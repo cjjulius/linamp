@@ -1,0 +1,298 @@
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use walkdir::WalkDir;
+
+/// Supported audio file extensions.
+pub const SUPPORTED_EXTS: &[&str] = &[
+    "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "opus", "wv", "aiff", "aif",
+];
+
+/// A single track in the playlist with cached metadata.
+#[derive(Clone, Debug)]
+pub struct Track {
+    pub path: PathBuf,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub duration: Option<Duration>,
+    /// Audio properties for the classic info line.
+    pub sample_rate: Option<u32>,
+    pub bitrate: Option<u32>,
+    pub channels: Option<u8>,
+}
+
+impl Track {
+    /// Build a track by reading tags/properties from disk. Falls back to the
+    /// file name if no tags are present.
+    pub fn from_path(path: PathBuf) -> Self {
+        let fallback_title = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let mut track = Track {
+            path,
+            title: fallback_title,
+            artist: String::new(),
+            album: String::new(),
+            duration: None,
+            sample_rate: None,
+            bitrate: None,
+            channels: None,
+        };
+
+        if let Ok(tagged) = lofty::read_from_path(&track.path) {
+            use lofty::file::{AudioFile, TaggedFileExt};
+            use lofty::tag::Accessor;
+
+            let props = tagged.properties();
+            track.duration = Some(props.duration());
+            track.sample_rate = props.sample_rate();
+            track.bitrate = props.audio_bitrate();
+            track.channels = props.channels();
+
+            if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
+                if let Some(t) = tag.title() {
+                    if !t.trim().is_empty() {
+                        track.title = t.to_string();
+                    }
+                }
+                if let Some(a) = tag.artist() {
+                    track.artist = a.to_string();
+                }
+                if let Some(al) = tag.album() {
+                    track.album = al.to_string();
+                }
+            }
+        }
+
+        track
+    }
+
+    /// "Artist - Title" when an artist is known, otherwise just the title.
+    pub fn display_name(&self) -> String {
+        if self.artist.trim().is_empty() {
+            self.title.clone()
+        } else {
+            format!("{} - {}", self.artist, self.title)
+        }
+    }
+}
+
+/// The ordered list of tracks plus the current selection/playback cursor.
+#[derive(Default)]
+pub struct Playlist {
+    pub tracks: Vec<Track>,
+    pub current: Option<usize>,
+}
+
+impl Playlist {
+    pub fn is_empty(&self) -> bool {
+        self.tracks.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.tracks.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.tracks.clear();
+        self.current = None;
+    }
+
+    pub fn current_track(&self) -> Option<&Track> {
+        self.current.and_then(|i| self.tracks.get(i))
+    }
+
+    /// Add a single file if it has a supported extension.
+    pub fn add_file(&mut self, path: PathBuf) {
+        if is_supported(&path) {
+            self.tracks.push(Track::from_path(path));
+        }
+    }
+
+    /// Recursively add every supported file found under `dir`.
+    pub fn add_folder(&mut self, dir: &Path) {
+        let mut found: Vec<PathBuf> = WalkDir::new(dir)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .map(|e| e.into_path())
+            .filter(|p| is_supported(p))
+            .collect();
+        found.sort();
+        for p in found {
+            self.tracks.push(Track::from_path(p));
+        }
+    }
+
+    pub fn remove(&mut self, index: usize) {
+        if index >= self.tracks.len() {
+            return;
+        }
+        self.tracks.remove(index);
+        match self.current {
+            Some(c) if c == index => self.current = None,
+            Some(c) if c > index => self.current = Some(c - 1),
+            _ => {}
+        }
+    }
+
+    /// Index after `current`, honoring shuffle/repeat-all.
+    pub fn next_index(&self, shuffle: bool, repeat_all: bool) -> Option<usize> {
+        if self.tracks.is_empty() {
+            return None;
+        }
+        if shuffle {
+            return Some(pseudo_random(self.tracks.len()));
+        }
+        match self.current {
+            Some(c) if c + 1 < self.tracks.len() => Some(c + 1),
+            Some(_) => {
+                if repeat_all {
+                    Some(0)
+                } else {
+                    None
+                }
+            }
+            None => Some(0),
+        }
+    }
+
+    /// Index before `current`.
+    pub fn prev_index(&self, shuffle: bool, repeat_all: bool) -> Option<usize> {
+        if self.tracks.is_empty() {
+            return None;
+        }
+        if shuffle {
+            return Some(pseudo_random(self.tracks.len()));
+        }
+        match self.current {
+            Some(c) if c > 0 => Some(c - 1),
+            Some(_) => {
+                if repeat_all {
+                    Some(self.tracks.len() - 1)
+                } else {
+                    None
+                }
+            }
+            None => Some(0),
+        }
+    }
+}
+
+impl Playlist {
+    /// Append all tracks referenced by an .m3u/.m3u8/.pls file.
+    pub fn load_file(&mut self, path: &Path) -> usize {
+        let before = self.tracks.len();
+        for p in parse_playlist_file(path) {
+            if p.exists() && is_supported(&p) {
+                self.tracks.push(Track::from_path(p));
+            }
+        }
+        self.tracks.len() - before
+    }
+}
+
+/// Write the playlist to disk as M3U (extended) or PLS, chosen by extension.
+pub fn save_playlist_file(path: &Path, tracks: &[Track]) -> std::io::Result<()> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    let mut out = String::new();
+    if ext == "pls" {
+        out.push_str("[playlist]\n");
+        for (i, t) in tracks.iter().enumerate() {
+            let n = i + 1;
+            out.push_str(&format!("File{n}={}\n", t.path.display()));
+            out.push_str(&format!("Title{n}={}\n", t.display_name()));
+            let secs = t.duration.map(|d| d.as_secs() as i64).unwrap_or(-1);
+            out.push_str(&format!("Length{n}={secs}\n"));
+        }
+        out.push_str(&format!("NumberOfEntries={}\n", tracks.len()));
+        out.push_str("Version=2\n");
+    } else {
+        out.push_str("#EXTM3U\n");
+        for t in tracks {
+            let secs = t.duration.map(|d| d.as_secs() as i64).unwrap_or(-1);
+            out.push_str(&format!("#EXTINF:{secs},{}\n", t.display_name()));
+            out.push_str(&format!("{}\n", t.path.display()));
+        }
+    }
+    std::fs::write(path, out)
+}
+
+/// Return the file paths referenced by an .m3u/.m3u8/.pls file, resolving
+/// relative paths against the playlist file's own directory.
+pub fn parse_playlist_file(path: &Path) -> Vec<PathBuf> {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let base = path.parent();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    let mut out = Vec::new();
+    if ext == "pls" {
+        for line in content.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("File") {
+                if let Some(eq) = rest.find('=') {
+                    out.push(resolve(base, rest[eq + 1..].trim()));
+                }
+            }
+        }
+    } else {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            out.push(resolve(base, line));
+        }
+    }
+    out
+}
+
+fn resolve(base: Option<&Path>, value: &str) -> PathBuf {
+    let p = PathBuf::from(value);
+    if p.is_absolute() {
+        p
+    } else if let Some(b) = base {
+        b.join(p)
+    } else {
+        p
+    }
+}
+
+/// Extract the first embedded cover image (raw encoded bytes) from a file, if any.
+pub fn read_cover(path: &Path) -> Option<Vec<u8>> {
+    use lofty::file::TaggedFileExt;
+    let tagged = lofty::read_from_path(path).ok()?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
+    let pic = tag.pictures().first()?;
+    Some(pic.data().to_vec())
+}
+
+pub fn is_supported(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| SUPPORTED_EXTS.contains(&e.to_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+/// Tiny time-seeded index picker so we don't pull in the `rand` crate for a
+/// shuffle that doesn't need to be cryptographically anything.
+fn pseudo_random(len: usize) -> usize {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as usize)
+        .unwrap_or(0);
+    nanos % len.max(1)
+}

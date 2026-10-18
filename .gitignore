@@ -1,0 +1,7 @@
+/target
+/scratch_brand
+/preview
+/.claude
+*.output
+__pycache__/
+*.pyc

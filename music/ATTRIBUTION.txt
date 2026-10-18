@@ -1,0 +1,16 @@
+LinAmp test audio
+=================
+
+These files are included only as free test material for exercising LinAmp's
+playback, playlist, library and visualizer.
+
+SoundHelix-Song-1.mp3
+SoundHelix-Song-2.mp3
+SoundHelix-Song-3.mp3
+  Source: https://www.soundhelix.com/audio-examples
+  Author: T. Schuerger (SoundHelix)
+  These algorithmically generated example tracks are published by SoundHelix
+  as free-to-use demo audio. Credit: "Music by SoundHelix (www.soundhelix.com)".
+
+If you redistribute LinAmp, keep this attribution file alongside the audio, or
+replace these files with your own music.
