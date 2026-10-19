@@ -2,6 +2,7 @@
 /scratch_brand
 /preview
 /.claude
+/skins/backup
 *.output
 __pycache__/
 *.pyc
