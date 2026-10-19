@@ -35,6 +35,8 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - ✅ Audio properties (kbps / kHz / channels)
 - ✅ SQLite media library (scan folders, search, add to playlist)
   — stored at `%LOCALAPPDATA%/LinAmp/library.db` (Win) / `~/.local/share/LinAmp/` (Linux)
+  — reachable in the classic UI via options menu → **Media Library…** (opens in
+  its own window)
 - 🔜 Album art, smart views / playlists
 
 ## UI / UX (Winamp feel)
@@ -72,7 +74,8 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
   preamp + 10 band sliders (drag), graph area; docks under the main window
 - ✅ **Classic Playlist window** (`PLEDIT.BMP`) — tiled frame, track list in the
   skin's pledit colours, current-track highlight, click-to-play, wheel scroll
-- ✅ Upper-left **options menu** (and right-click): open file/folder, toggle
+- ✅ Upper-left **options menu** (and right-click): open file/folder, Media
+  Library, toggle
   EQ/Playlist, load skin, modern view, exit
 - ✅ Title bars rebranded to LinAmp (main / equalizer / playlist)
 - ✅ `--render-all` headless preview (main + EQ + playlist stacked)
