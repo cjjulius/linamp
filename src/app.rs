@@ -7,7 +7,7 @@ use egui::{Color32, Id, Key, RichText, Stroke};
 use rustfft::{Fft, FftPlanner};
 
 use crate::classic::{self, Btn, ClassicSkin, MainState, PlayUi};
-use crate::config::Prefs;
+use crate::config::{Prefs, Session};
 use crate::library::Library;
 use crate::player::{PlayState, Player};
 use crate::playlist::{save_playlist_file, Playlist};
@@ -261,12 +261,16 @@ pub struct LinAmpApp {
     // multi-window geometry (points)
     win_pos: [egui::Pos2; 3],
     pl_px_h: f32,
+    pl_px_w: f32,
     positions_init: bool,
     drag: Option<Dragging>,
-    resize_pl: Option<f32>,
+    /// While resizing the playlist, the grab offsets (width, height) in px.
+    resize_pl: Option<egui::Vec2>,
     root_last: Option<(egui::Pos2, egui::Vec2)>,
     pl_menu_press: Option<classic::PlRegion>,
     prefs: Prefs,
+    /// Path of the currently loaded skin (persisted as `last_skin`).
+    skin_path: Option<PathBuf>,
     scale: f32,
     prefs_open: bool,
 
@@ -358,12 +362,14 @@ impl LinAmpApp {
             tb_last_click: None,
             win_pos: [egui::pos2(100.0, 100.0); 3],
             pl_px_h: classic::PL_H as f32,
+            pl_px_w: classic::MAIN_W as f32,
             positions_init: false,
             drag: None,
             resize_pl: None,
             root_last: None,
             pl_menu_press: None,
             prefs,
+            skin_path: None,
             scale,
             prefs_open: false,
             marquee_offset: 0.0,
@@ -373,8 +379,10 @@ impl LinAmpApp {
         };
 
         // Accept files/folders/playlists passed on the command line.
+        let mut had_cli = false;
         for arg in std::env::args().skip(1) {
             let p = PathBuf::from(arg);
+            had_cli = true;
             if p.is_dir() {
                 app.playlist.add_folder(&p);
             } else if matches!(
@@ -386,8 +394,26 @@ impl LinAmpApp {
                 app.playlist.add_file(p);
             }
         }
-        if !app.playlist.is_empty() {
-            app.play_index(0);
+        if had_cli {
+            if !app.playlist.is_empty() {
+                app.play_index(0);
+            }
+        } else {
+            // Restore last session's playlist/window size (but don't auto-play).
+            let session = Session::load();
+            for t in &session.tracks {
+                app.playlist.add_file(PathBuf::from(t));
+            }
+            app.playlist.current = session.current.filter(|&i| i < app.playlist.len());
+            if app.prefs.tag_on_load {
+                app.playlist.load_all();
+            }
+            if let Some(w) = session.pl_width {
+                app.pl_px_w = w.max(classic::MAIN_W as f32);
+            }
+            if let Some(h) = session.pl_height {
+                app.pl_px_h = h.max(87.0);
+            }
         }
         app.refresh_library();
         app.discover_skins();
@@ -397,11 +423,13 @@ impl LinAmpApp {
             p.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default()
         };
         let startup = app
-            .skins
-            .iter()
-            .find(|p| stem(p) == "linamp_base_skin")
-            .or_else(|| app.skins.iter().find(|p| stem(p).contains("base")))
-            .cloned()
+            .prefs
+            .last_skin
+            .as_ref()
+            .map(PathBuf::from)
+            .filter(|p| p.exists())
+            .or_else(|| app.skins.iter().find(|p| stem(p) == "linamp_base_skin").cloned())
+            .or_else(|| app.skins.iter().find(|p| stem(p).contains("base")).cloned())
             .or_else(|| app.skins.first().cloned());
         if let Some(p) = startup {
             if let Ok(cs) = ClassicSkin::load(&p) {
@@ -409,6 +437,7 @@ impl LinAmpApp {
                 if let Ok(t) = skin::load_wsz(&p) {
                     app.theme = t;
                 }
+                app.skin_path = Some(p.clone());
                 app.ui_mode = UiMode::Classic;
             }
         }
@@ -685,6 +714,10 @@ impl LinAmpApp {
         // Load the classic sprite sheets for the same skin.
         self.classic = ClassicSkin::load(path).ok();
         self.classic_tex = None;
+        // Remember this skin for next launch.
+        self.skin_path = Some(path.to_path_buf());
+        self.prefs.last_skin = Some(path.display().to_string());
+        self.prefs.save();
     }
 
     fn set_mode(&mut self, ctx: &egui::Context, mode: UiMode) {
@@ -1139,10 +1172,13 @@ impl LinAmpApp {
                         }
                         ClWin::Pl => {
                             use classic::PlRegion as P;
-                            match classic::pl_region_at(nx, ny, self.pl_px_h) {
+                            match classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h) {
                                 Some(P::Close) => self.close_window(ctx, ClWin::Pl),
                                 Some(P::TitleBar) => self.start_drag(ctx, win, screen_cursor),
-                                Some(P::Resize) => self.resize_pl = Some(self.pl_px_h - ny),
+                                Some(P::Resize) => {
+                                    self.resize_pl =
+                                        Some(egui::vec2(self.pl_px_w - nx, self.pl_px_h - ny))
+                                }
                                 Some(P::List) => {
                                     let row = classic::pl_row_at(ny, self.pl_first);
                                     if row < self.playlist.len() {
@@ -1223,9 +1259,13 @@ impl LinAmpApp {
                     self.apply_eq_slider(er, ny);
                 }
                 if let Some(grab) = self.resize_pl {
-                    let step = 29.0;
-                    let raw = (ny + grab).max(87.0);
-                    self.pl_px_h = ((raw / step).round() * step).max(87.0);
+                    let hstep = 29.0;
+                    let raw_h = (ny + grab.y).max(87.0);
+                    self.pl_px_h = ((raw_h / hstep).round() * hstep).max(87.0);
+                    let wstep = 25.0;
+                    let min_w = classic::MAIN_W as f32;
+                    let raw_w = (nx + grab.x).max(min_w);
+                    self.pl_px_w = (((raw_w - min_w) / wstep).round() * wstep + min_w).max(min_w);
                 }
             }
         }
@@ -1272,7 +1312,7 @@ impl LinAmpApp {
                 }
                 if win == ClWin::Pl {
                     if let Some(r) = self.pl_menu_press.take() {
-                        if classic::pl_region_at(nx, ny, self.pl_px_h) == Some(r) {
+                        if classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h) == Some(r) {
                             use classic::PlRegion as P;
                             let kind = match r {
                                 P::AddMenu => Popup::PlAdd,
@@ -1360,7 +1400,11 @@ impl LinAmpApp {
     }
 
     fn win_inner_size(&self, win: ClWin) -> egui::Vec2 {
-        egui::vec2(classic::MAIN_W as f32 * self.scale, self.win_native_h(win) * self.scale)
+        let w = match win {
+            ClWin::Pl if !self.pl_shade => self.pl_px_w,
+            _ => classic::MAIN_W as f32,
+        };
+        egui::vec2(w * self.scale, self.win_native_h(win) * self.scale)
     }
 
     fn start_drag(&mut self, ctx: &egui::Context, win: ClWin, screen_cursor: Option<egui::Pos2>) {
@@ -1538,12 +1582,19 @@ impl LinAmpApp {
         if !self.prefs_open {
             return;
         }
-        let mut open = true;
-        egui::Window::new("LinAmp Preferences")
-            .collapsible(false)
-            .resizable(false)
-            .open(&mut open)
-            .show(ctx, |ui| {
+        // Render in its own real window so it is never clipped by the (small)
+        // borderless main window.
+        let screen = self.win_pos[0] + egui::vec2(24.0, 24.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp Preferences")
+            .with_position(screen)
+            .with_inner_size(egui::vec2(330.0, 200.0))
+            .with_resizable(false)
+            .with_taskbar(false);
+        let id = egui::ViewportId::from_hash_of("linamp_prefs");
+        let mut close = false;
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            egui::CentralPanel::default().show(ctx, |ui| {
                 ui.strong("Display size");
                 let mut dbl = self.prefs.double_size;
                 ui.radio_value(&mut dbl, false, "1x — pixel-for-pixel");
@@ -1563,8 +1614,18 @@ impl LinAmpApp {
                         self.playlist.load_all();
                     }
                 }
+                ui.add_space(10.0);
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
             });
-        self.prefs_open = open;
+            if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
+                close = true;
+            }
+        });
+        if close {
+            self.prefs_open = false;
+        }
     }
 
     fn apply_eq_slider(&mut self, region: classic::EqRegion, ey: f32) {
@@ -1712,7 +1773,7 @@ impl LinAmpApp {
                         rows: &rows,
                         first: self.pl_first,
                     };
-                    cs.compose_playlist(&st, self.pl_px_h as u32)
+                    cs.compose_playlist(&st, self.pl_px_w as u32, self.pl_px_h as u32)
                 }
             }
         }
@@ -2397,6 +2458,23 @@ impl LinAmpApp {
 }
 
 impl eframe::App for LinAmpApp {
+    /// Persist the playlist + playlist-window size for next launch (called
+    /// periodically and on exit). The skin is saved separately on change.
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        let session = Session {
+            tracks: self
+                .playlist
+                .tracks
+                .iter()
+                .map(|t| t.path.display().to_string())
+                .collect(),
+            current: self.playlist.current,
+            pl_width: Some(self.pl_px_w),
+            pl_height: Some(self.pl_px_h),
+        };
+        session.save();
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32();

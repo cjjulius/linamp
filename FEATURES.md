@@ -39,6 +39,8 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 
 ## UI / UX (Winamp feel)
 - ✅ Dark skin, LCD-style display, scrolling marquee title
+- ✅ LinAmp logo (green lightning bolt on a disc) as the app/window + taskbar
+  icon; vector source kept in `assets/linamp_logo.svg` for reuse
 - ✅ Main player + Equalizer + Playlist in one window
 - ✅ Keyboard shortcuts matching Winamp (see below)
 - 🔜 Window shade / mini mode, docking, always-on-top
@@ -104,8 +106,11 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
   shown as a single taskbar entry (one program)
 - ✅ Movement via the OS window-drag (smooth); magnetic snap to each other and to
   screen edges on release; dragging the main window moves the docked group
-- ✅ Playlist height-resize via the bottom-right grip (snaps to Winamp steps)
-- 🔜 Playlist width-resize; finer group-docking; remember layout between runs
+- ✅ Playlist resize via the bottom-right grip — both height (29px steps) and
+  width (25px steps), snapping to Winamp steps; the frame tiles to any width
+- ✅ Remembers the last skin and the playlist (tracks + current + playlist-window
+  size) across runs; restored on launch unless files are passed on the CLI
+- 🔜 Finer group-docking; remember full window layout between runs
 
 ## Testing
 - `cargo test` runs the suite (playlist ops, M3U/PLS parse, skin colours,
@@ -119,6 +124,7 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
   - Drag-drop behaviour (append vs. insert)
   - **Sizing**: 1x pixel-for-pixel vs 2x scaled-for-modern-screens (Ctrl+D)
   - persisted to a config file
+  - opens in its own window (never clipped by the small main window)
 - 🔜 Lazy/background ID3 scanning to support the "on view" mode
 - 🔜 Full Winamp keyboard-shortcut support — see [SHORTCUTS.md](SHORTCUTS.md)
   (implies: ID3 tag editor Alt+3, jump-to-file J, jump-to-time Ctrl+J,
