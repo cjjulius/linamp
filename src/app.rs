@@ -27,6 +27,38 @@ fn win_idx(w: ClWin) -> usize {
     }
 }
 
+/// Two windows are docked when an edge is flush (within tolerance) and they
+/// overlap on the shared axis.
+fn rects_docked(a: egui::Rect, b: egui::Rect) -> bool {
+    let tol = 3.0;
+    let x_overlap = a.left() < b.right() - 1.0 && a.right() > b.left() + 1.0;
+    let y_overlap = a.top() < b.bottom() - 1.0 && a.bottom() > b.top() + 1.0;
+    let v_adj =
+        x_overlap && ((a.bottom() - b.top()).abs() <= tol || (a.top() - b.bottom()).abs() <= tol);
+    let h_adj =
+        y_overlap && ((a.right() - b.left()).abs() <= tol || (a.left() - b.right()).abs() <= tol);
+    v_adj || h_adj
+}
+
+/// Which of the three windows are transitively docked to the main window (0).
+fn dock_group_from_main(rects: &[egui::Rect; 3], visible: &[bool; 3]) -> [bool; 3] {
+    let mut in_group = [true, false, false];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for j in [1usize, 2usize] {
+            if in_group[j] || !visible[j] {
+                continue;
+            }
+            if (0..3).any(|k| in_group[k] && rects_docked(rects[j], rects[k])) {
+                in_group[j] = true;
+                changed = true;
+            }
+        }
+    }
+    in_group
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum UiMode {
     Classic,
@@ -1346,44 +1378,15 @@ impl LinAmpApp {
         egui::Rect::from_min_size(self.win_pos[idx], self.win_inner_size(w))
     }
 
-    fn win_visible(&self, idx: usize) -> bool {
-        match idx {
-            0 => true,
-            1 => self.eq_visible,
-            2 => self.pl_visible,
-            _ => false,
-        }
-    }
-
-    /// Are windows `a` and `b` docked — edge-flush and overlapping on the shared axis?
-    fn is_docked(&self, a: usize, b: usize) -> bool {
-        let (ra, rb) = (self.win_rect_pts(a), self.win_rect_pts(b));
-        let tol = 3.0;
-        let x_overlap = ra.left() < rb.right() - 1.0 && ra.right() > rb.left() + 1.0;
-        let y_overlap = ra.top() < rb.bottom() - 1.0 && ra.bottom() > rb.top() + 1.0;
-        let v_adj = x_overlap
-            && ((ra.bottom() - rb.top()).abs() <= tol || (ra.top() - rb.bottom()).abs() <= tol);
-        let h_adj = y_overlap
-            && ((ra.right() - rb.left()).abs() <= tol || (ra.left() - rb.right()).abs() <= tol);
-        v_adj || h_adj
-    }
-
     /// Windows transitively docked to the main window (by offset from main).
     fn main_dock_group(&self) -> Vec<(usize, egui::Vec2)> {
-        let mut in_group = [true, false, false];
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for j in [1usize, 2usize] {
-                if in_group[j] || !self.win_visible(j) {
-                    continue;
-                }
-                if (0..3).any(|k| in_group[k] && self.is_docked(j, k)) {
-                    in_group[j] = true;
-                    changed = true;
-                }
-            }
-        }
+        let rects = [
+            self.win_rect_pts(0),
+            self.win_rect_pts(1),
+            self.win_rect_pts(2),
+        ];
+        let vis = [true, self.eq_visible, self.pl_visible];
+        let in_group = dock_group_from_main(&rects, &vis);
         [1usize, 2usize]
             .into_iter()
             .filter(|&j| in_group[j])
@@ -2550,4 +2553,67 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
     style.spacing.item_spacing = egui::vec2(6.0, 4.0);
     style.spacing.slider_width = 120.0;
     ctx.set_style(style);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dock_group_from_main, rects_docked};
+    use egui::{pos2, vec2, Rect};
+
+    fn r(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect::from_min_size(pos2(x, y), vec2(w, h))
+    }
+
+    #[test]
+    fn stacked_windows_are_docked() {
+        assert!(rects_docked(r(0.0, 0.0, 275.0, 116.0), r(0.0, 116.0, 275.0, 116.0)));
+    }
+
+    #[test]
+    fn gap_is_not_docked() {
+        assert!(!rects_docked(r(0.0, 0.0, 275.0, 116.0), r(0.0, 140.0, 275.0, 116.0)));
+    }
+
+    #[test]
+    fn full_stack_all_follow_main() {
+        let rects = [
+            r(0.0, 0.0, 275.0, 116.0),
+            r(0.0, 116.0, 275.0, 116.0),
+            r(0.0, 232.0, 275.0, 180.0),
+        ];
+        assert_eq!(dock_group_from_main(&rects, &[true, true, true]), [true, true, true]);
+    }
+
+    #[test]
+    fn eq_pl_docked_only_to_each_other_dont_follow_main() {
+        // main alone; eq+pl docked to each other but far from main.
+        let rects = [
+            r(0.0, 0.0, 275.0, 116.0),
+            r(600.0, 0.0, 275.0, 116.0),
+            r(600.0, 116.0, 275.0, 180.0),
+        ];
+        assert_eq!(dock_group_from_main(&rects, &[true, true, true]), [true, false, false]);
+    }
+
+    #[test]
+    fn detached_eq_breaks_the_chain_to_pl() {
+        // eq floated away; pl is flush under eq but neither connects to main.
+        let rects = [
+            r(0.0, 0.0, 275.0, 116.0),
+            r(0.0, 300.0, 275.0, 116.0),
+            r(0.0, 416.0, 275.0, 180.0),
+        ];
+        assert_eq!(dock_group_from_main(&rects, &[true, true, true]), [true, false, false]);
+    }
+
+    #[test]
+    fn hidden_windows_never_follow() {
+        let rects = [
+            r(0.0, 0.0, 275.0, 116.0),
+            r(0.0, 116.0, 275.0, 116.0),
+            r(0.0, 232.0, 275.0, 180.0),
+        ];
+        // eq hidden -> it can't be in the group, and can't bridge to pl.
+        assert_eq!(dock_group_from_main(&rects, &[true, false, true]), [true, false, false]);
+    }
 }
