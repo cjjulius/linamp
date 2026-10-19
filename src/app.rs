@@ -27,6 +27,19 @@ fn win_idx(w: ClWin) -> usize {
     }
 }
 
+/// Window size (points) for a popup menu, from its item/separator count.
+fn popup_dims(kind: Popup) -> (f32, f32) {
+    let (buttons, seps) = match kind {
+        Popup::Options => (7, 3),
+        Popup::PlAdd => (2, 0),
+        Popup::PlRem => (3, 0),
+        Popup::PlSel => (3, 0),
+        Popup::PlMisc => (4, 0),
+        Popup::PlList => (3, 0),
+    };
+    (182.0, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
+}
+
 /// Two windows are docked when an edge is flush (within tolerance) and they
 /// overlap on the shared axis.
 fn rects_docked(a: egui::Rect, b: egui::Rect) -> bool {
@@ -882,24 +895,31 @@ impl LinAmpApp {
         }
     }
 
-    fn draw_popup_in(&mut self, ctx: &egui::Context, win: ClWin) {
+    /// Render the open popup menu in its own borderless window (so it is never
+    /// clipped by the small main/playlist windows). Positioned at the click.
+    fn draw_popup_viewport(&mut self, ctx: &egui::Context) {
         let Some((kind, owner, pos)) = self.popup else {
             return;
         };
-        if owner != win {
-            return;
-        }
+        let screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
+        let (w, h) = popup_dims(kind);
         let mut close = false;
         let sort = |app: &mut Self, k: SortKey| {
             app.sort_key = k;
             app.sort_playlist();
         };
-        let inner = egui::Area::new(egui::Id::new("classic_popup"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(pos)
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_min_width(140.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_position(screen)
+            .with_inner_size(egui::vec2(w, h))
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_taskbar(false);
+        let id = egui::ViewportId::from_hash_of("linamp_popup");
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            let style = ctx.style();
+            egui::CentralPanel::default()
+                .frame(egui::Frame::popup(&style))
+                .show(ctx, |ui| {
                     let item = |ui: &mut egui::Ui, label: &str| ui.button(label).clicked();
                     match kind {
                         Popup::Options => {
@@ -1018,15 +1038,12 @@ impl LinAmpApp {
                         }
                     }
                 });
-            });
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                close = true;
+            }
+        });
 
-        if self.popup_fresh {
-            self.popup_fresh = false;
-        } else if inner.response.clicked_elsewhere()
-            || ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        {
-            close = true;
-        }
+        self.popup_fresh = false;
         if close {
             self.popup = None;
         }
@@ -1060,6 +1077,11 @@ impl LinAmpApp {
             ClWin::Eq => self.eq_shade,
             ClWin::Pl => self.pl_shade,
         };
+
+        // Clicking any main window dismisses an open menu (click-away).
+        if pressed && self.popup.is_some() && !self.popup_fresh {
+            self.popup = None;
+        }
 
         if secondary && win == ClWin::Main {
             if let Some(l) = local {
@@ -1617,6 +1639,9 @@ impl LinAmpApp {
                 self.render_window(ctx, ClWin::Pl);
             });
         }
+
+        // The options / playlist menus render in their own (unclipped) window.
+        self.draw_popup_viewport(ctx);
     }
 
     fn render_window(&mut self, ctx: &egui::Context, win: ClWin) {
@@ -1652,8 +1677,6 @@ impl LinAmpApp {
                 let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                 ui.painter().image(tex.id(), rect, uv, Color32::WHITE);
             });
-
-        self.draw_popup_in(ctx, win);
     }
 
     fn compose_window(&self, win: ClWin) -> image::RgbaImage {
