@@ -132,6 +132,7 @@ fn row_to_track(row: &Row) -> rusqlite::Result<Track> {
         sample_rate: sr.map(|v| v as u32),
         bitrate: br.map(|v| v as u32),
         channels: ch.map(|v| v as u8),
+        loaded: true,
     })
 }
 

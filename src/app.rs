@@ -7,6 +7,7 @@ use egui::{Color32, Id, Key, RichText, Stroke};
 use rustfft::{Fft, FftPlanner};
 
 use crate::classic::{self, Btn, ClassicSkin, MainState, PlayUi};
+use crate::config::Prefs;
 use crate::library::Library;
 use crate::player::{PlayState, Player};
 use crate::playlist::{save_playlist_file, Playlist};
@@ -15,8 +16,6 @@ use crate::viz::{self, VizShared};
 
 const FFT_SIZE: usize = 2048;
 const VIZ_BANDS: usize = 28;
-/// Pixel scale for the classic skin window (2x = crisp and readable).
-const SCALE: f32 = 2.0;
 /// Magnetic docking snap distance in points.
 const SNAP: f32 = 16.0;
 
@@ -184,6 +183,9 @@ pub struct LinAmpApp {
     resize_pl: Option<f32>,
     root_last: Option<(egui::Pos2, egui::Vec2)>,
     pl_menu_press: Option<classic::PlRegion>,
+    prefs: Prefs,
+    scale: f32,
+    prefs_open: bool,
 
     marquee_offset: f32,
     last_frame: Instant,
@@ -207,6 +209,9 @@ struct KeyState {
     vol_down: bool,
     seek_fwd: bool,
     seek_back: bool,
+    ctrl: bool,
+    key_d: bool,
+    key_p: bool,
 }
 
 impl LinAmpApp {
@@ -215,6 +220,8 @@ impl LinAmpApp {
         let viz = player.viz();
         let library = Library::open().ok();
         let fft = FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE);
+        let prefs = Prefs::load();
+        let scale = prefs.scale();
 
         let mut app = Self {
             player,
@@ -274,6 +281,9 @@ impl LinAmpApp {
             resize_pl: None,
             root_last: None,
             pl_menu_press: None,
+            prefs,
+            scale,
+            prefs_open: false,
             marquee_offset: 0.0,
             last_frame: Instant::now(),
             last_device_check: Instant::now(),
@@ -328,6 +338,7 @@ impl LinAmpApp {
     // ---- transport helpers -------------------------------------------------
 
     fn play_index(&mut self, idx: usize) {
+        self.playlist.ensure_loaded(idx);
         if let Some(track) = self.playlist.tracks.get(idx).cloned() {
             match self.player.play_file(&track.path) {
                 Ok(()) => {
@@ -439,6 +450,7 @@ impl LinAmpApp {
             for p in paths {
                 self.playlist.add_file(p);
             }
+            self.maybe_scan_tags();
             if was_empty && !self.playlist.is_empty() {
                 self.play_index(0);
             }
@@ -446,10 +458,17 @@ impl LinAmpApp {
         }
     }
 
+    fn maybe_scan_tags(&mut self) {
+        if self.prefs.tag_on_load {
+            self.playlist.load_all();
+        }
+    }
+
     fn open_folder(&mut self) {
         if let Some(dir) = rfd::FileDialog::new().pick_folder() {
             let was_empty = self.playlist.is_empty();
             self.playlist.add_folder(&dir);
+            self.maybe_scan_tags();
             if was_empty && !self.playlist.is_empty() {
                 self.play_index(0);
             }
@@ -482,6 +501,7 @@ impl LinAmpApp {
         {
             let was_empty = self.playlist.is_empty();
             let n = self.playlist.load_file(&path);
+            self.maybe_scan_tags();
             if was_empty && !self.playlist.is_empty() {
                 self.play_index(0);
             }
@@ -815,6 +835,10 @@ impl LinAmpApp {
                                 self.load_skin_dialog(ctx);
                                 close = true;
                             }
+                            if item(ui, "Preferences…") {
+                                self.prefs_open = true;
+                                close = true;
+                            }
                             ui.separator();
                             if item(ui, "Exit") {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -955,8 +979,8 @@ impl LinAmpApp {
             self.active_region = None;
             self.eq_active = None;
             if let Some(l) = local {
-                let nx = l.x / SCALE;
-                let ny = l.y / SCALE;
+                let nx = l.x / self.scale;
+                let ny = l.y / self.scale;
                 if shaded {
                     match classic::shade_region_at(nx, ny) {
                         Some(classic::ShadeHit::Close) => self.close_window(ctx, win),
@@ -1051,8 +1075,8 @@ impl LinAmpApp {
                 }
             }
             if let Some(l) = local {
-                let nx = l.x / SCALE;
-                let ny = l.y / SCALE;
+                let nx = l.x / self.scale;
+                let ny = l.y / self.scale;
                 if let Some(r) = self.active_region {
                     if matches!(r, Btn::Seek | Btn::Volume | Btn::Balance) {
                         self.apply_classic_slider(r, nx);
@@ -1089,8 +1113,8 @@ impl LinAmpApp {
             }
             self.resize_pl = None;
             if let Some(l) = local {
-                let nx = l.x / SCALE;
-                let ny = l.y / SCALE;
+                let nx = l.x / self.scale;
+                let ny = l.y / self.scale;
                 if win == ClWin::Main {
                     if let Some(r) = self.active_region {
                         if classic::region_at(nx, ny) == Some(r) {
@@ -1163,7 +1187,7 @@ impl LinAmpApp {
     }
 
     fn win_inner_size(&self, win: ClWin) -> egui::Vec2 {
-        egui::vec2(classic::MAIN_W as f32 * SCALE, self.win_native_h(win) * SCALE)
+        egui::vec2(classic::MAIN_W as f32 * self.scale, self.win_native_h(win) * self.scale)
     }
 
     fn start_drag(&mut self, win: ClWin, local: Option<egui::Pos2>) {
@@ -1191,10 +1215,10 @@ impl LinAmpApp {
     /// in order, regardless of which was opened first.
     fn restack(&mut self) {
         let base = self.win_pos[0];
-        let mut y = base.y + self.main_h() * SCALE;
+        let mut y = base.y + self.main_h() * self.scale;
         if self.eq_visible {
             self.win_pos[1] = egui::pos2(base.x, y);
-            y += self.eq_h() * SCALE;
+            y += self.eq_h() * self.scale;
         }
         if self.pl_visible {
             self.win_pos[2] = egui::pos2(base.x, y);
@@ -1285,6 +1309,50 @@ impl LinAmpApp {
         }
     }
 
+    fn set_double_size(&mut self, _ctx: &egui::Context, dbl: bool) {
+        if self.prefs.double_size == dbl {
+            return;
+        }
+        self.prefs.double_size = dbl;
+        self.scale = self.prefs.scale();
+        self.prefs.save();
+        self.restack();
+        self.root_last = None; // force the root window to resize next frame
+    }
+
+    fn ui_prefs(&mut self, ctx: &egui::Context) {
+        if !self.prefs_open {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("LinAmp Preferences")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.strong("Display size");
+                let mut dbl = self.prefs.double_size;
+                ui.radio_value(&mut dbl, false, "1x — pixel-for-pixel");
+                ui.radio_value(&mut dbl, true, "2x — scaled for modern screens (Ctrl+D)");
+                if dbl != self.prefs.double_size {
+                    self.set_double_size(ctx, dbl);
+                }
+                ui.add_space(8.0);
+                ui.strong("ID3 tag loading");
+                let mut onload = self.prefs.tag_on_load;
+                ui.radio_value(&mut onload, true, "On load — scan when files are added");
+                ui.radio_value(&mut onload, false, "On view — lazily as rows scroll in");
+                if onload != self.prefs.tag_on_load {
+                    self.prefs.tag_on_load = onload;
+                    self.prefs.save();
+                    if onload {
+                        self.playlist.load_all();
+                    }
+                }
+            });
+        self.prefs_open = open;
+    }
+
     fn apply_eq_slider(&mut self, region: classic::EqRegion, ey: f32) {
         let v = classic::eq_value_at_y(ey);
         match region {
@@ -1304,14 +1372,15 @@ impl LinAmpApp {
 
         // Root viewport = main window.
         self.render_window(ctx, ClWin::Main);
+        self.ui_prefs(ctx);
 
         // Initialise window positions from the real main window, once.
         if !self.positions_init {
             if let Some(r) = self.win_rect[0] {
                 self.win_pos[0] = r.min;
-                self.win_pos[1] = egui::pos2(r.min.x, r.min.y + self.main_h() * SCALE);
+                self.win_pos[1] = egui::pos2(r.min.x, r.min.y + self.main_h() * self.scale);
                 self.win_pos[2] =
-                    egui::pos2(r.min.x, r.min.y + (self.main_h() + self.eq_h()) * SCALE);
+                    egui::pos2(r.min.x, r.min.y + (self.main_h() + self.eq_h()) * self.scale);
                 self.positions_init = true;
             }
         }
@@ -1358,6 +1427,15 @@ impl LinAmpApp {
 
     fn render_window(&mut self, ctx: &egui::Context, win: ClWin) {
         self.handle_window_input(ctx, win);
+
+        // Lazily read tags for the playlist rows about to be shown (on-view mode).
+        if win == ClWin::Pl && !self.pl_shade {
+            let vis = classic::pl_visible_rows(self.pl_px_h as u32);
+            let end = (self.pl_first + vis).min(self.playlist.len());
+            for i in self.pl_first..end {
+                self.playlist.ensure_loaded(i);
+            }
+        }
 
         let img = self.compose_window(win);
         let name = match win {
@@ -1490,6 +1568,9 @@ impl LinAmpApp {
             k.vol_down = i.key_pressed(Key::ArrowDown);
             k.seek_fwd = i.key_pressed(Key::ArrowRight);
             k.seek_back = i.key_pressed(Key::ArrowLeft);
+            k.ctrl = i.modifiers.ctrl || i.modifiers.command;
+            k.key_d = i.key_pressed(Key::D);
+            k.key_p = i.key_pressed(Key::P);
         });
 
         if k.play {
@@ -1530,6 +1611,13 @@ impl LinAmpApp {
         }
         if k.seek_back {
             self.seek_relative(-5.0);
+        }
+        if k.ctrl && k.key_d {
+            let dbl = !self.prefs.double_size;
+            self.set_double_size(ctx, dbl);
+        }
+        if k.ctrl && k.key_p {
+            self.prefs_open = !self.prefs_open;
         }
     }
 
@@ -2129,6 +2217,7 @@ impl eframe::App for LinAmpApp {
                     self.playlist.add_file(p);
                 }
             }
+            self.maybe_scan_tags();
             if was_empty && !self.playlist.is_empty() {
                 self.play_index(0);
             }

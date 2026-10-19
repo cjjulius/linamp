@@ -20,18 +20,18 @@ pub struct Track {
     pub sample_rate: Option<u32>,
     pub bitrate: Option<u32>,
     pub channels: Option<u8>,
+    /// Whether tags/properties have been read from disk yet (lazy loading).
+    pub loaded: bool,
 }
 
 impl Track {
-    /// Build a track by reading tags/properties from disk. Falls back to the
-    /// file name if no tags are present.
-    pub fn from_path(path: PathBuf) -> Self {
+    /// A track with only its file name known; tags are read later by `load`.
+    pub fn new(path: PathBuf) -> Self {
         let fallback_title = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Unknown".to_string());
-
-        let mut track = Track {
+        Track {
             path,
             title: fallback_title,
             artist: String::new(),
@@ -40,34 +40,47 @@ impl Track {
             sample_rate: None,
             bitrate: None,
             channels: None,
-        };
+            loaded: false,
+        }
+    }
 
-        if let Ok(tagged) = lofty::read_from_path(&track.path) {
+    /// Read tags/properties from disk (no-op if already loaded).
+    pub fn load(&mut self) {
+        if self.loaded {
+            return;
+        }
+        self.loaded = true;
+        if let Ok(tagged) = lofty::read_from_path(&self.path) {
             use lofty::file::{AudioFile, TaggedFileExt};
             use lofty::tag::Accessor;
 
             let props = tagged.properties();
-            track.duration = Some(props.duration());
-            track.sample_rate = props.sample_rate();
-            track.bitrate = props.audio_bitrate();
-            track.channels = props.channels();
+            self.duration = Some(props.duration());
+            self.sample_rate = props.sample_rate();
+            self.bitrate = props.audio_bitrate();
+            self.channels = props.channels();
 
             if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
                 if let Some(t) = tag.title() {
                     if !t.trim().is_empty() {
-                        track.title = t.to_string();
+                        self.title = t.to_string();
                     }
                 }
                 if let Some(a) = tag.artist() {
-                    track.artist = a.to_string();
+                    self.artist = a.to_string();
                 }
                 if let Some(al) = tag.album() {
-                    track.album = al.to_string();
+                    self.album = al.to_string();
                 }
             }
         }
+    }
 
-        track
+    /// Build a fully-loaded track (tags read immediately).
+    pub fn from_path(path: PathBuf) -> Self {
+        let mut t = Track::new(path);
+        t.load();
+        t
     }
 
     /// "Artist - Title" when an artist is known, otherwise just the title.
@@ -105,10 +118,24 @@ impl Playlist {
         self.current.and_then(|i| self.tracks.get(i))
     }
 
-    /// Add a single file if it has a supported extension.
+    /// Add a single file if it has a supported extension (tags read lazily).
     pub fn add_file(&mut self, path: PathBuf) {
         if is_supported(&path) {
-            self.tracks.push(Track::from_path(path));
+            self.tracks.push(Track::new(path));
+        }
+    }
+
+    /// Read tags for one track if not already loaded.
+    pub fn ensure_loaded(&mut self, index: usize) {
+        if let Some(t) = self.tracks.get_mut(index) {
+            t.load();
+        }
+    }
+
+    /// Read tags for every track.
+    pub fn load_all(&mut self) {
+        for t in &mut self.tracks {
+            t.load();
         }
     }
 
@@ -123,7 +150,7 @@ impl Playlist {
             .collect();
         found.sort();
         for p in found {
-            self.tracks.push(Track::from_path(p));
+            self.tracks.push(Track::new(p));
         }
     }
 
@@ -188,7 +215,7 @@ impl Playlist {
         let before = self.tracks.len();
         for p in parse_playlist_file(path) {
             if p.exists() && is_supported(&p) {
-                self.tracks.push(Track::from_path(p));
+                self.tracks.push(Track::new(p));
             }
         }
         self.tracks.len() - before
