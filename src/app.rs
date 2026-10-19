@@ -113,7 +113,15 @@ struct Dragging {
     group: Vec<(usize, egui::Vec2)>,
 }
 
-/// Global cursor position in egui points, if the platform exposes it (Windows).
+/// Global cursor position in egui points, if the platform exposes it.
+///
+/// - **Windows:** `GetCursorPos`.
+/// - **Linux/X11 (incl. XWayland):** `XQueryPointer` on the root window.
+/// - **Native Wayland / everything else:** `None` — the compositor doesn't
+///   expose a global cursor, so the caller falls back to the OS window-drag.
+///
+/// When this returns `Some`, the drag runs in "manual" mode: we drive the
+/// window position ourselves each frame and move the docked group in tandem.
 fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
     #[cfg(windows)]
     {
@@ -132,11 +140,83 @@ fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
         }
         None
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11_cursor_px().map(|(x, y)| {
+            let ppp = ctx.pixels_per_point().max(0.1);
+            egui::pos2(x as f32 / ppp, y as f32 / ppp)
+        })
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = ctx;
         None
     }
+}
+
+/// Global cursor position in physical pixels via X11's `XQueryPointer`, or
+/// `None` when there is no X display (e.g. native Wayland, where the connection
+/// can't be opened). The Xlib handle and display connection are opened once and
+/// cached per thread — the UI runs on a single thread, and the query is only
+/// made during an active title-bar drag.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn x11_cursor_px() -> Option<(i32, i32)> {
+    use std::cell::RefCell;
+    use std::ptr;
+    use x11_dl::xlib;
+
+    enum Conn {
+        Untried,
+        Unavailable,
+        Ready(xlib::Xlib, *mut xlib::Display, xlib::Window),
+    }
+
+    thread_local! {
+        static X11: RefCell<Conn> = RefCell::new(Conn::Untried);
+    }
+
+    X11.with(|cell| {
+        if matches!(*cell.borrow(), Conn::Untried) {
+            let next = match xlib::Xlib::open() {
+                Ok(xlib) => {
+                    let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
+                    if display.is_null() {
+                        Conn::Unavailable
+                    } else {
+                        let root = unsafe { (xlib.XDefaultRootWindow)(display) };
+                        Conn::Ready(xlib, display, root)
+                    }
+                }
+                Err(_) => Conn::Unavailable,
+            };
+            *cell.borrow_mut() = next;
+        }
+
+        let conn = cell.borrow();
+        let Conn::Ready(xlib, display, root) = &*conn else {
+            return None;
+        };
+        let mut root_ret: xlib::Window = 0;
+        let mut child_ret: xlib::Window = 0;
+        let (mut root_x, mut root_y, mut win_x, mut win_y) = (0i32, 0i32, 0i32, 0i32);
+        let mut mask: u32 = 0;
+        let ok = unsafe {
+            (xlib.XQueryPointer)(
+                *display,
+                *root,
+                &mut root_ret,
+                &mut child_ret,
+                &mut root_x,
+                &mut root_y,
+                &mut win_x,
+                &mut win_y,
+                &mut mask,
+            )
+        };
+        // XQueryPointer returns False only when the pointer is on a different
+        // screen; treat that as "unknown" and fall back to the OS drag.
+        (ok != 0).then_some((root_x, root_y))
+    })
 }
 
 /// Make the EQ/playlist windows *owned* by the main window so they ride its
