@@ -308,8 +308,8 @@ pub struct LinAmpApp {
     prefs_open: bool,
     library_open: bool,
     tag_editor: Option<TagEditor>,
-    /// Jump-to-file search query (Some while the dialog is open).
-    jump_file: Option<String>,
+    /// Jump-to-file search state (Some while the dialog is open).
+    jump_file: Option<JumpFile>,
     /// Jump-to-time input buffer (Some while the dialog is open).
     jump_time: Option<String>,
 
@@ -359,6 +359,13 @@ struct TagEditor {
     orig: crate::tags::TagFields,
     editable: bool,
     status: String,
+}
+
+/// Jump-to-file dialog state: the search query and the highlighted result row.
+#[derive(Default)]
+struct JumpFile {
+    query: String,
+    sel: usize,
 }
 
 /// Parse a time string ("m:ss", "mm:ss" or plain seconds) into seconds.
@@ -2000,43 +2007,93 @@ impl LinAmpApp {
         let id = egui::ViewportId::from_hash_of("linamp_jumpfile");
         let mut close = false;
         let mut play: Option<usize> = None;
-        let mut enter = false;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            let (up, down, enter, esc) = ctx.input(|i| {
+                (
+                    i.key_pressed(egui::Key::ArrowUp),
+                    i.key_pressed(egui::Key::ArrowDown),
+                    i.key_pressed(egui::Key::Enter),
+                    i.key_pressed(egui::Key::Escape),
+                )
+            });
             egui::CentralPanel::default().show(ctx, |ui| {
-                let q = {
-                    let query = self.jump_file.as_mut().unwrap();
-                    ui.label("Jump to file (type to filter):");
+                // Search box (keeps focus for typing).
+                let (q, changed) = {
+                    let jf = self.jump_file.as_mut().unwrap();
+                    ui.label("Jump to file (type to filter · ↑/↓ + Enter):");
                     let resp = ui.add(
-                        egui::TextEdit::singleline(query).hint_text("title / artist / file"),
+                        egui::TextEdit::singleline(&mut jf.query)
+                            .hint_text("title / artist / file"),
                     );
                     resp.request_focus();
-                    query.to_lowercase()
+                    (jf.query.to_lowercase(), resp.changed())
                 };
                 ui.separator();
-                let mut first_match: Option<usize> = None;
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    for (i, t) in self.playlist.tracks.iter().enumerate() {
+
+                // Filter the playlist to matching indices.
+                let filtered: Vec<usize> = self
+                    .playlist
+                    .tracks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| {
+                        if q.is_empty() {
+                            return true;
+                        }
                         let hay = format!(
                             "{} {}",
                             t.display_name(),
                             t.path.file_name().map(|s| s.to_string_lossy()).unwrap_or_default()
                         )
                         .to_lowercase();
-                        if q.is_empty() || hay.contains(&q) {
-                            if first_match.is_none() {
-                                first_match = Some(i);
-                            }
-                            if ui.selectable_label(false, t.display_name()).clicked() {
-                                play = Some(i);
-                            }
+                        hay.contains(&q)
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+
+                // Move the highlight (reset to top when the query changes).
+                let sel = {
+                    let jf = self.jump_file.as_mut().unwrap();
+                    if changed {
+                        jf.sel = 0;
+                    }
+                    if filtered.is_empty() {
+                        jf.sel = 0;
+                    } else {
+                        if down {
+                            jf.sel = (jf.sel + 1).min(filtered.len() - 1);
+                        }
+                        if up {
+                            jf.sel = jf.sel.saturating_sub(1);
+                        }
+                        jf.sel = jf.sel.min(filtered.len() - 1);
+                    }
+                    jf.sel
+                };
+
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for (row, &i) in filtered.iter().enumerate() {
+                        let selected = row == sel;
+                        let resp = ui.selectable_label(
+                            selected,
+                            self.playlist.tracks[i].display_name(),
+                        );
+                        if resp.clicked() {
+                            play = Some(i);
+                        }
+                        if resp.double_clicked() {
+                            play = Some(i);
+                        }
+                        if selected && (up || down) {
+                            resp.scroll_to_me(None);
                         }
                     }
                 });
-                enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
-                if enter {
-                    play = play.or(first_match);
+
+                if enter && !filtered.is_empty() {
+                    play = Some(filtered[sel]);
                 }
-                if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
+                if esc || ctx.input(|i| i.viewport().close_requested()) {
                     close = true;
                 }
             });
@@ -2448,7 +2505,7 @@ impl LinAmpApp {
             if k.ctrl {
                 self.jump_time = Some(String::new());
             } else {
-                self.jump_file = Some(String::new());
+                self.jump_file = Some(JumpFile::default());
             }
         }
         // Window toggles.
