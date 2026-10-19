@@ -99,11 +99,17 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - ✅ Seek bar jumps within the track (drag the main position slider)
 
 ## Windows (classic)
-- ✅ **Separate OS windows** for main / EQ / playlist (detach & move freely)
-- ✅ Magnetic docking: snap to each other and to screen edges; dragging the main
-  window moves the docked group
+- ✅ **Separate OS windows** for main / EQ / playlist (detach & move freely),
+  shown as a single taskbar entry (one program)
+- ✅ Movement via the OS window-drag (smooth); magnetic snap to each other and to
+  screen edges on release; dragging the main window moves the docked group
 - ✅ Playlist height-resize via the bottom-right grip (snaps to Winamp steps)
 - 🔜 Playlist width-resize; finer group-docking; remember layout between runs
+
+## Testing
+- `cargo test` runs the suite (playlist ops, M3U/PLS parse, skin colours,
+  classic window geometry/hit-testing, preferences, visualizer). Pure-logic and
+  cross-platform (Windows + Linux).
 
 ## Planned / Backlog
 - 🔜 **Options / Preferences window** (Ctrl+P): 

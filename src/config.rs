@@ -55,3 +55,29 @@ impl Prefs {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults() {
+        let p = Prefs::default();
+        assert!(p.double_size && p.tag_on_load);
+        assert_eq!(p.scale(), 2.0);
+    }
+
+    #[test]
+    fn scale_1x() {
+        let p = Prefs { double_size: false, tag_on_load: false };
+        assert_eq!(p.scale(), 1.0);
+    }
+
+    #[test]
+    fn json_roundtrip() {
+        let p = Prefs { double_size: false, tag_on_load: true };
+        let s = serde_json::to_string(&p).unwrap();
+        let q: Prefs = serde_json::from_str(&s).unwrap();
+        assert!(!q.double_size && q.tag_on_load);
+    }
+}

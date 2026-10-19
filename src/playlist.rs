@@ -323,3 +323,76 @@ fn pseudo_random(len: usize) -> usize {
         .unwrap_or(0);
     nanos % len.max(1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn supported_exts() {
+        assert!(is_supported(Path::new("a.mp3")));
+        assert!(is_supported(Path::new("A.FLAC")));
+        assert!(!is_supported(Path::new("a.txt")));
+        assert!(!is_supported(Path::new("noext")));
+    }
+
+    #[test]
+    fn lazy_track_uses_filename() {
+        let t = Track::new(PathBuf::from("/music/Song.mp3"));
+        assert!(!t.loaded);
+        assert_eq!(t.title, "Song");
+        assert_eq!(t.display_name(), "Song");
+    }
+
+    #[test]
+    fn display_with_artist() {
+        let mut t = Track::new(PathBuf::from("x.mp3"));
+        t.artist = "Band".into();
+        t.title = "Hit".into();
+        assert_eq!(t.display_name(), "Band - Hit");
+    }
+
+    #[test]
+    fn next_prev_indices() {
+        let mut pl = Playlist::default();
+        for n in ["a.mp3", "b.mp3", "c.mp3"] {
+            pl.add_file(PathBuf::from(n));
+        }
+        pl.current = Some(0);
+        assert_eq!(pl.next_index(false, false), Some(1));
+        pl.current = Some(2);
+        assert_eq!(pl.next_index(false, false), None);
+        assert_eq!(pl.next_index(false, true), Some(0));
+        pl.current = Some(0);
+        assert_eq!(pl.prev_index(false, false), None);
+        pl.current = Some(1);
+        assert_eq!(pl.prev_index(false, false), Some(0));
+    }
+
+    #[test]
+    fn remove_adjusts_current() {
+        let mut pl = Playlist::default();
+        for n in ["a.mp3", "b.mp3", "c.mp3"] {
+            pl.add_file(PathBuf::from(n));
+        }
+        pl.current = Some(2);
+        pl.remove(0);
+        assert_eq!(pl.len(), 2);
+        assert_eq!(pl.current, Some(1));
+    }
+
+    #[test]
+    fn m3u_roundtrip() {
+        let dir = std::env::temp_dir();
+        let p = dir.join("linamp_test_list.m3u");
+        let mut pl = Playlist::default();
+        pl.tracks.push(Track::new(dir.join("one.mp3")));
+        pl.tracks.push(Track::new(dir.join("two.flac")));
+        save_playlist_file(&p, &pl.tracks).unwrap();
+        let paths = parse_playlist_file(&p);
+        assert_eq!(paths.len(), 2);
+        assert!(paths[0].ends_with("one.mp3"));
+        let _ = std::fs::remove_file(&p);
+    }
+}
