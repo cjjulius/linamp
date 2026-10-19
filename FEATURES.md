@@ -79,13 +79,14 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - ✅ Playlist bottom bar wired: ADD (file/folder), REM (remove selected / crop /
   remove all), SEL (all/none/invert), MISC (sort title/artist/album/duration),
   LIST (new/save/load) — click-to-select, double-click-to-play, wheel scroll
-- 🔜 Per-band EQ DSP, window-shade mode, live spectrum in the classic viz area
+- 🔜 Window-shade polish, live spectrum in the classic viz area
 - 🔜 True "modern" (Winamp 3/5 `.wal` freeform) skin engine — large separate phase
 
 ## Equalizer
 - ✅ 10-band + preamp UI, on/off, reset
-- 🧪 Preamp applies real output gain
-- 🔜 Per-band biquad DSP + presets (Rock, Pop, etc.)
+- ✅ Per-band biquad DSP (RBJ peaking filters) — the sliders and preamp shape
+  the sound live; applied as a rodio `Source` ahead of the visualizer
+- 🔜 EQ presets (Rock, Pop, etc.) and per-track auto-EQ
 
 ## Visualization
 - ✅ Live spectrum analyzer (FFT) and oscilloscope (click to cycle), skin-coloured
@@ -128,7 +129,6 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - 🔜 Full Winamp keyboard-shortcut support — see [SHORTCUTS.md](SHORTCUTS.md)
   (implies: ID3 tag editor Alt+3, jump-to-file J, jump-to-time Ctrl+J,
   time elapsed/remaining Ctrl+T, open URL/stream Ctrl+L)
-- 🔜 Per-band EQ DSP (biquad filters) so the EQ sliders shape the sound
 - 🔜 Always-on-top, window-shade polish
 - 🔜 Live spectrum/oscilloscope inside the classic viz area
 - 🔜 True "modern" (Winamp 3/5 `.wal` freeform) skin engine

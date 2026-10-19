@@ -1635,7 +1635,10 @@ impl LinAmpApp {
                 self.eq_preamp_db = v * 12.0;
                 self.apply_eq();
             }
-            classic::EqRegion::Band(i) if i < 10 => self.eq_bands[i] = v * 12.0,
+            classic::EqRegion::Band(i) if i < 10 => {
+                self.eq_bands[i] = v * 12.0;
+                self.apply_eq();
+            }
             _ => {}
         }
     }
@@ -2168,29 +2171,29 @@ impl LinAmpApp {
                 ui.horizontal(|ui| {
                     for (i, label) in EQ_LABELS.iter().enumerate() {
                         ui.vertical(|ui| {
-                            ui.add(
-                                egui::Slider::new(&mut self.eq_bands[i], -12.0..=12.0)
-                                    .vertical()
-                                    .show_value(false),
-                            );
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut self.eq_bands[i], -12.0..=12.0)
+                                        .vertical()
+                                        .show_value(false),
+                                )
+                                .changed()
+                            {
+                                self.apply_eq();
+                            }
                             ui.label(RichText::new(*label).size(9.0).color(self.theme.lcd_dim));
                         });
                     }
                 });
-                ui.label(
-                    RichText::new(
-                        "Note: per-band DSP is phase 2; preamp currently drives output gain.",
-                    )
-                    .size(10.0)
-                    .italics()
-                    .color(Color32::GRAY),
-                );
             });
     }
 
     fn apply_eq(&mut self) {
-        let preamp = if self.eq_enabled { self.eq_preamp_db } else { 0.0 };
-        self.player.set_preamp_db(preamp);
+        // Push the live settings to the DSP; when disabled the source bypasses
+        // all filtering (and the preamp), matching Winamp's behaviour.
+        self.player
+            .eq()
+            .set(self.eq_enabled, self.eq_preamp_db, self.eq_bands);
     }
 
     fn ui_playlist(&mut self, ui: &mut egui::Ui) {

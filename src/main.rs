@@ -4,6 +4,7 @@
 mod app;
 mod classic;
 mod config;
+mod eq;
 mod library;
 mod player;
 mod playlist;
