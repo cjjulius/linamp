@@ -49,6 +49,7 @@ pub enum Btn {
     Minimize,
     Options,
     TitleBar,
+    Time,
 }
 
 /// (button, x, y, w, h) hit-rects in main-window space, most-specific first.
@@ -69,6 +70,7 @@ pub const REGIONS: &[(Btn, i32, i32, i32, i32)] = &[
     (Btn::Seek, 16, 72, 248, 10),
     (Btn::Volume, 107, 57, 68, 13),
     (Btn::Balance, 177, 57, 38, 13),
+    (Btn::Time, 36, 26, 64, 14), // click to toggle elapsed/remaining
     (Btn::TitleBar, 0, 0, 275, 14), // fallback: drag
 ];
 
@@ -103,6 +105,8 @@ pub struct MainState {
     pub pl_on: bool,
     pub pos: f32,
     pub duration: f32,
+    /// Show time as remaining (−mm:ss) instead of elapsed.
+    pub time_remaining: bool,
     pub volume: f32,
     pub balance: f32,
     pub stereo: bool,
@@ -220,15 +224,24 @@ impl ClassicSkin {
             blit(&mut c, pp, 26, 28, x, 0, 9, 9);
         }
 
-        // Time digits.
+        // Time digits (elapsed, or remaining with a leading minus).
         if let Some(nb) = self.bmp("numbers.bmp").or_else(|| self.bmp("nums_ex.bmp")) {
-            let secs = st.pos.max(0.0) as u32;
+            let remaining = st.time_remaining && st.duration > 0.0;
+            let secs = if remaining {
+                (st.duration - st.pos).max(0.0) as u32
+            } else {
+                st.pos.max(0.0) as u32
+            };
             let mm = (secs / 60).min(99);
             let ss = secs % 60;
             let digits = [mm / 10, mm % 10, ss / 10, ss % 10];
             let xs = [48, 60, 78, 90];
             for (i, &d) in digits.iter().enumerate() {
                 blit(&mut c, nb, xs[i], 26, d * 9, 0, 9, 13);
+            }
+            if remaining {
+                // Minus sign in the LCD colour, just left of the minutes.
+                fill_rect(&mut c, 40, 32, 5, 2, st.fg);
             }
         }
 
@@ -728,6 +741,7 @@ pub fn render_main_png(skin_path: &Path, out: &Path) -> Result<()> {
         pl_on: true,
         pos: 125.0,
         duration: 254.0,
+        time_remaining: false,
         volume: 0.78,
         balance: 0.0,
         stereo: true,
@@ -753,6 +767,7 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
         pl_on: true,
         pos: 73.0,
         duration: 221.0,
+        time_remaining: false,
         volume: 0.8,
         balance: 0.0,
         stereo: true,
@@ -811,6 +826,7 @@ mod tests {
         assert_eq!(region_at(50.0, 95.0), Some(Btn::Play));
         assert_eq!(region_at(7.0, 6.0), Some(Btn::Options));
         assert_eq!(region_at(5.0, 5.0), Some(Btn::TitleBar));
+        assert_eq!(region_at(60.0, 31.0), Some(Btn::Time)); // time display
         assert_eq!(region_at(1000.0, 1000.0), None);
     }
 
