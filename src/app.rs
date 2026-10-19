@@ -889,6 +889,42 @@ impl LinAmpApp {
             kbps,
             khz,
             fg: [self.theme.lcd.r(), self.theme.lcd.g(), self.theme.lcd.b()],
+            viz: match self.viz_mode {
+                VizMode::Spectrum => Some(classic::VizFrame::Spectrum(self.viz_bars.clone())),
+                VizMode::Oscilloscope => Some(classic::VizFrame::Scope(self.viz_samples.clone())),
+                VizMode::Off => None,
+            },
+            viz_spectrum: self
+                .theme
+                .viz_spectrum
+                .iter()
+                .map(|c| [c.r(), c.g(), c.b()])
+                .collect(),
+        }
+    }
+
+    /// Update the visualization data (spectrum bars / oscilloscope samples) for
+    /// the classic analyzer, once per frame.
+    fn step_viz(&mut self) {
+        match self.viz_mode {
+            VizMode::Spectrum => {
+                self.viz.snapshot(&mut self.viz_samples, FFT_SIZE);
+                let rate = self.viz.rate();
+                let bars =
+                    viz::compute_bars(&self.viz_samples, &*self.fft, FFT_SIZE, VIZ_BANDS, rate);
+                for (i, b) in self.viz_bars.iter_mut().enumerate() {
+                    let target = bars.get(i).copied().unwrap_or(0.0);
+                    if target > *b {
+                        *b = target;
+                    } else {
+                        *b = (*b * 0.82).max(target); // peak decay
+                    }
+                }
+            }
+            VizMode::Oscilloscope => {
+                self.viz.snapshot(&mut self.viz_samples, 76);
+            }
+            VizMode::Off => {}
         }
     }
 
@@ -953,6 +989,7 @@ impl LinAmpApp {
             Btn::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Btn::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
             Btn::Time => self.time_remaining = !self.time_remaining,
+            Btn::Viz => self.viz_mode = self.viz_mode.next(),
             Btn::Seek | Btn::Volume | Btn::Balance | Btn::TitleBar | Btn::Options => {}
         }
     }
@@ -2259,6 +2296,11 @@ impl LinAmpApp {
     fn render_window(&mut self, ctx: &egui::Context, win: ClWin) {
         self.handle_window_input(ctx, win);
         self.handle_dropped(ctx);
+
+        // Refresh the analyzer data for the main window.
+        if win == ClWin::Main && !self.main_shade {
+            self.step_viz();
+        }
 
         // Lazily read tags for the playlist rows about to be shown (on-view mode).
         if win == ClWin::Pl && !self.pl_shade {

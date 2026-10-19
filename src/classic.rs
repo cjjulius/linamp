@@ -50,6 +50,7 @@ pub enum Btn {
     Options,
     TitleBar,
     Time,
+    Viz,
 }
 
 /// (button, x, y, w, h) hit-rects in main-window space, most-specific first.
@@ -71,6 +72,7 @@ pub const REGIONS: &[(Btn, i32, i32, i32, i32)] = &[
     (Btn::Volume, 107, 57, 68, 13),
     (Btn::Balance, 177, 57, 38, 13),
     (Btn::Time, 36, 26, 64, 14), // click to toggle elapsed/remaining
+    (Btn::Viz, 24, 43, 76, 13),  // click to cycle visualizer mode
     (Btn::TitleBar, 0, 0, 275, 14), // fallback: drag
 ];
 
@@ -94,6 +96,14 @@ pub enum PlayUi {
     Stopped,
 }
 
+/// One frame of visualization data for the main-window analyzer area.
+pub enum VizFrame {
+    /// Per-band bar heights, 0..1.
+    Spectrum(Vec<f32>),
+    /// Mono samples, -1..1.
+    Scope(Vec<f32>),
+}
+
 /// Everything the compositor needs to draw one frame.
 pub struct MainState {
     pub focused: bool,
@@ -115,6 +125,10 @@ pub struct MainState {
     pub khz: String,
     /// LCD/foreground colour, used for the shade-bar title + time.
     pub fg: [u8; 3],
+    /// Live visualization for the analyzer area (None = off).
+    pub viz: Option<VizFrame>,
+    /// Spectrum bar gradient (bottom→top); empty falls back to `fg`.
+    pub viz_spectrum: Vec<[u8; 3]>,
 }
 
 /// Hit target on a 14px window-shade bar.
@@ -286,6 +300,9 @@ impl ClassicSkin {
         self.draw_text(&mut c, &st.title, 111, 27, 154);
         self.draw_text(&mut c, &st.kbps, 111, 43, 15);
         self.draw_text(&mut c, &st.khz, 156, 43, 10);
+
+        // Visualizer in the empty LCD slot below the time.
+        draw_viz(&mut c, st, 24, 43, 76, 13);
 
         c
     }
@@ -686,6 +703,51 @@ impl ClassicSkin {
     }
 }
 
+/// Draw the main-window visualizer (spectrum bars or oscilloscope) into the
+/// rect (x,y,w,h), using the skin's viz palette (bars) or `fg` (scope/fallback).
+fn draw_viz(c: &mut RgbaImage, st: &MainState, x: i32, y: i32, w: i32, h: i32) {
+    let bar_color = |b: f32| -> [u8; 3] {
+        if st.viz_spectrum.is_empty() {
+            st.fg
+        } else {
+            let n = st.viz_spectrum.len();
+            let idx = (((1.0 - b).clamp(0.0, 1.0) * (n - 1) as f32).round() as usize).min(n - 1);
+            st.viz_spectrum[idx]
+        }
+    };
+    match &st.viz {
+        Some(VizFrame::Spectrum(bars)) => {
+            let n = bars.len().max(1) as i32;
+            let bw = (w as f32 / n as f32).max(1.0);
+            for (i, &b) in bars.iter().enumerate() {
+                let b = b.clamp(0.0, 1.0);
+                let bh = (b * h as f32).round() as i32;
+                if bh <= 0 {
+                    continue;
+                }
+                let x0 = x + (i as f32 * bw) as i32;
+                let bar_w = (bw as i32 - 1).max(1); // 1px gap between bars
+                fill_rect(c, x0, y + h - bh, bar_w, bh, bar_color(b));
+            }
+        }
+        Some(VizFrame::Scope(samples)) => {
+            let n = samples.len().max(2);
+            let mid = y + h / 2;
+            let amp = (h as f32 / 2.0 - 1.0).max(1.0);
+            let yat = |s: f32| mid - (s.clamp(-1.0, 1.0) * amp) as i32;
+            let mut prev = yat(samples[0]);
+            for i in 1..n {
+                let px = x + (i as i32 * w / n as i32);
+                let cur = yat(samples[i]);
+                let (lo, hi) = (prev.min(cur), prev.max(cur));
+                fill_rect(c, px, lo, 1, (hi - lo + 1).max(1), st.fg);
+                prev = cur;
+            }
+        }
+        None => {}
+    }
+}
+
 /// Multiply the RGB of every pixel in a rect by `factor` (0..1) for a quick
 /// "pressed"/shaded look where no dedicated sprite exists.
 fn darken_rect(dst: &mut RgbaImage, x: i32, y: i32, w: i32, h: i32, factor: f32) {
@@ -766,6 +828,13 @@ fn blit_tinted(
     }
 }
 
+/// Sample spectrum bars for the headless previews.
+fn sample_bars() -> Vec<f32> {
+    (0..28)
+        .map(|i| 0.3 + 0.6 * (i as f32 * 0.7).sin().abs())
+        .collect()
+}
+
 /// Headless: render a skin's main window to a PNG (used for `--render-skin`).
 pub fn render_main_png(skin_path: &Path, out: &Path) -> Result<()> {
     let skin = ClassicSkin::load(skin_path)?;
@@ -787,6 +856,8 @@ pub fn render_main_png(skin_path: &Path, out: &Path) -> Result<()> {
         kbps: "128".to_string(),
         khz: "44".to_string(),
         fg: [0, 255, 120],
+        viz: Some(VizFrame::Spectrum(sample_bars())),
+        viz_spectrum: vec![],
     };
     skin.compose_main(&st).save(out)?;
     Ok(())
@@ -813,6 +884,8 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
         kbps: "192".to_string(),
         khz: "44".to_string(),
         fg: [0, 255, 120],
+        viz: Some(VizFrame::Spectrum(sample_bars())),
+        viz_spectrum: vec![],
     });
     let eq = skin.compose_eq(&EqState {
         focused: true,
@@ -866,6 +939,7 @@ mod tests {
         assert_eq!(region_at(7.0, 6.0), Some(Btn::Options));
         assert_eq!(region_at(5.0, 5.0), Some(Btn::TitleBar));
         assert_eq!(region_at(60.0, 31.0), Some(Btn::Time)); // time display
+        assert_eq!(region_at(60.0, 48.0), Some(Btn::Viz)); // visualizer
         assert_eq!(region_at(1000.0, 1000.0), None);
     }
 
