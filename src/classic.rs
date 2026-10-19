@@ -281,8 +281,9 @@ impl ClassicSkin {
             blit(&mut c, bb, tx, 58, sx, 422, 14, 11);
         }
 
-        // Scrolling title, kbps, khz (bitmap font).
-        self.draw_text(&mut c, &st.title, 111, 24, 154);
+        // Scrolling title, kbps, khz (bitmap font). The title sits centered in
+        // its ~12px LCD slot (rows 24-35), so its 6px glyphs start at y=27.
+        self.draw_text(&mut c, &st.title, 111, 27, 154);
         self.draw_text(&mut c, &st.kbps, 111, 43, 15);
         self.draw_text(&mut c, &st.khz, 156, 43, 10);
 
