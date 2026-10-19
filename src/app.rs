@@ -306,7 +306,7 @@ impl LinAmpApp {
             .iter()
             .find(|p| {
                 p.file_stem()
-                    .map(|s| s.to_string_lossy().to_lowercase() == "linamp")
+                    .map(|s| s.to_string_lossy().to_lowercase().contains("base"))
                     .unwrap_or(false)
             })
             .cloned()
