@@ -904,6 +904,17 @@ impl LinAmpApp {
                 VizMode::Oscilloscope => Some(classic::VizFrame::Scope(self.viz_samples.clone())),
                 VizMode::Off => None,
             },
+            viz_spectrum: self
+                .theme
+                .viz_spectrum
+                .iter()
+                .map(|c| [c.r(), c.g(), c.b()])
+                .collect(),
+            viz_peak: [
+                self.theme.viz_peak.r(),
+                self.theme.viz_peak.g(),
+                self.theme.viz_peak.b(),
+            ],
         }
     }
 
