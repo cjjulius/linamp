@@ -308,6 +308,10 @@ pub struct LinAmpApp {
     prefs_open: bool,
     library_open: bool,
     tag_editor: Option<TagEditor>,
+    /// Jump-to-file search query (Some while the dialog is open).
+    jump_file: Option<String>,
+    /// Jump-to-time input buffer (Some while the dialog is open).
+    jump_time: Option<String>,
 
     marquee_offset: f32,
     last_frame: Instant,
@@ -341,6 +345,7 @@ struct KeyState {
     key_e: bool,
     key_g: bool,
     key_a: bool,
+    key_j: bool,
     del: bool,
     insert: bool,
     enter: bool,
@@ -354,6 +359,24 @@ struct TagEditor {
     orig: crate::tags::TagFields,
     editable: bool,
     status: String,
+}
+
+/// Parse a time string ("m:ss", "mm:ss" or plain seconds) into seconds.
+fn parse_time(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some((m, sec)) = s.split_once(':') {
+        let m: f32 = m.trim().parse().ok()?;
+        let sec: f32 = sec.trim().parse().ok()?;
+        if sec < 0.0 || m < 0.0 {
+            return None;
+        }
+        Some(m * 60.0 + sec)
+    } else {
+        s.parse::<f32>().ok().filter(|v| *v >= 0.0)
+    }
 }
 
 impl LinAmpApp {
@@ -430,6 +453,8 @@ impl LinAmpApp {
             prefs_open: false,
             library_open: false,
             tag_editor: None,
+            jump_file: None,
+            jump_time: None,
             marquee_offset: 0.0,
             last_frame: Instant::now(),
             last_device_check: Instant::now(),
@@ -1960,6 +1985,126 @@ impl LinAmpApp {
         }
     }
 
+    /// Jump-to-file: type to filter the playlist, Enter/click to play a match.
+    fn ui_jump_file(&mut self, ctx: &egui::Context) {
+        if self.jump_file.is_none() {
+            return;
+        }
+        let screen = self.win_pos[0] + egui::vec2(28.0, 28.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp — Jump to file")
+            .with_position(screen)
+            .with_inner_size(egui::vec2(360.0, 300.0))
+            .with_min_inner_size(egui::vec2(260.0, 160.0))
+            .with_taskbar(false);
+        let id = egui::ViewportId::from_hash_of("linamp_jumpfile");
+        let mut close = false;
+        let mut play: Option<usize> = None;
+        let mut enter = false;
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let q = {
+                    let query = self.jump_file.as_mut().unwrap();
+                    ui.label("Jump to file (type to filter):");
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(query).hint_text("title / artist / file"),
+                    );
+                    resp.request_focus();
+                    query.to_lowercase()
+                };
+                ui.separator();
+                let mut first_match: Option<usize> = None;
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for (i, t) in self.playlist.tracks.iter().enumerate() {
+                        let hay = format!(
+                            "{} {}",
+                            t.display_name(),
+                            t.path.file_name().map(|s| s.to_string_lossy()).unwrap_or_default()
+                        )
+                        .to_lowercase();
+                        if q.is_empty() || hay.contains(&q) {
+                            if first_match.is_none() {
+                                first_match = Some(i);
+                            }
+                            if ui.selectable_label(false, t.display_name()).clicked() {
+                                play = Some(i);
+                            }
+                        }
+                    }
+                });
+                enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
+                if enter {
+                    play = play.or(first_match);
+                }
+                if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
+                    close = true;
+                }
+            });
+        });
+        if let Some(i) = play {
+            self.play_index(i);
+            close = true;
+        }
+        if close {
+            self.jump_file = None;
+        }
+    }
+
+    /// Jump-to-time: enter m:ss (or seconds) and seek there in the current track.
+    fn ui_jump_time(&mut self, ctx: &egui::Context) {
+        if self.jump_time.is_none() {
+            return;
+        }
+        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp — Jump to time")
+            .with_position(screen)
+            .with_inner_size(egui::vec2(260.0, 110.0))
+            .with_resizable(false)
+            .with_taskbar(false);
+        let id = egui::ViewportId::from_hash_of("linamp_jumptime");
+        let mut close = false;
+        let mut seek_to: Option<f32> = None;
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (input, parsed) = {
+                    let buf = self.jump_time.as_mut().unwrap();
+                    ui.label("Jump to time (m:ss or seconds):");
+                    let resp =
+                        ui.add(egui::TextEdit::singleline(buf).hint_text("1:23"));
+                    resp.request_focus();
+                    (buf.clone(), parse_time(buf))
+                };
+                let _ = input;
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(parsed.is_some(), egui::Button::new("Jump")).clicked() {
+                        seek_to = parsed;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+                if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if let Some(s) = parsed {
+                        seek_to = Some(s);
+                    }
+                }
+                if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
+                    close = true;
+                }
+            });
+        });
+        if let Some(s) = seek_to {
+            self.player.seek(Duration::from_secs_f32(s));
+            self.seek_preview = s;
+            close = true;
+        }
+        if close {
+            self.jump_time = None;
+        }
+    }
+
     fn apply_eq_slider(&mut self, region: classic::EqRegion, ey: f32) {
         let v = classic::eq_value_at_y(ey);
         match region {
@@ -1988,6 +2133,8 @@ impl LinAmpApp {
         self.ui_prefs(ctx);
         self.ui_library_window(ctx);
         self.ui_tag_editor(ctx);
+        self.ui_jump_file(ctx);
+        self.ui_jump_time(ctx);
 
         // Initialise window positions from the real main window, once.
         if !self.positions_init {
@@ -2225,6 +2372,7 @@ impl LinAmpApp {
             k.key_e = i.key_pressed(Key::E);
             k.key_g = i.key_pressed(Key::G);
             k.key_a = i.key_pressed(Key::A);
+            k.key_j = i.key_pressed(Key::J);
             k.del = i.key_pressed(Key::Delete);
             k.insert = i.key_pressed(Key::Insert);
             k.enter = i.key_pressed(Key::Enter);
@@ -2295,6 +2443,13 @@ impl LinAmpApp {
         }
         if k.alt && k.key_3 {
             self.open_tag_editor();
+        }
+        if k.key_j {
+            if k.ctrl {
+                self.jump_time = Some(String::new());
+            } else {
+                self.jump_file = Some(String::new());
+            }
         }
         // Window toggles.
         if k.alt && k.key_g {
@@ -3102,7 +3257,18 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dock_group_from_main, rects_docked};
+    use super::{dock_group_from_main, parse_time, rects_docked};
+
+    #[test]
+    fn parse_time_formats() {
+        assert_eq!(parse_time("1:23"), Some(83.0));
+        assert_eq!(parse_time("0:05"), Some(5.0));
+        assert_eq!(parse_time("90"), Some(90.0));
+        assert_eq!(parse_time(" 2:00 "), Some(120.0));
+        assert_eq!(parse_time(""), None);
+        assert_eq!(parse_time("abc"), None);
+        assert_eq!(parse_time("-5"), None);
+    }
     use egui::{pos2, vec2, Rect};
 
     fn r(x: f32, y: f32, w: f32, h: f32) -> Rect {
