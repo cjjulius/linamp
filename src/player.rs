@@ -188,6 +188,7 @@ impl Player {
         }
         self.state = PlayState::Stopped;
         self.fade = 1.0; // reset so the next track isn't faded
+        self.viz.clear(); // silence the analyzer so its bars fall to zero
     }
 
     /// Current playback position within the track.
