@@ -29,6 +29,8 @@ pub struct Player {
     sink: Option<Sink>,
     state: PlayState,
     volume: f32,
+    /// Extra output gain multiplier for fades (1.0 = normal).
+    fade: f32,
     current_path: Option<PathBuf>,
     viz: Arc<VizShared>,
     eq: Arc<EqShared>,
@@ -45,6 +47,7 @@ impl Player {
             sink: None,
             state: PlayState::Stopped,
             volume: 0.8,
+            fade: 1.0,
             current_path: None,
             viz: VizShared::new(),
             eq: EqShared::new(),
@@ -117,10 +120,16 @@ impl Player {
         self.apply_gain();
     }
 
+    /// Set the fade multiplier (1.0 = normal) applied on top of the volume.
+    pub fn set_fade(&mut self, f: f32) {
+        self.fade = f.clamp(0.0, 1.0);
+        self.apply_gain();
+    }
+
     fn apply_gain(&self) {
         if let Some(sink) = &self.sink {
-            // Preamp now lives in the EQ DSP; the sink carries plain volume.
-            sink.set_volume(self.volume);
+            // Preamp now lives in the EQ DSP; the sink carries volume × fade.
+            sink.set_volume(self.volume * self.fade);
         }
     }
 
@@ -178,6 +187,8 @@ impl Player {
             sink.stop();
         }
         self.state = PlayState::Stopped;
+        self.fade = 1.0; // reset so the next track isn't faded
+        self.viz.clear(); // silence the analyzer so its bars fall to zero
     }
 
     /// Current playback position within the track.

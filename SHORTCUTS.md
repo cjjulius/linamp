@@ -14,8 +14,8 @@ Goal: match classic Winamp as closely as possible. ✅ = implemented today,
 | Space | Play/pause toggle | ✅ (LinAmp extra) |
 | ← / → | Seek −5s / +5s | ✅ |
 | ↑ / ↓ | Volume up / down | ✅ |
-| Shift+V | Stop with fade-out | 🔜 |
-| Ctrl+V | Stop after current track | 🔜 |
+| Shift+V | Stop with fade-out | ✅ |
+| Ctrl+V | Stop after current track | ✅ (toggle) |
 | R | Toggle repeat | ✅ |
 | S | Toggle shuffle | ✅ |
 | Ctrl+T | Toggle time elapsed / remaining | ✅ (also click the time display) |
@@ -50,4 +50,3 @@ Goal: match classic Winamp as closely as possible. ✅ = implemented today,
 ## Features these shortcuts imply (to build)
 - Open-location / streaming (Ctrl+L)
 - Double-size / scaling toggle (Ctrl+D) — see preferences
-- Stop-after-current and stop-with-fade (Ctrl+V / Shift+V)

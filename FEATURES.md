@@ -18,6 +18,7 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - ✅ Repeat-all / Repeat-one / Shuffle
 - ✅ Auto-advance on track end
 - ✅ Stereo balance (the balance slider pans the output, with centre snap)
+- ✅ Stop after current track (Ctrl+V) and stop with fade-out (Shift+V)
 - 🔜 Crossfade, gapless, ReplayGain
 - 🔜 Playback speed / pitch
 

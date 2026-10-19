@@ -18,6 +18,8 @@ const FFT_SIZE: usize = 2048;
 const VIZ_BANDS: usize = 28;
 /// Fewer, wider bars for the small classic analyzer (Winamp-like).
 const CLASSIC_BANDS: usize = 19;
+/// Duration of the stop-with-fade (Shift+V) fade-out, in seconds.
+const FADE_SECS: f32 = 2.0;
 /// Magnetic docking snap distance in points.
 const SNAP: f32 = 16.0;
 
@@ -283,6 +285,10 @@ pub struct LinAmpApp {
     classic_seek_preview: Option<f32>,
     balance: f32,
     time_remaining: bool,
+    /// Stop when the current track ends instead of advancing (Ctrl+V).
+    stop_after_current: bool,
+    /// Remaining fade-out time in seconds while stopping with fade (Shift+V).
+    fade: Option<f32>,
     mode_init: bool,
     eq_visible: bool,
     pl_visible: bool,
@@ -440,6 +446,8 @@ impl LinAmpApp {
             classic_seek_preview: None,
             balance: 0.0,
             time_remaining: false,
+            stop_after_current: false,
+            fade: None,
             mode_init: true,
             eq_visible: false,
             pl_visible: false,
@@ -2508,9 +2516,24 @@ impl LinAmpApp {
         if k.pause {
             self.player.pause();
         }
-        if k.stop && !k.ctrl && !k.shift {
-            // Plain V stops; Ctrl+V (stop-after) and Shift+V (fade) are reserved.
-            self.player.stop();
+        if k.stop {
+            if k.shift {
+                // Stop with a fade-out.
+                if self.player.state() != PlayState::Stopped {
+                    self.fade = Some(FADE_SECS);
+                    self.status = "Fading out…".into();
+                }
+            } else if k.ctrl {
+                // Toggle stop-after-current.
+                self.stop_after_current = !self.stop_after_current;
+                self.status = format!(
+                    "Stop after current track: {}",
+                    if self.stop_after_current { "ON" } else { "off" }
+                );
+            } else {
+                self.player.stop();
+                self.fade = None;
+            }
         }
         if k.next {
             self.next();
@@ -3217,8 +3240,24 @@ impl eframe::App for LinAmpApp {
 
         self.handle_shortcuts(ctx, ClWin::Main);
 
+        // Advance a running fade-out; stop when it reaches zero.
+        if let Some(t) = self.fade {
+            let t = t - dt;
+            if t <= 0.0 {
+                self.player.stop();
+                self.player.set_fade(1.0);
+                self.fade = None;
+            } else {
+                self.player.set_fade(t / FADE_SECS);
+                self.fade = Some(t);
+            }
+        }
+
         if self.player.finished() {
-            if self.repeat_one {
+            if self.stop_after_current {
+                self.player.stop();
+                self.stop_after_current = false; // one-shot, like Winamp
+            } else if self.repeat_one {
                 if let Some(i) = self.playlist.current {
                     self.play_index(i);
                 }
