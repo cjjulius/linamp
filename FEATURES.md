@@ -13,6 +13,7 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - ✅ Decode MP3, FLAC, OGG/Vorbis, WAV, AAC/M4A, Opus, WavPack, AIFF
 - ✅ Play / Pause / Stop / Next / Previous
 - ✅ Seek bar (scrub) with position + total time
+- ✅ Time display toggles elapsed ↔ remaining (−mm:ss) — Ctrl+T or click the time
 - ✅ Volume control
 - ✅ Repeat-all / Repeat-one / Shuffle
 - ✅ Auto-advance on track end

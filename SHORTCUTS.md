@@ -18,7 +18,7 @@ Goal: match classic Winamp as closely as possible. ✅ = implemented today,
 | Ctrl+V | Stop after current track | 🔜 |
 | R | Toggle repeat | ✅ |
 | S | Toggle shuffle | ✅ |
-| Ctrl+T | Toggle time elapsed / remaining | 🔜 (needs remaining-time mode) |
+| Ctrl+T | Toggle time elapsed / remaining | ✅ (also click the time display) |
 
 ## Files / navigation
 | Keys | Action | Status |
@@ -48,7 +48,6 @@ Goal: match classic Winamp as closely as possible. ✅ = implemented today,
 
 ## Features these shortcuts imply (to build)
 - ID3 tag editor (Alt+3), jump-to-file (J) and jump-to-time (Ctrl+J) dialogs
-- Elapsed/remaining time toggle (Ctrl+T)
 - Open-location / streaming (Ctrl+L)
 - Double-size / scaling toggle (Ctrl+D) — see preferences
 - Stop-after-current and stop-with-fade (Ctrl+V / Shift+V)

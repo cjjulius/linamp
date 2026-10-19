@@ -247,6 +247,7 @@ pub struct LinAmpApp {
     pressed_btn: Option<Btn>,
     classic_seek_preview: Option<f32>,
     balance: f32,
+    time_remaining: bool,
     mode_init: bool,
     eq_visible: bool,
     pl_visible: bool,
@@ -302,6 +303,7 @@ struct KeyState {
     ctrl: bool,
     key_d: bool,
     key_p: bool,
+    key_t: bool,
 }
 
 impl LinAmpApp {
@@ -350,6 +352,7 @@ impl LinAmpApp {
             pressed_btn: None,
             classic_seek_preview: None,
             balance: 0.0,
+            time_remaining: false,
             mode_init: true,
             eq_visible: false,
             pl_visible: false,
@@ -795,6 +798,7 @@ impl LinAmpApp {
             pl_on: self.pl_visible,
             pos,
             duration: dur,
+            time_remaining: self.time_remaining,
             volume: self.player.volume(),
             balance: self.balance,
             stereo,
@@ -865,6 +869,7 @@ impl LinAmpApp {
             }
             Btn::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Btn::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            Btn::Time => self.time_remaining = !self.time_remaining,
             Btn::Seek | Btn::Volume | Btn::Balance | Btn::TitleBar | Btn::Options => {}
         }
     }
@@ -1955,6 +1960,7 @@ impl LinAmpApp {
             k.ctrl = i.modifiers.ctrl || i.modifiers.command;
             k.key_d = i.key_pressed(Key::D);
             k.key_p = i.key_pressed(Key::P);
+            k.key_t = i.key_pressed(Key::T);
         });
 
         if k.play {
@@ -2002,6 +2008,9 @@ impl LinAmpApp {
         }
         if k.ctrl && k.key_p {
             self.prefs_open = !self.prefs_open;
+        }
+        if k.ctrl && k.key_t {
+            self.time_remaining = !self.time_remaining;
         }
     }
 
