@@ -580,45 +580,12 @@ impl ClassicSkin {
             // Graph background.
             blit(&mut c, e, 86, 17, 0, 294, 113, 19);
 
-            // Each slider: the skin's colored position bar (28 sprites in two
-            // rows of 14, nominally green at top/boost → red at bottom/cut) plus
-            // the grey thumb on top. Skins draw these very differently — a clean
-            // gradient (base), full-height greyscale bars (Iria), textured bars
-            // (Valentine), segmented LED meters (Topaz) — so "is this sprite
-            // real?" is any genuine content, not just a saturated colour: a
-            // sprite counts if it has colour OR vertical light/dark variation.
-            // Sprites past the edge of a short EQMAIN (e.g. Alita ships no
-            // slider bank at all) simply don't exist, so bounds-check first.
-            let (ew, eh) = e.dimensions();
-            let present = |col: i32, row: i32| -> bool {
-                let (x0, y0) = (13 + col * 15, 164 + row * 65);
-                if x0 < 0 || y0 < 0 || x0 as u32 + 14 > ew || y0 as u32 + 63 > eh {
-                    return false;
-                }
-                let (mut max_sat, mut min_b, mut max_b) = (0i32, 255i32, 0i32);
-                let mut y = y0;
-                while y < y0 + 63 {
-                    for dx in [4, 7, 10] {
-                        let p = e.get_pixel((x0 + dx) as u32, y as u32);
-                        let (mx, mn) = (
-                            p[0].max(p[1]).max(p[2]) as i32,
-                            p[0].min(p[1]).min(p[2]) as i32,
-                        );
-                        max_sat = max_sat.max(mx - mn);
-                        let b = (p[0] as i32 + p[1] as i32 + p[2] as i32) / 3;
-                        min_b = min_b.min(b);
-                        max_b = max_b.max(b);
-                    }
-                    y += 2;
-                }
-                max_sat > 40 || (max_b - min_b) > 60
-            };
             // Which of the 28 slider sprites the skin actually provides. A
             // requested position with no sprite snaps to the nearest one the
             // skin does have, so a partially-skinned EQ keeps the skin's look.
             // When the skin ships no slider bank at all we draw only the thumb
             // over the background rather than synthesize garish bars.
-            let valid: Vec<i32> = (0..28).filter(|&i| present(i % 14, i / 14)).collect();
+            let valid = eq_valid_sprites(e);
             let draw_thumb = |c: &mut RgbaImage, e: &RgbaImage, colx: i32, v: f32, sel: bool| {
                 let frac = ((1.0 - v) / 2.0).clamp(0.0, 1.0);
                 let idx = (frac * 27.0).round() as i32; // 0 = top, 27 = bottom
@@ -756,6 +723,45 @@ impl ClassicSkin {
             x += 5;
         }
     }
+}
+
+/// Which of the 28 EQ slider sprites (two rows of 14 in EQMAIN.BMP, 14×63 each
+/// at x = 13+col*15, y = 164+row*65) a skin actually ships, left→right/top→bottom
+/// = index 0..28 (0 = full boost, 27 = full cut).
+///
+/// Skins draw these very differently — a clean green→red gradient (base),
+/// full-height greyscale bars (Iria), textured character bars (Valentine),
+/// segmented LED meters (Topaz) — so "is this sprite real?" means any genuine
+/// content, not just a saturated colour: a sprite counts if it shows colour OR
+/// vertical light/dark variation. Sprites past the edge of a short EQMAIN (e.g.
+/// Alita, which ships no slider bank at all) don't exist, so bounds-check first
+/// and return an empty list rather than reading out of bounds.
+fn eq_valid_sprites(e: &RgbaImage) -> Vec<i32> {
+    let (ew, eh) = e.dimensions();
+    let present = |col: i32, row: i32| -> bool {
+        let (x0, y0) = (13 + col * 15, 164 + row * 65);
+        if x0 < 0 || y0 < 0 || x0 as u32 + 14 > ew || y0 as u32 + 63 > eh {
+            return false;
+        }
+        let (mut max_sat, mut min_b, mut max_b) = (0i32, 255i32, 0i32);
+        let mut y = y0;
+        while y < y0 + 63 {
+            for dx in [4, 7, 10] {
+                let p = e.get_pixel((x0 + dx) as u32, y as u32);
+                let (mx, mn) = (
+                    p[0].max(p[1]).max(p[2]) as i32,
+                    p[0].min(p[1]).min(p[2]) as i32,
+                );
+                max_sat = max_sat.max(mx - mn);
+                let b = (p[0] as i32 + p[1] as i32 + p[2] as i32) / 3;
+                min_b = min_b.min(b);
+                max_b = max_b.max(b);
+            }
+            y += 2;
+        }
+        max_sat > 40 || (max_b - min_b) > 60
+    };
+    (0..28).filter(|&i| present(i % 14, i / 14)).collect()
 }
 
 /// Classic Winamp-style analyzer gradient by vertical fraction (0=bottom green,
@@ -1071,5 +1077,99 @@ mod tests {
         assert_eq!(char_cell('A'), (0, 0));
         assert_eq!(char_cell('0'), (0, 1));
         assert_eq!(char_cell(' '), (30, 0));
+    }
+
+    // --- EQ slider sprite detection (regressions from the colored-slider work) ---
+    //
+    // The bundled skins under skins/ are the fixtures. These lock in three bugs:
+    //   * Topaz (segmented LED meters) and Iria (greyscale bars) were detected as
+    //     "missing" by a saturation-only test, so Topaz synthesized a gradient and
+    //     Iria snapped good bars to its red sprites ("red at random").
+    //   * Alita ships a short EQMAIN with no slider bank; sampling it panicked.
+    // Keep these green before wiring skins into the Library.
+
+    fn skins_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skins")
+    }
+
+    fn load_skin(name: &str) -> ClassicSkin {
+        ClassicSkin::load(&skins_dir().join(name)).unwrap()
+    }
+
+    fn valid_count(name: &str) -> usize {
+        let skin = load_skin(name);
+        eq_valid_sprites(skin.bmp("eqmain.bmp").unwrap()).len()
+    }
+
+    const EQ_TEST_STATE: EqState = EqState {
+        focused: true,
+        on: true,
+        auto: false,
+        pressed: None,
+        preamp: 0.0,
+        bands: [0.6, 0.3, 0.0, -0.2, -0.4, -0.2, 0.1, 0.3, 0.5, 0.7],
+    };
+
+    #[test]
+    fn base_skin_has_full_slider_bank() {
+        // The reference skin ships all 28 gradient sprites.
+        assert_eq!(valid_count("linamp_base_skin.wsz"), 28);
+    }
+
+    #[test]
+    fn topaz_segmented_meters_are_detected() {
+        // Regression: segmented teal meters once read as blank -> synthesized.
+        // The empty bottom-of-travel sprite may legitimately not count, so allow
+        // a little slack but require nearly the whole bank.
+        assert!(valid_count("TopazAmp1-2.wsz") >= 25);
+    }
+
+    #[test]
+    fn iria_greyscale_bars_are_detected() {
+        // Regression: greyscale (low-saturation) bars once read as blank, so good
+        // positions snapped to Iria's red sprites ("red at random").
+        assert!(valid_count("Iria_Amp02.wsz") >= 25);
+    }
+
+    #[test]
+    fn alita_short_eqmain_has_no_slider_bank() {
+        // Regression: Alita's EQMAIN is too short to hold the slider bank; the old
+        // sampler read past the bottom and panicked. It must report zero sprites
+        // (so only the thumb is drawn) and never synthesize garish bars.
+        let skin = load_skin("Battle_Angel_Alita.wsz");
+        let eqmain = skin.bmp("eqmain.bmp").unwrap();
+        assert!(eqmain.height() < 227, "fixture changed: Alita EQMAIN grew");
+        assert_eq!(eq_valid_sprites(eqmain).len(), 0);
+    }
+
+    #[test]
+    fn every_bundled_skin_composes_eq_without_panic() {
+        // Composing the EQ for any bundled skin must not panic and must yield a
+        // correctly sized window. Guards the Alita-style out-of-bounds crash and
+        // anything similar a new skin might trip.
+        let mut checked = 0;
+        for entry in std::fs::read_dir(skins_dir()).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("wsz") {
+                continue;
+            }
+            let Ok(skin) = ClassicSkin::load(&path) else {
+                continue;
+            };
+            let img = skin.compose_eq(&EQ_TEST_STATE);
+            assert_eq!((img.width(), img.height()), (275, EQ_H), "{path:?}");
+            // A skin that has an EQMAIN tall enough for the bank should detect at
+            // least some sprites, so we never silently fall back to thumb-only.
+            if let Some(e) = skin.bmp("eqmain.bmp") {
+                if e.height() >= 227 {
+                    assert!(
+                        !eq_valid_sprites(e).is_empty(),
+                        "no slider sprites detected for {path:?}",
+                    );
+                }
+            }
+            checked += 1;
+        }
+        assert!(checked >= 5, "expected several bundled skins, found {checked}");
     }
 }
