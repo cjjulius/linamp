@@ -464,6 +464,35 @@ impl LinAmpApp {
         }
     }
 
+    /// Append any files/folders/playlists dropped onto this viewport's window.
+    fn handle_dropped(&mut self, ctx: &egui::Context) {
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect()
+        });
+        if dropped.is_empty() {
+            return;
+        }
+        let was_empty = self.playlist.is_empty();
+        for p in dropped {
+            let is_pl = matches!(
+                p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
+                Some("m3u") | Some("m3u8") | Some("pls")
+            );
+            if p.is_dir() {
+                self.playlist.add_folder(&p);
+            } else if is_pl {
+                self.playlist.load_file(&p);
+            } else {
+                self.playlist.add_file(p);
+            }
+        }
+        self.maybe_scan_tags();
+        if was_empty && !self.playlist.is_empty() {
+            self.play_index(0);
+        }
+        self.status = format!("{} track(s) in playlist.", self.playlist.len());
+    }
+
     fn open_folder(&mut self) {
         if let Some(dir) = rfd::FileDialog::new().pick_folder() {
             let was_empty = self.playlist.is_empty();
@@ -1427,6 +1456,7 @@ impl LinAmpApp {
 
     fn render_window(&mut self, ctx: &egui::Context, win: ClWin) {
         self.handle_window_input(ctx, win);
+        self.handle_dropped(ctx);
 
         // Lazily read tags for the playlist rows about to be shown (on-view mode).
         if win == ClWin::Pl && !self.pl_shade {
@@ -2198,32 +2228,6 @@ impl eframe::App for LinAmpApp {
 
         self.handle_shortcuts(ctx);
 
-        // Drag-and-drop: files/folders/playlists dropped on the window are appended.
-        let dropped: Vec<PathBuf> = ctx.input(|i| {
-            i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect()
-        });
-        if !dropped.is_empty() {
-            let was_empty = self.playlist.is_empty();
-            for p in dropped {
-                let is_pl = matches!(
-                    p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
-                    Some("m3u") | Some("m3u8") | Some("pls")
-                );
-                if p.is_dir() {
-                    self.playlist.add_folder(&p);
-                } else if is_pl {
-                    self.playlist.load_file(&p);
-                } else {
-                    self.playlist.add_file(p);
-                }
-            }
-            self.maybe_scan_tags();
-            if was_empty && !self.playlist.is_empty() {
-                self.play_index(0);
-            }
-            self.status = format!("{} track(s) in playlist.", self.playlist.len());
-        }
-
         if self.player.finished() {
             if self.repeat_one {
                 if let Some(i) = self.playlist.current {
@@ -2246,6 +2250,9 @@ impl eframe::App for LinAmpApp {
             ctx.request_repaint_after(Duration::from_millis(33));
             return;
         }
+
+        // Modern fallback window: handle drops here.
+        self.handle_dropped(ctx);
 
         egui::TopBottomPanel::top("player").show(ctx, |ui| {
             ui.add_space(4.0);
