@@ -30,7 +30,7 @@ fn win_idx(w: ClWin) -> usize {
 /// Window size (points) for a popup menu, from its item/separator count.
 fn popup_dims(kind: Popup) -> (f32, f32) {
     let (buttons, seps) = match kind {
-        Popup::Options => (7, 3),
+        Popup::Options => (8, 3),
         Popup::PlAdd => (2, 0),
         Popup::PlRem => (3, 0),
         Popup::PlSel => (3, 0),
@@ -275,6 +275,7 @@ pub struct LinAmpApp {
     skin_path: Option<PathBuf>,
     scale: f32,
     prefs_open: bool,
+    library_open: bool,
 
     marquee_offset: f32,
     last_frame: Instant,
@@ -374,6 +375,7 @@ impl LinAmpApp {
             skin_path: None,
             scale,
             prefs_open: false,
+            library_open: false,
             marquee_offset: 0.0,
             last_frame: Instant::now(),
             last_device_check: Instant::now(),
@@ -1033,6 +1035,11 @@ impl LinAmpApp {
                                 close = true;
                             }
                             ui.separator();
+                            if item(ui, "Media Library…") {
+                                self.library_open = true;
+                                self.refresh_library();
+                                close = true;
+                            }
                             if item(ui, "Load skin…") {
                                 self.load_skin_dialog(ctx);
                                 close = true;
@@ -1691,6 +1698,34 @@ impl LinAmpApp {
         }
     }
 
+    /// The media library + search, in its own window (the classic UI has no
+    /// built-in library view). Reuses the same list UI as the modern view.
+    fn ui_library_window(&mut self, ctx: &egui::Context) {
+        if !self.library_open {
+            return;
+        }
+        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp Media Library")
+            .with_position(screen)
+            .with_inner_size(egui::vec2(460.0, 360.0))
+            .with_min_inner_size(egui::vec2(320.0, 200.0))
+            .with_taskbar(false);
+        let id = egui::ViewportId::from_hash_of("linamp_library");
+        let mut close = false;
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                self.ui_library(ui);
+            });
+            if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
+                close = true;
+            }
+        });
+        if close {
+            self.library_open = false;
+        }
+    }
+
     fn apply_eq_slider(&mut self, region: classic::EqRegion, ey: f32) {
         let v = classic::eq_value_at_y(ey);
         match region {
@@ -1717,6 +1752,7 @@ impl LinAmpApp {
         // Root viewport = main window.
         self.render_window(ctx, ClWin::Main);
         self.ui_prefs(ctx);
+        self.ui_library_window(ctx);
 
         // Initialise window positions from the real main window, once.
         if !self.positions_init {
