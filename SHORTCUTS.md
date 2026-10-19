@@ -26,8 +26,8 @@ Goal: match classic Winamp as closely as possible. ✅ = implemented today,
 | L | Open / play file(s) | ✅ |
 | Shift+L | Open folder | ✅ |
 | Ctrl+L | Open location (URL / stream) | 🔜 (needs streaming) |
-| J | Jump to file (search) | 🔜 (needs jump-to-file dialog) |
-| Ctrl+J | Jump to time | 🔜 (needs jump-to-time dialog) |
+| J | Jump to file (search) | ✅ |
+| Ctrl+J | Jump to time | ✅ |
 
 ## Windows / view
 | Keys | Action | Status |
@@ -48,7 +48,6 @@ Goal: match classic Winamp as closely as possible. ✅ = implemented today,
 | Insert | Add file(s) | ✅ |
 
 ## Features these shortcuts imply (to build)
-- Jump-to-file (J) and jump-to-time (Ctrl+J) dialogs
 - Open-location / streaming (Ctrl+L)
 - Double-size / scaling toggle (Ctrl+D) — see preferences
 - Stop-after-current and stop-with-fade (Ctrl+V / Shift+V)
