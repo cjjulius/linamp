@@ -588,6 +588,51 @@ impl ClassicSkin {
             // Graph background.
             blit(&mut c, e, 86, 17, 0, 294, 113, 19);
 
+            // EQ response curve through the 10 bands, drawn in the graph box
+            // (dest 86,17 / 113×19) and coloured by EQMAIN's 19-row line
+            // gradient at x=115,y=294 (red = boost at the top, green = cut at the
+            // bottom), the way classic Winamp does. Skipped for skins whose
+            // EQMAIN is too short to carry the gradient (e.g. Alita), matching
+            // how the slider bank degrades.
+            if e.width() > 115 && e.height() >= 294 + 19 {
+                const GX: i32 = 86;
+                const GY: i32 = 17;
+                const GW: i32 = 113;
+                const GH: i32 = 19;
+                let bands = st.bands;
+                // Catmull-Rom sample of the band values at fx in 0.0..=9.0, so
+                // the curve passes smoothly through each slider's value.
+                let sample = |fx: f32| -> f32 {
+                    let i = fx.floor() as i32;
+                    let t = fx - i as f32;
+                    let g = |k: i32| bands[k.clamp(0, 9) as usize];
+                    let (p0, p1, p2, p3) = (g(i - 1), g(i), g(i + 1), g(i + 2));
+                    0.5 * (2.0 * p1
+                        + (-p0 + p2) * t
+                        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t
+                        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t * t * t)
+                };
+                // value (−1..1, bottom..top) -> graph row 0..=18 (top..bottom).
+                let row_of = |v: f32| -> i32 {
+                    (((1.0 - v) * 0.5) * (GH - 1) as f32)
+                        .round()
+                        .clamp(0.0, (GH - 1) as f32) as i32
+                };
+                let mut prev: Option<i32> = None;
+                for gx in 0..GW {
+                    let fx = gx as f32 / (GW - 1) as f32 * 9.0;
+                    let row = row_of(sample(fx).clamp(-1.0, 1.0));
+                    // Fill the span to the previous column so steep sections of
+                    // the curve stay a continuous line rather than dotted.
+                    let (lo, hi) = prev.map_or((row, row), |p| (row.min(p), row.max(p)));
+                    for r in lo..=hi {
+                        let px = *e.get_pixel(115, (294 + r) as u32);
+                        c.put_pixel((GX + gx) as u32, (GY + r) as u32, px);
+                    }
+                    prev = Some(row);
+                }
+            }
+
             // Which of the 28 slider sprites the skin actually provides. A
             // requested position with no sprite snaps to the nearest one the
             // skin does have, so a partially-skinned EQ keeps the skin's look.
@@ -1183,6 +1228,30 @@ mod tests {
     fn base_skin_has_full_slider_bank() {
         // The reference skin ships all 28 gradient sprites.
         assert_eq!(valid_count("linamp_base_skin.wsz"), 28);
+    }
+
+    #[test]
+    fn base_skin_draws_eq_curve() {
+        // The response curve lives in the graph box (dest 86,17 / 113×19) and is
+        // coloured by EQMAIN's line gradient at x=115, y=294 (row 0 = top). With
+        // every band maxed the curve hugs the top row; fully cut, the bottom row.
+        let skin = load_skin("linamp_base_skin.wsz");
+        let eqmain = skin.bmp("eqmain.bmp").unwrap();
+        let grad_top = *eqmain.get_pixel(115, 294);
+        let grad_bot = *eqmain.get_pixel(115, 294 + 18);
+
+        let mut st = EQ_TEST_STATE;
+        st.bands = [1.0; 10];
+        let img = skin.compose_eq(&st);
+        for gx in [100u32, 140, 180] {
+            assert_eq!(*img.get_pixel(gx, 17), grad_top, "top-row curve at x={gx}");
+        }
+
+        st.bands = [-1.0; 10];
+        let img = skin.compose_eq(&st);
+        for gx in [100u32, 140, 180] {
+            assert_eq!(*img.get_pixel(gx, 35), grad_bot, "bottom-row curve at x={gx}");
+        }
     }
 
     #[test]
