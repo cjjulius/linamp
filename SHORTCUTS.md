@@ -24,7 +24,7 @@ Goal: match classic Winamp as closely as possible. ✅ = implemented today,
 | Keys | Action | Status |
 |------|--------|--------|
 | L | Open / play file(s) | ✅ |
-| Shift+L | Open folder | 🔜 (map to add folder) |
+| Shift+L | Open folder | ✅ |
 | Ctrl+L | Open location (URL / stream) | 🔜 (needs streaming) |
 | J | Jump to file (search) | 🔜 (needs jump-to-file dialog) |
 | Ctrl+J | Jump to time | 🔜 (needs jump-to-time dialog) |
@@ -32,19 +32,20 @@ Goal: match classic Winamp as closely as possible. ✅ = implemented today,
 ## Windows / view
 | Keys | Action | Status |
 |------|--------|--------|
-| Alt+E | Toggle playlist editor | 🔜 |
-| Alt+G | Toggle equalizer | 🔜 |
-| Ctrl+D | Toggle double-size mode | 🔜 (ties into the 1x/2x scaling option) |
-| Ctrl+P | Preferences | 🔜 (needs preferences window) |
+| Alt+E | Toggle playlist editor | ✅ |
+| Alt+G | Toggle equalizer | ✅ |
+| Ctrl+D | Toggle double-size mode | ✅ |
+| Ctrl+P | Preferences | ✅ |
 
 ## Playlist editor
 | Keys | Action | Status |
 |------|--------|--------|
 | Alt+3 | View/edit file info (ID3 tag editor) | ✅ (MP3; more formats later) |
-| Enter | Play selected | ✅ (double-click today) |
-| Delete | Remove selected | 🔜 (menu today) |
-| Ctrl+A | Select all | 🔜 (menu today) |
-| Insert | Add file | 🔜 |
+| ↑ / ↓ | Move selection (playlist focused) | ✅ |
+| Enter | Play selected | ✅ (Enter or double-click) |
+| Delete | Remove selected | ✅ |
+| Ctrl+A | Select all | ✅ |
+| Insert | Add file(s) | ✅ |
 
 ## Features these shortcuts imply (to build)
 - Jump-to-file (J) and jump-to-time (Ctrl+J) dialogs

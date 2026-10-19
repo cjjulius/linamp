@@ -333,10 +333,17 @@ struct KeyState {
     seek_back: bool,
     ctrl: bool,
     alt: bool,
+    shift: bool,
     key_d: bool,
     key_p: bool,
     key_t: bool,
     key_3: bool,
+    key_e: bool,
+    key_g: bool,
+    key_a: bool,
+    del: bool,
+    insert: bool,
+    enter: bool,
 }
 
 /// State for the file-info / tag editor window.
@@ -947,6 +954,40 @@ impl LinAmpApp {
 
     fn pl_select_all(&mut self) {
         self.pl_selection = (0..self.playlist.len()).collect();
+    }
+
+    /// Move the single-row selection by `delta` (keyboard navigation), clamped,
+    /// and scroll it into view.
+    fn pl_move_selection(&mut self, delta: i32) {
+        if self.playlist.is_empty() {
+            return;
+        }
+        let len = self.playlist.len() as i32;
+        let anchor = if delta < 0 {
+            self.pl_selection.iter().min().copied()
+        } else {
+            self.pl_selection.iter().max().copied()
+        };
+        let next = match anchor {
+            Some(a) => (a as i32 + delta).clamp(0, len - 1),
+            // Nothing selected yet: enter from the near end.
+            None if delta < 0 => len - 1,
+            None => 0,
+        } as usize;
+        self.pl_selection.clear();
+        self.pl_selection.insert(next);
+        self.pl_last_click = Some((next, Instant::now()));
+        self.pl_scroll_to(next);
+    }
+
+    /// Adjust the playlist scroll offset so row `idx` is visible.
+    fn pl_scroll_to(&mut self, idx: usize) {
+        let visible = classic::pl_visible_rows(self.pl_px_h as u32).max(1);
+        if idx < self.pl_first {
+            self.pl_first = idx;
+        } else if idx >= self.pl_first + visible {
+            self.pl_first = idx + 1 - visible;
+        }
     }
 
     fn pl_invert_selection(&mut self) {
@@ -1983,7 +2024,7 @@ impl LinAmpApp {
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
                 // Fire global shortcuts while this window has focus (keyboard
                 // input goes to the focused viewport, not the root).
-                self.handle_shortcuts(ctx);
+                self.handle_shortcuts(ctx, ClWin::Eq);
                 self.render_window(ctx, ClWin::Eq);
             });
         }
@@ -1999,7 +2040,7 @@ impl LinAmpApp {
                 .with_taskbar(false);
             let id = egui::ViewportId::from_hash_of("linamp_pl");
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
-                self.handle_shortcuts(ctx);
+                self.handle_shortcuts(ctx, ClWin::Pl);
                 self.render_window(ctx, ClWin::Pl);
             });
         }
@@ -2155,7 +2196,7 @@ impl LinAmpApp {
 
     // ---- keyboard ----------------------------------------------------------
 
-    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+    fn handle_shortcuts(&mut self, ctx: &egui::Context, win: ClWin) {
         if ctx.wants_keyboard_input() {
             return; // a text field has focus
         }
@@ -2176,10 +2217,17 @@ impl LinAmpApp {
             k.seek_back = i.key_pressed(Key::ArrowLeft);
             k.ctrl = i.modifiers.ctrl || i.modifiers.command;
             k.alt = i.modifiers.alt;
+            k.shift = i.modifiers.shift;
             k.key_d = i.key_pressed(Key::D);
             k.key_p = i.key_pressed(Key::P);
             k.key_t = i.key_pressed(Key::T);
             k.key_3 = i.key_pressed(Key::Num3);
+            k.key_e = i.key_pressed(Key::E);
+            k.key_g = i.key_pressed(Key::G);
+            k.key_a = i.key_pressed(Key::A);
+            k.del = i.key_pressed(Key::Delete);
+            k.insert = i.key_pressed(Key::Insert);
+            k.enter = i.key_pressed(Key::Enter);
         });
 
         if k.play {
@@ -2188,7 +2236,8 @@ impl LinAmpApp {
         if k.pause {
             self.player.pause();
         }
-        if k.stop {
+        if k.stop && !k.ctrl && !k.shift {
+            // Plain V stops; Ctrl+V (stop-after) and Shift+V (fade) are reserved.
             self.player.stop();
         }
         if k.next {
@@ -2201,7 +2250,11 @@ impl LinAmpApp {
             self.play_pause();
         }
         if k.open {
-            self.open_files();
+            if k.shift {
+                self.open_folder();
+            } else {
+                self.open_files();
+            }
         }
         if k.repeat {
             self.repeat_all = !self.repeat_all;
@@ -2210,10 +2263,19 @@ impl LinAmpApp {
             self.shuffle = !self.shuffle;
         }
         if k.vol_up {
-            self.adjust_volume(0.05);
+            // Up/Down move the selection in the playlist window, else volume.
+            if win == ClWin::Pl {
+                self.pl_move_selection(-1);
+            } else {
+                self.adjust_volume(0.05);
+            }
         }
         if k.vol_down {
-            self.adjust_volume(-0.05);
+            if win == ClWin::Pl {
+                self.pl_move_selection(1);
+            } else {
+                self.adjust_volume(-0.05);
+            }
         }
         if k.seek_fwd {
             self.seek_relative(5.0);
@@ -2233,6 +2295,34 @@ impl LinAmpApp {
         }
         if k.alt && k.key_3 {
             self.open_tag_editor();
+        }
+        // Window toggles.
+        if k.alt && k.key_g {
+            self.eq_visible = !self.eq_visible;
+            if self.eq_visible {
+                self.restack();
+            }
+        }
+        if k.alt && k.key_e {
+            self.pl_visible = !self.pl_visible;
+            if self.pl_visible {
+                self.restack();
+            }
+        }
+        // Playlist edit.
+        if k.ctrl && k.key_a {
+            self.pl_select_all();
+        }
+        if k.del {
+            self.pl_remove(false);
+        }
+        if k.insert {
+            self.open_files();
+        }
+        if k.enter {
+            if let Some(&idx) = self.pl_selection.iter().min() {
+                self.play_index(idx);
+            }
         }
     }
 
@@ -2846,7 +2936,7 @@ impl eframe::App for LinAmpApp {
             self.last_device_check = now;
         }
 
-        self.handle_shortcuts(ctx);
+        self.handle_shortcuts(ctx, ClWin::Main);
 
         if self.player.finished() {
             if self.repeat_one {
