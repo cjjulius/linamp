@@ -87,7 +87,11 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - ✅ 10-band + preamp UI, on/off, reset
 - ✅ Per-band biquad DSP (RBJ peaking filters) — the sliders and preamp shape
   the sound live; applied as a rodio `Source` ahead of the visualizer
-- 🔜 EQ presets (Rock, Pop, etc.) and per-track auto-EQ
+- ✅ Built-in presets (Rock, Pop, Jazz, Classical, Dance, Bass/Treble boost, …)
+  via the classic **Presets** button and the modern view's dropdown
+- ✅ **Auto** gain — sets the preamp to offset the loudest boosted band so the
+  EQ is less likely to clip
+- ✅ EQ state (on/auto/preamp/bands) remembered across runs
 
 ## Visualization
 - ✅ Live spectrum analyzer (FFT) and oscilloscope (click to cycle), skin-coloured

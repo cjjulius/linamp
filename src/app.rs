@@ -36,6 +36,7 @@ fn popup_dims(kind: Popup) -> (f32, f32) {
         Popup::PlSel => (3, 0),
         Popup::PlMisc => (4, 0),
         Popup::PlList => (3, 0),
+        Popup::EqPresets => (crate::eq::PRESETS.len() as i32, 0),
     };
     (182.0, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
 }
@@ -143,6 +144,7 @@ enum Popup {
     PlSel,
     PlMisc,
     PlList,
+    EqPresets,
 }
 
 const EQ_LABELS: [&str; 10] = [
@@ -417,6 +419,18 @@ impl LinAmpApp {
         }
         app.refresh_library();
         app.discover_skins();
+
+        // Restore equalizer state from the last session and push it to the DSP.
+        let eq_session = Session::load();
+        if !eq_session.eq_bands.is_empty() {
+            app.eq_enabled = eq_session.eq_enabled;
+            app.eq_auto = eq_session.eq_auto;
+            app.eq_preamp_db = eq_session.eq_preamp;
+            for (i, b) in eq_session.eq_bands.iter().take(10).enumerate() {
+                app.eq_bands[i] = *b;
+            }
+            app.apply_eq();
+        }
 
         // Open with the LinAmp-branded default skin (fall back to any skin found).
         let stem = |p: &std::path::Path| {
@@ -932,11 +946,36 @@ impl LinAmpApp {
                 self.eq_enabled = !self.eq_enabled;
                 self.apply_eq();
             }
-            R::Auto => self.eq_auto = !self.eq_auto,
+            R::Auto => {
+                self.eq_auto = !self.eq_auto;
+                self.apply_eq_auto_gain();
+                self.apply_eq();
+            }
             R::Close => {
                 self.eq_visible = false;
             }
             R::Presets | R::TitleBar | R::Preamp | R::Band(_) => {}
+        }
+    }
+
+    /// Apply a built-in preset (by index into [`eq::PRESETS`]).
+    fn apply_eq_preset(&mut self, idx: usize) {
+        if let Some((_, preamp, bands)) = crate::eq::PRESETS.get(idx) {
+            self.eq_bands = *bands;
+            self.eq_preamp_db = *preamp;
+            if !self.eq_enabled {
+                self.eq_enabled = true;
+            }
+            self.apply_eq_auto_gain();
+            self.apply_eq();
+        }
+    }
+
+    /// When Auto is on, set the preamp to offset the loudest boosted band so the
+    /// EQ is less likely to clip.
+    fn apply_eq_auto_gain(&mut self) {
+        if self.eq_auto {
+            self.eq_preamp_db = crate::eq::auto_preamp(&self.eq_bands);
         }
     }
 
@@ -1079,6 +1118,14 @@ impl LinAmpApp {
                             if item(ui, "Load list…") {
                                 self.load_playlist_dialog();
                                 close = true;
+                            }
+                        }
+                        Popup::EqPresets => {
+                            for (i, (name, _, _)) in crate::eq::PRESETS.iter().enumerate() {
+                                if item(ui, name) {
+                                    self.apply_eq_preset(i);
+                                    close = true;
+                                }
                             }
                         }
                     }
@@ -1318,7 +1365,11 @@ impl LinAmpApp {
                 if win == ClWin::Eq {
                     if let Some(er) = self.eq_active {
                         if classic::eq_region_at(nx, ny) == Some(er) {
-                            self.trigger_eq(ctx, er);
+                            if er == classic::EqRegion::Presets {
+                                self.open_popup_in(Popup::EqPresets, ClWin::Eq, l);
+                            } else {
+                                self.trigger_eq(ctx, er);
+                            }
                         }
                     }
                 }
@@ -1644,11 +1695,14 @@ impl LinAmpApp {
         let v = classic::eq_value_at_y(ey);
         match region {
             classic::EqRegion::Preamp => {
+                // Dragging the preamp is a manual override, so it turns Auto off.
+                self.eq_auto = false;
                 self.eq_preamp_db = v * 12.0;
                 self.apply_eq();
             }
             classic::EqRegion::Band(i) if i < 10 => {
                 self.eq_bands[i] = v * 12.0;
+                self.apply_eq_auto_gain();
                 self.apply_eq();
             }
             _ => {}
@@ -2178,6 +2232,19 @@ impl LinAmpApp {
                         self.eq_preamp_db = 0.0;
                         self.apply_eq();
                     }
+                    if toggle(ui, &mut self.eq_auto, "Auto").changed() {
+                        self.apply_eq_auto_gain();
+                        self.apply_eq();
+                    }
+                    egui::ComboBox::from_id_salt("eq_preset")
+                        .selected_text("Presets")
+                        .show_ui(ui, |ui| {
+                            for (i, (name, _, _)) in crate::eq::PRESETS.iter().enumerate() {
+                                if ui.selectable_label(false, *name).clicked() {
+                                    self.apply_eq_preset(i);
+                                }
+                            }
+                        });
                 });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
@@ -2191,6 +2258,7 @@ impl LinAmpApp {
                                 )
                                 .changed()
                             {
+                                self.apply_eq_auto_gain();
                                 self.apply_eq();
                             }
                             ui.label(RichText::new(*label).size(9.0).color(self.theme.lcd_dim));
@@ -2483,6 +2551,10 @@ impl eframe::App for LinAmpApp {
             current: self.playlist.current,
             pl_width: Some(self.pl_px_w),
             pl_height: Some(self.pl_px_h),
+            eq_enabled: self.eq_enabled,
+            eq_auto: self.eq_auto,
+            eq_preamp: self.eq_preamp_db,
+            eq_bands: self.eq_bands.to_vec(),
         };
         session.save();
     }
