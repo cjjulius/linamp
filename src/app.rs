@@ -2410,12 +2410,27 @@ impl LinAmpApp {
                 } else {
                     let rows = self.build_pl_rows();
                     let colors = self.pl_colors();
+                    let elapsed_secs = match self.player.state() {
+                        PlayState::Stopped => 0.0,
+                        _ => self.player.position().as_secs_f32(),
+                    };
+                    let mut total_secs = 0.0;
+                    let mut total_partial = false;
+                    for t in &self.playlist.tracks {
+                        match t.duration {
+                            Some(d) => total_secs += d.as_secs_f32(),
+                            None => total_partial = true,
+                        }
+                    }
                     let st = classic::PlState {
                         focused: true,
                         colors,
                         rows: &rows,
                         first: self.pl_first,
                         pressed: self.pl_pressed_button(),
+                        elapsed_secs,
+                        total_secs,
+                        total_partial,
                     };
                     cs.compose_playlist(&st, self.pl_px_w as u32, self.pl_px_h as u32)
                 }
