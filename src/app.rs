@@ -333,10 +333,17 @@ struct KeyState {
     seek_back: bool,
     ctrl: bool,
     alt: bool,
+    shift: bool,
     key_d: bool,
     key_p: bool,
     key_t: bool,
     key_3: bool,
+    key_e: bool,
+    key_g: bool,
+    key_a: bool,
+    del: bool,
+    insert: bool,
+    enter: bool,
 }
 
 /// State for the file-info / tag editor window.
@@ -2176,10 +2183,17 @@ impl LinAmpApp {
             k.seek_back = i.key_pressed(Key::ArrowLeft);
             k.ctrl = i.modifiers.ctrl || i.modifiers.command;
             k.alt = i.modifiers.alt;
+            k.shift = i.modifiers.shift;
             k.key_d = i.key_pressed(Key::D);
             k.key_p = i.key_pressed(Key::P);
             k.key_t = i.key_pressed(Key::T);
             k.key_3 = i.key_pressed(Key::Num3);
+            k.key_e = i.key_pressed(Key::E);
+            k.key_g = i.key_pressed(Key::G);
+            k.key_a = i.key_pressed(Key::A);
+            k.del = i.key_pressed(Key::Delete);
+            k.insert = i.key_pressed(Key::Insert);
+            k.enter = i.key_pressed(Key::Enter);
         });
 
         if k.play {
@@ -2188,7 +2202,8 @@ impl LinAmpApp {
         if k.pause {
             self.player.pause();
         }
-        if k.stop {
+        if k.stop && !k.ctrl && !k.shift {
+            // Plain V stops; Ctrl+V (stop-after) and Shift+V (fade) are reserved.
             self.player.stop();
         }
         if k.next {
@@ -2201,7 +2216,11 @@ impl LinAmpApp {
             self.play_pause();
         }
         if k.open {
-            self.open_files();
+            if k.shift {
+                self.open_folder();
+            } else {
+                self.open_files();
+            }
         }
         if k.repeat {
             self.repeat_all = !self.repeat_all;
@@ -2233,6 +2252,34 @@ impl LinAmpApp {
         }
         if k.alt && k.key_3 {
             self.open_tag_editor();
+        }
+        // Window toggles.
+        if k.alt && k.key_g {
+            self.eq_visible = !self.eq_visible;
+            if self.eq_visible {
+                self.restack();
+            }
+        }
+        if k.alt && k.key_e {
+            self.pl_visible = !self.pl_visible;
+            if self.pl_visible {
+                self.restack();
+            }
+        }
+        // Playlist edit.
+        if k.ctrl && k.key_a {
+            self.pl_select_all();
+        }
+        if k.del {
+            self.pl_remove(false);
+        }
+        if k.insert {
+            self.open_files();
+        }
+        if k.enter {
+            if let Some(&idx) = self.pl_selection.iter().min() {
+                self.play_index(idx);
+            }
         }
     }
 
