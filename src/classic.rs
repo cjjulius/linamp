@@ -585,27 +585,38 @@ impl ClassicSkin {
             // thumb on top. Some skins (e.g. Iria) leave the slider-sprite area
             // blank; detect a valid green sprite 0 and otherwise synthesize a
             // green→red gradient so we never blit stray pixels.
-            let has_sprites = {
-                let p = e.get_pixel(20, 190);
-                (p[1] as i32) > (p[0] as i32) + 15 && (p[1] as i32) > (p[2] as i32) + 15
-            };
+            // Which of the 28 slider sprites the skin actually provides (a
+            // saturated colored bar, vs the blank area some skins leave white or
+            // black). A requested position with no sprite snaps to the nearest
+            // one the skin does have, so a partially-skinned EQ keeps the skin's
+            // look; only when there are none do we synthesize a gradient.
+            let valid: Vec<i32> = (0..28)
+                .filter(|&i| {
+                    let (row, col) = (i / 14, i % 14);
+                    let p = e.get_pixel((13 + col * 15 + 7) as u32, (164 + row * 65 + 31) as u32);
+                    let mx = p[0].max(p[1]).max(p[2]) as i32;
+                    let mn = p[0].min(p[1]).min(p[2]) as i32;
+                    mx - mn > 40
+                })
+                .collect();
             let draw_thumb = |c: &mut RgbaImage, e: &RgbaImage, colx: i32, v: f32, sel: bool| {
                 let frac = ((1.0 - v) / 2.0).clamp(0.0, 1.0);
-                if has_sprites {
-                    let idx = (frac * 27.0).round() as i32; // 0 = top, 27 = bottom
-                    let (row, col) = (idx / 14, idx % 14);
-                    blit(
-                        c,
-                        e,
-                        colx,
-                        EQ_SLIDER_TOP as i32,
-                        (13 + col * 15) as u32,
-                        (164 + row * 65) as u32,
-                        14,
-                        63,
-                    );
-                } else {
-                    fill_rect(c, colx, EQ_SLIDER_TOP as i32, 14, 63, viz_gradient(frac));
+                let idx = (frac * 27.0).round() as i32; // 0 = top, 27 = bottom
+                match valid.iter().min_by_key(|&&vi| (vi - idx).abs()).copied() {
+                    Some(ui) => {
+                        let (row, col) = (ui / 14, ui % 14);
+                        blit(
+                            c,
+                            e,
+                            colx,
+                            EQ_SLIDER_TOP as i32,
+                            (13 + col * 15) as u32,
+                            (164 + row * 65) as u32,
+                            14,
+                            63,
+                        );
+                    }
+                    None => fill_rect(c, colx, EQ_SLIDER_TOP as i32, 14, 63, viz_gradient(frac)),
                 }
                 let ty = EQ_SLIDER_TOP as i32 + (frac * EQ_SLIDER_TRAVEL) as i32;
                 let sy = if sel { 176 } else { 164 };
