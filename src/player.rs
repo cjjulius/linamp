@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::Result;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 
+use crate::balance::{self, BalanceShared};
 use crate::eq::{self, EqShared};
 use crate::viz::{self, VizShared};
 
@@ -31,6 +32,7 @@ pub struct Player {
     current_path: Option<PathBuf>,
     viz: Arc<VizShared>,
     eq: Arc<EqShared>,
+    balance: Arc<BalanceShared>,
     device_name: Option<String>,
 }
 
@@ -46,6 +48,7 @@ impl Player {
             current_path: None,
             viz: VizShared::new(),
             eq: EqShared::new(),
+            balance: BalanceShared::new(),
             device_name: Self::default_device_name(),
         })
     }
@@ -96,6 +99,11 @@ impl Player {
         self.eq.clone()
     }
 
+    /// Set the stereo balance (−1 = left, 0 = centre, +1 = right).
+    pub fn set_balance(&self, b: f32) {
+        self.balance.set(b);
+    }
+
     pub fn state(&self) -> PlayState {
         self.state
     }
@@ -127,9 +135,11 @@ impl Player {
         // analyzer reflects what you actually hear.
         let equalized = eq::eq(source, self.eq.clone());
         let tapped = viz::tap(equalized, self.viz.clone());
+        // Apply stereo balance last, after the viz tap.
+        let balanced = balance::balance(tapped, self.balance.clone());
 
         let sink = Sink::try_new(&self.handle)?;
-        sink.append(tapped);
+        sink.append(balanced);
         self.sink = Some(sink);
         self.current_path = Some(path.to_path_buf());
         self.state = PlayState::Playing;
