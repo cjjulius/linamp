@@ -816,7 +816,10 @@ impl LinAmpApp {
             }
             Btn::Balance => {
                 let t = ((lx - 177.0) / (38.0 - 14.0)).clamp(0.0, 1.0);
-                self.balance = t * 2.0 - 1.0;
+                let b = t * 2.0 - 1.0;
+                // Snap to dead-centre, as Winamp does.
+                self.balance = if b.abs() < 0.06 { 0.0 } else { b };
+                self.player.set_balance(self.balance);
             }
             _ => {}
         }

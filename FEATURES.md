@@ -16,7 +16,8 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - ✅ Volume control
 - ✅ Repeat-all / Repeat-one / Shuffle
 - ✅ Auto-advance on track end
-- 🔜 Balance control, crossfade, gapless, ReplayGain
+- ✅ Stereo balance (the balance slider pans the output, with centre snap)
+- 🔜 Crossfade, gapless, ReplayGain
 - 🔜 Playback speed / pitch
 
 ## Playlist
