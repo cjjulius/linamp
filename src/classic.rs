@@ -585,14 +585,16 @@ impl ClassicSkin {
                 y += 29;
             }
 
-            // Bottom bar: left corner (with Add/Rem/Sel/Misc), a tiled plain
-            // strip, then the right corner (with the List menu / time display).
+            // Bottom bar: left corner (Add/Rem/Sel/Misc), the stretch, then the
+            // right corner (mini-player / List menu / time). The stretch is
+            // tiled from the 4px plain-frame column at pledit x126 — tiling a
+            // wider slice there would duplicate the mini-player buttons.
             let by = height as i32 - 38;
             let mut bx = 125;
             while bx < w - 150 {
-                let seg = (w - 150 - bx).min(25) as u32;
+                let seg = (w - 150 - bx).min(4) as u32;
                 blit(&mut c, p, bx, by, 126, 72, seg, 38);
-                bx += 25;
+                bx += 4;
             }
             blit(&mut c, p, 0, by, 0, 72, 125, 38); // bottom-left
             blit(&mut c, p, w - 150, by, 126, 72, 150, 38); // bottom-right

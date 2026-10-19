@@ -684,6 +684,7 @@ impl LinAmpApp {
                 dirs.push(d.join("skins"));
             }
         }
+        let mut seen = std::collections::HashSet::new();
         for d in dirs {
             if let Ok(rd) = std::fs::read_dir(&d) {
                 for e in rd.flatten() {
@@ -693,8 +694,16 @@ impl LinAmpApp {
                         .and_then(|x| x.to_str())
                         .map(|x| matches!(x.to_lowercase().as_str(), "wsz" | "zip"))
                         .unwrap_or(false);
-                    if is_skin && !self.skins.contains(&p) {
-                        self.skins.push(p);
+                    // De-duplicate by file name so the same skin found in a
+                    // second location (e.g. next to the exe) isn't listed twice;
+                    // the first directory searched (./skins) wins.
+                    let name = p.file_name().map(|n| n.to_os_string());
+                    if is_skin {
+                        if let Some(n) = name {
+                            if seen.insert(n) {
+                                self.skins.push(p);
+                            }
+                        }
                     }
                 }
             }
