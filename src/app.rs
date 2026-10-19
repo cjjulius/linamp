@@ -16,6 +16,8 @@ use crate::viz::{self, VizShared};
 
 const FFT_SIZE: usize = 2048;
 const VIZ_BANDS: usize = 28;
+/// Fewer, wider bars for the small classic analyzer (Winamp-like).
+const CLASSIC_BANDS: usize = 19;
 /// Magnetic docking snap distance in points.
 const SNAP: f32 = 16.0;
 
@@ -254,6 +256,9 @@ pub struct LinAmpApp {
     viz: Arc<VizShared>,
     viz_mode: VizMode,
     viz_bars: Vec<f32>,
+    /// Classic analyzer bar heights + slowly-falling peak markers.
+    cviz_bars: Vec<f32>,
+    cviz_peaks: Vec<f32>,
     viz_samples: Vec<f32>,
     fft: Arc<dyn Fft<f32>>,
 
@@ -415,6 +420,8 @@ impl LinAmpApp {
             viz,
             viz_mode: VizMode::Spectrum,
             viz_bars: vec![0.0; VIZ_BANDS],
+            cviz_bars: vec![0.0; CLASSIC_BANDS],
+            cviz_peaks: vec![0.0; CLASSIC_BANDS],
             viz_samples: Vec::new(),
             fft,
             album_art: None,
@@ -890,7 +897,10 @@ impl LinAmpApp {
             khz,
             fg: [self.theme.lcd.r(), self.theme.lcd.g(), self.theme.lcd.b()],
             viz: match self.viz_mode {
-                VizMode::Spectrum => Some(classic::VizFrame::Spectrum(self.viz_bars.clone())),
+                VizMode::Spectrum => Some(classic::VizFrame::Spectrum {
+                    bars: self.cviz_bars.clone(),
+                    peaks: self.cviz_peaks.clone(),
+                }),
                 VizMode::Oscilloscope => Some(classic::VizFrame::Scope(self.viz_samples.clone())),
                 VizMode::Off => None,
             },
@@ -911,14 +921,22 @@ impl LinAmpApp {
                 self.viz.snapshot(&mut self.viz_samples, FFT_SIZE);
                 let rate = self.viz.rate();
                 let bars =
-                    viz::compute_bars(&self.viz_samples, &*self.fft, FFT_SIZE, VIZ_BANDS, rate);
-                for (i, b) in self.viz_bars.iter_mut().enumerate() {
+                    viz::compute_bars(&self.viz_samples, &*self.fft, FFT_SIZE, CLASSIC_BANDS, rate);
+                for i in 0..CLASSIC_BANDS {
                     let target = bars.get(i).copied().unwrap_or(0.0);
-                    if target > *b {
-                        *b = target;
+                    // Bar: instant attack, medium decay (not below the signal).
+                    let b = if target > self.cviz_bars[i] {
+                        target
                     } else {
-                        *b = (*b * 0.82).max(target); // peak decay
-                    }
+                        (self.cviz_bars[i] * 0.80).max(target)
+                    };
+                    self.cviz_bars[i] = b;
+                    // Peak marker: holds the max, then falls slowly.
+                    self.cviz_peaks[i] = if b > self.cviz_peaks[i] {
+                        b
+                    } else {
+                        (self.cviz_peaks[i] - 0.015).max(0.0)
+                    };
                 }
             }
             VizMode::Oscilloscope => {

@@ -98,8 +98,8 @@ pub enum PlayUi {
 
 /// One frame of visualization data for the main-window analyzer area.
 pub enum VizFrame {
-    /// Per-band bar heights, 0..1.
-    Spectrum(Vec<f32>),
+    /// Per-band bar heights and slowly-falling peak markers, each 0..1.
+    Spectrum { bars: Vec<f32>, peaks: Vec<f32> },
     /// Mono samples, -1..1.
     Scope(Vec<f32>),
 }
@@ -715,19 +715,30 @@ fn draw_viz(c: &mut RgbaImage, st: &MainState, x: i32, y: i32, w: i32, h: i32) {
             st.viz_spectrum[idx]
         }
     };
+    // Peak-marker colour: a desaturated light tint of the LCD colour.
+    let peak_col = [
+        st.fg[0] / 2 + 110,
+        st.fg[1] / 2 + 110,
+        st.fg[2] / 2 + 110,
+    ];
     match &st.viz {
-        Some(VizFrame::Spectrum(bars)) => {
+        Some(VizFrame::Spectrum { bars, peaks }) => {
             let n = bars.len().max(1) as i32;
-            let bw = (w as f32 / n as f32).max(1.0);
+            let bw = (w as f32 / n as f32).max(2.0);
             for (i, &b) in bars.iter().enumerate() {
                 let b = b.clamp(0.0, 1.0);
-                let bh = (b * h as f32).round() as i32;
-                if bh <= 0 {
-                    continue;
-                }
                 let x0 = x + (i as f32 * bw) as i32;
                 let bar_w = (bw as i32 - 1).max(1); // 1px gap between bars
-                fill_rect(c, x0, y + h - bh, bar_w, bh, bar_color(b));
+                let bh = (b * h as f32).round() as i32;
+                if bh > 0 {
+                    fill_rect(c, x0, y + h - bh, bar_w, bh, bar_color(b));
+                }
+                // Slowly-falling peak dash, drawn only above the bar.
+                let pk = peaks.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                let ph = (pk * h as f32).round() as i32;
+                if ph > bh {
+                    fill_rect(c, x0, y + h - ph, bar_w, 1, peak_col);
+                }
             }
         }
         Some(VizFrame::Scope(samples)) => {
@@ -828,11 +839,11 @@ fn blit_tinted(
     }
 }
 
-/// Sample spectrum bars for the headless previews.
-fn sample_bars() -> Vec<f32> {
-    (0..28)
-        .map(|i| 0.3 + 0.6 * (i as f32 * 0.7).sin().abs())
-        .collect()
+/// Sample spectrum bars + peaks for the headless previews.
+fn sample_viz() -> (Vec<f32>, Vec<f32>) {
+    let bars: Vec<f32> = (0..19).map(|i| 0.3 + 0.6 * (i as f32 * 0.7).sin().abs()).collect();
+    let peaks: Vec<f32> = bars.iter().map(|b| (b + 0.18).min(1.0)).collect();
+    (bars, peaks)
 }
 
 /// Headless: render a skin's main window to a PNG (used for `--render-skin`).
@@ -856,7 +867,7 @@ pub fn render_main_png(skin_path: &Path, out: &Path) -> Result<()> {
         kbps: "128".to_string(),
         khz: "44".to_string(),
         fg: [0, 255, 120],
-        viz: Some(VizFrame::Spectrum(sample_bars())),
+        viz: Some({ let (bars, peaks) = sample_viz(); VizFrame::Spectrum { bars, peaks } }),
         viz_spectrum: vec![],
     };
     skin.compose_main(&st).save(out)?;
@@ -884,7 +895,7 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
         kbps: "192".to_string(),
         khz: "44".to_string(),
         fg: [0, 255, 120],
-        viz: Some(VizFrame::Spectrum(sample_bars())),
+        viz: Some({ let (bars, peaks) = sample_viz(); VizFrame::Spectrum { bars, peaks } }),
         viz_spectrum: vec![],
     });
     let eq = skin.compose_eq(&EqState {
