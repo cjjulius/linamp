@@ -16,6 +16,8 @@ use crate::viz::{self, VizShared};
 
 const FFT_SIZE: usize = 2048;
 const VIZ_BANDS: usize = 28;
+/// Fewer, wider bars for the small classic analyzer (Winamp-like).
+const CLASSIC_BANDS: usize = 19;
 /// Magnetic docking snap distance in points.
 const SNAP: f32 = 16.0;
 
@@ -254,6 +256,9 @@ pub struct LinAmpApp {
     viz: Arc<VizShared>,
     viz_mode: VizMode,
     viz_bars: Vec<f32>,
+    /// Classic analyzer bar heights + slowly-falling peak markers.
+    cviz_bars: Vec<f32>,
+    cviz_peaks: Vec<f32>,
     viz_samples: Vec<f32>,
     fft: Arc<dyn Fft<f32>>,
 
@@ -415,6 +420,8 @@ impl LinAmpApp {
             viz,
             viz_mode: VizMode::Spectrum,
             viz_bars: vec![0.0; VIZ_BANDS],
+            cviz_bars: vec![0.0; CLASSIC_BANDS],
+            cviz_peaks: vec![0.0; CLASSIC_BANDS],
             viz_samples: Vec::new(),
             fft,
             album_art: None,
@@ -889,6 +896,60 @@ impl LinAmpApp {
             kbps,
             khz,
             fg: [self.theme.lcd.r(), self.theme.lcd.g(), self.theme.lcd.b()],
+            viz: match self.viz_mode {
+                VizMode::Spectrum => Some(classic::VizFrame::Spectrum {
+                    bars: self.cviz_bars.clone(),
+                    peaks: self.cviz_peaks.clone(),
+                }),
+                VizMode::Oscilloscope => Some(classic::VizFrame::Scope(self.viz_samples.clone())),
+                VizMode::Off => None,
+            },
+            viz_spectrum: self
+                .theme
+                .viz_spectrum
+                .iter()
+                .map(|c| [c.r(), c.g(), c.b()])
+                .collect(),
+            viz_peak: [
+                self.theme.viz_peak.r(),
+                self.theme.viz_peak.g(),
+                self.theme.viz_peak.b(),
+            ],
+        }
+    }
+
+    /// Update the visualization data (spectrum bars / oscilloscope samples) for
+    /// the classic analyzer, once per frame.
+    fn step_viz(&mut self) {
+        match self.viz_mode {
+            VizMode::Spectrum => {
+                self.viz.snapshot(&mut self.viz_samples, FFT_SIZE);
+                let rate = self.viz.rate();
+                let bars =
+                    viz::compute_bars(&self.viz_samples, &*self.fft, FFT_SIZE, CLASSIC_BANDS, rate);
+                for i in 0..CLASSIC_BANDS {
+                    let target = bars.get(i).copied().unwrap_or(0.0);
+                    let cur = self.cviz_bars[i];
+                    // Smoothed rise (not instant) and a steady fall toward the
+                    // current level, so it isn't so jumpy or sticky.
+                    let b = if target > cur {
+                        cur + (target - cur) * 0.55
+                    } else {
+                        (cur - 0.045).max(target)
+                    };
+                    self.cviz_bars[i] = b;
+                    // Peak marker: holds the max, then falls slowly.
+                    self.cviz_peaks[i] = if b > self.cviz_peaks[i] {
+                        b
+                    } else {
+                        (self.cviz_peaks[i] - 0.012).max(0.0)
+                    };
+                }
+            }
+            VizMode::Oscilloscope => {
+                self.viz.snapshot(&mut self.viz_samples, 76);
+            }
+            VizMode::Off => {}
         }
     }
 
@@ -953,6 +1014,7 @@ impl LinAmpApp {
             Btn::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Btn::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
             Btn::Time => self.time_remaining = !self.time_remaining,
+            Btn::Viz => self.viz_mode = self.viz_mode.next(),
             Btn::Seek | Btn::Volume | Btn::Balance | Btn::TitleBar | Btn::Options => {}
         }
     }
@@ -2259,6 +2321,11 @@ impl LinAmpApp {
     fn render_window(&mut self, ctx: &egui::Context, win: ClWin) {
         self.handle_window_input(ctx, win);
         self.handle_dropped(ctx);
+
+        // Refresh the analyzer data for the main window.
+        if win == ClWin::Main && !self.main_shade {
+            self.step_viz();
+        }
 
         // Lazily read tags for the playlist rows about to be shown (on-view mode).
         if win == ClWin::Pl && !self.pl_shade {

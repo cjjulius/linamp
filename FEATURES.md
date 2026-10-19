@@ -88,7 +88,8 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - ✅ Playlist bottom bar wired: ADD (file/folder), REM (remove selected / crop /
   remove all), SEL (all/none/invert), MISC (sort title/artist/album/duration),
   LIST (new/save/load) — click-to-select, double-click-to-play, wheel scroll
-- 🔜 Window-shade polish, live spectrum in the classic viz area
+- ✅ Live spectrum / oscilloscope in the classic viz area (click to cycle)
+- 🔜 Window-shade polish
 - 🔜 True "modern" (Winamp 3/5 `.wal` freeform) skin engine — large separate phase
 
 ## Equalizer
@@ -146,7 +147,6 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
   (implies: ID3 tag editor Alt+3, jump-to-file J, jump-to-time Ctrl+J,
   time elapsed/remaining Ctrl+T, open URL/stream Ctrl+L)
 - 🔜 Always-on-top, window-shade polish
-- 🔜 Live spectrum/oscilloscope inside the classic viz area
 - 🔜 True "modern" (Winamp 3/5 `.wal` freeform) skin engine
 
 ## Keyboard shortcuts (Winamp-compatible)
