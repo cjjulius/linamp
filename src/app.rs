@@ -300,15 +300,15 @@ impl LinAmpApp {
         app.refresh_library();
         app.discover_skins();
 
-        // Open looking like Winamp: auto-load base-2.91 (or the first skin found).
+        // Open with the LinAmp-branded default skin (fall back to any skin found).
+        let stem = |p: &std::path::Path| {
+            p.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default()
+        };
         let startup = app
             .skins
             .iter()
-            .find(|p| {
-                p.file_stem()
-                    .map(|s| s.to_string_lossy().to_lowercase().contains("base"))
-                    .unwrap_or(false)
-            })
+            .find(|p| stem(p) == "linamp_base_skin")
+            .or_else(|| app.skins.iter().find(|p| stem(p).contains("base")))
             .cloned()
             .or_else(|| app.skins.first().cloned());
         if let Some(p) = startup {
