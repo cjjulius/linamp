@@ -176,7 +176,10 @@ pub fn compute_bars(
     fft.process(&mut buf);
 
     let half = fft_size / 2;
-    let mags: Vec<f32> = buf[..half].iter().map(|c| c.norm()).collect();
+    // Normalize by the FFT size so magnitudes sit in a sane range (otherwise
+    // loud content saturates to 1.0 and the bars just pin at the top).
+    let norm = fft_size as f32;
+    let mags: Vec<f32> = buf[..half].iter().map(|c| c.norm() / norm).collect();
 
     let nyquist = sample_rate as f32 / 2.0;
     let fmin = 40.0_f32;

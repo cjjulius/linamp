@@ -127,8 +127,6 @@ pub struct MainState {
     pub fg: [u8; 3],
     /// Live visualization for the analyzer area (None = off).
     pub viz: Option<VizFrame>,
-    /// Spectrum bar gradient (bottom→top); empty falls back to `fg`.
-    pub viz_spectrum: Vec<[u8; 3]>,
 }
 
 /// Hit target on a 14px window-shade bar.
@@ -703,24 +701,33 @@ impl ClassicSkin {
     }
 }
 
-/// Draw the main-window visualizer (spectrum bars or oscilloscope) into the
-/// rect (x,y,w,h), using the skin's viz palette (bars) or `fg` (scope/fallback).
-fn draw_viz(c: &mut RgbaImage, st: &MainState, x: i32, y: i32, w: i32, h: i32) {
-    let bar_color = |b: f32| -> [u8; 3] {
-        if st.viz_spectrum.is_empty() {
-            st.fg
-        } else {
-            let n = st.viz_spectrum.len();
-            let idx = (((1.0 - b).clamp(0.0, 1.0) * (n - 1) as f32).round() as usize).min(n - 1);
-            st.viz_spectrum[idx]
-        }
+/// Classic Winamp-style analyzer gradient by vertical fraction (0=bottom green,
+/// 0.5=yellow, 1=top red).
+fn viz_gradient(f: f32) -> [u8; 3] {
+    let lerp = |a: [u8; 3], b: [u8; 3], t: f32| {
+        [
+            (a[0] as f32 + (b[0] as f32 - a[0] as f32) * t) as u8,
+            (a[1] as f32 + (b[1] as f32 - a[1] as f32) * t) as u8,
+            (a[2] as f32 + (b[2] as f32 - a[2] as f32) * t) as u8,
+        ]
     };
-    // Peak-marker colour: a desaturated light tint of the LCD colour.
-    let peak_col = [
-        st.fg[0] / 2 + 110,
-        st.fg[1] / 2 + 110,
-        st.fg[2] / 2 + 110,
-    ];
+    let f = f.clamp(0.0, 1.0);
+    let green = [40, 220, 60];
+    let yellow = [220, 210, 40];
+    let red = [220, 70, 40];
+    if f < 0.5 {
+        lerp(green, yellow, f / 0.5)
+    } else {
+        lerp(yellow, red, (f - 0.5) / 0.5)
+    }
+}
+
+/// Draw the main-window visualizer (spectrum bars or oscilloscope) into the
+/// rect (x,y,w,h). Bars use a green→yellow→red gradient by height; the
+/// oscilloscope uses the LCD colour.
+fn draw_viz(c: &mut RgbaImage, st: &MainState, x: i32, y: i32, w: i32, h: i32) {
+    let peak_col = [200, 200, 205]; // light grey, like Winamp
+    let hf = (h as f32 - 1.0).max(1.0);
     match &st.viz {
         Some(VizFrame::Spectrum { bars, peaks }) => {
             let n = bars.len().max(1) as i32;
@@ -730,8 +737,10 @@ fn draw_viz(c: &mut RgbaImage, st: &MainState, x: i32, y: i32, w: i32, h: i32) {
                 let x0 = x + (i as f32 * bw) as i32;
                 let bar_w = (bw as i32 - 1).max(1); // 1px gap between bars
                 let bh = (b * h as f32).round() as i32;
-                if bh > 0 {
-                    fill_rect(c, x0, y + h - bh, bar_w, bh, bar_color(b));
+                // Draw the bar row by row so it fades green→yellow→red upward.
+                for k in 0..bh {
+                    let col = viz_gradient(k as f32 / hf);
+                    fill_rect(c, x0, y + h - 1 - k, bar_w, 1, col);
                 }
                 // Slowly-falling peak dash, drawn only above the bar.
                 let pk = peaks.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
@@ -868,7 +877,6 @@ pub fn render_main_png(skin_path: &Path, out: &Path) -> Result<()> {
         khz: "44".to_string(),
         fg: [0, 255, 120],
         viz: Some({ let (bars, peaks) = sample_viz(); VizFrame::Spectrum { bars, peaks } }),
-        viz_spectrum: vec![],
     };
     skin.compose_main(&st).save(out)?;
     Ok(())
@@ -896,7 +904,6 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
         khz: "44".to_string(),
         fg: [0, 255, 120],
         viz: Some({ let (bars, peaks) = sample_viz(); VizFrame::Spectrum { bars, peaks } }),
-        viz_spectrum: vec![],
     });
     let eq = skin.compose_eq(&EqState {
         focused: true,

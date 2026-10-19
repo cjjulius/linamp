@@ -904,12 +904,6 @@ impl LinAmpApp {
                 VizMode::Oscilloscope => Some(classic::VizFrame::Scope(self.viz_samples.clone())),
                 VizMode::Off => None,
             },
-            viz_spectrum: self
-                .theme
-                .viz_spectrum
-                .iter()
-                .map(|c| [c.r(), c.g(), c.b()])
-                .collect(),
         }
     }
 
@@ -924,18 +918,20 @@ impl LinAmpApp {
                     viz::compute_bars(&self.viz_samples, &*self.fft, FFT_SIZE, CLASSIC_BANDS, rate);
                 for i in 0..CLASSIC_BANDS {
                     let target = bars.get(i).copied().unwrap_or(0.0);
-                    // Bar: instant attack, medium decay (not below the signal).
-                    let b = if target > self.cviz_bars[i] {
-                        target
+                    let cur = self.cviz_bars[i];
+                    // Smoothed rise (not instant) and a steady fall toward the
+                    // current level, so it isn't so jumpy or sticky.
+                    let b = if target > cur {
+                        cur + (target - cur) * 0.55
                     } else {
-                        (self.cviz_bars[i] * 0.80).max(target)
+                        (cur - 0.045).max(target)
                     };
                     self.cviz_bars[i] = b;
                     // Peak marker: holds the max, then falls slowly.
                     self.cviz_peaks[i] = if b > self.cviz_peaks[i] {
                         b
                     } else {
-                        (self.cviz_peaks[i] - 0.015).max(0.0)
+                        (self.cviz_peaks[i] - 0.012).max(0.0)
                     };
                 }
             }
