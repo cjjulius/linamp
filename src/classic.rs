@@ -783,3 +783,45 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
     canvas.save(out)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::char_cell;
+    use super::*;
+
+    #[test]
+    fn main_regions() {
+        assert_eq!(region_at(50.0, 95.0), Some(Btn::Play));
+        assert_eq!(region_at(7.0, 6.0), Some(Btn::Options));
+        assert_eq!(region_at(5.0, 5.0), Some(Btn::TitleBar));
+        assert_eq!(region_at(1000.0, 1000.0), None);
+    }
+
+    #[test]
+    fn eq_regions() {
+        assert_eq!(eq_region_at(20.0, 20.0), Some(EqRegion::On));
+        assert!(matches!(eq_region_at(80.0, 60.0), Some(EqRegion::Band(0))));
+    }
+
+    #[test]
+    fn pl_regions() {
+        assert_eq!(pl_region_at(5.0, 5.0, 180.0), Some(PlRegion::TitleBar));
+        assert_eq!(pl_region_at(100.0, 100.0, 180.0), Some(PlRegion::List));
+        assert_eq!(pl_region_at(260.0, 165.0, 180.0), Some(PlRegion::Resize));
+    }
+
+    #[test]
+    fn shade_regions() {
+        assert_eq!(shade_region_at(265.0, 5.0), Some(ShadeHit::Close));
+        assert_eq!(shade_region_at(50.0, 5.0), Some(ShadeHit::TitleBar));
+        assert_eq!(shade_region_at(50.0, 20.0), None);
+    }
+
+    #[test]
+    fn font_map() {
+        assert_eq!(char_cell('a'), (0, 0));
+        assert_eq!(char_cell('A'), (0, 0));
+        assert_eq!(char_cell('0'), (0, 1));
+        assert_eq!(char_cell(' '), (30, 0));
+    }
+}

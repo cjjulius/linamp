@@ -270,3 +270,35 @@ pub fn describe(path: &Path) {
         Err(e) => println!("ERR {:<24} {}", path.display(), e),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{blend, contrast_text, parse_hex, parse_viscolor};
+    use egui::Color32;
+
+    #[test]
+    fn hex_parsing() {
+        assert_eq!(parse_hex("#00FF00"), Some(Color32::from_rgb(0, 255, 0)));
+        assert_eq!(parse_hex("0000C6"), Some(Color32::from_rgb(0, 0, 0xC6)));
+        assert_eq!(parse_hex("#fff"), None);
+    }
+
+    #[test]
+    fn viscolor_parsing() {
+        let v = parse_viscolor("0,0,0 // bg\n255, 255, 255, // white\nbad line\n1,2,3");
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[1], Color32::from_rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn blend_midpoint() {
+        let g = blend(Color32::BLACK, Color32::WHITE, 0.5);
+        assert!((g.r() as i32 - 127).abs() <= 1);
+    }
+
+    #[test]
+    fn contrast_picks_readable() {
+        assert_eq!(contrast_text(Color32::BLACK), Color32::from_rgb(225, 225, 225));
+        assert_eq!(contrast_text(Color32::WHITE), Color32::from_rgb(15, 15, 15));
+    }
+}

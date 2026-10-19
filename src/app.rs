@@ -27,6 +27,38 @@ fn win_idx(w: ClWin) -> usize {
     }
 }
 
+/// Two windows are docked when an edge is flush (within tolerance) and they
+/// overlap on the shared axis.
+fn rects_docked(a: egui::Rect, b: egui::Rect) -> bool {
+    let tol = 3.0;
+    let x_overlap = a.left() < b.right() - 1.0 && a.right() > b.left() + 1.0;
+    let y_overlap = a.top() < b.bottom() - 1.0 && a.bottom() > b.top() + 1.0;
+    let v_adj =
+        x_overlap && ((a.bottom() - b.top()).abs() <= tol || (a.top() - b.bottom()).abs() <= tol);
+    let h_adj =
+        y_overlap && ((a.right() - b.left()).abs() <= tol || (a.left() - b.right()).abs() <= tol);
+    v_adj || h_adj
+}
+
+/// Which of the three windows are transitively docked to the main window (0).
+fn dock_group_from_main(rects: &[egui::Rect; 3], visible: &[bool; 3]) -> [bool; 3] {
+    let mut in_group = [true, false, false];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for j in [1usize, 2usize] {
+            if in_group[j] || !visible[j] {
+                continue;
+            }
+            if (0..3).any(|k| in_group[k] && rects_docked(rects[j], rects[k])) {
+                in_group[j] = true;
+                changed = true;
+            }
+        }
+    }
+    in_group
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum UiMode {
     Classic,
@@ -42,12 +74,51 @@ enum ClWin {
 }
 
 /// An in-progress title-bar drag of a classic window.
+///
+/// On Windows (where we can read the global cursor) we drive the move ourselves
+/// each frame so docked windows move in tandem, live. Elsewhere we fall back to
+/// the OS window-drag (ViewportCommand::StartDrag), which snaps the group on
+/// release. `win_pos` stays authoritative and is snapped on release either way.
 struct Dragging {
     win: ClWin,
-    /// Pointer position (viewport-local) grabbed at press; stays fixed.
-    grab: egui::Pos2,
+    /// true = manual per-frame move (live tandem); false = OS drag fallback.
+    manual: bool,
+    /// Manual: offset of the global cursor from the window origin (points).
+    grab: egui::Vec2,
+    /// Window position at press (to tell a click from a drag).
+    press_pos: egui::Pos2,
+    /// OS fallback: screen pos at press (drag threshold) + whether started.
+    press_screen: egui::Pos2,
+    started_os: bool,
     moved: bool,
+    /// Docked windows that move with this one, by offset from it.
     group: Vec<(usize, egui::Vec2)>,
+}
+
+/// Global cursor position in egui points, if the platform exposes it (Windows).
+fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct Point {
+            x: i32,
+            y: i32,
+        }
+        extern "system" {
+            fn GetCursorPos(p: *mut Point) -> i32;
+        }
+        let mut pt = Point { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut pt) } != 0 {
+            let ppp = ctx.pixels_per_point().max(0.1);
+            return Some(egui::pos2(pt.x as f32 / ppp, pt.y as f32 / ppp));
+        }
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = ctx;
+        None
+    }
 }
 
 /// Popup menus in classic mode (options + the playlist bottom-bar fly-outs).
@@ -176,7 +247,6 @@ pub struct LinAmpApp {
     tb_last_click: Option<(ClWin, Instant)>,
     // multi-window geometry (points)
     win_pos: [egui::Pos2; 3],
-    win_rect: [Option<egui::Rect>; 3],
     pl_px_h: f32,
     positions_init: bool,
     drag: Option<Dragging>,
@@ -274,7 +344,6 @@ impl LinAmpApp {
             pl_shade: false,
             tb_last_click: None,
             win_pos: [egui::pos2(100.0, 100.0); 3],
-            win_rect: [None; 3],
             pl_px_h: classic::PL_H as f32,
             positions_init: false,
             drag: None,
@@ -970,13 +1039,13 @@ impl LinAmpApp {
 
     /// Per-window input in local (viewport) coordinates.
     fn handle_window_input(&mut self, ctx: &egui::Context, win: ClWin) {
-        let idx = win_idx(win);
         let outer = ctx.input(|i| i.viewport().outer_rect);
-        if let Some(r) = outer {
-            self.win_rect[idx] = Some(r);
-        }
         let monitor = ctx.input(|i| i.viewport().monitor_size);
         let local = ctx.pointer_latest_pos();
+        let screen_cursor = match (outer, local) {
+            (Some(o), Some(l)) => Some(o.min + l.to_vec2()),
+            _ => None,
+        };
         let (pressed, released, down, secondary, scroll) = ctx.input(|i| {
             (
                 i.pointer.primary_pressed(),
@@ -1013,7 +1082,7 @@ impl LinAmpApp {
                 if shaded {
                     match classic::shade_region_at(nx, ny) {
                         Some(classic::ShadeHit::Close) => self.close_window(ctx, win),
-                        Some(classic::ShadeHit::TitleBar) => self.start_drag(win, local),
+                        Some(classic::ShadeHit::TitleBar) => self.start_drag(ctx, win, screen_cursor),
                         None => {}
                     }
                 } else {
@@ -1024,7 +1093,7 @@ impl LinAmpApp {
                             match r {
                                 Some(Btn::TitleBar) => {
                                     self.active_region = None;
-                                    self.start_drag(win, local);
+                                    self.start_drag(ctx, win, screen_cursor);
                                 }
                                 Some(b @ (Btn::Seek | Btn::Volume | Btn::Balance)) => {
                                     self.apply_classic_slider(b, nx)
@@ -1038,7 +1107,7 @@ impl LinAmpApp {
                             match r {
                                 Some(classic::EqRegion::TitleBar) => {
                                     self.eq_active = None;
-                                    self.start_drag(win, local);
+                                    self.start_drag(ctx, win, screen_cursor);
                                 }
                                 Some(er @ (classic::EqRegion::Preamp | classic::EqRegion::Band(_))) => {
                                     self.apply_eq_slider(er, ny)
@@ -1050,7 +1119,7 @@ impl LinAmpApp {
                             use classic::PlRegion as P;
                             match classic::pl_region_at(nx, ny, self.pl_px_h) {
                                 Some(P::Close) => self.close_window(ctx, ClWin::Pl),
-                                Some(P::TitleBar) => self.start_drag(win, local),
+                                Some(P::TitleBar) => self.start_drag(ctx, win, screen_cursor),
                                 Some(P::Resize) => self.resize_pl = Some(self.pl_px_h - ny),
                                 Some(P::List) => {
                                     let row = classic::pl_row_at(ny, self.pl_first);
@@ -1082,23 +1151,40 @@ impl LinAmpApp {
         }
 
         if down {
-            // Drag via the pointer's drift within the window (the window then
-            // moves to re-centre it next frame) — no dependence on the laggy
-            // reported window position, which avoids the drag "wiggle".
-            if let (Some(d), Some(l)) = (self.drag.as_ref(), local) {
-                if d.win == win {
-                    let err = l - d.grab;
-                    if err.length() > 1.5 {
-                        let before = self.win_pos[idx];
-                        let size = self.win_inner_size(win);
-                        let snapped = self.snap_pos(idx, before + err, size, monitor);
-                        self.win_pos[idx] = snapped;
+            let idx = win_idx(win);
+            let is_my_drag = self.drag.as_ref().map(|d| d.win == win).unwrap_or(false);
+            if is_my_drag {
+                let manual = self.drag.as_ref().unwrap().manual;
+                if manual {
+                    // Live move: drive position from the global cursor (feedback-
+                    // free), moving the docked group in tandem each frame.
+                    if let Some(g) = global_cursor_points(ctx) {
+                        let d = self.drag.as_ref().unwrap();
+                        let target = g - d.grab;
                         let group = d.group.clone();
+                        let press_pos = d.press_pos;
+                        self.win_pos[idx] = target;
                         for (mi, off) in group {
-                            self.win_pos[mi] = snapped + off;
+                            self.win_pos[mi] = target + off;
                         }
-                        if let Some(dm) = self.drag.as_mut() {
-                            dm.moved = true;
+                        if (target - press_pos).length() > 3.0 {
+                            if let Some(dm) = self.drag.as_mut() {
+                                dm.moved = true;
+                            }
+                        }
+                        if idx == 0 {
+                            self.root_last = None; // keep root in sync while moving
+                        }
+                    }
+                    ctx.request_repaint();
+                } else if !self.drag.as_ref().unwrap().started_os {
+                    // OS fallback: hand off to the OS window-drag past a threshold.
+                    if let Some(sc) = screen_cursor {
+                        if (sc - self.drag.as_ref().unwrap().press_screen).length() > 4.0 {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                            if let Some(dm) = self.drag.as_mut() {
+                                dm.started_os = true;
+                            }
                         }
                     }
                 }
@@ -1122,24 +1208,19 @@ impl LinAmpApp {
             }
         }
 
-        if released {
+        // Finalize a drag once the button is up (covers release after the modal
+        // OS drag, which may swallow the release event).
+        if !down {
             if let Some(d) = self.drag.take() {
-                if d.win == win && !d.moved {
-                    let now = Instant::now();
-                    let dbl = self
-                        .tb_last_click
-                        .map(|(w, t)| w == d.win && now.duration_since(t).as_millis() < 350)
-                        .unwrap_or(false);
-                    if dbl {
-                        self.toggle_shade(d.win);
-                        self.tb_last_click = None;
-                    } else {
-                        self.tb_last_click = Some((d.win, now));
-                    }
-                } else if d.win != win {
+                if d.win == win {
+                    self.finalize_drag(d, outer, monitor);
+                } else {
                     self.drag = Some(d);
                 }
             }
+        }
+
+        if released {
             self.resize_pl = None;
             if let Some(l) = local {
                 let nx = l.x / self.scale;
@@ -1201,6 +1282,47 @@ impl LinAmpApp {
         }
     }
 
+    fn finalize_drag(&mut self, d: Dragging, outer: Option<egui::Rect>, monitor: Option<egui::Vec2>) {
+        let idx = win_idx(d.win);
+        let did_move = if d.manual { d.moved } else { d.started_os };
+        if did_move {
+            // OS fallback moved the window out from under win_pos; re-sync it.
+            if !d.manual {
+                if let Some(r) = outer {
+                    self.win_pos[idx] = r.min;
+                }
+                for (mi, off) in &d.group {
+                    self.win_pos[*mi] = self.win_pos[idx] + *off;
+                }
+            }
+            // Magnetic snap to screen edges / other windows; move the group together.
+            let before = self.win_pos[idx];
+            let size = self.win_inner_size(d.win);
+            let snapped = self.snap_pos(idx, before, size, monitor);
+            let delta = snapped - before;
+            self.win_pos[idx] = snapped;
+            for (mi, _) in &d.group {
+                self.win_pos[*mi] += delta;
+            }
+            if d.win == ClWin::Main {
+                self.root_last = None;
+            }
+        } else {
+            // A click with no move: double-click toggles the window shade.
+            let now = Instant::now();
+            let dbl = self
+                .tb_last_click
+                .map(|(w, t)| w == d.win && now.duration_since(t).as_millis() < 350)
+                .unwrap_or(false);
+            if dbl {
+                self.toggle_shade(d.win);
+                self.tb_last_click = None;
+            } else {
+                self.tb_last_click = Some((d.win, now));
+            }
+        }
+    }
+
     fn win_native_h(&self, win: ClWin) -> f32 {
         match win {
             ClWin::Main => self.main_h(),
@@ -1219,25 +1341,57 @@ impl LinAmpApp {
         egui::vec2(classic::MAIN_W as f32 * self.scale, self.win_native_h(win) * self.scale)
     }
 
-    fn start_drag(&mut self, win: ClWin, local: Option<egui::Pos2>) {
-        if let Some(l) = local {
+    fn start_drag(&mut self, ctx: &egui::Context, win: ClWin, screen_cursor: Option<egui::Pos2>) {
+        if let Some(sc) = screen_cursor {
+            // Only the main window carries a group: the set of windows actually
+            // docked (edge-flush) to it. EQ/playlist always move on their own,
+            // even when docked to each other.
+            let group = if win == ClWin::Main {
+                self.main_dock_group()
+            } else {
+                Vec::new()
+            };
             let idx = win_idx(win);
-            let mut group = Vec::new();
-            if win == ClWin::Main {
-                for j in [1usize, 2usize] {
-                    let vis = if j == 1 { self.eq_visible } else { self.pl_visible };
-                    if vis {
-                        group.push((j, self.win_pos[j] - self.win_pos[idx]));
-                    }
-                }
-            }
+            let (manual, grab) = match global_cursor_points(ctx) {
+                Some(g) => (true, g - self.win_pos[idx]),
+                None => (false, egui::Vec2::ZERO),
+            };
             self.drag = Some(Dragging {
                 win,
-                grab: l,
+                manual,
+                grab,
+                press_pos: self.win_pos[idx],
+                press_screen: sc,
+                started_os: false,
                 moved: false,
                 group,
             });
         }
+    }
+
+    fn win_rect_pts(&self, idx: usize) -> egui::Rect {
+        let w = match idx {
+            0 => ClWin::Main,
+            1 => ClWin::Eq,
+            _ => ClWin::Pl,
+        };
+        egui::Rect::from_min_size(self.win_pos[idx], self.win_inner_size(w))
+    }
+
+    /// Windows transitively docked to the main window (by offset from main).
+    fn main_dock_group(&self) -> Vec<(usize, egui::Vec2)> {
+        let rects = [
+            self.win_rect_pts(0),
+            self.win_rect_pts(1),
+            self.win_rect_pts(2),
+        ];
+        let vis = [true, self.eq_visible, self.pl_visible];
+        let in_group = dock_group_from_main(&rects, &vis);
+        [1usize, 2usize]
+            .into_iter()
+            .filter(|&j| in_group[j])
+            .map(|j| (j, self.win_pos[j] - self.win_pos[0]))
+            .collect()
     }
 
     /// Canonical stacking: EQ then playlist dock directly below the main window,
@@ -1292,7 +1446,13 @@ impl LinAmpApp {
             if !vis {
                 continue;
             }
-            if let Some(o) = self.win_rect[j] {
+            {
+                let jwin = match j {
+                    0 => ClWin::Main,
+                    1 => ClWin::Eq,
+                    _ => ClWin::Pl,
+                };
+                let o = Rect::from_min_size(self.win_pos[j], self.win_inner_size(jwin));
                 let xover = r.left() < o.right() + s && r.right() > o.left() - s;
                 if xover {
                     if (r.top() - o.bottom()).abs() < s {
@@ -1336,6 +1496,9 @@ impl LinAmpApp {
             ClWin::Eq => self.eq_shade = !self.eq_shade,
             ClWin::Pl => self.pl_shade = !self.pl_shade,
         }
+        // Keep the docked stack consistent and resize the root window.
+        self.restack();
+        self.root_last = None;
     }
 
     fn set_double_size(&mut self, _ctx: &egui::Context, dbl: bool) {
@@ -1405,7 +1568,7 @@ impl LinAmpApp {
 
         // Initialise window positions from the real main window, once.
         if !self.positions_init {
-            if let Some(r) = self.win_rect[0] {
+            if let Some(r) = ctx.input(|i| i.viewport().outer_rect) {
                 self.win_pos[0] = r.min;
                 self.win_pos[1] = egui::pos2(r.min.x, r.min.y + self.main_h() * self.scale);
                 self.win_pos[2] =
@@ -1432,7 +1595,8 @@ impl LinAmpApp {
                 .with_inner_size(self.win_inner_size(ClWin::Eq))
                 .with_position(self.win_pos[1])
                 .with_decorations(false)
-                .with_resizable(false);
+                .with_resizable(false)
+                .with_taskbar(false);
             let id = egui::ViewportId::from_hash_of("linamp_eq");
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
                 self.render_window(ctx, ClWin::Eq);
@@ -1446,7 +1610,8 @@ impl LinAmpApp {
                 .with_inner_size(self.win_inner_size(ClWin::Pl))
                 .with_position(self.win_pos[2])
                 .with_decorations(false)
-                .with_resizable(false);
+                .with_resizable(false)
+                .with_taskbar(false);
             let id = egui::ViewportId::from_hash_of("linamp_pl");
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
                 self.render_window(ctx, ClWin::Pl);
@@ -2388,4 +2553,67 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
     style.spacing.item_spacing = egui::vec2(6.0, 4.0);
     style.spacing.slider_width = 120.0;
     ctx.set_style(style);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dock_group_from_main, rects_docked};
+    use egui::{pos2, vec2, Rect};
+
+    fn r(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect::from_min_size(pos2(x, y), vec2(w, h))
+    }
+
+    #[test]
+    fn stacked_windows_are_docked() {
+        assert!(rects_docked(r(0.0, 0.0, 275.0, 116.0), r(0.0, 116.0, 275.0, 116.0)));
+    }
+
+    #[test]
+    fn gap_is_not_docked() {
+        assert!(!rects_docked(r(0.0, 0.0, 275.0, 116.0), r(0.0, 140.0, 275.0, 116.0)));
+    }
+
+    #[test]
+    fn full_stack_all_follow_main() {
+        let rects = [
+            r(0.0, 0.0, 275.0, 116.0),
+            r(0.0, 116.0, 275.0, 116.0),
+            r(0.0, 232.0, 275.0, 180.0),
+        ];
+        assert_eq!(dock_group_from_main(&rects, &[true, true, true]), [true, true, true]);
+    }
+
+    #[test]
+    fn eq_pl_docked_only_to_each_other_dont_follow_main() {
+        // main alone; eq+pl docked to each other but far from main.
+        let rects = [
+            r(0.0, 0.0, 275.0, 116.0),
+            r(600.0, 0.0, 275.0, 116.0),
+            r(600.0, 116.0, 275.0, 180.0),
+        ];
+        assert_eq!(dock_group_from_main(&rects, &[true, true, true]), [true, false, false]);
+    }
+
+    #[test]
+    fn detached_eq_breaks_the_chain_to_pl() {
+        // eq floated away; pl is flush under eq but neither connects to main.
+        let rects = [
+            r(0.0, 0.0, 275.0, 116.0),
+            r(0.0, 300.0, 275.0, 116.0),
+            r(0.0, 416.0, 275.0, 180.0),
+        ];
+        assert_eq!(dock_group_from_main(&rects, &[true, true, true]), [true, false, false]);
+    }
+
+    #[test]
+    fn hidden_windows_never_follow() {
+        let rects = [
+            r(0.0, 0.0, 275.0, 116.0),
+            r(0.0, 116.0, 275.0, 116.0),
+            r(0.0, 232.0, 275.0, 180.0),
+        ];
+        // eq hidden -> it can't be in the group, and can't bridge to pl.
+        assert_eq!(dock_group_from_main(&rects, &[true, false, true]), [true, false, false]);
+    }
 }
