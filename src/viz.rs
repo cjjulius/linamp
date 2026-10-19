@@ -176,9 +176,10 @@ pub fn compute_bars(
     fft.process(&mut buf);
 
     let half = fft_size / 2;
-    // Normalize by the FFT size so magnitudes sit in a sane range (otherwise
-    // loud content saturates to 1.0 and the bars just pin at the top).
-    let norm = fft_size as f32;
+    // Normalize the magnitudes into a useful range: raw bins saturate to 1.0
+    // (pinning the bars), while dividing by the full FFT size is far too quiet.
+    // fft_size/16 lands typical music with peaks near the top and good motion.
+    let norm = fft_size as f32 / 16.0;
     let mags: Vec<f32> = buf[..half].iter().map(|c| c.norm() / norm).collect();
 
     let nyquist = sample_rate as f32 / 2.0;
