@@ -122,8 +122,11 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 
 ## Testing
 - `cargo test` runs the suite (playlist ops, M3U/PLS parse, skin colours,
-  classic window geometry/hit-testing, preferences, visualizer). Pure-logic and
-  cross-platform (Windows + Linux).
+  classic window geometry/hit-testing, preferences, EQ/balance DSP math,
+  visualizer). Pure-logic and cross-platform (Windows + Linux).
+- **CI** (GitHub Actions): every push/PR builds and tests on `ubuntu-latest`
+  and `windows-latest`; tags (`v*`) and manual runs also upload release
+  binaries for both platforms. Linux needs `libasound2-dev` (installed in CI).
 
 ## Planned / Backlog
 - 🔜 **Options / Preferences window** (Ctrl+P): 
