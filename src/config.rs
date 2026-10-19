@@ -69,6 +69,11 @@ pub struct Session {
     pub current: Option<usize>,
     pub pl_width: Option<f32>,
     pub pl_height: Option<f32>,
+    /// Equalizer state, remembered across runs.
+    pub eq_enabled: bool,
+    pub eq_auto: bool,
+    pub eq_preamp: f32,
+    pub eq_bands: Vec<f32>,
 }
 
 impl Session {
@@ -135,11 +140,17 @@ mod tests {
             current: Some(1),
             pl_width: Some(350.0),
             pl_height: Some(232.0),
+            eq_enabled: true,
+            eq_auto: true,
+            eq_preamp: -3.0,
+            eq_bands: vec![1.0; 10],
         };
         let j = serde_json::to_string(&s).unwrap();
         let q: Session = serde_json::from_str(&j).unwrap();
         assert_eq!(q.tracks.len(), 2);
         assert_eq!(q.current, Some(1));
         assert_eq!(q.pl_width, Some(350.0));
+        assert!(q.eq_enabled && q.eq_auto);
+        assert_eq!(q.eq_bands.len(), 10);
     }
 }

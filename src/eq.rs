@@ -23,6 +23,27 @@ pub const BAND_FREQS: [f32; 10] = [
 /// still giving each slider an audible, roughly one-third-octave reach.
 const Q: f32 = 1.0;
 
+/// Built-in equalizer presets: `(name, preamp dB, 10 band gains in dB)` at
+/// [`BAND_FREQS`]. Band gains stay within the ±12 dB slider range.
+pub const PRESETS: &[(&str, f32, [f32; 10])] = &[
+    ("Flat", 0.0, [0.0; 10]),
+    ("Rock", 0.0, [8.0, 5.0, -4.0, -7.0, -3.0, 2.0, 6.0, 9.0, 10.0, 10.0]),
+    ("Pop", 0.0, [-2.0, 3.0, 6.0, 7.0, 4.0, 0.0, -2.0, -3.0, -3.0, -3.0]),
+    ("Jazz", 0.0, [5.0, 4.0, 2.0, 3.0, -1.0, -1.0, 0.0, 2.0, 4.0, 5.0]),
+    ("Classical", 0.0, [6.0, 5.0, 4.0, 2.0, -2.0, -2.0, 0.0, 3.0, 5.0, 6.0]),
+    ("Dance", 0.0, [9.0, 7.0, 3.0, 0.0, 0.0, -4.0, -6.0, -6.0, 0.0, 0.0]),
+    ("Bass Boost", 0.0, [10.0, 9.0, 8.0, 5.0, 2.0, -1.0, -3.0, -5.0, -6.0, -6.0]),
+    ("Treble Boost", 0.0, [-7.0, -6.0, -5.0, -2.0, 0.0, 4.0, 7.0, 9.0, 10.0, 10.0]),
+    ("Vocal", 0.0, [-3.0, -2.0, 0.0, 3.0, 5.0, 5.0, 4.0, 2.0, 0.0, -2.0]),
+    ("Soft", 0.0, [4.0, 2.0, 1.0, 0.0, -1.0, -2.0, 0.0, 2.0, 4.0, 6.0]),
+];
+
+/// Auto-gain preamp (dB) that offsets a preset's largest boost so it is less
+/// likely to clip: the negative of the loudest positive band, else 0.
+pub fn auto_preamp(bands: &[f32; 10]) -> f32 {
+    -bands.iter().cloned().fold(0.0_f32, f32::max)
+}
+
 /// A snapshot of the equalizer controls.
 #[derive(Clone, Copy)]
 pub struct EqParams {
@@ -302,6 +323,26 @@ mod tests {
         let bq = peaking(60.0, Q, 12.0, 44_100.0);
         let ratio = rms_through(bq, 10_000.0, 44_100.0) / 0.70710677;
         assert!((ratio - 1.0).abs() < 0.05, "ratio={ratio}");
+    }
+
+    #[test]
+    fn presets_are_well_formed() {
+        assert!(PRESETS.iter().any(|(n, _, _)| *n == "Flat"));
+        for (name, preamp, bands) in PRESETS {
+            assert!(preamp.abs() <= 12.0, "{name} preamp");
+            assert!(bands.iter().all(|b| b.abs() <= 12.0), "{name} bands");
+        }
+        let flat = PRESETS.iter().find(|(n, _, _)| *n == "Flat").unwrap();
+        assert_eq!(flat.2, [0.0; 10]);
+    }
+
+    #[test]
+    fn auto_preamp_offsets_largest_boost() {
+        assert_eq!(auto_preamp(&[0.0; 10]), 0.0);
+        let mut b = [0.0; 10];
+        b[3] = 8.0;
+        assert_eq!(auto_preamp(&b), -8.0);
+        assert_eq!(auto_preamp(&[-4.0; 10]), 0.0); // no boost → no cut
     }
 
     #[test]
