@@ -472,6 +472,8 @@ pub struct PlState<'a> {
     pub colors: PlColors,
     pub rows: &'a [PlRow],
     pub first: usize,
+    /// Bottom-bar menu button currently held / with its menu open.
+    pub pressed: Option<PlRegion>,
 }
 
 /// Left-anchored bottom-bar menu buttons: (region, x, width). y is
@@ -612,6 +614,19 @@ impl ClassicSkin {
             blit(&mut c, p, 0, by, 0, 72, 125, 38); // bottom-left
             blit(&mut c, p, w - 150, by, 126, 72, 150, 38); // bottom-right
             blit(&mut c, p, w - 11, 3, 52, 42, 9, 9); // close
+
+            // Depress the held bottom-bar menu button. pledit has no pressed
+            // sprite for these, so darken the button region to show the press.
+            if let Some(bx) = st.pressed.and_then(|pr| match pr {
+                PlRegion::AddMenu => Some(14),
+                PlRegion::RemMenu => Some(43),
+                PlRegion::SelMenu => Some(72),
+                PlRegion::MiscMenu => Some(101),
+                PlRegion::ListMenu => Some(w - 44),
+                _ => None,
+            }) {
+                darken_rect(&mut c, bx, height as i32 - 30, 22, 18, 0.55);
+            }
         }
 
         // Track list.
@@ -666,6 +681,28 @@ impl ClassicSkin {
             let (col, row) = char_cell(ch);
             blit_tinted(c, tf, x, y0, col * 5, row * 6, 5, 6, color);
             x += 5;
+        }
+    }
+}
+
+/// Multiply the RGB of every pixel in a rect by `factor` (0..1) for a quick
+/// "pressed"/shaded look where no dedicated sprite exists.
+fn darken_rect(dst: &mut RgbaImage, x: i32, y: i32, w: i32, h: i32, factor: f32) {
+    let (dw, dh) = dst.dimensions();
+    for j in 0..h {
+        let yy = y + j;
+        if yy < 0 || yy >= dh as i32 {
+            continue;
+        }
+        for i in 0..w {
+            let xx = x + i;
+            if xx < 0 || xx >= dw as i32 {
+                continue;
+            }
+            let p = dst.get_pixel_mut(xx as u32, yy as u32);
+            p[0] = (p[0] as f32 * factor) as u8;
+            p[1] = (p[1] as f32 * factor) as u8;
+            p[2] = (p[2] as f32 * factor) as u8;
         }
     }
 }
@@ -802,6 +839,7 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
             },
             rows: &rows,
             first: 0,
+            pressed: None,
         },
         MAIN_W,
         PL_H,

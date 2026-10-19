@@ -1951,6 +1951,9 @@ impl LinAmpApp {
                 .with_taskbar(false);
             let id = egui::ViewportId::from_hash_of("linamp_eq");
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
+                // Fire global shortcuts while this window has focus (keyboard
+                // input goes to the focused viewport, not the root).
+                self.handle_shortcuts(ctx);
                 self.render_window(ctx, ClWin::Eq);
             });
         }
@@ -1966,6 +1969,7 @@ impl LinAmpApp {
                 .with_taskbar(false);
             let id = egui::ViewportId::from_hash_of("linamp_pl");
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
+                self.handle_shortcuts(ctx);
                 self.render_window(ctx, ClWin::Pl);
             });
         }
@@ -2009,6 +2013,26 @@ impl LinAmpApp {
             });
     }
 
+    /// The bottom-bar menu button that should appear pressed: the one held
+    /// down, or the one whose fly-out menu is currently open.
+    fn pl_pressed_button(&self) -> Option<classic::PlRegion> {
+        use classic::PlRegion as P;
+        if let Some(r) = self.pl_menu_press {
+            return Some(r);
+        }
+        if let Some((kind, ClWin::Pl, _)) = self.popup {
+            return match kind {
+                Popup::PlAdd => Some(P::AddMenu),
+                Popup::PlRem => Some(P::RemMenu),
+                Popup::PlSel => Some(P::SelMenu),
+                Popup::PlMisc => Some(P::MiscMenu),
+                Popup::PlList => Some(P::ListMenu),
+                _ => None,
+            };
+        }
+        None
+    }
+
     fn compose_window(&self, win: ClWin) -> image::RgbaImage {
         let cs = self.classic.as_ref().unwrap();
         match win {
@@ -2038,6 +2062,7 @@ impl LinAmpApp {
                         colors,
                         rows: &rows,
                         first: self.pl_first,
+                        pressed: self.pl_pressed_button(),
                     };
                     cs.compose_playlist(&st, self.pl_px_w as u32, self.pl_px_h as u32)
                 }
