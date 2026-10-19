@@ -683,25 +683,24 @@ impl ClassicSkin {
             // total omits tracks whose length isn't known yet. Both are shown
             // once the playlist has content.
             if st.total_secs > 0.0 || st.elapsed_secs > 0.0 {
-                let sx0 = w - 150; // sprite origin
-                let draw_right = |c: &mut RgbaImage, s: &Self, text: &str, right: i32, floor: i32, y: i32| {
-                    let tw = text.chars().count() as i32 * 5;
-                    let tx = (right - tw).max(floor);
-                    s.draw_text_tinted(c, text, tx, y, right - tx, st.colors.normal);
-                };
+                // Sprite origin; its two black boxes sit at these local offsets:
+                // the wide summary bar at x5..96 / y8..17 and the small elapsed
+                // box at x63..96 / y22..29 (colon baked at x83).
+                let sx0 = w - 150;
                 let summary = format!(
                     "{}/{}{}",
                     fmt_pl_time(st.elapsed_secs),
                     fmt_pl_time(st.total_secs),
                     if st.total_partial { "+" } else { "" },
                 );
-                draw_right(&mut c, self, &summary, sx0 + 96, sx0 + 6, by + 7);
+                // Left-aligned and vertically centred in the top bar.
+                self.draw_text_tinted(&mut c, &summary, sx0 + 7, by + 10, 89, st.colors.normal);
                 // Current elapsed in the small box, its colon aligned onto the
                 // one baked into the sprite so they don't double up.
                 let el = fmt_pl_time(st.elapsed_secs);
                 if let Some(ci) = el.rfind(':') {
                     let tx = sx0 + 83 - el[..ci].chars().count() as i32 * 5;
-                    self.draw_text_tinted(&mut c, &el, tx, by + 25, sx0 + 98 - tx, st.colors.normal);
+                    self.draw_text_tinted(&mut c, &el, tx, by + 22, sx0 + 98 - tx, st.colors.normal);
                 }
             }
         }
