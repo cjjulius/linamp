@@ -41,6 +41,7 @@ Goal: match classic Winamp as closely as possible. ✅ = implemented today,
 | Keys | Action | Status |
 |------|--------|--------|
 | Alt+3 | View/edit file info (ID3 tag editor) | ✅ (MP3; more formats later) |
+| ↑ / ↓ | Move selection (playlist focused) | ✅ |
 | Enter | Play selected | ✅ (Enter or double-click) |
 | Delete | Remove selected | ✅ |
 | Ctrl+A | Select all | ✅ |

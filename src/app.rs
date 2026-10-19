@@ -956,6 +956,40 @@ impl LinAmpApp {
         self.pl_selection = (0..self.playlist.len()).collect();
     }
 
+    /// Move the single-row selection by `delta` (keyboard navigation), clamped,
+    /// and scroll it into view.
+    fn pl_move_selection(&mut self, delta: i32) {
+        if self.playlist.is_empty() {
+            return;
+        }
+        let len = self.playlist.len() as i32;
+        let anchor = if delta < 0 {
+            self.pl_selection.iter().min().copied()
+        } else {
+            self.pl_selection.iter().max().copied()
+        };
+        let next = match anchor {
+            Some(a) => (a as i32 + delta).clamp(0, len - 1),
+            // Nothing selected yet: enter from the near end.
+            None if delta < 0 => len - 1,
+            None => 0,
+        } as usize;
+        self.pl_selection.clear();
+        self.pl_selection.insert(next);
+        self.pl_last_click = Some((next, Instant::now()));
+        self.pl_scroll_to(next);
+    }
+
+    /// Adjust the playlist scroll offset so row `idx` is visible.
+    fn pl_scroll_to(&mut self, idx: usize) {
+        let visible = classic::pl_visible_rows(self.pl_px_h as u32).max(1);
+        if idx < self.pl_first {
+            self.pl_first = idx;
+        } else if idx >= self.pl_first + visible {
+            self.pl_first = idx + 1 - visible;
+        }
+    }
+
     fn pl_invert_selection(&mut self) {
         self.pl_selection = (0..self.playlist.len())
             .filter(|i| !self.pl_selection.contains(i))
@@ -1990,7 +2024,7 @@ impl LinAmpApp {
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
                 // Fire global shortcuts while this window has focus (keyboard
                 // input goes to the focused viewport, not the root).
-                self.handle_shortcuts(ctx);
+                self.handle_shortcuts(ctx, ClWin::Eq);
                 self.render_window(ctx, ClWin::Eq);
             });
         }
@@ -2006,7 +2040,7 @@ impl LinAmpApp {
                 .with_taskbar(false);
             let id = egui::ViewportId::from_hash_of("linamp_pl");
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
-                self.handle_shortcuts(ctx);
+                self.handle_shortcuts(ctx, ClWin::Pl);
                 self.render_window(ctx, ClWin::Pl);
             });
         }
@@ -2162,7 +2196,7 @@ impl LinAmpApp {
 
     // ---- keyboard ----------------------------------------------------------
 
-    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+    fn handle_shortcuts(&mut self, ctx: &egui::Context, win: ClWin) {
         if ctx.wants_keyboard_input() {
             return; // a text field has focus
         }
@@ -2229,10 +2263,19 @@ impl LinAmpApp {
             self.shuffle = !self.shuffle;
         }
         if k.vol_up {
-            self.adjust_volume(0.05);
+            // Up/Down move the selection in the playlist window, else volume.
+            if win == ClWin::Pl {
+                self.pl_move_selection(-1);
+            } else {
+                self.adjust_volume(0.05);
+            }
         }
         if k.vol_down {
-            self.adjust_volume(-0.05);
+            if win == ClWin::Pl {
+                self.pl_move_selection(1);
+            } else {
+                self.adjust_volume(-0.05);
+            }
         }
         if k.seek_fwd {
             self.seek_relative(5.0);
@@ -2893,7 +2936,7 @@ impl eframe::App for LinAmpApp {
             self.last_device_check = now;
         }
 
-        self.handle_shortcuts(ctx);
+        self.handle_shortcuts(ctx, ClWin::Main);
 
         if self.player.finished() {
             if self.repeat_one {
