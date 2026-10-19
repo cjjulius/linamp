@@ -49,12 +49,16 @@ fn main() -> eframe::Result<()> {
 
     // Start borderless at classic skin size (the app sets the real mode on the
     // first frame once it knows whether a skin loaded).
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([550.0, 232.0])
+        .with_decorations(false)
+        .with_resizable(false)
+        .with_title("LinAmp");
+    if let Some(icon) = load_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([550.0, 232.0])
-            .with_decorations(false)
-            .with_resizable(false)
-            .with_title("LinAmp"),
+        viewport,
         ..Default::default()
     };
 
@@ -63,4 +67,16 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(LinAmpApp::new(cc)))),
     )
+}
+
+/// Decode the embedded LinAmp logo into an egui window/taskbar icon.
+fn load_icon() -> Option<egui::IconData> {
+    let bytes = include_bytes!("../assets/linamp_logo_256.png");
+    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let (width, height) = img.dimensions();
+    Some(egui::IconData {
+        rgba: img.into_raw(),
+        width,
+        height,
+    })
 }

@@ -461,13 +461,13 @@ pub struct PlState<'a> {
     pub first: usize,
 }
 
-/// Bottom-bar menu buttons: (region, x, width). y is `height - 30`, h = 18.
+/// Left-anchored bottom-bar menu buttons: (region, x, width). y is
+/// `height - 30`, h = 18. The List menu is right-anchored (see `pl_region_at`).
 const PL_BOTTOM_BTNS: &[(PlRegion, i32, i32)] = &[
     (PlRegion::AddMenu, 14, 22),
     (PlRegion::RemMenu, 43, 22),
     (PlRegion::SelMenu, 72, 22),
     (PlRegion::MiscMenu, 101, 22),
-    (PlRegion::ListMenu, 231, 22),
 ];
 
 
@@ -475,27 +475,31 @@ const PL_ROW_H: i32 = 7;
 const PL_LIST_X: i32 = 14;
 const PL_LIST_Y: i32 = 21;
 
-pub fn pl_region_at(x: f32, y: f32, height: f32) -> Option<PlRegion> {
-    if x >= 264.0 && x < 273.0 && y >= 3.0 && y < 12.0 {
+pub fn pl_region_at(x: f32, y: f32, width: f32, height: f32) -> Option<PlRegion> {
+    if x >= width - 11.0 && x < width - 2.0 && y >= 3.0 && y < 12.0 {
         return Some(PlRegion::Close);
     }
     if y < 20.0 {
         return Some(PlRegion::TitleBar);
     }
     // Resize grip (bottom-right corner).
-    if x >= 255.0 && y >= height - 20.0 {
+    if x >= width - 20.0 && y >= height - 20.0 {
         return Some(PlRegion::Resize);
     }
     if y < height - 38.0 {
         return Some(PlRegion::List);
     }
-    // Bottom-bar menu buttons.
+    // Bottom-bar menu buttons: the Add/Rem/Sel/Misc cluster is anchored left,
+    // the List menu is anchored to the right edge.
     let by = height - 30.0;
     if y >= by && y < by + 18.0 {
         for (region, bx, bw) in PL_BOTTOM_BTNS {
             if x >= *bx as f32 && x < (*bx + *bw) as f32 {
                 return Some(*region);
             }
+        }
+        if x >= width - 44.0 && x < width - 22.0 {
+            return Some(PlRegion::ListMenu);
         }
     }
     None
@@ -555,34 +559,44 @@ impl ClassicSkin {
         c
     }
 
-    pub fn compose_playlist(&self, st: &PlState, height: u32) -> RgbaImage {
-        let mut c = RgbaImage::new(275, height);
+    pub fn compose_playlist(&self, st: &PlState, width: u32, height: u32) -> RgbaImage {
+        let w = width.max(MAIN_W) as i32;
+        let mut c = RgbaImage::new(w as u32, height);
         // Inner background fill.
-        fill_rect(&mut c, 12, 20, 275 - 12 - 20, height as i32 - 20 - 38, st.colors.bg);
+        fill_rect(&mut c, 12, 20, w - 12 - 20, height as i32 - 20 - 38, st.colors.bg);
 
         if let Some(p) = self.bmp("pledit.bmp") {
             let sy = if st.focused { 0 } else { 21 };
             blit(&mut c, p, 0, 0, 0, sy, 25, 20); // top-left corner
-            blit(&mut c, p, 250, 0, 153, sy, 25, 20); // top-right corner
+            blit(&mut c, p, w - 25, 0, 153, sy, 25, 20); // top-right corner
             let mut x = 25;
-            while x < 250 {
+            while x < w - 25 {
                 blit(&mut c, p, x, 0, 127, sy, 25, 20);
                 x += 25;
             }
-            blit(&mut c, p, 87, 0, 26, sy, 100, 20); // title bar center
+            blit(&mut c, p, (w - 100) / 2, 0, 26, sy, 100, 20); // title bar center
 
+            // Left/right window edges, tiled vertically.
             let mut y = 20;
             let mid_end = height as i32 - 38;
             while y < mid_end {
                 blit(&mut c, p, 0, y, 0, 42, 12, 29);
-                blit(&mut c, p, 255, y, 31, 42, 20, 29);
+                blit(&mut c, p, w - 20, y, 31, 42, 20, 29);
                 y += 29;
             }
 
+            // Bottom bar: left corner (with Add/Rem/Sel/Misc), a tiled plain
+            // strip, then the right corner (with the List menu / time display).
             let by = height as i32 - 38;
-            blit(&mut c, p, 0, by, 0, 72, 125, 38);
-            blit(&mut c, p, 125, by, 126, 72, 150, 38);
-            blit(&mut c, p, 264, 3, 52, 42, 9, 9); // close
+            let mut bx = 125;
+            while bx < w - 150 {
+                let seg = (w - 150 - bx).min(25) as u32;
+                blit(&mut c, p, bx, by, 126, 72, seg, 38);
+                bx += 25;
+            }
+            blit(&mut c, p, 0, by, 0, 72, 125, 38); // bottom-left
+            blit(&mut c, p, w - 150, by, 126, 72, 150, 38); // bottom-right
+            blit(&mut c, p, w - 11, 3, 52, 42, 9, 9); // close
         }
 
         // Track list.
@@ -590,10 +604,10 @@ impl ClassicSkin {
         for (i, (text, is_cur, is_sel)) in st.rows.iter().skip(st.first).take(visible).enumerate() {
             let ry = PL_LIST_Y + i as i32 * PL_ROW_H;
             if *is_sel {
-                fill_rect(&mut c, PL_LIST_X - 2, ry - 1, 275 - PL_LIST_X - 22, PL_ROW_H, st.colors.selbg);
+                fill_rect(&mut c, PL_LIST_X - 2, ry - 1, w - PL_LIST_X - 22, PL_ROW_H, st.colors.selbg);
             }
             let col = if *is_cur { st.colors.current } else { st.colors.normal };
-            self.draw_text_tinted(&mut c, text, PL_LIST_X, ry, 275 - PL_LIST_X - 24, col);
+            self.draw_text_tinted(&mut c, text, PL_LIST_X, ry, w - PL_LIST_X - 24, col);
         }
         c
     }
@@ -772,6 +786,7 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
             rows: &rows,
             first: 0,
         },
+        MAIN_W,
         PL_H,
     );
 
@@ -805,9 +820,12 @@ mod tests {
 
     #[test]
     fn pl_regions() {
-        assert_eq!(pl_region_at(5.0, 5.0, 180.0), Some(PlRegion::TitleBar));
-        assert_eq!(pl_region_at(100.0, 100.0, 180.0), Some(PlRegion::List));
-        assert_eq!(pl_region_at(260.0, 165.0, 180.0), Some(PlRegion::Resize));
+        assert_eq!(pl_region_at(5.0, 5.0, 275.0, 180.0), Some(PlRegion::TitleBar));
+        assert_eq!(pl_region_at(100.0, 100.0, 275.0, 180.0), Some(PlRegion::List));
+        assert_eq!(pl_region_at(260.0, 165.0, 275.0, 180.0), Some(PlRegion::Resize));
+        // Resize grip and List menu track the right edge when widened.
+        assert_eq!(pl_region_at(360.0, 165.0, 375.0, 180.0), Some(PlRegion::Resize));
+        assert_eq!(pl_region_at(375.0 - 30.0, 180.0 - 20.0, 375.0, 180.0), Some(PlRegion::ListMenu));
     }
 
     #[test]
