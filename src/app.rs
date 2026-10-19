@@ -1249,16 +1249,14 @@ impl LinAmpApp {
 
     fn start_drag(&mut self, win: ClWin, screen_cursor: Option<egui::Pos2>) {
         if let Some(sc) = screen_cursor {
-            let idx = win_idx(win);
-            let mut group = Vec::new();
-            if win == ClWin::Main {
-                for j in [1usize, 2usize] {
-                    let vis = if j == 1 { self.eq_visible } else { self.pl_visible };
-                    if vis {
-                        group.push((j, self.win_pos[j] - self.win_pos[idx]));
-                    }
-                }
-            }
+            // Only the main window carries a group: the set of windows actually
+            // docked (edge-flush) to it. EQ/playlist always move on their own,
+            // even when docked to each other.
+            let group = if win == ClWin::Main {
+                self.main_dock_group()
+            } else {
+                Vec::new()
+            };
             self.drag = Some(Dragging {
                 win,
                 press_screen: sc,
@@ -1266,6 +1264,60 @@ impl LinAmpApp {
                 group,
             });
         }
+    }
+
+    fn win_rect_pts(&self, idx: usize) -> egui::Rect {
+        let w = match idx {
+            0 => ClWin::Main,
+            1 => ClWin::Eq,
+            _ => ClWin::Pl,
+        };
+        egui::Rect::from_min_size(self.win_pos[idx], self.win_inner_size(w))
+    }
+
+    fn win_visible(&self, idx: usize) -> bool {
+        match idx {
+            0 => true,
+            1 => self.eq_visible,
+            2 => self.pl_visible,
+            _ => false,
+        }
+    }
+
+    /// Are windows `a` and `b` docked — edge-flush and overlapping on the shared axis?
+    fn is_docked(&self, a: usize, b: usize) -> bool {
+        let (ra, rb) = (self.win_rect_pts(a), self.win_rect_pts(b));
+        let tol = 3.0;
+        let x_overlap = ra.left() < rb.right() - 1.0 && ra.right() > rb.left() + 1.0;
+        let y_overlap = ra.top() < rb.bottom() - 1.0 && ra.bottom() > rb.top() + 1.0;
+        let v_adj = x_overlap
+            && ((ra.bottom() - rb.top()).abs() <= tol || (ra.top() - rb.bottom()).abs() <= tol);
+        let h_adj = y_overlap
+            && ((ra.right() - rb.left()).abs() <= tol || (ra.left() - rb.right()).abs() <= tol);
+        v_adj || h_adj
+    }
+
+    /// Windows transitively docked to the main window (by offset from main).
+    fn main_dock_group(&self) -> Vec<(usize, egui::Vec2)> {
+        let mut in_group = [true, false, false];
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for j in [1usize, 2usize] {
+                if in_group[j] || !self.win_visible(j) {
+                    continue;
+                }
+                if (0..3).any(|k| in_group[k] && self.is_docked(j, k)) {
+                    in_group[j] = true;
+                    changed = true;
+                }
+            }
+        }
+        [1usize, 2usize]
+            .into_iter()
+            .filter(|&j| in_group[j])
+            .map(|j| (j, self.win_pos[j] - self.win_pos[0]))
+            .collect()
     }
 
     /// Canonical stacking: EQ then playlist dock directly below the main window,
