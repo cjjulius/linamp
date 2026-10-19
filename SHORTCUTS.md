@@ -40,14 +40,14 @@ Goal: match classic Winamp as closely as possible. ✅ = implemented today,
 ## Playlist editor
 | Keys | Action | Status |
 |------|--------|--------|
-| Alt+3 | View/edit file info (ID3 tag editor) | 🔜 (needs tag editor) |
+| Alt+3 | View/edit file info (ID3 tag editor) | ✅ (MP3; more formats later) |
 | Enter | Play selected | ✅ (double-click today) |
 | Delete | Remove selected | 🔜 (menu today) |
 | Ctrl+A | Select all | 🔜 (menu today) |
 | Insert | Add file | 🔜 |
 
 ## Features these shortcuts imply (to build)
-- ID3 tag editor (Alt+3), jump-to-file (J) and jump-to-time (Ctrl+J) dialogs
+- Jump-to-file (J) and jump-to-time (Ctrl+J) dialogs
 - Open-location / streaming (Ctrl+L)
 - Double-size / scaling toggle (Ctrl+D) — see preferences
 - Stop-after-current and stop-with-fade (Ctrl+V / Shift+V)

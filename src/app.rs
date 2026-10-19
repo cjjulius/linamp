@@ -30,7 +30,7 @@ fn win_idx(w: ClWin) -> usize {
 /// Window size (points) for a popup menu, from its item/separator count.
 fn popup_dims(kind: Popup) -> (f32, f32) {
     let (buttons, seps) = match kind {
-        Popup::Options => (8, 3),
+        Popup::Options => (9, 3),
         Popup::PlAdd => (2, 0),
         Popup::PlRem => (3, 0),
         Popup::PlSel => (3, 0),
@@ -277,6 +277,7 @@ pub struct LinAmpApp {
     scale: f32,
     prefs_open: bool,
     library_open: bool,
+    tag_editor: Option<TagEditor>,
 
     marquee_offset: f32,
     last_frame: Instant,
@@ -301,9 +302,21 @@ struct KeyState {
     seek_fwd: bool,
     seek_back: bool,
     ctrl: bool,
+    alt: bool,
     key_d: bool,
     key_p: bool,
     key_t: bool,
+    key_3: bool,
+}
+
+/// State for the file-info / tag editor window.
+struct TagEditor {
+    index: usize,
+    path: PathBuf,
+    fields: crate::tags::TagFields,
+    orig: crate::tags::TagFields,
+    editable: bool,
+    status: String,
 }
 
 impl LinAmpApp {
@@ -379,6 +392,7 @@ impl LinAmpApp {
             scale,
             prefs_open: false,
             library_open: false,
+            tag_editor: None,
             marquee_offset: 0.0,
             last_frame: Instant::now(),
             last_device_check: Instant::now(),
@@ -1043,6 +1057,10 @@ impl LinAmpApp {
                             if item(ui, "Media Library…") {
                                 self.library_open = true;
                                 self.refresh_library();
+                                close = true;
+                            }
+                            if item(ui, "Edit file tags… (Alt+3)") {
+                                self.open_tag_editor();
                                 close = true;
                             }
                             if item(ui, "Load skin…") {
@@ -1731,6 +1749,146 @@ impl LinAmpApp {
         }
     }
 
+    /// Open the file-info / tag editor for the selected row (or current track).
+    fn open_tag_editor(&mut self) {
+        let idx = if self.pl_selection.len() == 1 {
+            self.pl_selection.iter().next().copied()
+        } else {
+            self.playlist.current
+        }
+        .or(if self.playlist.is_empty() { None } else { Some(0) });
+
+        let Some(index) = idx else {
+            self.status = "No track to edit.".into();
+            return;
+        };
+        let Some(track) = self.playlist.tracks.get(index) else {
+            return;
+        };
+        let path = track.path.clone();
+        let fields = crate::tags::read(&path);
+        let editable = crate::tags::can_edit(&path);
+        let status = if editable {
+            String::new()
+        } else {
+            "Read-only: tag writing isn't supported for this format yet.".into()
+        };
+        self.tag_editor = Some(TagEditor {
+            index,
+            path,
+            orig: fields.clone(),
+            fields,
+            editable,
+            status,
+        });
+    }
+
+    /// Write the editor's fields back to the file and refresh the playlist row.
+    fn save_tag_editor(&mut self) {
+        let (index, path, fields) = match &self.tag_editor {
+            Some(ed) if ed.editable => (ed.index, ed.path.clone(), ed.fields.clone()),
+            _ => return,
+        };
+        let result = crate::tags::write(&path, &fields);
+        if result.is_ok() {
+            if let Some(t) = self.playlist.tracks.get_mut(index) {
+                t.loaded = false;
+                t.load();
+            }
+        }
+        if let Some(ed) = self.tag_editor.as_mut() {
+            match result {
+                Ok(()) => {
+                    ed.orig = ed.fields.clone();
+                    ed.status = "Saved.".into();
+                }
+                Err(e) => ed.status = format!("Error: {e}"),
+            }
+        }
+    }
+
+    /// The tag editor window (own viewport, like preferences / library).
+    fn ui_tag_editor(&mut self, ctx: &egui::Context) {
+        if self.tag_editor.is_none() {
+            return;
+        }
+        let screen = self.win_pos[0] + egui::vec2(32.0, 32.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp — File Info")
+            .with_position(screen)
+            .with_inner_size(egui::vec2(400.0, 380.0))
+            .with_resizable(false)
+            .with_taskbar(false);
+        let id = egui::ViewportId::from_hash_of("linamp_tags");
+        let mut close = false;
+        let mut do_save = false;
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let ed = self.tag_editor.as_mut().unwrap();
+                let fname = ed
+                    .path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                ui.label(RichText::new(fname).strong());
+                ui.separator();
+                egui::Grid::new("tag_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 6.0])
+                    .show(ui, |ui| {
+                        let row = |ui: &mut egui::Ui, label: &str, val: &mut String| {
+                            ui.label(label);
+                            ui.add(
+                                egui::TextEdit::singleline(val).desired_width(260.0),
+                            );
+                            ui.end_row();
+                        };
+                        row(ui, "Title", &mut ed.fields.title);
+                        row(ui, "Artist", &mut ed.fields.artist);
+                        row(ui, "Album", &mut ed.fields.album);
+                        row(ui, "Album artist", &mut ed.fields.album_artist);
+                        row(ui, "Year", &mut ed.fields.year);
+                        row(ui, "Track", &mut ed.fields.track);
+                        row(ui, "Genre", &mut ed.fields.genre);
+                        ui.label("Comment");
+                        ui.add(
+                            egui::TextEdit::multiline(&mut ed.fields.comment)
+                                .desired_width(260.0)
+                                .desired_rows(2),
+                        );
+                        ui.end_row();
+                    });
+                ui.add_space(6.0);
+                if !ed.status.is_empty() {
+                    ui.label(RichText::new(&ed.status).color(Color32::GRAY));
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(ed.editable, |ui| {
+                        if ui.button("Save").clicked() {
+                            do_save = true;
+                        }
+                    });
+                    if ui.button("Revert").clicked() {
+                        ed.fields = ed.orig.clone();
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
+            });
+            if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
+                close = true;
+            }
+        });
+        if do_save {
+            self.save_tag_editor();
+        }
+        if close {
+            self.tag_editor = None;
+        }
+    }
+
     fn apply_eq_slider(&mut self, region: classic::EqRegion, ey: f32) {
         let v = classic::eq_value_at_y(ey);
         match region {
@@ -1758,6 +1916,7 @@ impl LinAmpApp {
         self.render_window(ctx, ClWin::Main);
         self.ui_prefs(ctx);
         self.ui_library_window(ctx);
+        self.ui_tag_editor(ctx);
 
         // Initialise window positions from the real main window, once.
         if !self.positions_init {
@@ -1958,9 +2117,11 @@ impl LinAmpApp {
             k.seek_fwd = i.key_pressed(Key::ArrowRight);
             k.seek_back = i.key_pressed(Key::ArrowLeft);
             k.ctrl = i.modifiers.ctrl || i.modifiers.command;
+            k.alt = i.modifiers.alt;
             k.key_d = i.key_pressed(Key::D);
             k.key_p = i.key_pressed(Key::P);
             k.key_t = i.key_pressed(Key::T);
+            k.key_3 = i.key_pressed(Key::Num3);
         });
 
         if k.play {
@@ -2011,6 +2172,9 @@ impl LinAmpApp {
         }
         if k.ctrl && k.key_t {
             self.time_remaining = !self.time_remaining;
+        }
+        if k.alt && k.key_3 {
+            self.open_tag_editor();
         }
     }
 
