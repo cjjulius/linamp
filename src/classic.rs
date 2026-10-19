@@ -495,6 +495,14 @@ pub struct PlState<'a> {
     pub first: usize,
     /// Bottom-bar menu button currently held / with its menu open.
     pub pressed: Option<PlRegion>,
+    /// Elapsed time of the current track, in seconds (0 when stopped).
+    pub elapsed_secs: f32,
+    /// Total running time of the whole playlist, in seconds (sum of the known
+    /// track durations).
+    pub total_secs: f32,
+    /// True when at least one track's length is unknown, so `total_secs` is a
+    /// lower bound and the readout gets a trailing `+` (as in Winamp).
+    pub total_partial: bool,
 }
 
 /// Left-anchored bottom-bar menu buttons: (region, x, width). y is
@@ -667,6 +675,34 @@ impl ClassicSkin {
             }) {
                 darken_rect(&mut c, bx, height as i32 - 30, 22, 18, 0.55);
             }
+
+            // Time readouts in the bottom-right sprite (anchored at w-150): the
+            // "<elapsed>/<total>" summary in its wide top bar and the current
+            // track's elapsed time in the small box by the mini-player, like
+            // Winamp's "6:46/52:48:36+" over "02:29". A trailing + means the
+            // total omits tracks whose length isn't known yet. Both are shown
+            // once the playlist has content.
+            if st.total_secs > 0.0 || st.elapsed_secs > 0.0 {
+                // Sprite origin; its two black boxes sit at these local offsets:
+                // the wide summary bar at x5..96 / y8..17 and the small elapsed
+                // box at x63..96 / y22..29 (colon baked at x83).
+                let sx0 = w - 150;
+                let summary = format!(
+                    "{}/{}{}",
+                    fmt_pl_time(st.elapsed_secs),
+                    fmt_pl_time(st.total_secs),
+                    if st.total_partial { "+" } else { "" },
+                );
+                // Left-aligned and vertically centred in the top bar.
+                self.draw_text_tinted(&mut c, &summary, sx0 + 7, by + 10, 89, st.colors.normal);
+                // Current elapsed in the small box, its colon aligned onto the
+                // one baked into the sprite so they don't double up.
+                let el = fmt_pl_time(st.elapsed_secs);
+                if let Some(ci) = el.rfind(':') {
+                    let tx = sx0 + 83 - el[..ci].chars().count() as i32 * 5;
+                    self.draw_text_tinted(&mut c, &el, tx, by + 22, sx0 + 98 - tx, st.colors.normal);
+                }
+            }
         }
 
         // Track list.
@@ -762,6 +798,19 @@ fn eq_valid_sprites(e: &RgbaImage) -> Vec<i32> {
         max_sat > 40 || (max_b - min_b) > 60
     };
     (0..28).filter(|&i| present(i % 14, i / 14)).collect()
+}
+
+/// Format a playlist time like Winamp's bottom bar: `M:SS`, or `H:MM:SS` once it
+/// reaches an hour. Minutes/hours have no leading zero; seconds (and minutes
+/// inside an H:MM:SS) are zero-padded. Negative input clamps to zero.
+fn fmt_pl_time(secs: f32) -> String {
+    let total = secs.max(0.0) as u64;
+    let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
 }
 
 /// Classic Winamp-style analyzer gradient by vertical fraction (0=bottom green,
@@ -1019,6 +1068,9 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
             rows: &rows,
             first: 0,
             pressed: None,
+            elapsed_secs: 406.0, // 6:46
+            total_secs: 52.0 * 3600.0 + 48.0 * 60.0 + 36.0, // 52:48:36
+            total_partial: true,
         },
         MAIN_W,
         PL_H,
@@ -1069,6 +1121,23 @@ mod tests {
         assert_eq!(shade_region_at(265.0, 5.0), Some(ShadeHit::Close));
         assert_eq!(shade_region_at(50.0, 5.0), Some(ShadeHit::TitleBar));
         assert_eq!(shade_region_at(50.0, 20.0), None);
+    }
+
+    #[test]
+    fn playlist_time_format() {
+        // M:SS with no leading zero on minutes; seconds always padded.
+        assert_eq!(fmt_pl_time(0.0), "0:00");
+        assert_eq!(fmt_pl_time(9.0), "0:09");
+        assert_eq!(fmt_pl_time(406.0), "6:46"); // the issue's current-time example
+        assert_eq!(fmt_pl_time(65.4), "1:05"); // fractions truncate
+        // Rolls over to H:MM:SS at an hour, hours unpadded, mins/secs padded.
+        assert_eq!(fmt_pl_time(3600.0), "1:00:00");
+        assert_eq!(
+            fmt_pl_time(52.0 * 3600.0 + 48.0 * 60.0 + 36.0),
+            "52:48:36" // the issue's total-time example
+        );
+        // Negative clamps to zero rather than underflowing.
+        assert_eq!(fmt_pl_time(-5.0), "0:00");
     }
 
     #[test]
