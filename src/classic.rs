@@ -580,12 +580,26 @@ impl ClassicSkin {
             // Graph background.
             blit(&mut c, e, 86, 17, 0, 294, 113, 19);
 
-            // Slider thumbs.
+            // Each slider: the skin's colored position bar (green at top/boost →
+            // red at bottom/cut, 28 sprites in two rows of 14) plus the grey
+            // thumb on top.
             let draw_thumb = |c: &mut RgbaImage, e: &RgbaImage, colx: i32, v: f32, sel: bool| {
                 let frac = ((1.0 - v) / 2.0).clamp(0.0, 1.0);
+                let idx = (frac * 27.0).round() as i32; // 0 = top, 27 = bottom
+                let (row, col) = (idx / 14, idx % 14);
+                blit(
+                    c,
+                    e,
+                    colx,
+                    EQ_SLIDER_TOP as i32,
+                    (13 + col * 15) as u32,
+                    (164 + row * 65) as u32,
+                    14,
+                    63,
+                );
                 let ty = EQ_SLIDER_TOP as i32 + (frac * EQ_SLIDER_TRAVEL) as i32;
                 let sy = if sel { 176 } else { 164 };
-                blit(c, e, colx, ty, 0, sy, 11, 11);
+                blit(c, e, colx + 2, ty, 0, sy, 11, 11);
             };
             draw_thumb(&mut c, e, EQ_PREAMP_X, st.preamp, st.pressed == Some(EqRegion::Preamp));
             for (i, &bx) in EQ_BAND_X.iter().enumerate() {
