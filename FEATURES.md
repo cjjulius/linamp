@@ -158,11 +158,17 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 | B | Next track |
 | Z | Previous track |
 | Space | Play/Pause toggle |
-| L | Open file(s) |
+| L / Shift+L | Open file(s) / folder |
 | R | Toggle repeat |
 | S | Toggle shuffle |
 | ↑ / ↓ | Volume up / down |
 | ← / → | Seek -5s / +5s |
+| Ctrl+T | Time elapsed / remaining |
+| Alt+G / Alt+E | Toggle equalizer / playlist |
 | Ctrl+P | Preferences |
 | Ctrl+D | Toggle double size |
 | Alt+3 | Edit file tags (ID3) |
+| Enter / Delete | Play / remove selected (playlist) |
+| Ctrl+A / Insert | Select all / add files (playlist) |
+
+See [SHORTCUTS.md](SHORTCUTS.md) for the full map and what's still planned.
