@@ -10,6 +10,7 @@ mod library;
 mod player;
 mod playlist;
 mod skin;
+mod tags;
 mod viz;
 
 use app::LinAmpApp;
