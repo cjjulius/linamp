@@ -50,6 +50,7 @@ pub enum Btn {
     Options,
     TitleBar,
     Time,
+    Viz,
 }
 
 /// (button, x, y, w, h) hit-rects in main-window space, most-specific first.
@@ -71,6 +72,7 @@ pub const REGIONS: &[(Btn, i32, i32, i32, i32)] = &[
     (Btn::Volume, 107, 57, 68, 13),
     (Btn::Balance, 177, 57, 38, 13),
     (Btn::Time, 36, 26, 64, 14), // click to toggle elapsed/remaining
+    (Btn::Viz, 24, 43, 76, 13),  // click to cycle visualizer mode
     (Btn::TitleBar, 0, 0, 275, 14), // fallback: drag
 ];
 
@@ -94,6 +96,14 @@ pub enum PlayUi {
     Stopped,
 }
 
+/// One frame of visualization data for the main-window analyzer area.
+pub enum VizFrame {
+    /// Per-band bar heights and slowly-falling peak markers, each 0..1.
+    Spectrum { bars: Vec<f32>, peaks: Vec<f32> },
+    /// Mono samples, -1..1.
+    Scope(Vec<f32>),
+}
+
 /// Everything the compositor needs to draw one frame.
 pub struct MainState {
     pub focused: bool,
@@ -115,6 +125,13 @@ pub struct MainState {
     pub khz: String,
     /// LCD/foreground colour, used for the shade-bar title + time.
     pub fg: [u8; 3],
+    /// Live visualization for the analyzer area (None = off).
+    pub viz: Option<VizFrame>,
+    /// Spectrum gradient from the skin (index 0 = top .. last = bottom); empty
+    /// falls back to a synthesized green→yellow→red gradient.
+    pub viz_spectrum: Vec<[u8; 3]>,
+    /// Peak-marker colour from the skin.
+    pub viz_peak: [u8; 3],
 }
 
 /// Hit target on a 14px window-shade bar.
@@ -286,6 +303,9 @@ impl ClassicSkin {
         self.draw_text(&mut c, &st.title, 111, 27, 154);
         self.draw_text(&mut c, &st.kbps, 111, 43, 15);
         self.draw_text(&mut c, &st.khz, 156, 43, 10);
+
+        // Visualizer in the empty LCD slot below the time.
+        draw_viz(&mut c, st, 24, 43, 76, 13);
 
         c
     }
@@ -686,6 +706,84 @@ impl ClassicSkin {
     }
 }
 
+/// Classic Winamp-style analyzer gradient by vertical fraction (0=bottom green,
+/// 0.5=yellow, 1=top red).
+fn viz_gradient(f: f32) -> [u8; 3] {
+    let lerp = |a: [u8; 3], b: [u8; 3], t: f32| {
+        [
+            (a[0] as f32 + (b[0] as f32 - a[0] as f32) * t) as u8,
+            (a[1] as f32 + (b[1] as f32 - a[1] as f32) * t) as u8,
+            (a[2] as f32 + (b[2] as f32 - a[2] as f32) * t) as u8,
+        ]
+    };
+    let f = f.clamp(0.0, 1.0);
+    let green = [40, 220, 60];
+    let yellow = [220, 210, 40];
+    let red = [220, 70, 40];
+    if f < 0.5 {
+        lerp(green, yellow, f / 0.5)
+    } else {
+        lerp(yellow, red, (f - 0.5) / 0.5)
+    }
+}
+
+/// Draw the main-window visualizer (spectrum bars or oscilloscope) into the
+/// rect (x,y,w,h). Bars use a green→yellow→red gradient by height; the
+/// oscilloscope uses the LCD colour.
+fn draw_viz(c: &mut RgbaImage, st: &MainState, x: i32, y: i32, w: i32, h: i32) {
+    let peak_col = st.viz_peak;
+    let hf = (h as f32 - 1.0).max(1.0);
+    // Colour at vertical fraction f (0=bottom, 1=top): the skin's spectrum
+    // gradient if present, else a synthesized green→yellow→red gradient.
+    let grad = |f: f32| -> [u8; 3] {
+        if st.viz_spectrum.is_empty() {
+            viz_gradient(f)
+        } else {
+            let n = st.viz_spectrum.len();
+            let idx = (((1.0 - f.clamp(0.0, 1.0)) * (n - 1) as f32).round() as usize).min(n - 1);
+            st.viz_spectrum[idx]
+        }
+    };
+    match &st.viz {
+        Some(VizFrame::Spectrum { bars, peaks }) => {
+            let n = bars.len().max(1) as i32;
+            let bw = (w as f32 / n as f32).max(2.0);
+            for (i, &b) in bars.iter().enumerate() {
+                let b = b.clamp(0.0, 1.0);
+                let x0 = x + (i as f32 * bw) as i32;
+                let bar_w = (bw as i32 - 1).max(1); // 1px gap between bars
+                let bh = (b * h as f32).round() as i32;
+                // Draw the bar row by row so it fades up its height.
+                for k in 0..bh {
+                    let col = grad(k as f32 / hf);
+                    fill_rect(c, x0, y + h - 1 - k, bar_w, 1, col);
+                }
+                // Slowly-falling peak dash, drawn only above the bar.
+                let pk = peaks.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                let ph = (pk * h as f32).round() as i32;
+                if ph > bh {
+                    fill_rect(c, x0, y + h - ph, bar_w, 1, peak_col);
+                }
+            }
+        }
+        Some(VizFrame::Scope(samples)) => {
+            let n = samples.len().max(2);
+            let mid = y + h / 2;
+            let amp = (h as f32 / 2.0 - 1.0).max(1.0);
+            let yat = |s: f32| mid - (s.clamp(-1.0, 1.0) * amp) as i32;
+            let mut prev = yat(samples[0]);
+            for i in 1..n {
+                let px = x + (i as i32 * w / n as i32);
+                let cur = yat(samples[i]);
+                let (lo, hi) = (prev.min(cur), prev.max(cur));
+                fill_rect(c, px, lo, 1, (hi - lo + 1).max(1), st.fg);
+                prev = cur;
+            }
+        }
+        None => {}
+    }
+}
+
 /// Multiply the RGB of every pixel in a rect by `factor` (0..1) for a quick
 /// "pressed"/shaded look where no dedicated sprite exists.
 fn darken_rect(dst: &mut RgbaImage, x: i32, y: i32, w: i32, h: i32, factor: f32) {
@@ -766,6 +864,22 @@ fn blit_tinted(
     }
 }
 
+/// Base-skin-like spectrum gradient (top red .. bottom green) for previews.
+fn sample_palette() -> Vec<[u8; 3]> {
+    vec![
+        [239, 49, 16], [214, 90, 0], [214, 115, 0], [222, 165, 24],
+        [214, 181, 33], [189, 222, 41], [148, 222, 33], [41, 206, 16],
+        [57, 181, 16], [24, 132, 8],
+    ]
+}
+
+/// Sample spectrum bars + peaks for the headless previews.
+fn sample_viz() -> (Vec<f32>, Vec<f32>) {
+    let bars: Vec<f32> = (0..19).map(|i| 0.3 + 0.6 * (i as f32 * 0.7).sin().abs()).collect();
+    let peaks: Vec<f32> = bars.iter().map(|b| (b + 0.18).min(1.0)).collect();
+    (bars, peaks)
+}
+
 /// Headless: render a skin's main window to a PNG (used for `--render-skin`).
 pub fn render_main_png(skin_path: &Path, out: &Path) -> Result<()> {
     let skin = ClassicSkin::load(skin_path)?;
@@ -787,6 +901,9 @@ pub fn render_main_png(skin_path: &Path, out: &Path) -> Result<()> {
         kbps: "128".to_string(),
         khz: "44".to_string(),
         fg: [0, 255, 120],
+        viz: Some({ let (bars, peaks) = sample_viz(); VizFrame::Spectrum { bars, peaks } }),
+        viz_spectrum: sample_palette(),
+        viz_peak: [150, 150, 150],
     };
     skin.compose_main(&st).save(out)?;
     Ok(())
@@ -813,6 +930,9 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
         kbps: "192".to_string(),
         khz: "44".to_string(),
         fg: [0, 255, 120],
+        viz: Some({ let (bars, peaks) = sample_viz(); VizFrame::Spectrum { bars, peaks } }),
+        viz_spectrum: sample_palette(),
+        viz_peak: [150, 150, 150],
     });
     let eq = skin.compose_eq(&EqState {
         focused: true,
@@ -866,6 +986,7 @@ mod tests {
         assert_eq!(region_at(7.0, 6.0), Some(Btn::Options));
         assert_eq!(region_at(5.0, 5.0), Some(Btn::TitleBar));
         assert_eq!(region_at(60.0, 31.0), Some(Btn::Time)); // time display
+        assert_eq!(region_at(60.0, 48.0), Some(Btn::Viz)); // visualizer
         assert_eq!(region_at(1000.0, 1000.0), None);
     }
 
