@@ -33,6 +33,10 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 
 ## Metadata / Library
 - ✅ Read ID3v2 / Vorbis / FLAC tags (title/artist/album)
+- ✅ **Tag editor** (Alt+3 / options menu → Edit file tags): view and edit
+  title / artist / album / album-artist / year / track / genre / comment, saved
+  back to the file. MP3 (ID3v2) today; modular, so more formats follow (reading
+  already works for all)
 - ✅ Audio properties (kbps / kHz / channels)
 - ✅ SQLite media library (scan folders, search, add to playlist)
   — stored at `%LOCALAPPDATA%/LinAmp/library.db` (Win) / `~/.local/share/LinAmp/` (Linux)
@@ -158,3 +162,6 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 | S | Toggle shuffle |
 | ↑ / ↓ | Volume up / down |
 | ← / → | Seek -5s / +5s |
+| Ctrl+P | Preferences |
+| Ctrl+D | Toggle double size |
+| Alt+3 | Edit file tags (ID3) |
