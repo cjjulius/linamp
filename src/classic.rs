@@ -580,43 +580,60 @@ impl ClassicSkin {
             // Graph background.
             blit(&mut c, e, 86, 17, 0, 294, 113, 19);
 
-            // Each slider: the skin's colored position bar (green at top/boost →
-            // red at bottom/cut, 28 sprites in two rows of 14) plus the grey
-            // thumb on top. Some skins (e.g. Iria) leave the slider-sprite area
-            // blank; detect a valid green sprite 0 and otherwise synthesize a
-            // green→red gradient so we never blit stray pixels.
-            // Which of the 28 slider sprites the skin actually provides (a
-            // saturated colored bar, vs the blank area some skins leave white or
-            // black). A requested position with no sprite snaps to the nearest
-            // one the skin does have, so a partially-skinned EQ keeps the skin's
-            // look; only when there are none do we synthesize a gradient.
-            let valid: Vec<i32> = (0..28)
-                .filter(|&i| {
-                    let (row, col) = (i / 14, i % 14);
-                    let p = e.get_pixel((13 + col * 15 + 7) as u32, (164 + row * 65 + 31) as u32);
-                    let mx = p[0].max(p[1]).max(p[2]) as i32;
-                    let mn = p[0].min(p[1]).min(p[2]) as i32;
-                    mx - mn > 40
-                })
-                .collect();
+            // Each slider: the skin's colored position bar (28 sprites in two
+            // rows of 14, nominally green at top/boost → red at bottom/cut) plus
+            // the grey thumb on top. Skins draw these very differently — a clean
+            // gradient (base), full-height greyscale bars (Iria), textured bars
+            // (Valentine), segmented LED meters (Topaz) — so "is this sprite
+            // real?" is any genuine content, not just a saturated colour: a
+            // sprite counts if it has colour OR vertical light/dark variation.
+            // Sprites past the edge of a short EQMAIN (e.g. Alita ships no
+            // slider bank at all) simply don't exist, so bounds-check first.
+            let (ew, eh) = e.dimensions();
+            let present = |col: i32, row: i32| -> bool {
+                let (x0, y0) = (13 + col * 15, 164 + row * 65);
+                if x0 < 0 || y0 < 0 || x0 as u32 + 14 > ew || y0 as u32 + 63 > eh {
+                    return false;
+                }
+                let (mut max_sat, mut min_b, mut max_b) = (0i32, 255i32, 0i32);
+                let mut y = y0;
+                while y < y0 + 63 {
+                    for dx in [4, 7, 10] {
+                        let p = e.get_pixel((x0 + dx) as u32, y as u32);
+                        let (mx, mn) = (
+                            p[0].max(p[1]).max(p[2]) as i32,
+                            p[0].min(p[1]).min(p[2]) as i32,
+                        );
+                        max_sat = max_sat.max(mx - mn);
+                        let b = (p[0] as i32 + p[1] as i32 + p[2] as i32) / 3;
+                        min_b = min_b.min(b);
+                        max_b = max_b.max(b);
+                    }
+                    y += 2;
+                }
+                max_sat > 40 || (max_b - min_b) > 60
+            };
+            // Which of the 28 slider sprites the skin actually provides. A
+            // requested position with no sprite snaps to the nearest one the
+            // skin does have, so a partially-skinned EQ keeps the skin's look.
+            // When the skin ships no slider bank at all we draw only the thumb
+            // over the background rather than synthesize garish bars.
+            let valid: Vec<i32> = (0..28).filter(|&i| present(i % 14, i / 14)).collect();
             let draw_thumb = |c: &mut RgbaImage, e: &RgbaImage, colx: i32, v: f32, sel: bool| {
                 let frac = ((1.0 - v) / 2.0).clamp(0.0, 1.0);
                 let idx = (frac * 27.0).round() as i32; // 0 = top, 27 = bottom
-                match valid.iter().min_by_key(|&&vi| (vi - idx).abs()).copied() {
-                    Some(ui) => {
-                        let (row, col) = (ui / 14, ui % 14);
-                        blit(
-                            c,
-                            e,
-                            colx,
-                            EQ_SLIDER_TOP as i32,
-                            (13 + col * 15) as u32,
-                            (164 + row * 65) as u32,
-                            14,
-                            63,
-                        );
-                    }
-                    None => fill_rect(c, colx, EQ_SLIDER_TOP as i32, 14, 63, viz_gradient(frac)),
+                if let Some(ui) = valid.iter().min_by_key(|&&vi| (vi - idx).abs()).copied() {
+                    let (row, col) = (ui / 14, ui % 14);
+                    blit(
+                        c,
+                        e,
+                        colx,
+                        EQ_SLIDER_TOP as i32,
+                        (13 + col * 15) as u32,
+                        (164 + row * 65) as u32,
+                        14,
+                        63,
+                    );
                 }
                 let ty = EQ_SLIDER_TOP as i32 + (frac * EQ_SLIDER_TRAVEL) as i32;
                 let sy = if sel { 176 } else { 164 };
