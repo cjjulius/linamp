@@ -88,9 +88,18 @@ cargo run --release -- --render-all skins/linamp_base_skin.wsz /tmp/out.png
 
 These are untested on Linux and the most likely sources of platform bugs:
 
-- **Borderless windows** — the three windows are undecorated and manually
-  positioned/dragged. Behaviour differs between **X11 and Wayland** (Wayland
-  restricts client-side window positioning). Test both session types.
+- **Borderless windows / docking** — the three windows are undecorated and
+  manually positioned/dragged, and snap/dock to each other (the main window
+  drags its docked group in tandem). This needs the **global cursor position**,
+  which `global_cursor_points()` in `src/app.rs` reads per platform: `GetCursorPos`
+  on Windows, `XQueryPointer` on **X11** (via the `x11-dl` crate, dlopened — no
+  new system package; libX11 is present on any X session). Verified working on
+  X11 (incl. XWayland). **Native Wayland cannot do this** — the compositor
+  forbids a client from reading the global cursor or positioning its own
+  top-level windows, so docking falls back to a no-op there. Full Winamp-style
+  docking on native Wayland would require compositing the three panes into a
+  single top-level window (tracked separately). Until then, Wayland users get
+  working docking via XWayland (`WINIT_UNIX_BACKEND=x11`).
 - **File dialogs** (rfd) — opening files/folders, adding to the playlist.
 - **Audio** — playback, device switching, no-xruns under PipeWire.
 - **HiDPI / fractional scaling** — the skin is pixel-exact; check it isn't

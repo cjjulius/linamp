@@ -2084,6 +2084,7 @@ dependencies = [
  "serde",
  "serde_json",
  "walkdir",
+ "x11-dl",
  "zip",
 ]
 
