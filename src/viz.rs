@@ -200,3 +200,26 @@ pub fn compute_bars(
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ring_snapshot_len() {
+        let v = VizShared::new();
+        v.push_batch(&[0.1, 0.2, 0.3]);
+        let mut out = Vec::new();
+        v.snapshot(&mut out, 4);
+        assert_eq!(out.len(), 4);
+    }
+
+    #[test]
+    fn bars_on_silence_are_zero() {
+        use rustfft::FftPlanner;
+        let fft = FftPlanner::<f32>::new().plan_fft_forward(1024);
+        let bars = compute_bars(&vec![0.0f32; 1024], &*fft, 1024, 10, 44100);
+        assert_eq!(bars.len(), 10);
+        assert!(bars.iter().all(|b| *b <= 0.01));
+    }
+}
