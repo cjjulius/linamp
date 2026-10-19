@@ -582,21 +582,31 @@ impl ClassicSkin {
 
             // Each slider: the skin's colored position bar (green at top/boost →
             // red at bottom/cut, 28 sprites in two rows of 14) plus the grey
-            // thumb on top.
+            // thumb on top. Some skins (e.g. Iria) leave the slider-sprite area
+            // blank; detect a valid green sprite 0 and otherwise synthesize a
+            // green→red gradient so we never blit stray pixels.
+            let has_sprites = {
+                let p = e.get_pixel(20, 190);
+                (p[1] as i32) > (p[0] as i32) + 15 && (p[1] as i32) > (p[2] as i32) + 15
+            };
             let draw_thumb = |c: &mut RgbaImage, e: &RgbaImage, colx: i32, v: f32, sel: bool| {
                 let frac = ((1.0 - v) / 2.0).clamp(0.0, 1.0);
-                let idx = (frac * 27.0).round() as i32; // 0 = top, 27 = bottom
-                let (row, col) = (idx / 14, idx % 14);
-                blit(
-                    c,
-                    e,
-                    colx,
-                    EQ_SLIDER_TOP as i32,
-                    (13 + col * 15) as u32,
-                    (164 + row * 65) as u32,
-                    14,
-                    63,
-                );
+                if has_sprites {
+                    let idx = (frac * 27.0).round() as i32; // 0 = top, 27 = bottom
+                    let (row, col) = (idx / 14, idx % 14);
+                    blit(
+                        c,
+                        e,
+                        colx,
+                        EQ_SLIDER_TOP as i32,
+                        (13 + col * 15) as u32,
+                        (164 + row * 65) as u32,
+                        14,
+                        63,
+                    );
+                } else {
+                    fill_rect(c, colx, EQ_SLIDER_TOP as i32, 14, 63, viz_gradient(frac));
+                }
                 let ty = EQ_SLIDER_TOP as i32 + (frac * EQ_SLIDER_TRAVEL) as i32;
                 let sy = if sel { 176 } else { 164 };
                 blit(c, e, colx + 2, ty, 0, sy, 11, 11);
