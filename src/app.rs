@@ -135,6 +135,36 @@ fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
     }
 }
 
+/// Make the EQ/playlist windows *owned* by the main window so they ride its
+/// z-order as a group (rise together, stay above it, hide when it minimizes) —
+/// Winamp-style window grouping. Idempotent and cheap, so it runs each frame to
+/// cover windows being shown/hidden (which recreates them). Windows-only.
+fn group_child_windows() {
+    #[cfg(windows)]
+    {
+        #[allow(non_snake_case)]
+        extern "system" {
+            fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+            fn SetWindowLongPtrW(hwnd: isize, index: i32, new: isize) -> isize;
+            fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
+        }
+        const GWLP_HWNDPARENT: i32 = -8;
+        let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+        unsafe {
+            let main = FindWindowW(std::ptr::null(), wide("LinAmp").as_ptr());
+            if main == 0 {
+                return;
+            }
+            for title in ["LinAmp Equalizer", "LinAmp Playlist"] {
+                let child = FindWindowW(std::ptr::null(), wide(title).as_ptr());
+                if child != 0 && GetWindowLongPtrW(child, GWLP_HWNDPARENT) != main {
+                    SetWindowLongPtrW(child, GWLP_HWNDPARENT, main);
+                }
+            }
+        }
+    }
+}
+
 /// Popup menus in classic mode (options + the playlist bottom-bar fly-outs).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Popup {
@@ -1976,6 +2006,9 @@ impl LinAmpApp {
 
         // The options / playlist menus render in their own (unclipped) window.
         self.draw_popup_viewport(ctx);
+
+        // Keep the EQ/playlist windows owned by the main window (z-order group).
+        group_child_windows();
     }
 
     fn render_window(&mut self, ctx: &egui::Context, win: ClWin) {
