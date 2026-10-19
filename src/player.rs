@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::Result;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 
+use crate::eq::{self, EqShared};
 use crate::viz::{self, VizShared};
 
 /// High-level playback state the UI cares about.
@@ -27,10 +28,9 @@ pub struct Player {
     sink: Option<Sink>,
     state: PlayState,
     volume: f32,
-    /// EQ preamp in dB, applied on top of `volume` as a linear gain.
-    preamp_db: f32,
     current_path: Option<PathBuf>,
     viz: Arc<VizShared>,
+    eq: Arc<EqShared>,
     device_name: Option<String>,
 }
 
@@ -43,9 +43,9 @@ impl Player {
             sink: None,
             state: PlayState::Stopped,
             volume: 0.8,
-            preamp_db: 0.0,
             current_path: None,
             viz: VizShared::new(),
+            eq: EqShared::new(),
             device_name: Self::default_device_name(),
         })
     }
@@ -91,6 +91,11 @@ impl Player {
         self.viz.clone()
     }
 
+    /// Shared handle to the live equalizer settings.
+    pub fn eq(&self) -> Arc<EqShared> {
+        self.eq.clone()
+    }
+
     pub fn state(&self) -> PlayState {
         self.state
     }
@@ -104,15 +109,10 @@ impl Player {
         self.apply_gain();
     }
 
-    pub fn set_preamp_db(&mut self, db: f32) {
-        self.preamp_db = db;
-        self.apply_gain();
-    }
-
     fn apply_gain(&self) {
         if let Some(sink) = &self.sink {
-            let preamp_lin = 10f32.powf(self.preamp_db / 20.0);
-            sink.set_volume(self.volume * preamp_lin);
+            // Preamp now lives in the EQ DSP; the sink carries plain volume.
+            sink.set_volume(self.volume);
         }
     }
 
@@ -123,7 +123,10 @@ impl Player {
 
         self.viz.clear();
         self.viz.set_rate(source.sample_rate());
-        let tapped = viz::tap(source, self.viz.clone());
+        // Shape the audio with the EQ, then tap for visualization so the
+        // analyzer reflects what you actually hear.
+        let equalized = eq::eq(source, self.eq.clone());
+        let tapped = viz::tap(equalized, self.viz.clone());
 
         let sink = Sink::try_new(&self.handle)?;
         sink.append(tapped);
