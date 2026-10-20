@@ -34,8 +34,18 @@ cpal talks to PipeWire through that bridge — no LinAmp code change needed. If
 there's no sound, check that `pipewire` and `pipewire-alsa` (or `wireplumber`)
 are running and that a default sink exists (`pactl info`, `pavucontrol`).
 
-`src/player.rs` already rebuilds the output stream when the default device
-changes (`poll_device`) — worth testing on Linux when switching sinks.
+`src/player.rs` rebuilds the output stream when the default device changes
+(`poll_device`). On PipeWire this is effectively a safety net: cpal's default
+device keeps the name `default`, so `poll_device` doesn't fire, but the
+`pipewire-alsa` stream *auto-follows* the default sink, so switching sinks still
+moves playback seamlessly. `poll_device` remains the fallback for pure-ALSA
+systems where the default change needs a manual rebuild.
+
+**Verified on Pop!_OS (PipeWire 1.0.3, pipewire-alsa + WirePlumber):** playback
+reaches the hardware sink (a `linamp` ALSA sink-input appears, uncorked), and
+switching the default sink to another output moves the live stream to it (and
+back) with no gap. Linux Mint (same Ubuntu/PipeWire base) is expected to behave
+identically but is not yet verified on hardware.
 
 **Target distros:** Pop!_OS and Linux Mint, latest stock releases (both
 Ubuntu/Debian-based). Commands below assume `apt`.
