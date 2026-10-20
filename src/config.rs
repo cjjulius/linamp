@@ -13,6 +13,8 @@ pub struct Prefs {
     pub tag_on_load: bool,
     /// Path to the skin loaded last; restored on next launch.
     pub last_skin: Option<String>,
+    /// true = the Stop action fades out instead of cutting off immediately.
+    pub fade_on_stop: bool,
 }
 
 impl Default for Prefs {
@@ -21,6 +23,7 @@ impl Default for Prefs {
             double_size: true,
             tag_on_load: true,
             last_skin: None,
+            fade_on_stop: false,
         }
     }
 }
@@ -74,6 +77,13 @@ pub struct Session {
     pub eq_auto: bool,
     pub eq_preamp: f32,
     pub eq_bands: Vec<f32>,
+    /// Which windows were open, and whether each was collapsed (window-shade), so
+    /// the layout is restored on next launch. Positions are not remembered.
+    pub eq_visible: bool,
+    pub pl_visible: bool,
+    pub main_shade: bool,
+    pub eq_shade: bool,
+    pub pl_shade: bool,
 }
 
 impl Session {
@@ -116,7 +126,7 @@ mod tests {
 
     #[test]
     fn scale_1x() {
-        let p = Prefs { double_size: false, tag_on_load: false, last_skin: None };
+        let p = Prefs { double_size: false, tag_on_load: false, ..Prefs::default() };
         assert_eq!(p.scale(), 1.0);
     }
 
@@ -126,6 +136,7 @@ mod tests {
             double_size: false,
             tag_on_load: true,
             last_skin: Some("C:/skins/x.wsz".into()),
+            ..Prefs::default()
         };
         let s = serde_json::to_string(&p).unwrap();
         let q: Prefs = serde_json::from_str(&s).unwrap();
@@ -144,6 +155,11 @@ mod tests {
             eq_auto: true,
             eq_preamp: -3.0,
             eq_bands: vec![1.0; 10],
+            eq_visible: true,
+            pl_visible: false,
+            main_shade: true,
+            eq_shade: false,
+            pl_shade: true,
         };
         let j = serde_json::to_string(&s).unwrap();
         let q: Session = serde_json::from_str(&j).unwrap();
@@ -152,5 +168,7 @@ mod tests {
         assert_eq!(q.pl_width, Some(350.0));
         assert!(q.eq_enabled && q.eq_auto);
         assert_eq!(q.eq_bands.len(), 10);
+        assert!(q.eq_visible && !q.pl_visible);
+        assert!(q.main_shade && !q.eq_shade && q.pl_shade);
     }
 }
