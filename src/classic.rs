@@ -428,14 +428,22 @@ impl ClassicSkin {
         }
         // The main windowshade sprite is a self-contained strip (branding, seek,
         // time slot, mini transport, buttons) with no song-title LCD, so we only
-        // fill in the elapsed time: the digits sit either side of the sprite's
-        // baked ":" separator (~x143). Drawing the title here (the old behaviour)
-        // just overprinted the baked "LINAMP" branding.
-        let secs = st.pos.max(0.0) as u32;
+        // fill in the time: the digits sit either side of the sprite's baked ":"
+        // separator (~x143). Shows remaining (with a leading minus) when the
+        // elapsed/remaining toggle is on, matching the expanded LCD.
+        let remaining = st.time_remaining && st.duration > 0.0;
+        let secs = if remaining {
+            (st.duration - st.pos).max(0.0) as u32
+        } else {
+            st.pos.max(0.0) as u32
+        };
         let mm = format!("{:02}", (secs / 60).min(99));
         let ss = format!("{:02}", secs % 60);
         self.draw_text_tinted(&mut c, &mm, 132, 4, 10, st.fg);
         self.draw_text_tinted(&mut c, &ss, 146, 4, 10, st.fg);
+        if remaining {
+            fill_rect(&mut c, 126, 7, 4, 2, st.fg); // minus sign before the minutes
+        }
         c
     }
 
@@ -618,6 +626,10 @@ pub struct PlState<'a> {
     pub pressed: Option<PlRegion>,
     /// Elapsed time of the current track, in seconds (0 when stopped).
     pub elapsed_secs: f32,
+    /// Duration of the current track, for the remaining-time toggle (0 if unknown).
+    pub cur_duration: f32,
+    /// Show the current-track time as remaining (−m:ss) instead of elapsed.
+    pub time_remaining: bool,
     /// Total running time of the whole playlist, in seconds (sum of the known
     /// track durations).
     pub total_secs: f32,
@@ -877,17 +889,18 @@ impl ClassicSkin {
                 // the wide summary bar at x5..96 / y8..17 and the small elapsed
                 // box at x63..96 / y22..29 (colon baked at x83).
                 let sx0 = w - 150;
+                let cur = fmt_pl_time_signed(st.elapsed_secs, st.cur_duration, st.time_remaining);
                 let summary = format!(
                     "{}/{}{}",
-                    fmt_pl_time(st.elapsed_secs),
+                    cur,
                     fmt_pl_time(st.total_secs),
                     if st.total_partial { "+" } else { "" },
                 );
                 // Left-aligned and vertically centred in the top bar.
                 self.draw_text_tinted(&mut c, &summary, sx0 + 7, by + 10, 89, st.colors.normal);
-                // Current elapsed in the small box, its colon aligned onto the
-                // one baked into the sprite so they don't double up.
-                let el = fmt_pl_time(st.elapsed_secs);
+                // Current time in the small box, its colon aligned onto the one
+                // baked into the sprite so they don't double up.
+                let el = cur.clone();
                 if let Some(ci) = el.rfind(':') {
                     let tx = sx0 + 83 - el[..ci].chars().count() as i32 * 5;
                     self.draw_text_tinted(&mut c, &el, tx, by + 22, sx0 + 98 - tx, st.colors.normal);
@@ -936,7 +949,7 @@ impl ClassicSkin {
         &self,
         focused: bool,
         text: &str,
-        secs: Option<f32>,
+        time: &str,
         color: [u8; 3],
     ) -> RgbaImage {
         let mut c = RgbaImage::new(275, 14);
@@ -951,16 +964,16 @@ impl ClassicSkin {
             blit(&mut c, p, 225, 0, 99, ry, 50, 14); // right end (with buttons)
             blit(&mut c, p, 264, 3, 52, 42, 9, 9); // close
 
-            // Current track + length on the bar. The title starts at the same x
-            // as the expanded list's rows (`PL_LIST_X`) so the two line up; the
-            // length is right-aligned before the right-end button cluster, and the
-            // title is clipped so they never overlap.
-            let time = secs.map(fmt_pl_time).unwrap_or_default();
+            // Current track + its time on the bar (the app passes elapsed,
+            // −remaining, or the track length as appropriate). The title starts at
+            // the same x as the expanded list's rows (`PL_LIST_X`) so the two line
+            // up; the time is right-aligned before the right-end button cluster,
+            // and the title is clipped so they never overlap.
             let mut title_w = 225 - PL_LIST_X - 4;
             if !time.is_empty() {
                 let tw = time.chars().count() as i32 * 5;
                 let tx = 214 - tw;
-                self.draw_text_tinted(&mut c, &time, tx, 4, tw, color);
+                self.draw_text_tinted(&mut c, time, tx, 4, tw, color);
                 title_w = tx - PL_LIST_X - 4;
             }
             if !text.is_empty() {
@@ -1029,13 +1042,23 @@ fn eq_valid_sprites(e: &RgbaImage) -> Vec<i32> {
 /// Format a playlist time like Winamp's bottom bar: `M:SS`, or `H:MM:SS` once it
 /// reaches an hour. Minutes/hours have no leading zero; seconds (and minutes
 /// inside an H:MM:SS) are zero-padded. Negative input clamps to zero.
-fn fmt_pl_time(secs: f32) -> String {
+pub fn fmt_pl_time(secs: f32) -> String {
     let total = secs.max(0.0) as u64;
     let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
     if h > 0 {
         format!("{h}:{m:02}:{s:02}")
     } else {
         format!("{m}:{s:02}")
+    }
+}
+
+/// Current-track time as elapsed, or `-remaining` when the remaining-time toggle
+/// is on and the duration is known.
+pub fn fmt_pl_time_signed(pos: f32, duration: f32, remaining: bool) -> String {
+    if remaining && duration > 0.0 {
+        format!("-{}", fmt_pl_time((duration - pos).max(0.0)))
+    } else {
+        fmt_pl_time(pos)
     }
 }
 
@@ -1295,6 +1318,8 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
             first: 0,
             pressed: None,
             elapsed_secs: 406.0, // 6:46
+            cur_duration: 272.0,
+            time_remaining: false,
             total_secs: 52.0 * 3600.0 + 48.0 * 60.0 + 36.0, // 52:48:36
             total_partial: true,
         },
@@ -1471,9 +1496,9 @@ mod tests {
             }
             n
         };
-        let shown = skin.compose_pl_shade(true, "1. a song", Some(372.0), color);
+        let shown = skin.compose_pl_shade(true, "1. a song", "6:12", color);
         assert!(text_px(&shown) > 0, "shaded bar should draw the track and time");
-        let empty = skin.compose_pl_shade(true, "", None, color);
+        let empty = skin.compose_pl_shade(true, "", "", color);
         assert_eq!(text_px(&empty), 0, "no current track -> no text on the bar");
     }
 
@@ -1500,6 +1525,8 @@ mod tests {
             first: 0,
             pressed: None,
             elapsed_secs: 0.0,
+            cur_duration: 0.0,
+            time_remaining: false,
             total_secs: 0.0,
             total_partial: false,
         };
