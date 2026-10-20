@@ -161,47 +161,54 @@ pub fn compute_bars(
     }
     let slice = &samples[samples.len() - fft_size..];
 
-    // Hann window into complex buffer.
-    let mut buf: Vec<Complex<f32>> = slice
-        .iter()
-        .enumerate()
-        .map(|(i, &s)| {
-            let w = 0.5 - 0.5 * (2.0 * PI * i as f32 / (fft_size as f32 - 1.0)).cos();
-            Complex {
-                re: s * w,
-                im: 0.0,
-            }
-        })
-        .collect();
-    fft.process(&mut buf);
-
-    let half = fft_size / 2;
-    // Normalize: fft_size/16 keeps typical music's peaks near the top (full
-    // fft_size is too quiet; raw bins pin the bars at 1.0).
-    let norm = fft_size as f32 / 16.0;
-    let mags: Vec<f32> = buf[..half].iter().map(|c| c.norm() / norm).collect();
-
-    let nyquist = sample_rate as f32 / 2.0;
-    let fmin = 40.0_f32;
-    let fmax = nyquist.min(16_000.0).max(fmin + 1.0);
-
-    let mut out = Vec::with_capacity(bands);
-    for b in 0..bands {
-        let f0 = fmin * (fmax / fmin).powf(b as f32 / bands as f32);
-        let f1 = fmin * (fmax / fmin).powf((b + 1) as f32 / bands as f32);
-        let i0 = ((f0 / nyquist) * half as f32) as usize;
-        let i1 = (((f1 / nyquist) * half as f32) as usize).max(i0 + 1).min(half);
-        let (mut sum, mut cnt) = (0.0_f32, 0usize);
-        for &m in &mags[i0..i1] {
-            sum += m;
-            cnt += 1;
-        }
-        let avg = if cnt > 0 { sum / cnt as f32 } else { 0.0 };
-        // Map roughly -60..0 dBFS to 0..1.
-        let db = 20.0 * (avg + 1e-6).log10();
-        out.push(((db + 60.0) / 60.0).clamp(0.0, 1.0));
+    // Cached Hann window (rebuilt only on a size change) and a reusable complex
+    // scratch buffer, so this per-frame path allocates only the small output.
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<(Vec<f32>, Vec<Complex<f32>>)> =
+            const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
     }
-    out
+    SCRATCH.with(|s| {
+        let (win, buf) = &mut *s.borrow_mut();
+        if win.len() != fft_size {
+            *win = (0..fft_size)
+                .map(|i| 0.5 - 0.5 * (2.0 * PI * i as f32 / (fft_size as f32 - 1.0)).cos())
+                .collect();
+        }
+        buf.clear();
+        buf.extend(
+            slice
+                .iter()
+                .zip(win.iter())
+                .map(|(&s, &w)| Complex { re: s * w, im: 0.0 }),
+        );
+        fft.process(buf);
+
+        let half = fft_size / 2;
+        // Normalize: fft_size/16 keeps typical music's peaks near the top (full
+        // fft_size is too quiet; raw bins pin the bars at 1.0).
+        let norm = fft_size as f32 / 16.0;
+        let nyquist = sample_rate as f32 / 2.0;
+        let fmin = 40.0_f32;
+        let fmax = nyquist.min(16_000.0).max(fmin + 1.0);
+
+        let mut out = Vec::with_capacity(bands);
+        for b in 0..bands {
+            let f0 = fmin * (fmax / fmin).powf(b as f32 / bands as f32);
+            let f1 = fmin * (fmax / fmin).powf((b + 1) as f32 / bands as f32);
+            let i0 = ((f0 / nyquist) * half as f32) as usize;
+            let i1 = (((f1 / nyquist) * half as f32) as usize).max(i0 + 1).min(half);
+            let (mut sum, mut cnt) = (0.0_f32, 0usize);
+            for c in &buf[i0..i1] {
+                sum += c.norm() / norm;
+                cnt += 1;
+            }
+            let avg = if cnt > 0 { sum / cnt as f32 } else { 0.0 };
+            // Map roughly -60..0 dBFS to 0..1.
+            let db = 20.0 * (avg + 1e-6).log10();
+            out.push(((db + 60.0) / 60.0).clamp(0.0, 1.0));
+        }
+        out
+    })
 }
 
 #[cfg(test)]
