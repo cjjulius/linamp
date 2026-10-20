@@ -15,6 +15,8 @@ pub struct Prefs {
     pub last_skin: Option<String>,
     /// true = the Stop action fades out instead of cutting off immediately.
     pub fade_on_stop: bool,
+    /// true = keep the LinAmp windows above other applications.
+    pub always_on_top: bool,
 }
 
 impl Default for Prefs {
@@ -24,6 +26,7 @@ impl Default for Prefs {
             tag_on_load: true,
             last_skin: None,
             fade_on_stop: false,
+            always_on_top: false,
         }
     }
 }
