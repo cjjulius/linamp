@@ -57,11 +57,13 @@ fn push_off(r: egui::Rect, keep: egui::Rect) -> Option<egui::Pos2> {
         return None;
     }
     use egui::vec2;
+    // Candidates exclude "push above": the main window should favour the dropped
+    // window ending up below it rather than over the top. Left/right/below compete
+    // on least movement (no left/right preference).
     let cands = [
-        vec2(keep.left() - r.right(), 0.0),  // out to the left
-        vec2(keep.right() - r.left(), 0.0),  // out to the right
-        vec2(0.0, keep.top() - r.bottom()),  // out above
-        vec2(0.0, keep.bottom() - r.top()),  // out below
+        vec2(keep.left() - r.right(), 0.0), // out to the left
+        vec2(keep.right() - r.left(), 0.0), // out to the right
+        vec2(0.0, keep.bottom() - r.top()), // out below
     ];
     let best = cands
         .iter()
@@ -2260,8 +2262,8 @@ impl LinAmpApp {
             ClWin::Eq => self.eq_shade = !self.eq_shade,
             ClWin::Pl => self.pl_shade = !self.pl_shade,
         }
-        // Keep the docked stack consistent and resize the root window.
-        self.restack();
+        // Each window keeps its position across collapse/restore (don't restack);
+        // just let the changed window resize next frame.
         self.root_last = None;
     }
 
