@@ -610,8 +610,6 @@ struct TagEditor {
     tab: TagTab,
     editable: bool,
     status: String,
-    /// Showing the "discard unsaved changes?" confirmation.
-    confirm_discard: bool,
 }
 
 impl TagEditor {
@@ -2472,7 +2470,6 @@ impl LinAmpApp {
             tab: TagTab::Basic,
             editable,
             status,
-            confirm_discard: false,
         });
     }
 
@@ -2507,7 +2504,6 @@ impl LinAmpApp {
                     ed.orig_v2 = ed.v2.clone();
                     ed.orig_v1_on = ed.v1_on;
                     ed.orig_v2_on = ed.v2_on;
-                    ed.confirm_discard = false;
                     ed.status = "Saved.".into();
                 }
                 Err(e) => ed.status = format!("Error: {e}"),
@@ -2540,14 +2536,18 @@ impl LinAmpApp {
                 // Path + unsaved marker.
                 let dot = if dirty { "● " } else { "" };
                 ui.label(RichText::new(format!("{dot}{}", ed.info.path)).strong());
-                ui.separator();
+                ui.add_space(4.0);
+                let col = ui.visuals().text_color();
+                // Tab strip sitting on the panel below, so it reads as real tabs.
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut ed.tab, TagTab::Basic, "Basic Info");
-                    ui.selectable_value(&mut ed.tab, TagTab::Id3, "ID3");
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    ui.selectable_value(&mut ed.tab, TagTab::Basic, mnem("Basic Info", 0, col));
+                    ui.selectable_value(&mut ed.tab, TagTab::Id3, mnem("ID3", 0, col));
                 });
-                ui.separator();
-
-                match ed.tab {
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(624.0);
+                    ui.set_min_height(300.0);
+                    match ed.tab {
                     TagTab::Basic => {
                         egui::Grid::new("basic_grid")
                             .num_columns(2)
@@ -2585,7 +2585,7 @@ impl LinAmpApp {
                         };
                         ui.columns(2, |cols| {
                             // ----- ID3v1 (left) -----
-                            cols[0].checkbox(&mut ed.v1_on, "ID3v1 Tag");
+                            cols[0].checkbox(&mut ed.v1_on, mnem("ID3v1 Tag", 4, col));
                             cols[0].add_enabled_ui(on && ed.v1_on, |ui| {
                                 egui::Grid::new("v1_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
                                     let f = &mut ed.v1;
@@ -2608,7 +2608,7 @@ impl LinAmpApp {
                                 });
                             });
                             // ----- ID3v2 (right) -----
-                            cols[1].checkbox(&mut ed.v2_on, "ID3v2 Tag");
+                            cols[1].checkbox(&mut ed.v2_on, mnem("ID3v2 Tag", 4, col));
                             cols[1].add_enabled_ui(on && ed.v2_on, |ui| {
                                 egui::Grid::new("v2_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
                                     let f = &mut ed.v2;
@@ -2638,6 +2638,7 @@ impl LinAmpApp {
                         });
                     }
                 }
+                });
 
                 ui.add_space(6.0);
                 if dirty {
@@ -2647,12 +2648,14 @@ impl LinAmpApp {
                 }
                 ui.add_space(4.0);
 
-                // Shortcuts: Alt-1/2 toggle the tags, Alt-U update, Alt-C cancel,
-                // Alt-T/Alt-F copy to/from ID3v1 (read raw so a focused field
-                // doesn't swallow them).
-                let (k_v1, k_v2, k_up, k_cancel, k_to, k_from) = ctx.input(|i| {
+                // Shortcuts: Alt-B/Alt-I pick the tab, Alt-1/2 toggle the tags,
+                // Alt-U update, Alt-C cancel, Alt-T/Alt-F copy to/from ID3v1 (read
+                // raw so a focused field doesn't swallow them).
+                let (k_basic, k_id3, k_v1, k_v2, k_up, k_cancel, k_to, k_from) = ctx.input(|i| {
                     let a = i.modifiers.alt;
                     (
+                        a && i.key_pressed(egui::Key::B),
+                        a && i.key_pressed(egui::Key::I),
                         a && i.key_pressed(egui::Key::Num1),
                         a && i.key_pressed(egui::Key::Num2),
                         a && i.key_pressed(egui::Key::U),
@@ -2661,89 +2664,87 @@ impl LinAmpApp {
                         a && i.key_pressed(egui::Key::F),
                     )
                 });
-                if on && k_v1 {
+                if k_basic {
+                    ed.tab = TagTab::Basic;
+                }
+                if k_id3 {
+                    ed.tab = TagTab::Id3;
+                }
+                let id3 = ed.tab == TagTab::Id3;
+                if on && id3 && k_v1 {
                     ed.v1_on = !ed.v1_on;
                 }
-                if on && k_v2 {
+                if on && id3 && k_v2 {
                     ed.v2_on = !ed.v2_on;
                 }
-                if on && k_up {
+                if on && id3 && k_up {
                     do_save = true;
                 }
 
-                let can_copy = on && ed.v2_on;
+                let can_copy = on && id3 && ed.v2_on;
                 let mut do_copy_to = k_to && can_copy;
                 let mut do_copy_from = k_from && can_copy;
-                if ed.confirm_discard {
-                    ui.label(RichText::new("Discard unsaved changes?").color(Color32::from_rgb(220, 120, 70)));
-                    ui.horizontal(|ui| {
-                        if ui.button("Discard").clicked() {
-                            close = true;
-                        }
-                        if ui.button("Keep editing").clicked() {
-                            ed.confirm_discard = false;
-                        }
-                    });
-                } else {
-                    ui.horizontal(|ui| {
+                ui.horizontal(|ui| {
+                    // Update and the copy buttons only apply to the ID3 tab.
+                    if id3 {
                         ui.add_enabled_ui(on, |ui| {
-                            if ui.button("Update").clicked() {
+                            if ui.button(mnem("Update", 0, col)).clicked() {
                                 do_save = true;
                             }
                         });
-                        if ui.button("Cancel").clicked() {
-                            if dirty {
-                                ed.confirm_discard = true;
-                            } else {
-                                close = true;
-                            }
-                        }
+                    }
+                    if ui.button(mnem("Cancel", 0, col)).clicked() {
+                        close = true;
+                    }
+                    if id3 {
                         ui.add_enabled_ui(can_copy, |ui| {
-                            if ui.button("Copy to ID3v1").clicked() {
+                            if ui.button(mnem("Copy to ID3v1", 5, col)).clicked() {
                                 do_copy_to = true;
                             }
-                            if ui.button("Copy from ID3v1").clicked() {
+                            if ui.button(mnem("Copy from ID3v1", 5, col)).clicked() {
                                 do_copy_from = true;
                             }
                         });
-                    });
-                }
-                if k_cancel {
-                    if dirty {
-                        ed.confirm_discard = true;
-                    } else {
-                        close = true;
                     }
+                });
+                if k_cancel {
+                    close = true;
                 }
-                let trunc = |s: &str, n: usize| s.chars().take(n).collect::<String>();
+                // Copy only non-blank source fields so a copy never wipes a value.
                 if do_copy_to {
-                    ed.v1.track = ed.v2.track.clone();
-                    ed.v1.title = trunc(&ed.v2.title, crate::tags::V1_MAX_TEXT);
-                    ed.v1.artist = trunc(&ed.v2.artist, crate::tags::V1_MAX_TEXT);
-                    ed.v1.album = trunc(&ed.v2.album, crate::tags::V1_MAX_TEXT);
-                    ed.v1.year = trunc(&ed.v2.year, crate::tags::V1_MAX_YEAR);
-                    ed.v1.genre = ed.v2.genre.clone();
-                    ed.v1.comment = trunc(&ed.v2.comment, crate::tags::V1_MAX_TEXT);
+                    ed.v1_on = true; // checking v1 un-greys its fields first
+                    let cp = |dst: &mut String, src: &str, n: usize| {
+                        if !src.trim().is_empty() {
+                            *dst = src.chars().take(n).collect();
+                        }
+                    };
+                    let max = usize::MAX;
+                    cp(&mut ed.v1.track, &ed.v2.track, max);
+                    cp(&mut ed.v1.title, &ed.v2.title, crate::tags::V1_MAX_TEXT);
+                    cp(&mut ed.v1.artist, &ed.v2.artist, crate::tags::V1_MAX_TEXT);
+                    cp(&mut ed.v1.album, &ed.v2.album, crate::tags::V1_MAX_TEXT);
+                    cp(&mut ed.v1.year, &ed.v2.year, crate::tags::V1_MAX_YEAR);
+                    cp(&mut ed.v1.genre, &ed.v2.genre, max);
+                    cp(&mut ed.v1.comment, &ed.v2.comment, crate::tags::V1_MAX_TEXT);
                 }
                 if do_copy_from {
-                    ed.v2.track = ed.v1.track.clone();
-                    ed.v2.title = ed.v1.title.clone();
-                    ed.v2.artist = ed.v1.artist.clone();
-                    ed.v2.album = ed.v1.album.clone();
-                    ed.v2.year = ed.v1.year.clone();
-                    ed.v2.genre = ed.v1.genre.clone();
-                    ed.v2.comment = ed.v1.comment.clone();
+                    let cp = |dst: &mut String, src: &str| {
+                        if !src.trim().is_empty() {
+                            *dst = src.to_string();
+                        }
+                    };
+                    cp(&mut ed.v2.track, &ed.v1.track);
+                    cp(&mut ed.v2.title, &ed.v1.title);
+                    cp(&mut ed.v2.artist, &ed.v1.artist);
+                    cp(&mut ed.v2.album, &ed.v1.album);
+                    cp(&mut ed.v2.year, &ed.v1.year);
+                    cp(&mut ed.v2.genre, &ed.v1.genre);
+                    cp(&mut ed.v2.comment, &ed.v1.comment);
                 }
             });
-            // Esc / window-close: guard unsaved edits instead of losing them.
+            // Esc / window-close: discard without saving or prompting.
             if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
-                if let Some(ed) = self.tag_editor.as_mut() {
-                    if ed.dirty() {
-                        ed.confirm_discard = true;
-                    } else {
-                        close = true;
-                    }
-                }
+                close = true;
             }
         });
         if do_save {
@@ -4220,6 +4221,21 @@ impl eframe::App for LinAmpApp {
 
 /// Upload (or update in place) a composed RGBA frame into a nearest-neighbour
 /// texture, returning a handle to draw with.
+/// Build a label with the Alt-mnemonic character at char index `pos` underlined
+/// (as in the reference dialog). Usable for buttons, checkboxes and tabs.
+fn mnem(text: &str, pos: usize, color: Color32) -> egui::text::LayoutJob {
+    use egui::text::{LayoutJob, TextFormat};
+    let mut job = LayoutJob::default();
+    for (i, ch) in text.chars().enumerate() {
+        let mut fmt = TextFormat::simple(egui::FontId::proportional(14.0), color);
+        if i == pos {
+            fmt.underline = Stroke::new(1.0_f32, color);
+        }
+        job.append(&ch.to_string(), 0.0, fmt);
+    }
+    job
+}
+
 fn upload_tex(
     slot: &mut Option<egui::TextureHandle>,
     ctx: &egui::Context,
