@@ -1,10 +1,7 @@
-//! Classic Winamp 2.x skin renderer.
-//!
-//! A `.wsz` is a ZIP of BMP sprite sheets. This module decodes those sheets and
-//! composites the classic 275x116 main window from them at exact Winamp sprite
-//! coordinates (sourced from the open-source webamp project). The same
-//! compositor is used both for a headless PNG preview and for the live in-app
-//! view (which uploads the composed frame as a nearest-neighbour texture).
+//! Classic Winamp 2.x skin renderer: decodes a `.wsz` (ZIP of BMP sprite sheets)
+//! and composites the classic windows at exact Winamp sprite coords (from the
+//! webamp project). Serves both headless PNG previews and the live in-app view
+//! (uploaded as a nearest-neighbour texture).
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -648,9 +645,8 @@ const PL_BOTTOM_BTNS: &[(PlRegion, i32, i32)] = &[
 ];
 
 /// Mini-player transport buttons in the bottom-right sprite: (region, x, width)
-/// as offsets from the sprite origin (window `width - 150`). Their row sits at
-/// `height - 15 .. height - 7` (the sprite's lower button strip). Measured from
-/// PLEDIT.BMP's bottom-right glyphs (source x132..184).
+/// offset from the sprite origin (`width - 150`), row at `height - 15..-7`.
+/// Measured from PLEDIT.BMP's bottom-right glyphs (source x132..184).
 const PL_MINI_BTNS: &[(PlRegion, i32, i32)] = &[
     (PlRegion::MiniPrev, 5, 8),
     (PlRegion::MiniPlay, 13, 8),
@@ -745,12 +741,9 @@ impl ClassicSkin {
             // Graph background.
             blit(&mut c, e, 86, 17, 0, 294, 113, 19);
 
-            // EQ response curve through the 10 bands, drawn in the graph box
-            // (dest 86,17 / 113×19) and coloured by EQMAIN's 19-row line
-            // gradient at x=115,y=294 (red = boost at the top, green = cut at the
-            // bottom), the way classic Winamp does. Skipped for skins whose
-            // EQMAIN is too short to carry the gradient (e.g. Alita), matching
-            // how the slider bank degrades.
+            // EQ response curve through the 10 bands in the graph box (86,17 /
+            // 113×19), coloured by EQMAIN's 19-row gradient at x=115,y=294 (red
+            // boost top, green cut bottom). Skipped when EQMAIN is too short (Alita).
             if e.width() > 115 && e.height() >= 294 + 19 {
                 const GX: i32 = 86;
                 const GY: i32 = 17;
@@ -849,10 +842,9 @@ impl ClassicSkin {
                 y += 29;
             }
 
-            // Bottom bar: left corner (Add/Rem/Sel/Misc), the stretch, then the
-            // right corner (mini-player / List menu / time). The stretch is
-            // tiled from the 4px plain-frame column at pledit x126 — tiling a
-            // wider slice there would duplicate the mini-player buttons.
+            // Bottom bar: left corner (Add/Rem/Sel/Misc), the tiled stretch, then
+            // the right corner (mini-player / List / time). Stretch tiles the 4px
+            // plain column at pledit x126 (a wider slice duplicates the buttons).
             let by = height as i32 - 38;
             let mut bx = 125;
             while bx < w - 150 {
@@ -877,12 +869,10 @@ impl ClassicSkin {
                 darken_rect(&mut c, bx, height as i32 - 30, 22, 18, 0.55);
             }
 
-            // Time readouts in the bottom-right sprite (anchored at w-150): the
-            // "<elapsed>/<total>" summary in its wide top bar and the current
-            // track's elapsed time in the small box by the mini-player, like
-            // Winamp's "6:46/52:48:36+" over "02:29". A trailing + means the
-            // total omits tracks whose length isn't known yet. Both are shown
-            // once the playlist has content.
+            // Time readouts in the bottom-right sprite (at w-150): the
+            // "<cur>/<total>" summary in the wide top bar and the current time in
+            // the small box, like Winamp's "6:46/52:48:36+" over "02:29". A
+            // trailing + means the total omits tracks of unknown length.
             if st.total_secs > 0.0 || st.elapsed_secs > 0.0 {
                 // Sprite origin; its two black boxes sit at these local offsets:
                 // the wide summary bar at x5..96 / y8..17 and the small elapsed
@@ -963,11 +953,9 @@ impl ClassicSkin {
             blit(&mut c, p, 225, 0, 99, ry, 50, 14); // right end (with buttons)
             blit(&mut c, p, 264, 3, 52, 42, 9, 9); // close
 
-            // Current track + its time on the bar (the app passes elapsed,
-            // −remaining, or the track length as appropriate). The title starts at
-            // the same x as the expanded list's rows (`PL_LIST_X`) so the two line
-            // up; the time is right-aligned before the right-end button cluster,
-            // and the title is clipped so they never overlap.
+            // Shade-bar track + time: title at `PL_LIST_X` (aligned with the
+            // expanded rows), time right-aligned before the button cluster, title
+            // clipped so they never overlap.
             let mut title_w = 225 - PL_LIST_X - 4;
             if !time.is_empty() {
                 let tw = time.chars().count() as i32 * 5;
@@ -999,17 +987,10 @@ impl ClassicSkin {
     }
 }
 
-/// Which of the 28 EQ slider sprites (two rows of 14 in EQMAIN.BMP, 14×63 each
-/// at x = 13+col*15, y = 164+row*65) a skin actually ships, left→right/top→bottom
-/// = index 0..28 (0 = full boost, 27 = full cut).
-///
-/// Skins draw these very differently — a clean green→red gradient (base),
-/// full-height greyscale bars (Iria), textured character bars (Valentine),
-/// segmented LED meters (Topaz) — so "is this sprite real?" means any genuine
-/// content, not just a saturated colour: a sprite counts if it shows colour OR
-/// vertical light/dark variation. Sprites past the edge of a short EQMAIN (e.g.
-/// Alita, which ships no slider bank at all) don't exist, so bounds-check first
-/// and return an empty list rather than reading out of bounds.
+/// Which of the 28 EQ slider sprites (two rows of 14 in EQMAIN.BMP, 14×63 at
+/// x=13+col*15, y=164+row*65) a skin ships, index 0..28 (0=boost, 27=cut). Skins
+/// differ wildly, so a sprite counts as present on colour OR light/dark variation.
+/// Bounds-checked: a short EQMAIN (e.g. Alita, no slider bank) yields an empty list.
 fn eq_valid_sprites(e: &RgbaImage) -> Vec<i32> {
     let (ew, eh) = e.dimensions();
     let present = |col: i32, row: i32| -> bool {
@@ -1681,14 +1662,9 @@ mod tests {
         assert_eq!(char_cell(' '), (30, 0));
     }
 
-    // --- EQ slider sprite detection (regressions from the colored-slider work) ---
-    //
-    // The bundled skins under skins/ are the fixtures. These lock in three bugs:
-    //   * Topaz (segmented LED meters) and Iria (greyscale bars) were detected as
-    //     "missing" by a saturation-only test, so Topaz synthesized a gradient and
-    //     Iria snapped good bars to its red sprites ("red at random").
-    //   * Alita ships a short EQMAIN with no slider bank; sampling it panicked.
-    // Keep these green before wiring skins into the Library.
+    // EQ slider sprite detection, using bundled skins as fixtures. Locks three
+    // bugs: Topaz/Iria bars mis-detected as "missing" (saturation-only test), and
+    // Alita's short EQMAIN panicking the sampler.
 
     fn skins_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skins")

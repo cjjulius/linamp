@@ -1,10 +1,7 @@
-//! Winamp classic skin (.wsz) theming.
-//!
-//! A `.wsz` file is a ZIP archive of bitmaps plus a couple of plain-text colour
-//! config files. We don't render the classic sprite layout (that's a separate
-//! phase); instead we derive a cohesive colour [`Theme`] from each skin's own
-//! `PLEDIT.TXT` (playlist colours), `VISCOLOR.TXT` (visualizer palette) and
-//! `MAIN.BMP` (sampled for window/panel tone), and apply it to LinAmp's UI.
+//! Winamp `.wsz` skin theming: derives a cohesive colour [`Theme`] from each
+//! skin's own `PLEDIT.TXT` (playlist), `VISCOLOR.TXT` (visualizer) and sampled
+//! `MAIN.BMP` (window tone). Sprite compositing lives in `classic`; this module
+//! only produces the theme.
 
 use std::fs::File;
 use std::io::{Read, Seek};
