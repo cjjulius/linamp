@@ -77,6 +77,13 @@ pub struct Session {
     pub eq_auto: bool,
     pub eq_preamp: f32,
     pub eq_bands: Vec<f32>,
+    /// Which windows were open, and whether each was collapsed (window-shade), so
+    /// the layout is restored on next launch. Positions are not remembered.
+    pub eq_visible: bool,
+    pub pl_visible: bool,
+    pub main_shade: bool,
+    pub eq_shade: bool,
+    pub pl_shade: bool,
 }
 
 impl Session {
@@ -148,6 +155,11 @@ mod tests {
             eq_auto: true,
             eq_preamp: -3.0,
             eq_bands: vec![1.0; 10],
+            eq_visible: true,
+            pl_visible: false,
+            main_shade: true,
+            eq_shade: false,
+            pl_shade: true,
         };
         let j = serde_json::to_string(&s).unwrap();
         let q: Session = serde_json::from_str(&j).unwrap();
@@ -156,5 +168,7 @@ mod tests {
         assert_eq!(q.pl_width, Some(350.0));
         assert!(q.eq_enabled && q.eq_auto);
         assert_eq!(q.eq_bands.len(), 10);
+        assert!(q.eq_visible && !q.pl_visible);
+        assert!(q.main_shade && !q.eq_shade && q.pl_shade);
     }
 }
