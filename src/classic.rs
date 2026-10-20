@@ -261,6 +261,10 @@ pub struct ClassicSkin {
     bitmaps: HashMap<String, RgbaImage>,
     /// EQ slider sprites the skin ships (invariant per skin, computed once).
     eq_sprites: Vec<i32>,
+    /// Background colour of the bitmap font (TEXT.BMP), so tinted text can tell
+    /// the glyph from its backing regardless of whether the font is light-on-dark
+    /// or dark-on-light.
+    text_bg: [u8; 3],
 }
 
 impl ClassicSkin {
@@ -292,9 +296,14 @@ impl ClassicSkin {
             .get("eqmain.bmp")
             .map(eq_valid_sprites)
             .unwrap_or_default();
+        let text_bg = bitmaps
+            .get("text.bmp")
+            .map(dominant_color)
+            .unwrap_or([0, 0, 0]);
         Ok(Self {
             bitmaps,
             eq_sprites,
+            text_bg,
         })
     }
 
@@ -990,7 +999,7 @@ impl ClassicSkin {
                 break;
             }
             let (col, row) = char_cell(ch);
-            blit_tinted(c, tf, x, y0, col * 5, row * 6, 5, 6, color);
+            blit_tinted(c, tf, x, y0, col * 5, row * 6, 5, 6, color, self.text_bg);
             x += 5;
         }
     }
@@ -1178,6 +1187,23 @@ fn fill_rect(dst: &mut RgbaImage, x: i32, y: i32, w: i32, h: i32, col: [u8; 3]) 
 }
 
 /// Blit a glyph, recolouring its lit pixels to `color` (transparent elsewhere).
+/// Most common colour in an image — used as the bitmap font's background.
+fn dominant_color(img: &RgbaImage) -> [u8; 3] {
+    let mut counts: HashMap<[u8; 3], u32> = HashMap::new();
+    for p in img.pixels() {
+        *counts.entry([p[0], p[1], p[2]]).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .max_by_key(|&(_, n)| n)
+        .map(|(c, _)| c)
+        .unwrap_or([0, 0, 0])
+}
+
+/// Blit the lit pixels of a bitmap-font glyph in `color`. A pixel counts as part
+/// of the glyph when it differs enough from the font background `bg`; for the
+/// usual light-on-black font this is the same as "bright", but it also handles
+/// dark-on-light fonts (which otherwise paint as solid blocks).
 fn blit_tinted(
     dst: &mut RgbaImage,
     src: &RgbaImage,
@@ -1188,6 +1214,7 @@ fn blit_tinted(
     w: u32,
     h: u32,
     color: [u8; 3],
+    bg: [u8; 3],
 ) {
     let (sw, sh) = src.dimensions();
     let (dw, dh) = dst.dimensions();
@@ -1210,8 +1237,10 @@ fn blit_tinted(
                 continue;
             }
             let p = src.get_pixel(sxx, syy);
-            let lum = p[0] as u32 + p[1] as u32 + p[2] as u32;
-            if lum > 150 {
+            let diff = (p[0] as i32 - bg[0] as i32).abs()
+                + (p[1] as i32 - bg[1] as i32).abs()
+                + (p[2] as i32 - bg[2] as i32).abs();
+            if diff > 150 {
                 dst.put_pixel(dxx as u32, dyy as u32, Rgba([color[0], color[1], color[2], 255]));
             }
         }
@@ -1698,6 +1727,17 @@ mod tests {
         preamp: 0.0,
         bands: [0.6, 0.3, 0.0, -0.2, -0.4, -0.2, 0.1, 0.3, 0.5, 0.7],
     };
+
+    #[test]
+    fn bundled_base_and_iria_skins_load() {
+        // The shipped base + Iria skins must decode (have MAIN.BMP) and
+        // composite their windows without panicking.
+        for name in ["linamp_base_skin.wsz", "Iria_Amp02.wsz"] {
+            let skin = load_skin(name); // unwraps: fails loudly if it won't load
+            assert!(skin.bmp("main.bmp").is_some(), "{name} missing MAIN.BMP");
+            let _ = skin.compose_eq(&EQ_TEST_STATE);
+        }
+    }
 
     #[test]
     fn base_skin_has_full_slider_bank() {
