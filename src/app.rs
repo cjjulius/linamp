@@ -1652,9 +1652,25 @@ impl LinAmpApp {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;
                 if shaded {
-                    match classic::shade_region_at(nx, ny) {
-                        Some(classic::ShadeHit::Close) => self.close_window(ctx, win),
-                        Some(classic::ShadeHit::TitleBar) => self.start_drag(ctx, win, screen_cursor),
+                    use classic::ShadeHit as H;
+                    // The main shade bar carries extra controls; EQ/PL shades only
+                    // have close + title bar.
+                    let hit = if win == ClWin::Main {
+                        classic::main_shade_region_at(nx, ny)
+                    } else {
+                        classic::shade_region_at(nx, ny)
+                    };
+                    match hit {
+                        Some(H::Close) => self.close_window(ctx, win),
+                        Some(H::Restore) => self.toggle_shade(win),
+                        Some(H::TitleBar) => self.start_drag(ctx, win, screen_cursor),
+                        Some(H::Options) => self.open_popup_in(Popup::Options, win, l),
+                        Some(H::Prev) => self.trigger_classic(ctx, Btn::Prev),
+                        Some(H::Play) => self.trigger_classic(ctx, Btn::Play),
+                        Some(H::Pause) => self.trigger_classic(ctx, Btn::Pause),
+                        Some(H::Stop) => self.trigger_classic(ctx, Btn::Stop),
+                        Some(H::Next) => self.trigger_classic(ctx, Btn::Next),
+                        Some(H::Eject) => self.trigger_classic(ctx, Btn::Eject),
                         None => {}
                     }
                 } else {
