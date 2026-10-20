@@ -877,7 +877,16 @@ impl ClassicSkin {
         c
     }
 
-    pub fn compose_pl_shade(&self, focused: bool) -> RgbaImage {
+    /// Collapsed (window-shade) playlist bar. Shows the current track and its
+    /// length on the single line, Winamp-style; `text` empty means nothing is
+    /// playing, so only the bar is drawn.
+    pub fn compose_pl_shade(
+        &self,
+        focused: bool,
+        text: &str,
+        secs: Option<f32>,
+        color: [u8; 3],
+    ) -> RgbaImage {
         let mut c = RgbaImage::new(275, 14);
         if let Some(p) = self.bmp("pledit.bmp") {
             blit(&mut c, p, 0, 0, 72, 42, 25, 14); // left end
@@ -889,6 +898,21 @@ impl ClassicSkin {
             let ry = if focused { 42 } else { 57 };
             blit(&mut c, p, 225, 0, 99, ry, 50, 14); // right end (with buttons)
             blit(&mut c, p, 264, 3, 52, 42, 9, 9); // close
+
+            // Current track + length on the bar. The length is right-aligned
+            // before the right-end button cluster; the title fills the space left
+            // of it, clipped so the two never overlap.
+            let time = secs.map(fmt_pl_time).unwrap_or_default();
+            let mut title_w = 185;
+            if !time.is_empty() {
+                let tw = time.chars().count() as i32 * 5;
+                let tx = 214 - tw;
+                self.draw_text_tinted(&mut c, &time, tx, 4, tw, color);
+                title_w = tx - 27 - 4;
+            }
+            if !text.is_empty() {
+                self.draw_text_tinted(&mut c, text, 27, 4, title_w.max(0), color);
+            }
         }
         c
     }
@@ -1341,6 +1365,30 @@ mod tests {
             assert_eq!(n.0, w.0, "label changed");
             assert_eq!(w.1 - n.1, 100, "{} did not follow the right edge", n.0);
         }
+    }
+
+    #[test]
+    fn pl_shade_shows_track_and_time() {
+        // #80: the collapsed playlist bar draws the current track + length; with
+        // no current track it draws only the frame.
+        let skin = load_skin("linamp_base_skin.wsz");
+        let color = [0, 255, 0];
+        let text_px = |img: &RgbaImage| -> usize {
+            let mut n = 0;
+            for y in 0..14 {
+                for x in 27..214u32 {
+                    let p = img.get_pixel(x, y);
+                    if p[0] < 80 && p[1] > 180 && p[2] < 80 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        let shown = skin.compose_pl_shade(true, "1. a song", Some(372.0), color);
+        assert!(text_px(&shown) > 0, "shaded bar should draw the track and time");
+        let empty = skin.compose_pl_shade(true, "", None, color);
+        assert_eq!(text_px(&empty), 0, "no current track -> no text on the bar");
     }
 
     #[test]

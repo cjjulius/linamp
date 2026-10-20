@@ -2690,7 +2690,17 @@ impl LinAmpApp {
             }
             ClWin::Pl => {
                 if self.pl_shade {
-                    cs.compose_pl_shade(true)
+                    let (text, secs) = match self.playlist.current_track() {
+                        Some(t) => {
+                            let n = self.playlist.current.map(|i| i + 1).unwrap_or(0);
+                            (
+                                format!("{}. {}", n, t.display_name()),
+                                t.duration.map(|d| d.as_secs_f32()),
+                            )
+                        }
+                        None => (String::new(), None),
+                    };
+                    cs.compose_pl_shade(true, &text, secs, self.pl_colors().current)
                 } else {
                     let rows = self.build_pl_rows();
                     let colors = self.pl_colors();
