@@ -117,37 +117,51 @@ pub(crate) fn dock_group_from_main(rects: &[egui::Rect; 3], visible: &[bool; 3])
     in_group
 }
 
-/// When window `grown` changes height, which other windows form the flush,
-/// vertically-docked chain *below* it — i.e. the ones that should shift to keep
-/// the stack intact. Walks downward from `grown`'s bottom, following windows
-/// whose top is flush with the running bottom and that overlap its column; a gap
-/// or a non-overlapping window ends the chain (floating windows aren't touched).
-pub(crate) fn docked_below_chain(rects: &[Option<egui::Rect>; 3], grown: usize) -> [bool; 3] {
+/// When window `grown` changes height, the other windows that should move with
+/// it: the docked sub-group hanging below it. Seeds with the windows docked
+/// directly below `grown`'s bottom edge, then transitively pulls in any window
+/// docked to one already moving — so a window docked to the *side* of a pushed
+/// window rides along and stays docked. The grown window itself, and anything
+/// reachable only through it (above or beside it), stay put.
+pub(crate) fn docked_group_below(rects: &[Option<egui::Rect>; 3], grown: usize) -> [bool; 3] {
     let mut moved = [false; 3];
     let Some(g) = rects.get(grown).copied().flatten() else {
         return moved;
     };
     let tol = 2.0;
-    let mut bottom = g.bottom();
-    loop {
-        let mut next = None;
-        for (j, rj) in rects.iter().enumerate() {
+    // Seed: windows flush directly below the grown window's bottom edge.
+    for (j, rj) in rects.iter().enumerate() {
+        if j == grown {
+            continue;
+        }
+        if let Some(r) = rj {
+            let x_overlap = r.left() < g.right() && r.right() > g.left();
+            if x_overlap && (r.top() - g.bottom()).abs() <= tol {
+                moved[j] = true;
+            }
+        }
+    }
+    // Transitive: a window docked to any moving window joins the group.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for j in 0..3 {
             if j == grown || moved[j] {
                 continue;
             }
-            let Some(r) = *rj else { continue };
-            let x_overlap = r.left() < g.right() && r.right() > g.left();
-            if x_overlap && (r.top() - bottom).abs() <= tol {
-                next = Some((j, r.bottom()));
-                break;
+            let Some(rj) = rects[j] else { continue };
+            for k in 0..3 {
+                if k == grown || !moved[k] {
+                    continue;
+                }
+                if let Some(rk) = rects[k] {
+                    if rects_docked(rj, rk) {
+                        moved[j] = true;
+                        changed = true;
+                        break;
+                    }
+                }
             }
-        }
-        match next {
-            Some((j, b)) => {
-                moved[j] = true;
-                bottom = b;
-            }
-            None => break,
         }
     }
     moved
@@ -167,35 +181,54 @@ mod tests {
     fn expanding_main_pushes_the_stack_below() {
         // Main > EQ > PL, all collapsed and flush.
         let rects = [Some(r(0.0, 0.0, 275.0, 14.0)), Some(r(0.0, 14.0, 275.0, 14.0)), Some(r(0.0, 28.0, 275.0, 14.0))];
-        assert_eq!(docked_below_chain(&rects, 0), [false, true, true]);
+        assert_eq!(docked_group_below(&rects, 0), [false, true, true]);
     }
 
     #[test]
     fn expanding_eq_pushes_only_below_it() {
         // Main > EQ > PL: growing EQ moves PL (below), not Main (above).
         let rects = [Some(r(0.0, 0.0, 275.0, 14.0)), Some(r(0.0, 14.0, 275.0, 14.0)), Some(r(0.0, 28.0, 275.0, 14.0))];
-        assert_eq!(docked_below_chain(&rects, 1), [false, false, true]);
+        assert_eq!(docked_group_below(&rects, 1), [false, false, true]);
     }
 
     #[test]
     fn expanding_top_window_pushes_main_and_pl() {
         // EQ on top of Main, then PL: EQ(1) y0, Main(0) y14, PL(2) y28.
         let rects = [Some(r(0.0, 14.0, 275.0, 14.0)), Some(r(0.0, 0.0, 275.0, 14.0)), Some(r(0.0, 28.0, 275.0, 14.0))];
-        assert_eq!(docked_below_chain(&rects, 1), [true, false, true]);
+        assert_eq!(docked_group_below(&rects, 1), [true, false, true]);
     }
 
     #[test]
     fn a_gap_ends_the_chain() {
         // EQ flush below main, but PL has a gap below EQ -> PL not pushed.
         let rects = [Some(r(0.0, 0.0, 275.0, 14.0)), Some(r(0.0, 14.0, 275.0, 14.0)), Some(r(0.0, 60.0, 275.0, 14.0))];
-        assert_eq!(docked_below_chain(&rects, 0), [false, true, false]);
+        assert_eq!(docked_group_below(&rects, 0), [false, true, false]);
     }
 
     #[test]
     fn a_floating_sidebyside_window_is_not_pushed() {
         // EQ sits beside main (no x overlap with main's column) -> not in the chain.
         let rects = [Some(r(0.0, 0.0, 275.0, 14.0)), Some(r(400.0, 14.0, 275.0, 14.0)), None];
-        assert_eq!(docked_below_chain(&rects, 0), [false, false, false]);
+        assert_eq!(docked_group_below(&rects, 0), [false, false, false]);
+    }
+
+    #[test]
+    fn side_docked_window_rides_along_with_the_pushed_one() {
+        // Main; EQ docked below main; PL docked to EQ's right (same row as EQ).
+        // Expanding main must push EQ *and* PL (docked to EQ), not just EQ.
+        let rects = [
+            Some(r(0.0, 0.0, 275.0, 14.0)),   // main
+            Some(r(0.0, 14.0, 275.0, 14.0)),  // eq, below main
+            Some(r(275.0, 14.0, 275.0, 14.0)),// pl, right of eq
+        ];
+        assert_eq!(docked_group_below(&rects, 0), [false, true, true]);
+        // PL on the left of EQ behaves the same.
+        let rects_l = [
+            Some(r(0.0, 0.0, 275.0, 14.0)),
+            Some(r(0.0, 14.0, 275.0, 14.0)),
+            Some(r(-275.0, 14.0, 275.0, 14.0)),
+        ];
+        assert_eq!(docked_group_below(&rects_l, 0), [false, true, true]);
     }
 
     #[test]

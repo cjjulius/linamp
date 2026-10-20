@@ -8,7 +8,7 @@ use rustfft::{Fft, FftPlanner};
 
 use crate::classic::{self, Btn, ClassicSkin, MainState, PlayUi};
 use crate::config::{Prefs, Session};
-use crate::dock::{dock_group_from_main, docked_below_chain, push_off, rects_docked, snap_rect};
+use crate::dock::{dock_group_from_main, docked_group_below, push_off, rects_docked, snap_rect};
 use crate::library::Library;
 use crate::player::{PlayState, Player};
 use crate::playlist::{save_playlist_file, Playlist};
@@ -2243,13 +2243,10 @@ impl LinAmpApp {
 
     /// Current on-screen rects of the three windows (None when hidden).
     fn window_rects(&self) -> [Option<egui::Rect>; 3] {
-        let mk = |i: usize, w: ClWin| {
-            egui::Rect::from_min_size(self.win_pos[i], self.win_inner_size(w))
-        };
         [
-            Some(mk(0, ClWin::Main)),
-            self.eq_visible.then(|| mk(1, ClWin::Eq)),
-            self.pl_visible.then(|| mk(2, ClWin::Pl)),
+            Some(self.win_rect_pts(0)),
+            self.eq_visible.then(|| self.win_rect_pts(1)),
+            self.pl_visible.then(|| self.win_rect_pts(2)),
         ]
     }
 
@@ -2260,7 +2257,7 @@ impl LinAmpApp {
         // intact instead of overlapping (only docked windows are affected).
         let before = self.window_rects();
         let old_h = before[idx].map(|r| r.height()).unwrap_or(0.0);
-        let moved = docked_below_chain(&before, idx);
+        let moved = docked_group_below(&before, idx);
         match win {
             ClWin::Main => self.main_shade = !self.main_shade,
             ClWin::Eq => self.eq_shade = !self.eq_shade,
