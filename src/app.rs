@@ -2700,7 +2700,7 @@ impl LinAmpApp {
                         }
                         None => (String::new(), None),
                     };
-                    cs.compose_pl_shade(true, &text, secs, self.pl_colors().current)
+                    cs.compose_pl_shade(true, &text, secs, self.pl_colors().normal)
                 } else {
                     let rows = self.build_pl_rows();
                     let colors = self.pl_colors();

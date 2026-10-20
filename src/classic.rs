@@ -899,19 +899,20 @@ impl ClassicSkin {
             blit(&mut c, p, 225, 0, 99, ry, 50, 14); // right end (with buttons)
             blit(&mut c, p, 264, 3, 52, 42, 9, 9); // close
 
-            // Current track + length on the bar. The length is right-aligned
-            // before the right-end button cluster; the title fills the space left
-            // of it, clipped so the two never overlap.
+            // Current track + length on the bar. The title starts at the same x
+            // as the expanded list's rows (`PL_LIST_X`) so the two line up; the
+            // length is right-aligned before the right-end button cluster, and the
+            // title is clipped so they never overlap.
             let time = secs.map(fmt_pl_time).unwrap_or_default();
-            let mut title_w = 185;
+            let mut title_w = 225 - PL_LIST_X - 4;
             if !time.is_empty() {
                 let tw = time.chars().count() as i32 * 5;
                 let tx = 214 - tw;
                 self.draw_text_tinted(&mut c, &time, tx, 4, tw, color);
-                title_w = tx - 27 - 4;
+                title_w = tx - PL_LIST_X - 4;
             }
             if !text.is_empty() {
-                self.draw_text_tinted(&mut c, text, 27, 4, title_w.max(0), color);
+                self.draw_text_tinted(&mut c, text, PL_LIST_X, 4, title_w.max(0), color);
             }
         }
         c
