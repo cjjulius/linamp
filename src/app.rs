@@ -1296,6 +1296,7 @@ impl LinAmpApp {
                     format!("{}. {}", i + 1, t.display_name()),
                     Some(i) == cur,
                     self.pl_selection.contains(&i),
+                    t.duration.map(|d| d.as_secs_f32()),
                 )
             })
             .collect()
@@ -1709,6 +1710,13 @@ impl LinAmpApp {
                                     // Open on release (below) so this click can't dismiss it.
                                     self.pl_menu_press = Some(menu);
                                 }
+                                // Mini-player transport buttons mirror the main window's.
+                                Some(P::MiniPrev) => self.trigger_classic(ctx, Btn::Prev),
+                                Some(P::MiniPlay) => self.trigger_classic(ctx, Btn::Play),
+                                Some(P::MiniPause) => self.trigger_classic(ctx, Btn::Pause),
+                                Some(P::MiniStop) => self.trigger_classic(ctx, Btn::Stop),
+                                Some(P::MiniNext) => self.trigger_classic(ctx, Btn::Next),
+                                Some(P::MiniEject) => self.trigger_classic(ctx, Btn::Eject),
                                 None => {}
                             }
                         }
@@ -2602,6 +2610,7 @@ impl LinAmpApp {
             ClWin::Eq => &mut self.eq_tex,
             ClWin::Pl => &mut self.pl_tex,
         };
+        let (nw, nh) = (img.width() as f32, img.height() as f32);
         let tex = upload_tex(slot, ctx, &img, name);
 
         egui::CentralPanel::default()
@@ -2610,6 +2619,27 @@ impl LinAmpApp {
                 let rect = ui.max_rect();
                 let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                 ui.painter().image(tex.id(), rect, uv, Color32::WHITE);
+
+                // Hover tooltips over the classic buttons. These are hover-only
+                // widgets, so they don't intercept the manual click/drag handling;
+                // skipped while a window is shaded (its buttons aren't shown).
+                let tips = match win {
+                    ClWin::Main if !self.main_shade => classic::main_tooltips(),
+                    ClWin::Eq if !self.eq_shade => classic::eq_tooltips(),
+                    ClWin::Pl if !self.pl_shade => {
+                        classic::pl_tooltips(self.pl_px_w as i32, self.pl_px_h as i32)
+                    }
+                    _ => Vec::new(),
+                };
+                if nw > 0.0 && nh > 0.0 {
+                    let (sx, sy) = (rect.width() / nw, rect.height() / nh);
+                    for (label, x, y, w, h) in tips {
+                        let min = rect.min + egui::vec2(x as f32 * sx, y as f32 * sy);
+                        let r = egui::Rect::from_min_size(min, egui::vec2(w as f32 * sx, h as f32 * sy));
+                        ui.interact(r, ui.id().with(("tip", label, x, y)), egui::Sense::hover())
+                            .on_hover_text(label);
+                    }
+                }
             });
     }
 

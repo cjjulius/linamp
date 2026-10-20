@@ -89,6 +89,67 @@ pub fn region_at(x: f32, y: f32) -> Option<Btn> {
         .map(|(b, ..)| *b)
 }
 
+/// Hover-tooltip label for a main-window button, or `None` for regions that
+/// aren't buttons (title bar, sliders, time/viz toggles).
+fn btn_label(b: Btn) -> Option<&'static str> {
+    Some(match b {
+        Btn::Prev => "Previous",
+        Btn::Play => "Play",
+        Btn::Pause => "Pause",
+        Btn::Stop => "Stop",
+        Btn::Next => "Next",
+        Btn::Eject => "Open file(s)",
+        Btn::Shuffle => "Shuffle",
+        Btn::Repeat => "Repeat",
+        Btn::Eq => "Equalizer",
+        Btn::Pl => "Playlist",
+        Btn::Close => "Close",
+        Btn::Minimize => "Minimize",
+        Btn::Options => "Options",
+        _ => return None,
+    })
+}
+
+/// Tooltip (label, x, y, w, h) rects for the main window's buttons, in native
+/// skin pixels. Reuses the click `REGIONS` so hover and hit-testing stay in sync.
+pub fn main_tooltips() -> Vec<(&'static str, i32, i32, i32, i32)> {
+    REGIONS
+        .iter()
+        .filter_map(|(b, x, y, w, h)| btn_label(*b).map(|l| (l, *x, *y, *w, *h)))
+        .collect()
+}
+
+/// Tooltip rects for the equalizer window's buttons, in native skin pixels.
+pub fn eq_tooltips() -> Vec<(&'static str, i32, i32, i32, i32)> {
+    vec![
+        ("On", 14, 18, 26, 12),
+        ("Auto", 40, 18, 32, 12),
+        ("Presets", 217, 18, 44, 12),
+        ("Close", 264, 3, 9, 9),
+    ]
+}
+
+/// Tooltip rects for the playlist window's mini-player transport buttons, in
+/// native skin pixels. Mirrors `PL_MINI_BTNS` / `pl_region_at`.
+pub fn pl_tooltips(width: i32, height: i32) -> Vec<(&'static str, i32, i32, i32, i32)> {
+    let ox = width - 150;
+    PL_MINI_BTNS
+        .iter()
+        .filter_map(|(region, bx, bw)| {
+            let label = match region {
+                PlRegion::MiniPrev => "Previous",
+                PlRegion::MiniPlay => "Play",
+                PlRegion::MiniPause => "Pause",
+                PlRegion::MiniStop => "Stop",
+                PlRegion::MiniNext => "Next",
+                PlRegion::MiniEject => "Open file(s)",
+                _ => return None,
+            };
+            Some((label, ox + *bx, height - 15, *bw, 9))
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PlayUi {
     Playing,
@@ -475,6 +536,13 @@ pub enum PlRegion {
     MiscMenu,
     ListMenu,
     Resize,
+    // Mini-player transport buttons in the bottom-right sprite.
+    MiniPrev,
+    MiniPlay,
+    MiniPause,
+    MiniStop,
+    MiniNext,
+    MiniEject,
 }
 
 #[derive(Clone, Copy)]
@@ -485,8 +553,9 @@ pub struct PlColors {
     pub selbg: [u8; 3],
 }
 
-/// One playlist row: display text, is-playing, is-selected.
-pub type PlRow = (String, bool, bool);
+/// One playlist row: display text, is-playing, is-selected, track length in
+/// seconds (None when not yet known). The length is drawn right-aligned.
+pub type PlRow = (String, bool, bool, Option<f32>);
 
 pub struct PlState<'a> {
     pub focused: bool,
@@ -514,6 +583,19 @@ const PL_BOTTOM_BTNS: &[(PlRegion, i32, i32)] = &[
     (PlRegion::MiscMenu, 101, 22),
 ];
 
+/// Mini-player transport buttons in the bottom-right sprite: (region, x, width)
+/// as offsets from the sprite origin (window `width - 150`). Their row sits at
+/// `height - 15 .. height - 7` (the sprite's lower button strip). Measured from
+/// PLEDIT.BMP's bottom-right glyphs (source x132..184).
+const PL_MINI_BTNS: &[(PlRegion, i32, i32)] = &[
+    (PlRegion::MiniPrev, 5, 8),
+    (PlRegion::MiniPlay, 13, 8),
+    (PlRegion::MiniPause, 23, 8),
+    (PlRegion::MiniStop, 33, 8),
+    (PlRegion::MiniNext, 42, 8),
+    (PlRegion::MiniEject, 51, 9),
+];
+
 
 const PL_ROW_H: i32 = 7;
 const PL_LIST_X: i32 = 14;
@@ -532,6 +614,17 @@ pub fn pl_region_at(x: f32, y: f32, width: f32, height: f32) -> Option<PlRegion>
     }
     if y < height - 38.0 {
         return Some(PlRegion::List);
+    }
+    // Mini-player transport buttons, in the lower strip of the bottom-right
+    // sprite (checked before the menu band, which overlaps in y but not in x).
+    if y >= height - 15.0 && y < height - 6.0 {
+        let ox = width - 150.0;
+        for (region, bx, bw) in PL_MINI_BTNS {
+            let x0 = ox + *bx as f32;
+            if x >= x0 && x < x0 + *bw as f32 {
+                return Some(*region);
+            }
+        }
     }
     // Bottom-bar menu buttons: the Add/Rem/Sel/Misc cluster is anchored left,
     // the List menu is anchored to the right edge.
@@ -750,15 +843,26 @@ impl ClassicSkin {
             }
         }
 
-        // Track list.
+        // Track list. Each row shows the title on the left and, when known, the
+        // track length right-aligned (as in Winamp), with the title clipped so
+        // the two never overlap.
         let visible = pl_visible_rows(height);
-        for (i, (text, is_cur, is_sel)) in st.rows.iter().skip(st.first).take(visible).enumerate() {
+        for (i, (text, is_cur, is_sel, dur)) in st.rows.iter().skip(st.first).take(visible).enumerate() {
             let ry = PL_LIST_Y + i as i32 * PL_ROW_H;
             if *is_sel {
                 fill_rect(&mut c, PL_LIST_X - 2, ry - 1, w - PL_LIST_X - 22, PL_ROW_H, st.colors.selbg);
             }
             let col = if *is_cur { st.colors.current } else { st.colors.normal };
-            self.draw_text_tinted(&mut c, text, PL_LIST_X, ry, w - PL_LIST_X - 24, col);
+            let time = dur.map(|d| fmt_pl_time(d));
+            // Default title width (no time): up to the right frame.
+            let mut title_w = w - PL_LIST_X - 24;
+            if let Some(t) = &time {
+                let tw = t.chars().count() as i32 * 5;
+                let tx = w - 24 - tw; // right-aligned, just left of the frame
+                self.draw_text_tinted(&mut c, t, tx, ry, tw, col);
+                title_w = tx - PL_LIST_X - 6; // leave a gap before the time
+            }
+            self.draw_text_tinted(&mut c, text, PL_LIST_X, ry, title_w.max(0), col);
         }
         c
     }
@@ -1095,11 +1199,11 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
         bands: [0.6, 0.3, 0.0, -0.2, -0.4, -0.2, 0.1, 0.3, 0.5, 0.7],
     });
     let rows: Vec<PlRow> = vec![
-        ("1. akira - kaneda theme".to_string(), true, true),
-        ("2. geinoh yamashirogumi - tetsuo".to_string(), false, false),
-        ("3. battle angel alita - gally".to_string(), false, false),
-        ("4. iria - zeiram ost".to_string(), false, false),
-        ("5. evangelion - cruel angel".to_string(), false, false),
+        ("1. akira - kaneda theme".to_string(), true, true, Some(272.0)),
+        ("2. geinoh yamashirogumi - tetsuo".to_string(), false, false, Some(345.0)),
+        ("3. battle angel alita - gally".to_string(), false, false, None),
+        ("4. iria - zeiram ost".to_string(), false, false, Some(201.0)),
+        ("5. evangelion - cruel angel".to_string(), false, false, Some(238.0)),
     ];
     let pl = skin.compose_playlist(
         &PlState {
@@ -1159,6 +1263,18 @@ mod tests {
         // Resize grip and List menu track the right edge when widened.
         assert_eq!(pl_region_at(360.0, 165.0, 375.0, 180.0), Some(PlRegion::Resize));
         assert_eq!(pl_region_at(375.0 - 30.0, 180.0 - 20.0, 375.0, 180.0), Some(PlRegion::ListMenu));
+    }
+
+    #[test]
+    fn pl_mini_transport_regions() {
+        // The mini-player buttons sit in the bottom-right sprite's lower strip.
+        let (w, h) = (275.0, 180.0);
+        assert_eq!(pl_region_at(142.0, 169.0, w, h), Some(PlRegion::MiniPlay));
+        assert_eq!(pl_region_at(162.0, 169.0, w, h), Some(PlRegion::MiniStop));
+        // They track the right edge when the window is widened.
+        assert_eq!(pl_region_at(142.0 + 100.0, 169.0, w + 100.0, h), Some(PlRegion::MiniPlay));
+        // Just above the strip is the menu band, not a transport button.
+        assert_ne!(pl_region_at(142.0, 155.0, w, h), Some(PlRegion::MiniPlay));
     }
 
     #[test]
