@@ -5,12 +5,14 @@ mod app;
 mod balance;
 mod classic;
 mod config;
+mod dock;
 mod eq;
 mod library;
 mod player;
 mod playlist;
 mod skin;
 mod tags;
+mod text;
 mod viz;
 
 use app::LinAmpApp;
