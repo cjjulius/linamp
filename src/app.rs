@@ -533,6 +533,9 @@ pub struct LinAmpApp {
     /// While resizing the playlist, the grab offsets (width, height) in px.
     resize_pl: Option<egui::Vec2>,
     root_last: Option<(egui::Pos2, egui::Vec2)>,
+    /// Last always-on-top state pushed to the root window (so we only send the
+    /// window-level command when it changes).
+    on_top_last: Option<bool>,
     pl_menu_press: Option<classic::PlRegion>,
     prefs: Prefs,
     /// Path of the currently loaded skin (persisted as `last_skin`).
@@ -695,6 +698,7 @@ impl LinAmpApp {
             drag: None,
             resize_pl: None,
             root_last: None,
+            on_top_last: None,
             pl_menu_press: None,
             prefs,
             skin_path: None,
@@ -1545,7 +1549,8 @@ impl LinAmpApp {
             .with_inner_size(egui::vec2(w, h))
             .with_decorations(false)
             .with_resizable(false)
-            .with_taskbar(false);
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_popup");
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
@@ -1592,6 +1597,16 @@ impl LinAmpApp {
                             }
                             if item(ui, "Load skin…") {
                                 self.load_skin_dialog(ctx);
+                                close = true;
+                            }
+                            let aot = if self.prefs.always_on_top {
+                                "✓ Always on top"
+                            } else {
+                                "   Always on top"
+                            };
+                            if item(ui, aot) {
+                                self.prefs.always_on_top = !self.prefs.always_on_top;
+                                self.prefs.save();
                                 close = true;
                             }
                             if item(ui, "Preferences…") {
@@ -2241,6 +2256,15 @@ impl LinAmpApp {
         }
     }
 
+    /// Target OS window level for the player windows (always-on-top or normal).
+    fn window_level(&self) -> egui::WindowLevel {
+        if self.prefs.always_on_top {
+            egui::WindowLevel::AlwaysOnTop
+        } else {
+            egui::WindowLevel::Normal
+        }
+    }
+
     /// Current on-screen rects of the three windows (None when hidden).
     fn window_rects(&self) -> [Option<egui::Rect>; 3] {
         [
@@ -2295,7 +2319,8 @@ impl LinAmpApp {
             .with_position(screen)
             .with_inner_size(egui::vec2(340.0, 300.0))
             .with_resizable(false)
-            .with_taskbar(false);
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_prefs");
         let mut close = false;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
@@ -2362,7 +2387,8 @@ impl LinAmpApp {
             .with_position(screen)
             .with_inner_size(egui::vec2(460.0, 360.0))
             .with_min_inner_size(egui::vec2(320.0, 200.0))
-            .with_taskbar(false);
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_library");
         let mut close = false;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
@@ -2447,7 +2473,8 @@ impl LinAmpApp {
             .with_position(screen)
             .with_inner_size(egui::vec2(400.0, 380.0))
             .with_resizable(false)
-            .with_taskbar(false);
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_tags");
         let mut close = false;
         let mut do_save = false;
@@ -2529,7 +2556,8 @@ impl LinAmpApp {
             .with_position(screen)
             .with_inner_size(egui::vec2(360.0, 300.0))
             .with_min_inner_size(egui::vec2(260.0, 160.0))
-            .with_taskbar(false);
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_jumpfile");
         let mut close = false;
         let mut play: Option<usize> = None;
@@ -2644,7 +2672,8 @@ impl LinAmpApp {
             .with_position(screen)
             .with_inner_size(egui::vec2(260.0, 110.0))
             .with_resizable(false)
-            .with_taskbar(false);
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_jumptime");
         let mut close = false;
         let mut seek_to: Option<f32> = None;
@@ -2741,6 +2770,12 @@ impl LinAmpApp {
             self.root_last = Some((pos, size));
         }
 
+        // Keep the root window's always-on-top level in sync (send only on change).
+        if self.on_top_last != Some(self.prefs.always_on_top) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(self.window_level()));
+            self.on_top_last = Some(self.prefs.always_on_top);
+        }
+
         // Equalizer child window.
         if self.eq_visible {
             let builder = egui::ViewportBuilder::default()
@@ -2749,7 +2784,8 @@ impl LinAmpApp {
                 .with_position(self.win_pos[1])
                 .with_decorations(false)
                 .with_resizable(false)
-                .with_taskbar(false);
+                .with_taskbar(false)
+                .with_window_level(self.window_level());
             let id = egui::ViewportId::from_hash_of("linamp_eq");
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
                 // Fire global shortcuts while this window has focus (keyboard
@@ -2767,7 +2803,8 @@ impl LinAmpApp {
                 .with_position(self.win_pos[2])
                 .with_decorations(false)
                 .with_resizable(false)
-                .with_taskbar(false);
+                .with_taskbar(false)
+                .with_window_level(self.window_level());
             let id = egui::ViewportId::from_hash_of("linamp_pl");
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
                 self.handle_shortcuts(ctx, ClWin::Pl);
