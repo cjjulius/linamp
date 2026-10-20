@@ -2537,107 +2537,106 @@ impl LinAmpApp {
                 let dot = if dirty { "● " } else { "" };
                 ui.label(RichText::new(format!("{dot}{}", ed.info.path)).strong());
                 ui.add_space(4.0);
-                let col = ui.visuals().text_color();
                 // Tab strip sitting on the panel below, so it reads as real tabs.
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
-                    ui.selectable_value(&mut ed.tab, TagTab::Basic, mnem("Basic Info", 0, col));
-                    ui.selectable_value(&mut ed.tab, TagTab::Id3, mnem("ID3", 0, col));
+                    ui.selectable_value(&mut ed.tab, TagTab::Basic, mnem("Basic Info", 0));
+                    ui.selectable_value(&mut ed.tab, TagTab::Id3, mnem("ID3", 0));
                 });
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.set_min_width(624.0);
                     ui.set_min_height(300.0);
                     match ed.tab {
-                    TagTab::Basic => {
-                        egui::Grid::new("basic_grid")
-                            .num_columns(2)
-                            .spacing([12.0, 4.0])
-                            .show(ui, |ui| {
-                                let i = &ed.info;
-                                let mut r = |k: &str, v: String| {
-                                    ui.label(k);
-                                    ui.label(v);
-                                    ui.end_row();
-                                };
-                                r("Size", format!("{} bytes", i.size_bytes));
-                                r("Length", format!("{} seconds", i.length_secs));
-                                r("Format", i.mpeg.clone());
-                                r("Bitrate", format!("{} kbps", i.bitrate_kbps));
-                                r("Sample rate", format!("{} Hz", i.sample_rate_hz));
-                                r("Channels", i.channel_mode.clone());
-                                r("Copyrighted", if i.copyrighted { "Yes" } else { "No" }.into());
-                                r("Original", if i.original { "Yes" } else { "No" }.into());
-                                r("Emphasis", i.emphasis.clone());
-                            });
-                    }
-                    TagTab::Id3 => {
-                        let genre_combo = |ui: &mut egui::Ui, salt: &str, val: &mut String| {
-                            egui::ComboBox::from_id_salt(salt)
-                                .selected_text(if val.is_empty() { "—".into() } else { val.clone() })
-                                .width(140.0)
-                                .show_ui(ui, |ui| {
-                                    for g in crate::tags::GENRES {
-                                        if ui.selectable_label(val == g, *g).clicked() {
-                                            *val = (*g).to_string();
+                        TagTab::Basic => {
+                            egui::Grid::new("basic_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 4.0])
+                                .show(ui, |ui| {
+                                    let i = &ed.info;
+                                    let mut r = |k: &str, v: String| {
+                                        ui.label(k);
+                                        ui.label(v);
+                                        ui.end_row();
+                                    };
+                                    r("Size", format!("{} bytes", i.size_bytes));
+                                    r("Length", format!("{} seconds", i.length_secs));
+                                    r("Format", i.mpeg.clone());
+                                    r("Bitrate", format!("{} kbps", i.bitrate_kbps));
+                                    r("Sample rate", format!("{} Hz", i.sample_rate_hz));
+                                    r("Channels", i.channel_mode.clone());
+                                    r("Copyrighted", if i.copyrighted { "Yes" } else { "No" }.into());
+                                    r("Original", if i.original { "Yes" } else { "No" }.into());
+                                    r("Emphasis", i.emphasis.clone());
+                                });
+                        }
+                        TagTab::Id3 => {
+                            let genre_combo = |ui: &mut egui::Ui, salt: &str, val: &mut String| {
+                                egui::ComboBox::from_id_salt(salt)
+                                    .selected_text(if val.is_empty() { "—".into() } else { val.clone() })
+                                    .width(140.0)
+                                    .show_ui(ui, |ui| {
+                                        for g in crate::tags::GENRES {
+                                            if ui.selectable_label(val == g, *g).clicked() {
+                                                *val = (*g).to_string();
+                                            }
                                         }
-                                    }
-                                });
-                        };
-                        ui.columns(2, |cols| {
-                            // ----- ID3v1 (left) -----
-                            cols[0].checkbox(&mut ed.v1_on, mnem("ID3v1 Tag", 4, col));
-                            cols[0].add_enabled_ui(on && ed.v1_on, |ui| {
-                                egui::Grid::new("v1_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
-                                    let f = &mut ed.v1;
-                                    let lim = |ui: &mut egui::Ui, l: &str, v: &mut String, n: usize| {
-                                        ui.label(l);
-                                        ui.add(egui::TextEdit::singleline(v).desired_width(150.0).char_limit(n));
+                                    });
+                            };
+                            ui.columns(2, |cols| {
+                                // ----- ID3v1 (left) -----
+                                cols[0].checkbox(&mut ed.v1_on, mnem("ID3v1 Tag", 4));
+                                cols[0].add_enabled_ui(on && ed.v1_on, |ui| {
+                                    egui::Grid::new("v1_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
+                                        let f = &mut ed.v1;
+                                        let lim = |ui: &mut egui::Ui, l: &str, v: &mut String, n: usize| {
+                                            ui.label(l);
+                                            ui.add(egui::TextEdit::singleline(v).desired_width(150.0).char_limit(n));
+                                            ui.end_row();
+                                        };
+                                        lim(ui, "Track", &mut f.track, 3);
+                                        lim(ui, "Title", &mut f.title, crate::tags::V1_MAX_TEXT);
+                                        lim(ui, "Artist", &mut f.artist, crate::tags::V1_MAX_TEXT);
+                                        lim(ui, "Album", &mut f.album, crate::tags::V1_MAX_TEXT);
+                                        lim(ui, "Year", &mut f.year, crate::tags::V1_MAX_YEAR);
+                                        ui.label("Genre");
+                                        genre_combo(ui, "v1_genre", &mut f.genre);
                                         ui.end_row();
-                                    };
-                                    lim(ui, "Track", &mut f.track, 3);
-                                    lim(ui, "Title", &mut f.title, crate::tags::V1_MAX_TEXT);
-                                    lim(ui, "Artist", &mut f.artist, crate::tags::V1_MAX_TEXT);
-                                    lim(ui, "Album", &mut f.album, crate::tags::V1_MAX_TEXT);
-                                    lim(ui, "Year", &mut f.year, crate::tags::V1_MAX_YEAR);
-                                    ui.label("Genre");
-                                    genre_combo(ui, "v1_genre", &mut f.genre);
-                                    ui.end_row();
-                                    ui.label("Comment");
-                                    ui.add(egui::TextEdit::multiline(&mut f.comment).desired_width(150.0).desired_rows(2).char_limit(crate::tags::V1_MAX_TEXT));
-                                    ui.end_row();
+                                        ui.label("Comment");
+                                        ui.add(egui::TextEdit::multiline(&mut f.comment).desired_width(150.0).desired_rows(2).char_limit(crate::tags::V1_MAX_TEXT));
+                                        ui.end_row();
+                                    });
+                                });
+                                // ----- ID3v2 (right) -----
+                                cols[1].checkbox(&mut ed.v2_on, mnem("ID3v2 Tag", 4));
+                                cols[1].add_enabled_ui(on && ed.v2_on, |ui| {
+                                    egui::Grid::new("v2_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
+                                        let f = &mut ed.v2;
+                                        let row = |ui: &mut egui::Ui, l: &str, v: &mut String| {
+                                            ui.label(l);
+                                            ui.add(egui::TextEdit::singleline(v).desired_width(170.0));
+                                            ui.end_row();
+                                        };
+                                        row(ui, "Track", &mut f.track);
+                                        row(ui, "Title", &mut f.title);
+                                        row(ui, "Artist", &mut f.artist);
+                                        row(ui, "Album", &mut f.album);
+                                        row(ui, "Year", &mut f.year);
+                                        ui.label("Genre");
+                                        genre_combo(ui, "v2_genre", &mut f.genre);
+                                        ui.end_row();
+                                        ui.label("Comment");
+                                        ui.add(egui::TextEdit::multiline(&mut f.comment).desired_width(170.0).desired_rows(2));
+                                        ui.end_row();
+                                        row(ui, "Composer", &mut f.composer);
+                                        row(ui, "Orig. Artist", &mut f.orig_artist);
+                                        row(ui, "Copyright", &mut f.copyright);
+                                        row(ui, "URL", &mut f.url);
+                                        row(ui, "Encoded by", &mut f.encoded_by);
+                                    });
                                 });
                             });
-                            // ----- ID3v2 (right) -----
-                            cols[1].checkbox(&mut ed.v2_on, mnem("ID3v2 Tag", 4, col));
-                            cols[1].add_enabled_ui(on && ed.v2_on, |ui| {
-                                egui::Grid::new("v2_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
-                                    let f = &mut ed.v2;
-                                    let row = |ui: &mut egui::Ui, l: &str, v: &mut String| {
-                                        ui.label(l);
-                                        ui.add(egui::TextEdit::singleline(v).desired_width(170.0));
-                                        ui.end_row();
-                                    };
-                                    row(ui, "Track", &mut f.track);
-                                    row(ui, "Title", &mut f.title);
-                                    row(ui, "Artist", &mut f.artist);
-                                    row(ui, "Album", &mut f.album);
-                                    row(ui, "Year", &mut f.year);
-                                    ui.label("Genre");
-                                    genre_combo(ui, "v2_genre", &mut f.genre);
-                                    ui.end_row();
-                                    ui.label("Comment");
-                                    ui.add(egui::TextEdit::multiline(&mut f.comment).desired_width(170.0).desired_rows(2));
-                                    ui.end_row();
-                                    row(ui, "Composer", &mut f.composer);
-                                    row(ui, "Orig. Artist", &mut f.orig_artist);
-                                    row(ui, "Copyright", &mut f.copyright);
-                                    row(ui, "URL", &mut f.url);
-                                    row(ui, "Encoded by", &mut f.encoded_by);
-                                });
-                            });
-                        });
+                        }
                     }
-                }
                 });
 
                 ui.add_space(6.0);
@@ -2688,20 +2687,20 @@ impl LinAmpApp {
                     // Update and the copy buttons only apply to the ID3 tab.
                     if id3 {
                         ui.add_enabled_ui(on, |ui| {
-                            if ui.button(mnem("Update", 0, col)).clicked() {
+                            if ui.button(mnem("Update", 0)).clicked() {
                                 do_save = true;
                             }
                         });
                     }
-                    if ui.button(mnem("Cancel", 0, col)).clicked() {
+                    if ui.button(mnem("Cancel", 0)).clicked() {
                         close = true;
                     }
                     if id3 {
                         ui.add_enabled_ui(can_copy, |ui| {
-                            if ui.button(mnem("Copy to ID3v1", 5, col)).clicked() {
+                            if ui.button(mnem("Copy to ID3v1", 5)).clicked() {
                                 do_copy_to = true;
                             }
-                            if ui.button(mnem("Copy from ID3v1", 5, col)).clicked() {
+                            if ui.button(mnem("Copy from ID3v1", 5)).clicked() {
                                 do_copy_from = true;
                             }
                         });
@@ -4223,13 +4222,15 @@ impl eframe::App for LinAmpApp {
 /// texture, returning a handle to draw with.
 /// Build a label with the Alt-mnemonic character at char index `pos` underlined
 /// (as in the reference dialog). Usable for buttons, checkboxes and tabs.
-fn mnem(text: &str, pos: usize, color: Color32) -> egui::text::LayoutJob {
+fn mnem(text: &str, pos: usize) -> egui::text::LayoutJob {
     use egui::text::{LayoutJob, TextFormat};
+    // Color32::PLACEHOLDER lets egui substitute the widget's resolved text
+    // colour at paint time, so disabled/selected/hover states still apply.
     let mut job = LayoutJob::default();
     for (i, ch) in text.chars().enumerate() {
-        let mut fmt = TextFormat::simple(egui::FontId::proportional(14.0), color);
+        let mut fmt = TextFormat::simple(egui::FontId::proportional(14.0), Color32::PLACEHOLDER);
         if i == pos {
-            fmt.underline = Stroke::new(1.0_f32, color);
+            fmt.underline = Stroke::new(1.0_f32, Color32::PLACEHOLDER);
         }
         job.append(&ch.to_string(), 0.0, fmt);
     }
