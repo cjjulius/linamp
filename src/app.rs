@@ -556,6 +556,9 @@ pub struct LinAmpApp {
     positions_init: bool,
     /// Hash of the last-persisted session, so we only write on actual changes.
     session_sig: Option<u64>,
+    /// Frames remaining in a graceful shutdown (set when the WM asks to close),
+    /// used to tear down child viewports before the root to avoid a winit crash.
+    quit_countdown: Option<u8>,
     drag: Option<Dragging>,
     /// While resizing the playlist, the grab offsets (width, height) in px.
     resize_pl: Option<egui::Vec2>,
@@ -715,6 +718,7 @@ impl LinAmpApp {
             pl_px_w: classic::MAIN_W as f32,
             positions_init: false,
             session_sig: None,
+            quit_countdown: None,
             drag: None,
             resize_pl: None,
             root_last: None,
@@ -1294,6 +1298,11 @@ impl LinAmpApp {
     /// every frame; it only touches disk on an actual change, so it doesn't rely
     /// on eframe's save-on-exit (which isn't invoked here) or its periodic timer.
     fn persist_session_if_changed(&mut self) {
+        // Don't overwrite the saved layout while shutting down (we hide the child
+        // windows for teardown, which must not be persisted as "closed").
+        if self.quit_countdown.is_some() {
+            return;
+        }
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.eq_visible.hash(&mut h);
@@ -3628,6 +3637,28 @@ impl eframe::App for LinAmpApp {
         // Persist the session (playlist, window layout, EQ) whenever it changes,
         // so it survives exit without relying on eframe's save-on-exit.
         self.persist_session_if_changed();
+
+        // Graceful shutdown on a window-manager close (Alt+F4 / WM "X"). Tearing
+        // down the root window while the EQ/playlist/popup viewports still exist
+        // crashes winit (an unwrap on a TranslateCoordinates query of the dying
+        // window). Close the children first, stop drawing the classic windows,
+        // and close the root a couple of frames later once they're gone.
+        if self.quit_countdown.is_none() && ctx.input(|i| i.viewport().close_requested()) {
+            self.eq_visible = false;
+            self.pl_visible = false;
+            self.popup = None;
+            self.quit_countdown = Some(2);
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+        if let Some(n) = self.quit_countdown {
+            ctx.request_repaint();
+            if n == 0 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.quit_countdown = Some(n - 1);
+            }
+            return; // don't render (or query) the classic windows mid-teardown
+        }
 
         if self.mode_init {
             let m = self.ui_mode;
