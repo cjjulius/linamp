@@ -1228,7 +1228,13 @@ impl LinAmpApp {
             || self.quit_countdown.is_some()
             || (self.player.state() == PlayState::Stopped
                 && self.viz_mode == VizMode::Spectrum
-                && self.cviz_bars.iter().any(|&b| b > 0.001))
+                // Bars *and* peak markers — the peaks fall slower, so without
+                // them the falloff would stall when the repaint rate drops.
+                && self
+                    .cviz_bars
+                    .iter()
+                    .chain(self.cviz_peaks.iter())
+                    .any(|&b| b > 0.001))
     }
 
     /// Height in native px of each classic window given shade state.
