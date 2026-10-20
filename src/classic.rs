@@ -380,10 +380,16 @@ impl ClassicSkin {
             blit(&mut c, tb, 254, 3, 0, 18, 9, 9); // shade / restore button
             blit(&mut c, tb, 264, 3, 18, 0, 9, 9); // close button
         }
-        self.draw_text_tinted(&mut c, &st.title, 6, 4, 150, st.fg);
+        // The main windowshade sprite is a self-contained strip (branding, seek,
+        // time slot, mini transport, buttons) with no song-title LCD, so we only
+        // fill in the elapsed time: the digits sit either side of the sprite's
+        // baked ":" separator (~x143). Drawing the title here (the old behaviour)
+        // just overprinted the baked "LINAMP" branding.
         let secs = st.pos.max(0.0) as u32;
-        let time = format!("{:02}:{:02}", (secs / 60).min(99), secs % 60);
-        self.draw_text_tinted(&mut c, &time, 224, 4, 28, st.fg);
+        let mm = format!("{:02}", (secs / 60).min(99));
+        let ss = format!("{:02}", secs % 60);
+        self.draw_text_tinted(&mut c, &mm, 132, 4, 10, st.fg);
+        self.draw_text_tinted(&mut c, &ss, 146, 4, 10, st.fg);
         c
     }
 
@@ -1366,6 +1372,39 @@ mod tests {
             assert_eq!(n.0, w.0, "label changed");
             assert_eq!(w.1 - n.1, 100, "{} did not follow the right edge", n.0);
         }
+    }
+
+    #[test]
+    fn main_shade_ignores_title() {
+        // Regression: the collapsed main bar used to draw the song title over the
+        // baked branding, producing garbled text. It must not draw the title now,
+        // so the output is identical regardless of what the title is.
+        let skin = load_skin("linamp_base_skin.wsz");
+        let mk = |title: &str| MainState {
+            focused: true,
+            play: PlayUi::Playing,
+            pressed: None,
+            shuffle: false,
+            repeat: false,
+            eq_on: false,
+            pl_on: false,
+            pos: 71.0,
+            duration: 200.0,
+            time_remaining: false,
+            volume: 0.5,
+            balance: 0.0,
+            stereo: true,
+            title: title.to_string(),
+            kbps: "128".to_string(),
+            khz: "44".to_string(),
+            fg: [0, 255, 0],
+            viz: None,
+            viz_spectrum: Vec::new(),
+            viz_peak: [0, 0, 0],
+        };
+        let a = skin.compose_main_shade(&mk("")).into_raw();
+        let b = skin.compose_main_shade(&mk("A VERY LONG SONG TITLE 1234567890")).into_raw();
+        assert_eq!(a, b, "the collapsed main bar must not draw the song title");
     }
 
     #[test]
