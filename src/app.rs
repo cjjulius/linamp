@@ -589,15 +589,38 @@ struct KeyState {
 }
 
 /// State for the file-info / tag editor window.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TagTab {
+    Basic,
+    Id3,
+}
+
 struct TagEditor {
     index: usize,
     path: PathBuf,
-    fields: crate::tags::TagFields,
-    orig: crate::tags::TagFields,
+    info: crate::tags::FileInfo,
+    v1: crate::tags::Id3Fields,
+    v2: crate::tags::Id3Fields,
+    v1_on: bool,
+    v2_on: bool,
+    orig_v1: crate::tags::Id3Fields,
+    orig_v2: crate::tags::Id3Fields,
+    orig_v1_on: bool,
+    orig_v2_on: bool,
+    tab: TagTab,
     editable: bool,
     status: String,
     /// Showing the "discard unsaved changes?" confirmation.
     confirm_discard: bool,
+}
+
+impl TagEditor {
+    fn dirty(&self) -> bool {
+        self.v1 != self.orig_v1
+            || self.v2 != self.orig_v2
+            || self.v1_on != self.orig_v1_on
+            || self.v2_on != self.orig_v2_on
+    }
 }
 
 /// Jump-to-file dialog state: the search query and the highlighted result row.
@@ -2423,8 +2446,12 @@ impl LinAmpApp {
             return;
         };
         let path = track.path.clone();
-        let fields = crate::tags::read(&path);
+        let (v1, v2) = crate::tags::read_id3(&path);
+        let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
+        let (v1_on, v2_on) = (v1.is_some(), v2.is_some());
+        let v1 = v1.unwrap_or_default();
+        let v2 = v2.unwrap_or_default();
         let status = if editable {
             String::new()
         } else {
@@ -2433,21 +2460,40 @@ impl LinAmpApp {
         self.tag_editor = Some(TagEditor {
             index,
             path,
-            orig: fields.clone(),
-            fields,
+            info,
+            orig_v1: v1.clone(),
+            orig_v2: v2.clone(),
+            orig_v1_on: v1_on,
+            orig_v2_on: v2_on,
+            v1,
+            v2,
+            v1_on,
+            v2_on,
+            tab: TagTab::Basic,
             editable,
             status,
             confirm_discard: false,
         });
     }
 
-    /// Write the editor's fields back to the file and refresh the playlist row.
+    /// Write the editor's tags back to the file and refresh the playlist row.
     fn save_tag_editor(&mut self) {
-        let (index, path, fields) = match &self.tag_editor {
-            Some(ed) if ed.editable => (ed.index, ed.path.clone(), ed.fields.clone()),
+        let (index, path, v1, v2, v1_on, v2_on) = match &self.tag_editor {
+            Some(ed) if ed.editable => (
+                ed.index,
+                ed.path.clone(),
+                ed.v1.clone(),
+                ed.v2.clone(),
+                ed.v1_on,
+                ed.v2_on,
+            ),
             _ => return,
         };
-        let result = crate::tags::write(&path, &fields);
+        let result = crate::tags::write_id3(
+            &path,
+            v1_on.then_some(&v1),
+            v2_on.then_some(&v2),
+        );
         if result.is_ok() {
             if let Some(t) = self.playlist.tracks.get_mut(index) {
                 t.loaded = false;
@@ -2457,7 +2503,11 @@ impl LinAmpApp {
         if let Some(ed) = self.tag_editor.as_mut() {
             match result {
                 Ok(()) => {
-                    ed.orig = ed.fields.clone();
+                    ed.orig_v1 = ed.v1.clone();
+                    ed.orig_v2 = ed.v2.clone();
+                    ed.orig_v1_on = ed.v1_on;
+                    ed.orig_v2_on = ed.v2_on;
+                    ed.confirm_discard = false;
                     ed.status = "Saved.".into();
                 }
                 Err(e) => ed.status = format!("Error: {e}"),
@@ -2474,7 +2524,7 @@ impl LinAmpApp {
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp — File Info")
             .with_position(screen)
-            .with_inner_size(egui::vec2(400.0, 380.0))
+            .with_inner_size(egui::vec2(660.0, 470.0))
             .with_resizable(false)
             .with_taskbar(false)
             .with_window_level(self.window_level());
@@ -2484,44 +2534,111 @@ impl LinAmpApp {
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let ed = self.tag_editor.as_mut().unwrap();
-                let dirty = ed.fields != ed.orig;
-                let fname = ed
-                    .path
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let title = if dirty { format!("● {fname}") } else { fname };
-                ui.label(RichText::new(title).strong());
+                let dirty = ed.dirty();
+                let on = ed.editable;
+
+                // Path + unsaved marker.
+                let dot = if dirty { "● " } else { "" };
+                ui.label(RichText::new(format!("{dot}{}", ed.info.path)).strong());
                 ui.separator();
-                egui::Grid::new("tag_grid")
-                    .num_columns(2)
-                    .spacing([8.0, 6.0])
-                    .show(ui, |ui| {
-                        let row = |ui: &mut egui::Ui, label: &str, val: &mut String| {
-                            ui.label(label);
-                            ui.add(
-                                egui::TextEdit::singleline(val).desired_width(260.0),
-                            );
-                            ui.end_row();
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut ed.tab, TagTab::Basic, "Basic Info");
+                    ui.selectable_value(&mut ed.tab, TagTab::Id3, "ID3");
+                });
+                ui.separator();
+
+                match ed.tab {
+                    TagTab::Basic => {
+                        egui::Grid::new("basic_grid")
+                            .num_columns(2)
+                            .spacing([12.0, 4.0])
+                            .show(ui, |ui| {
+                                let i = &ed.info;
+                                let mut r = |k: &str, v: String| {
+                                    ui.label(k);
+                                    ui.label(v);
+                                    ui.end_row();
+                                };
+                                r("Size", format!("{} bytes", i.size_bytes));
+                                r("Length", format!("{} seconds", i.length_secs));
+                                r("Format", i.mpeg.clone());
+                                r("Bitrate", format!("{} kbps", i.bitrate_kbps));
+                                r("Sample rate", format!("{} Hz", i.sample_rate_hz));
+                                r("Channels", i.channel_mode.clone());
+                                r("Copyrighted", if i.copyrighted { "Yes" } else { "No" }.into());
+                                r("Original", if i.original { "Yes" } else { "No" }.into());
+                                r("Emphasis", i.emphasis.clone());
+                            });
+                    }
+                    TagTab::Id3 => {
+                        let genre_combo = |ui: &mut egui::Ui, salt: &str, val: &mut String| {
+                            egui::ComboBox::from_id_salt(salt)
+                                .selected_text(if val.is_empty() { "—".into() } else { val.clone() })
+                                .width(140.0)
+                                .show_ui(ui, |ui| {
+                                    for g in crate::tags::GENRES {
+                                        if ui.selectable_label(val == g, *g).clicked() {
+                                            *val = (*g).to_string();
+                                        }
+                                    }
+                                });
                         };
-                        row(ui, "Title", &mut ed.fields.title);
-                        row(ui, "Artist", &mut ed.fields.artist);
-                        row(ui, "Album", &mut ed.fields.album);
-                        row(ui, "Album artist", &mut ed.fields.album_artist);
-                        row(ui, "Year", &mut ed.fields.year);
-                        row(ui, "Track", &mut ed.fields.track);
-                        row(ui, "Disc", &mut ed.fields.disc);
-                        row(ui, "Genre", &mut ed.fields.genre);
-                        row(ui, "Composer", &mut ed.fields.composer);
-                        row(ui, "BPM", &mut ed.fields.bpm);
-                        ui.label("Comment");
-                        ui.add(
-                            egui::TextEdit::multiline(&mut ed.fields.comment)
-                                .desired_width(260.0)
-                                .desired_rows(2),
-                        );
-                        ui.end_row();
-                    });
+                        ui.columns(2, |cols| {
+                            // ----- ID3v1 (left) -----
+                            cols[0].checkbox(&mut ed.v1_on, "ID3v1 Tag");
+                            cols[0].add_enabled_ui(on && ed.v1_on, |ui| {
+                                egui::Grid::new("v1_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
+                                    let f = &mut ed.v1;
+                                    let lim = |ui: &mut egui::Ui, l: &str, v: &mut String, n: usize| {
+                                        ui.label(l);
+                                        ui.add(egui::TextEdit::singleline(v).desired_width(150.0).char_limit(n));
+                                        ui.end_row();
+                                    };
+                                    lim(ui, "Track", &mut f.track, 3);
+                                    lim(ui, "Title", &mut f.title, crate::tags::V1_MAX_TEXT);
+                                    lim(ui, "Artist", &mut f.artist, crate::tags::V1_MAX_TEXT);
+                                    lim(ui, "Album", &mut f.album, crate::tags::V1_MAX_TEXT);
+                                    lim(ui, "Year", &mut f.year, crate::tags::V1_MAX_YEAR);
+                                    ui.label("Genre");
+                                    genre_combo(ui, "v1_genre", &mut f.genre);
+                                    ui.end_row();
+                                    ui.label("Comment");
+                                    ui.add(egui::TextEdit::multiline(&mut f.comment).desired_width(150.0).desired_rows(2).char_limit(crate::tags::V1_MAX_TEXT));
+                                    ui.end_row();
+                                });
+                            });
+                            // ----- ID3v2 (right) -----
+                            cols[1].checkbox(&mut ed.v2_on, "ID3v2 Tag");
+                            cols[1].add_enabled_ui(on && ed.v2_on, |ui| {
+                                egui::Grid::new("v2_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
+                                    let f = &mut ed.v2;
+                                    let row = |ui: &mut egui::Ui, l: &str, v: &mut String| {
+                                        ui.label(l);
+                                        ui.add(egui::TextEdit::singleline(v).desired_width(170.0));
+                                        ui.end_row();
+                                    };
+                                    row(ui, "Track", &mut f.track);
+                                    row(ui, "Title", &mut f.title);
+                                    row(ui, "Artist", &mut f.artist);
+                                    row(ui, "Album", &mut f.album);
+                                    row(ui, "Year", &mut f.year);
+                                    ui.label("Genre");
+                                    genre_combo(ui, "v2_genre", &mut f.genre);
+                                    ui.end_row();
+                                    ui.label("Comment");
+                                    ui.add(egui::TextEdit::multiline(&mut f.comment).desired_width(170.0).desired_rows(2));
+                                    ui.end_row();
+                                    row(ui, "Composer", &mut f.composer);
+                                    row(ui, "Orig. Artist", &mut f.orig_artist);
+                                    row(ui, "Copyright", &mut f.copyright);
+                                    row(ui, "URL", &mut f.url);
+                                    row(ui, "Encoded by", &mut f.encoded_by);
+                                });
+                            });
+                        });
+                    }
+                }
+
                 ui.add_space(6.0);
                 if dirty {
                     ui.label(RichText::new("● Unsaved changes").color(Color32::from_rgb(220, 170, 70)));
@@ -2529,47 +2646,99 @@ impl LinAmpApp {
                     ui.label(RichText::new(&ed.status).color(Color32::GRAY));
                 }
                 ui.add_space(4.0);
-                // Ctrl+S saves (even while a text field has focus).
-                let save_key = ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S));
-                if save_key && ed.editable {
+
+                // Shortcuts: Alt-1/2 toggle the tags, Alt-U update, Alt-C cancel,
+                // Alt-T/Alt-F copy to/from ID3v1 (read raw so a focused field
+                // doesn't swallow them).
+                let (k_v1, k_v2, k_up, k_cancel, k_to, k_from) = ctx.input(|i| {
+                    let a = i.modifiers.alt;
+                    (
+                        a && i.key_pressed(egui::Key::Num1),
+                        a && i.key_pressed(egui::Key::Num2),
+                        a && i.key_pressed(egui::Key::U),
+                        a && i.key_pressed(egui::Key::C),
+                        a && i.key_pressed(egui::Key::T),
+                        a && i.key_pressed(egui::Key::F),
+                    )
+                });
+                if on && k_v1 {
+                    ed.v1_on = !ed.v1_on;
+                }
+                if on && k_v2 {
+                    ed.v2_on = !ed.v2_on;
+                }
+                if on && k_up {
                     do_save = true;
                 }
+
+                let can_copy = on && ed.v2_on;
+                let mut do_copy_to = k_to && can_copy;
+                let mut do_copy_from = k_from && can_copy;
                 if ed.confirm_discard {
-                    ui.label(
-                        RichText::new("Discard unsaved changes?").color(Color32::from_rgb(220, 120, 70)),
-                    );
+                    ui.label(RichText::new("Discard unsaved changes?").color(Color32::from_rgb(220, 120, 70)));
                     ui.horizontal(|ui| {
                         if ui.button("Discard").clicked() {
                             close = true;
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button("Keep editing").clicked() {
                             ed.confirm_discard = false;
                         }
                     });
                 } else {
                     ui.horizontal(|ui| {
-                        ui.add_enabled_ui(ed.editable, |ui| {
-                            if ui.button("Save").clicked() {
+                        ui.add_enabled_ui(on, |ui| {
+                            if ui.button("Update").clicked() {
                                 do_save = true;
                             }
                         });
-                        if ui.button("Revert").clicked() {
-                            ed.fields = ed.orig.clone();
-                        }
-                        if ui.button("Close").clicked() {
+                        if ui.button("Cancel").clicked() {
                             if dirty {
                                 ed.confirm_discard = true;
                             } else {
                                 close = true;
                             }
                         }
+                        ui.add_enabled_ui(can_copy, |ui| {
+                            if ui.button("Copy to ID3v1").clicked() {
+                                do_copy_to = true;
+                            }
+                            if ui.button("Copy from ID3v1").clicked() {
+                                do_copy_from = true;
+                            }
+                        });
                     });
+                }
+                if k_cancel {
+                    if dirty {
+                        ed.confirm_discard = true;
+                    } else {
+                        close = true;
+                    }
+                }
+                let trunc = |s: &str, n: usize| s.chars().take(n).collect::<String>();
+                if do_copy_to {
+                    ed.v1.track = ed.v2.track.clone();
+                    ed.v1.title = trunc(&ed.v2.title, crate::tags::V1_MAX_TEXT);
+                    ed.v1.artist = trunc(&ed.v2.artist, crate::tags::V1_MAX_TEXT);
+                    ed.v1.album = trunc(&ed.v2.album, crate::tags::V1_MAX_TEXT);
+                    ed.v1.year = trunc(&ed.v2.year, crate::tags::V1_MAX_YEAR);
+                    ed.v1.genre = ed.v2.genre.clone();
+                    ed.v1.comment = trunc(&ed.v2.comment, crate::tags::V1_MAX_TEXT);
+                }
+                if do_copy_from {
+                    ed.v2.track = ed.v1.track.clone();
+                    ed.v2.title = ed.v1.title.clone();
+                    ed.v2.artist = ed.v1.artist.clone();
+                    ed.v2.album = ed.v1.album.clone();
+                    ed.v2.year = ed.v1.year.clone();
+                    ed.v2.genre = ed.v1.genre.clone();
+                    ed.v2.comment = ed.v1.comment.clone();
                 }
             });
             // Esc / window-close: guard unsaved edits instead of losing them.
             if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
                 if let Some(ed) = self.tag_editor.as_mut() {
-                    if ed.fields != ed.orig {
+                    if ed.dirty() {
                         ed.confirm_discard = true;
                     } else {
                         close = true;
