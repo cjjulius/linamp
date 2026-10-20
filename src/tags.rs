@@ -142,8 +142,8 @@ mod tests {
 
     #[test]
     fn mp3_write_read_roundtrip() {
-        // Uses a bundled sample; skip gracefully if the checkout lacks it.
-        let src = Path::new("music/SoundHelix-Song-1.mp3");
+        // Uses the bundled sample; skip gracefully if the checkout lacks it.
+        let src = Path::new("music/Aria Nocturne - Crystal Harbor.mp3");
         if !src.exists() {
             return;
         }
