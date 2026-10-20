@@ -1600,9 +1600,9 @@ impl LinAmpApp {
                                 close = true;
                             }
                             let aot = if self.prefs.always_on_top {
-                                "✓ Always on top"
+                                "[✓] Always on top"
                             } else {
-                                "   Always on top"
+                                "[  ] Always on top"
                             };
                             if item(ui, aot) {
                                 self.prefs.always_on_top = !self.prefs.always_on_top;
