@@ -1,9 +1,7 @@
-//! Stereo balance (left/right pan) applied to the output as a rodio `Source`.
-//!
-//! The balance control attenuates the opposite channel: panning right turns the
-//! left channel down (and vice-versa), leaving the panned-to side at full gain.
-//! The UI thread writes the value through a [`BalanceShared`] handle; the audio
-//! thread reads it (a cheap atomic load) and applies per-channel gain live.
+//! Stereo balance (left/right pan) as a rodio `Source`: panning attenuates the
+//! opposite channel, leaving the panned-to side at full gain. The UI writes via
+//! a [`BalanceShared`] handle; the audio thread reads it (atomic) and applies
+//! per-channel gain live.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
