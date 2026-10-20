@@ -50,9 +50,11 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - ✅ Dark skin, LCD-style display, scrolling marquee title
 - ✅ LinAmp logo (green lightning bolt on a disc) as the app/window + taskbar
   icon; vector source kept in `assets/linamp_logo.svg` for reuse
-- ✅ Main player + Equalizer + Playlist in one window
-- ✅ Keyboard shortcuts matching Winamp (see below)
-- 🔜 Window shade / mini mode, docking, always-on-top
+- ✅ Main player + Equalizer + Playlist as separate windows that dock & snap
+- ✅ Window-shade mode (double-click a title bar to collapse)
+- ✅ Keyboard shortcuts matching Winamp — see the [README](README.md#keyboard-shortcuts)
+- ✅ Preferences window (Ctrl+P): tag-load mode and 1×/2× sizing, persisted
+- 🔜 Mini mode, always-on-top
 
 ## Theming / Skins
 - ✅ **Pixel-perfect classic skin renderer** — composites real `.wsz` sprite
@@ -136,40 +138,13 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
   binaries for both platforms. Linux needs `libasound2-dev` (installed in CI).
 
 ## Planned / Backlog
-- 🔜 **Options / Preferences window** (Ctrl+P): 
-  - ID3 tag loading mode: **on load** (scan all up front) vs **on view** (lazy,
-    as rows scroll into view) — matches Winamp
-  - Drag-drop behaviour (append vs. insert)
-  - **Sizing**: 1x pixel-for-pixel vs 2x scaled-for-modern-screens (Ctrl+D)
-  - persisted to a config file
-  - opens in its own window (never clipped by the small main window)
-- 🔜 Lazy/background ID3 scanning to support the "on view" mode
-- 🔜 Full Winamp keyboard-shortcut support — see [SHORTCUTS.md](SHORTCUTS.md)
-  (implies: ID3 tag editor Alt+3, jump-to-file J, jump-to-time Ctrl+J,
-  time elapsed/remaining Ctrl+T, open URL/stream Ctrl+L)
-- 🔜 Always-on-top, window-shade polish
+Big-ticket items; the full, current backlog is in
+[GitHub Issues](https://github.com/cjjulius/linamp/issues).
+- 🔜 Open URL / stream playback (Ctrl+L)
+- 🔜 Always-on-top; mini mode
+- 🔜 Crossfade, gapless, ReplayGain
 - 🔜 True "modern" (Winamp 3/5 `.wal` freeform) skin engine
 
-## Keyboard shortcuts (Winamp-compatible)
-| Key | Action |
-|-----|--------|
-| X | Play |
-| C | Pause |
-| V | Stop |
-| B | Next track |
-| Z | Previous track |
-| Space | Play/Pause toggle |
-| L / Shift+L | Open file(s) / folder |
-| R | Toggle repeat |
-| S | Toggle shuffle |
-| ↑ / ↓ | Volume up / down |
-| ← / → | Seek -5s / +5s |
-| Ctrl+T | Time elapsed / remaining |
-| Alt+G / Alt+E | Toggle equalizer / playlist |
-| Ctrl+P | Preferences |
-| Ctrl+D | Toggle double size |
-| Alt+3 | Edit file tags (ID3) |
-| Enter / Delete | Play / remove selected (playlist) |
-| Ctrl+A / Insert | Select all / add files (playlist) |
-
-See [SHORTCUTS.md](SHORTCUTS.md) for the full map and what's still planned.
+## Keyboard shortcuts
+See the [README](README.md#keyboard-shortcuts) for the implemented set, and
+[SHORTCUTS.md](SHORTCUTS.md) for the full map including planned keys.
