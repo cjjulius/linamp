@@ -798,8 +798,7 @@ impl ClassicSkin {
             let valid = eq_valid_sprites(e);
             let draw_thumb = |c: &mut RgbaImage, e: &RgbaImage, colx: i32, v: f32, sel: bool| {
                 let frac = ((1.0 - v) / 2.0).clamp(0.0, 1.0);
-                let idx = (frac * 27.0).round() as i32; // 0 = top, 27 = bottom
-                if let Some(ui) = valid.iter().min_by_key(|&&vi| (vi - idx).abs()).copied() {
+                if let Some(ui) = eq_sprite_index(v, &valid) {
                     let (row, col) = (ui / 14, ui % 14);
                     blit(
                         c,
@@ -1042,6 +1041,15 @@ fn eq_valid_sprites(e: &RgbaImage) -> Vec<i32> {
 /// Format a playlist time like Winamp's bottom bar: `M:SS`, or `H:MM:SS` once it
 /// reaches an hour. Minutes/hours have no leading zero; seconds (and minutes
 /// inside an H:MM:SS) are zero-padded. Negative input clamps to zero.
+/// EQ slider sprite index (0 = top/boost .. 27 = bottom/cut) for value `v`
+/// (-1..=1), snapped to the nearest sprite the skin ships. None when the skin
+/// has no slider bank (only the thumb is drawn).
+fn eq_sprite_index(v: f32, valid: &[i32]) -> Option<i32> {
+    let frac = ((1.0 - v) / 2.0).clamp(0.0, 1.0);
+    let idx = (frac * 27.0).round() as i32;
+    valid.iter().min_by_key(|&&vi| (vi - idx).abs()).copied()
+}
+
 pub fn fmt_pl_time(secs: f32) -> String {
     let total = secs.max(0.0) as u64;
     let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
@@ -1340,6 +1348,82 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
 mod tests {
     use super::char_cell;
     use super::*;
+
+    #[test]
+    fn eq_regions_cover_all_controls() {
+        assert_eq!(eq_region_at(268.0, 7.0), Some(EqRegion::Close));
+        assert_eq!(eq_region_at(20.0, 24.0), Some(EqRegion::On));
+        assert_eq!(eq_region_at(50.0, 24.0), Some(EqRegion::Auto));
+        assert_eq!(eq_region_at(230.0, 24.0), Some(EqRegion::Presets));
+        assert_eq!(eq_region_at(25.0, 50.0), Some(EqRegion::Preamp));
+        assert_eq!(eq_region_at(80.0, 50.0), Some(EqRegion::Band(0)));
+        assert_eq!(eq_region_at(245.0, 50.0), Some(EqRegion::Band(9)));
+        assert_eq!(eq_region_at(5.0, 5.0), Some(EqRegion::TitleBar));
+        assert_eq!(eq_region_at(150.0, 35.0), None); // between buttons and sliders
+    }
+
+    #[test]
+    fn main_slider_regions() {
+        assert_eq!(region_at(140.0, 77.0), Some(Btn::Seek));
+        assert_eq!(region_at(141.0, 63.0), Some(Btn::Volume));
+        assert_eq!(region_at(196.0, 63.0), Some(Btn::Balance));
+    }
+
+    #[test]
+    fn playlist_visible_rows_and_hit() {
+        assert_eq!(pl_visible_rows(0), 0);
+        assert_eq!(pl_visible_rows(60), 0);
+        assert_eq!(pl_visible_rows(67), 1);
+        assert_eq!(pl_visible_rows(PL_H), 17);
+        assert_eq!(pl_row_at(PL_LIST_Y as f32, 0), 0);
+        assert_eq!(pl_row_at(PL_LIST_Y as f32 + PL_ROW_H as f32, 0), 1);
+        assert_eq!(pl_row_at(0.0, 0), 0); // above the list clamps
+        assert_eq!(pl_row_at(PL_LIST_Y as f32, 5), 5); // offset by `first`
+        assert_eq!(pl_row_at(PL_LIST_Y as f32 + 2.0 * PL_ROW_H as f32, 2), 4);
+    }
+
+    #[test]
+    fn eq_sprite_index_maps_and_snaps() {
+        let full: Vec<i32> = (0..28).collect();
+        assert_eq!(eq_sprite_index(1.0, &full), Some(0)); // boost -> top
+        assert_eq!(eq_sprite_index(-1.0, &full), Some(27)); // cut -> bottom
+        assert_eq!(eq_sprite_index(0.0, &full), Some(14)); // centre
+        assert_eq!(eq_sprite_index(2.0, &full), Some(0)); // clamps high
+        assert_eq!(eq_sprite_index(-2.0, &full), Some(27)); // clamps low
+        assert_eq!(eq_sprite_index(0.5, &[0, 27]), Some(0)); // snap to nearer
+        assert_eq!(eq_sprite_index(-0.5, &[0, 27]), Some(27));
+        assert_eq!(eq_sprite_index(0.0, &[]), None); // no bank -> thumb only
+    }
+
+    #[test]
+    fn signed_time_elapsed_and_remaining() {
+        assert_eq!(fmt_pl_time_signed(71.0, 200.0, false), "1:11");
+        assert_eq!(fmt_pl_time_signed(71.0, 200.0, true), "-2:09");
+        assert_eq!(fmt_pl_time_signed(71.0, 0.0, true), "1:11"); // no duration -> elapsed
+        assert_eq!(fmt_pl_time_signed(250.0, 200.0, true), "-0:00"); // past end clamps
+    }
+
+    #[test]
+    fn viz_gradient_anchors() {
+        assert_eq!(viz_gradient(0.0), [40, 220, 60]); // green
+        assert_eq!(viz_gradient(0.5), [220, 210, 40]); // yellow
+        assert_eq!(viz_gradient(1.0), [220, 70, 40]); // red
+        assert_eq!(viz_gradient(-1.0), [40, 220, 60]); // clamps low
+        assert_eq!(viz_gradient(2.0), [220, 70, 40]); // clamps high
+    }
+
+    #[test]
+    fn char_cell_punctuation_and_case() {
+        assert_eq!(char_cell('.'), (11, 1));
+        assert_eq!(char_cell(':'), (12, 1));
+        assert_eq!(char_cell('/'), (21, 1));
+        assert_eq!(char_cell('+'), (19, 1));
+        assert_eq!(char_cell('?'), (3, 2));
+        assert_eq!(char_cell('*'), (4, 2));
+        assert_eq!(char_cell('<'), (22, 1));
+        assert_eq!(char_cell('9'), (9, 1));
+        assert_eq!(char_cell('Z'), (25, 0)); // case-folded to 'z'
+    }
 
     #[test]
     fn main_regions() {

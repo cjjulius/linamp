@@ -4012,7 +4012,27 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dock_group_from_main, parse_time, push_off, rects_docked, snap_rect};
+    use super::{dock_group_from_main, parse_time, push_off, rects_docked, scroll_text, snap_rect};
+
+    #[test]
+    fn scroll_text_passthrough_when_fits() {
+        assert_eq!(scroll_text("hi", 0.0, 10), "hi");
+        assert_eq!(scroll_text("abcde", 5.0, 5), "abcde"); // exactly width, offset ignored
+    }
+
+    #[test]
+    fn scroll_text_wraps_to_fixed_width() {
+        let out = scroll_text("abcdefgh", 0.0, 5);
+        assert_eq!(out.chars().count(), 5);
+        assert_eq!(out, "abcde");
+    }
+
+    #[test]
+    fn scroll_text_offset_wraps_modulo() {
+        // padded len = 8 + 7-char separator = 15; offset 15 == offset 0, no panic.
+        assert_eq!(scroll_text("abcdefgh", 15.0, 5), scroll_text("abcdefgh", 0.0, 5));
+        assert_eq!(scroll_text("abcdefgh", 1000.0, 5).chars().count(), 5);
+    }
 
     #[test]
     fn parse_time_formats() {
