@@ -100,6 +100,14 @@ These are untested on Linux and the most likely sources of platform bugs:
   docking on native Wayland would require compositing the three panes into a
   single top-level window (tracked separately). Until then, Wayland users get
   working docking via XWayland (`WINIT_UNIX_BACKEND=x11`).
+- **Window grouping** — the EQ/playlist windows ride the main window's z-order
+  (raise and focus together, click any to bring all forward) and share one
+  taskbar entry, like Winamp. `group_child_windows()` does this per platform:
+  owner window (`GWLP_HWNDPARENT`) on Windows; `WM_TRANSIENT_FOR` plus
+  `_NET_WM_STATE_SKIP_TASKBAR` on **X11** (`x11util` in `src/app.rs`, applied
+  only until the links settle so steady state makes no X calls). Verified on
+  X11; a no-op on native Wayland, which gives a client no z-order/stacking
+  control (same single-window caveat as docking).
 - **File dialogs** (rfd) — opening files/folders, adding to the playlist.
 - **Audio** — playback, device switching, no-xruns under PipeWire.
 - **HiDPI / fractional scaling** — the skin is pixel-exact; check it isn't
