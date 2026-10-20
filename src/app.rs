@@ -88,6 +88,58 @@ fn push_off(r: egui::Rect, keep: egui::Rect) -> Option<egui::Pos2> {
     Some(r.min + push)
 }
 
+/// Magnetic snapping for a dragged window `r`: snap to the *nearest* in-range edge
+/// across the other visible windows (`others`) and the screen (`monitor`), choosing
+/// the smallest offset per axis independently.
+///
+/// Snapping must pick the nearest edge, not snap cumulatively in window order:
+/// collapsed windows are 14px tall but [`SNAP`] is 16px, so a window dropped just
+/// above another sits within snap range of several edges at once. Order-dependent
+/// snapping would leapfrog onto the farther edge (e.g. a playlist dropped above a
+/// stacked EQ would jump past it onto the main window below). Returns the snapped
+/// top-left corner.
+fn snap_rect(r: egui::Rect, others: &[egui::Rect], monitor: Option<egui::Vec2>) -> egui::Pos2 {
+    let s = SNAP;
+    let mut best_dx: Option<f32> = None;
+    let mut best_dy: Option<f32> = None;
+    let consider = |cur: &mut Option<f32>, off: f32| {
+        if off.abs() < s && cur.map_or(true, |b: f32| off.abs() < b.abs()) {
+            *cur = Some(off);
+        }
+    };
+    if let Some(m) = monitor {
+        consider(&mut best_dx, -r.left());
+        consider(&mut best_dx, m.x - r.right());
+        consider(&mut best_dy, -r.top());
+        consider(&mut best_dy, m.y - r.bottom());
+    }
+    for o in others {
+        // Stacked (same column): the windows overlap horizontally -> snap the nearer
+        // horizontal edge to edge and align the column's left side.
+        let xover = r.left() < o.right() + s && r.right() > o.left() - s;
+        if xover {
+            consider(&mut best_dy, o.bottom() - r.top());
+            consider(&mut best_dy, o.top() - r.bottom());
+            consider(&mut best_dx, o.left() - r.left());
+        }
+        // Side by side (same row): the windows overlap vertically -> snap the nearer
+        // vertical edge to edge. Align tops only when they are *not* also stacked: a
+        // thin window dropped just above/below another is within the top-alignment
+        // range, and aligning its top would drag it onto the other window (what
+        // blocked collapsed windows from landing above main).
+        let yover = r.top() < o.bottom() + s && r.bottom() > o.top() - s;
+        if yover {
+            consider(&mut best_dx, o.right() - r.left());
+            consider(&mut best_dx, o.left() - r.right());
+            if !xover {
+                consider(&mut best_dy, o.top() - r.top());
+            }
+        }
+    }
+    r.translate(egui::vec2(best_dx.unwrap_or(0.0), best_dy.unwrap_or(0.0)))
+        .min
+}
+
 /// Two windows are docked when an edge is flush (within tolerance) and they
 /// overlap on the shared axis.
 fn rects_docked(a: egui::Rect, b: egui::Rect) -> bool {
@@ -2234,23 +2286,9 @@ impl LinAmpApp {
         size: egui::Vec2,
         monitor: Option<egui::Vec2>,
     ) -> egui::Pos2 {
-        use egui::{vec2, Rect};
-        let s = SNAP;
-        let mut r = Rect::from_min_size(pos, size);
-        if let Some(m) = monitor {
-            if r.left().abs() < s {
-                r = r.translate(vec2(-r.left(), 0.0));
-            }
-            if (m.x - r.right()).abs() < s {
-                r = r.translate(vec2(m.x - r.right(), 0.0));
-            }
-            if r.top().abs() < s {
-                r = r.translate(vec2(0.0, -r.top()));
-            }
-            if (m.y - r.bottom()).abs() < s {
-                r = r.translate(vec2(0.0, m.y - r.bottom()));
-            }
-        }
+        use egui::Rect;
+        let r = Rect::from_min_size(pos, size);
+        let mut others = Vec::new();
         for j in 0..3 {
             if j == idx {
                 continue;
@@ -2264,40 +2302,14 @@ impl LinAmpApp {
             if !vis {
                 continue;
             }
-            {
-                let jwin = match j {
-                    0 => ClWin::Main,
-                    1 => ClWin::Eq,
-                    _ => ClWin::Pl,
-                };
-                let o = Rect::from_min_size(self.win_pos[j], self.win_inner_size(jwin));
-                let xover = r.left() < o.right() + s && r.right() > o.left() - s;
-                if xover {
-                    if (r.top() - o.bottom()).abs() < s {
-                        r = r.translate(vec2(0.0, o.bottom() - r.top()));
-                    }
-                    if (r.bottom() - o.top()).abs() < s {
-                        r = r.translate(vec2(0.0, o.top() - r.bottom()));
-                    }
-                    if (r.left() - o.left()).abs() < s {
-                        r = r.translate(vec2(o.left() - r.left(), 0.0));
-                    }
-                }
-                let yover = r.top() < o.bottom() + s && r.bottom() > o.top() - s;
-                if yover {
-                    if (r.left() - o.right()).abs() < s {
-                        r = r.translate(vec2(o.right() - r.left(), 0.0));
-                    }
-                    if (r.right() - o.left()).abs() < s {
-                        r = r.translate(vec2(o.left() - r.right(), 0.0));
-                    }
-                    if (r.top() - o.top()).abs() < s {
-                        r = r.translate(vec2(0.0, o.top() - r.top()));
-                    }
-                }
-            }
+            let jwin = match j {
+                0 => ClWin::Main,
+                1 => ClWin::Eq,
+                _ => ClWin::Pl,
+            };
+            others.push(Rect::from_min_size(self.win_pos[j], self.win_inner_size(jwin)));
         }
-        r.min
+        snap_rect(r, &others, monitor)
     }
 
     fn close_window(&mut self, ctx: &egui::Context, win: ClWin) {
@@ -4000,7 +4012,7 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dock_group_from_main, parse_time, push_off, rects_docked};
+    use super::{dock_group_from_main, parse_time, push_off, rects_docked, snap_rect};
 
     #[test]
     fn parse_time_formats() {
@@ -4051,6 +4063,82 @@ mod tests {
     #[test]
     fn gap_is_not_docked() {
         assert!(!rects_docked(r(0.0, 0.0, 275.0, 116.0), r(0.0, 140.0, 275.0, 116.0)));
+    }
+
+    // Collapsed classic windows are 14px tall; SNAP is 16px. These guard the
+    // window-shade docking that was broken: a thin window dropped above another
+    // must land above it, not snap onto / past it onto a farther edge.
+    const COLL: f32 = 14.0;
+
+    #[test]
+    fn collapsed_eq_snaps_flush_above_main() {
+        // Main collapsed at y 473..487; EQ dropped just above it (bottom at 478,
+        // 5px into main). It must snap flush ABOVE main, not onto it.
+        let main = r(800.0, 473.0, 275.0, COLL);
+        let eq = r(794.0, 464.0, 275.0, COLL); // 464..478
+        let p = snap_rect(eq, &[main], None);
+        assert!((p.y + COLL - main.top()).abs() < 0.01, "EQ bottom should meet main top (flush above)");
+        assert!((p.x - main.left()).abs() < 0.01, "EQ should align to main's column");
+        // And the overlap resolver then leaves it alone (already separated).
+        let snapped = r(p.x, p.y, 275.0, COLL);
+        assert!(push_off(snapped, main).is_none(), "flush-above EQ must not be pushed");
+    }
+
+    #[test]
+    fn collapsed_playlist_lands_above_stacked_eq_not_on_main() {
+        // Regression: PL dropped above an EQ that is itself stacked above main must
+        // snap to EQ's top (0px away), not leapfrog past it onto main's top (14px
+        // away) and get shoved below main.
+        let main = r(800.0, 473.0, 275.0, COLL); // 473..487
+        let eq = r(800.0, 459.0, 275.0, COLL); //   459..473 (above main)
+        let pl_drop = r(794.0, 445.0, 275.0, COLL); // 445..459 (above eq)
+        let p = snap_rect(pl_drop, &[main, eq], None);
+        assert!((p.y + COLL - eq.top()).abs() < 0.01, "PL bottom should meet EQ top, staying above EQ");
+        assert!(p.y < main.top(), "PL must not snap down onto/under main");
+        // End-to-end: the child overlap resolver keeps it above both.
+        let pl = r(p.x, p.y, 275.0, COLL);
+        assert!(push_off(pl, main).is_none(), "PL must not overlap main");
+        assert!(rects_docked(eq, main), "EQ is docked to main (part of the stack)");
+        assert!(push_off(pl, eq).is_none(), "PL must not overlap the EQ it sits above");
+    }
+
+    #[test]
+    fn snap_picks_the_nearest_edge() {
+        // A window dropped between two stacked windows, within SNAP of both facing
+        // edges, snaps to the nearer one (not whichever is checked first). Here the
+        // drop sits 2px below the upper window's bottom and 12px above the lower
+        // window's top, so it must snap up to the upper window's bottom.
+        let upper = r(0.0, 0.0, 275.0, COLL); //   0..14
+        let lower = r(0.0, 42.0, 275.0, COLL); // 42..56
+        let drop = r(0.0, 16.0, 275.0, COLL); //  16..30: top 2px from upper.bottom, bottom 12px from lower.top
+        // Pass the farther window first to prove slice order doesn't decide the snap.
+        let p = snap_rect(drop, &[lower, upper], None);
+        assert!((p.y - upper.bottom()).abs() < 0.01, "should snap flush below the nearer (upper) window");
+    }
+
+    #[test]
+    fn eq_docks_below_main_normally() {
+        let main = r(800.0, 100.0, 275.0, 116.0); // 100..216
+        let eq_drop = r(805.0, 210.0, 275.0, 116.0); // top 210, 6px from main bottom
+        let p = snap_rect(eq_drop, &[main], None);
+        assert!((p.y - main.bottom()).abs() < 0.01, "EQ should dock flush below main");
+        assert!((p.x - main.left()).abs() < 0.01, "EQ should align to main's column");
+    }
+
+    #[test]
+    fn window_snaps_flush_to_the_side() {
+        let main = r(800.0, 100.0, 275.0, 116.0); // x 800..1075
+        let side = r(1070.0, 105.0, 275.0, 116.0); // left 1070, 5px from main's right
+        let p = snap_rect(side, &[main], None);
+        assert!((p.x - main.right()).abs() < 0.01, "side window should snap flush to main's right edge");
+    }
+
+    #[test]
+    fn snaps_to_screen_edges() {
+        let mon = Some(egui::vec2(1920.0, 1200.0));
+        let near_top_left = r(5.0, 9.0, 275.0, 116.0);
+        let p = snap_rect(near_top_left, &[], mon);
+        assert!(p.x.abs() < 0.01 && p.y.abs() < 0.01, "should snap into the top-left screen corner");
     }
 
     #[test]
