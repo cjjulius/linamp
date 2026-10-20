@@ -65,11 +65,8 @@ fn push_off(r: egui::Rect, keep: egui::Rect) -> Option<egui::Pos2> {
         return None;
     }
     use egui::vec2;
-    // Resolve the overlap by the least movement, but favour below over above: only
-    // go above when the window is *mostly* above `keep` (its centre is above the
-    // top edge); otherwise the vertical escape is downward. Left/right compete on
-    // least movement (no left/right preference), and we pick whichever axis — the
-    // chosen vertical or the nearest horizontal — needs the least movement.
+    // Least-movement escape, but favour below: go above only when the window's
+    // centre is above `keep`'s. Left/right compete on least movement.
     let vpush = if r.center().y < keep.center().y {
         keep.top() - r.bottom() // up: the window sits higher than main's centre
     } else {
@@ -88,16 +85,10 @@ fn push_off(r: egui::Rect, keep: egui::Rect) -> Option<egui::Pos2> {
     Some(r.min + push)
 }
 
-/// Magnetic snapping for a dragged window `r`: snap to the *nearest* in-range edge
-/// across the other visible windows (`others`) and the screen (`monitor`), choosing
-/// the smallest offset per axis independently.
-///
-/// Snapping must pick the nearest edge, not snap cumulatively in window order:
-/// collapsed windows are 14px tall but [`SNAP`] is 16px, so a window dropped just
-/// above another sits within snap range of several edges at once. Order-dependent
-/// snapping would leapfrog onto the farther edge (e.g. a playlist dropped above a
-/// stacked EQ would jump past it onto the main window below). Returns the snapped
-/// top-left corner.
+/// Magnetic snap for a dragged window `r` to the *nearest* in-range edge across
+/// the other visible windows and the screen, smallest offset per axis. Nearest,
+/// not window-order: collapsed 14px windows sit within [`SNAP`] (16px) of several
+/// edges at once, so order-dependent snapping would leapfrog. Returns the top-left.
 fn snap_rect(r: egui::Rect, others: &[egui::Rect], monitor: Option<egui::Vec2>) -> egui::Pos2 {
     let s = SNAP;
     let mut best_dx: Option<f32> = None;
@@ -186,12 +177,9 @@ enum ClWin {
     Pl,
 }
 
-/// An in-progress title-bar drag of a classic window.
-///
-/// On Windows (where we can read the global cursor) we drive the move ourselves
-/// each frame so docked windows move in tandem, live. Elsewhere we fall back to
-/// the OS window-drag (ViewportCommand::StartDrag), which snaps the group on
-/// release. `win_pos` stays authoritative and is snapped on release either way.
+/// An in-progress title-bar drag of a classic window. On Windows (global cursor
+/// readable) we move it each frame so docked windows track live; elsewhere we
+/// fall back to the OS window-drag. `win_pos` is authoritative, snapped on release.
 struct Dragging {
     win: ClWin,
     /// true = manual per-frame move (live tandem); false = OS drag fallback.
@@ -208,15 +196,10 @@ struct Dragging {
     group: Vec<(usize, egui::Vec2)>,
 }
 
-/// Global cursor position in egui points, if the platform exposes it.
-///
-/// - **Windows:** `GetCursorPos`.
-/// - **Linux/X11 (incl. XWayland):** `XQueryPointer` on the root window.
-/// - **Native Wayland / everything else:** `None` — the compositor doesn't
-///   expose a global cursor, so the caller falls back to the OS window-drag.
-///
-/// When this returns `Some`, the drag runs in "manual" mode: we drive the
-/// window position ourselves each frame and move the docked group in tandem.
+/// Global cursor in egui points if the platform exposes it: `GetCursorPos`
+/// (Windows), `XQueryPointer` (X11/XWayland), `None` (native Wayland/else). When
+/// `Some`, the drag runs "manual" — we move the window and its docked group each
+/// frame; `None` falls back to the OS window-drag.
 fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
     #[cfg(windows)]
     {
@@ -249,12 +232,10 @@ fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
     }
 }
 
-/// Linux/X11 helpers used for classic-window management: the global cursor query
-/// (for manual tandem dragging) and `WM_TRANSIENT_FOR` window grouping (so the
-/// EQ/playlist windows ride the main window's z-order, raise with it, and don't
-/// get their own taskbar entry — the X11 analogue of the Windows owner-window
-/// grouping). Everything degrades to a no-op when there is no X display (e.g.
-/// native Wayland), so the caller falls back to OS behaviour there.
+/// Linux/X11 helpers for classic-window management: the global cursor query
+/// (manual tandem drag) and `WM_TRANSIENT_FOR` grouping (EQ/playlist ride the
+/// main window's z-order, no separate taskbar entry). A no-op without an X
+/// display (e.g. native Wayland), where the caller uses OS behaviour.
 #[cfg(all(unix, not(target_os = "macos")))]
 mod x11util {
     use std::cell::RefCell;
@@ -377,10 +358,8 @@ mod x11util {
         0
     }
 
-    /// Ask the WM to drop `win` from the taskbar via `_NET_WM_STATE_SKIP_TASKBAR`.
-    /// Sent as an EWMH client message (the correct way to change state on a window
-    /// that is already mapped) so the EQ/playlist windows don't each get their own
-    /// taskbar entry — only the main window represents the group.
+    /// Drop `win` from the taskbar via `_NET_WM_STATE_SKIP_TASKBAR`, sent as an
+    /// EWMH client message so only the main window represents the group.
     unsafe fn skip_taskbar(xlib: &xlib::Xlib, d: *mut xlib::Display, win: xlib::Window) {
         let root = (xlib.XDefaultRootWindow)(d);
         let net_wm_state = intern(xlib, d, "_NET_WM_STATE");
@@ -405,10 +384,9 @@ mod x11util {
         (xlib.XSendEvent)(d, root, 0, mask, &mut ev);
     }
 
-    /// Link the EQ/playlist windows to the main window via `WM_TRANSIENT_FOR`.
-    /// Scans and applies only while the links aren't yet in place for the current
-    /// set of visible windows; steady state makes no X calls at all. Re-links
-    /// after a show/hide (which recreates the child window with a new XID).
+    /// Link EQ/playlist to the main window via `WM_TRANSIENT_FOR`. Acts only when
+    /// the links aren't current (steady state makes no X calls); re-links after a
+    /// show/hide, which recreates the child with a new XID.
     pub fn group(eq_visible: bool, pl_visible: bool) {
         thread_local! {
             // (eq_visible, pl_visible, linked?) we last acted on.
@@ -471,11 +449,10 @@ mod x11util {
     }
 }
 
-/// Make the EQ/playlist windows *owned* by the main window so they ride its
-/// z-order as a group (rise together, stay above it, hide when it minimizes) —
-/// Winamp-style window grouping. Idempotent and cheap, so it runs each frame to
-/// cover windows being shown/hidden (which recreates them). Implemented on
-/// Windows (owner window) and Linux/X11 (`WM_TRANSIENT_FOR`); a no-op elsewhere.
+/// Make EQ/playlist *owned* by the main window so they ride its z-order (rise
+/// together, stay above, hide on minimize) — Winamp-style grouping. Idempotent,
+/// runs each frame to cover show/hide. Windows (owner window) and Linux/X11
+/// (`WM_TRANSIENT_FOR`); a no-op elsewhere.
 fn group_child_windows(eq_visible: bool, pl_visible: bool) {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -1170,9 +1147,8 @@ impl LinAmpApp {
                         .and_then(|x| x.to_str())
                         .map(|x| matches!(x.to_lowercase().as_str(), "wsz" | "zip"))
                         .unwrap_or(false);
-                    // De-duplicate by file name so the same skin found in a
-                    // second location (e.g. next to the exe) isn't listed twice;
-                    // the first directory searched (./skins) wins.
+                    // De-dup by file name (first dir searched, ./skins, wins) so
+                    // a skin found next to the exe too isn't listed twice.
                     let name = p.file_name().map(|n| n.to_os_string());
                     if is_skin {
                         if let Some(n) = name {
@@ -2178,10 +2154,9 @@ impl LinAmpApp {
         }
     }
 
-    /// After a drag, resolve window overlaps: the main window is never covered, and
-    /// the EQ/playlist windows never cover each other (they stack). The window that
-    /// gives way is the one just dragged (a child moves off main and off its
-    /// sibling; when main was dragged, the children move off it instead).
+    /// After a drag, resolve overlaps: main is never covered and EQ/playlist never
+    /// cover each other. The just-dragged window gives way (a child moves off main
+    /// and its sibling; a dragged main pushes the children off instead).
     fn resolve_overlaps(&mut self, dragged: ClWin) {
         let rect = |app: &Self, i: usize| {
             egui::Rect::from_min_size(app.win_pos[i], app.win_inner_size(idx_win(i)))
@@ -2213,10 +2188,9 @@ impl LinAmpApp {
                 }
             }
         } else {
-            // The dragged child moves out of the main window, and stacks below its
-            // sibling only when that sibling is itself docked to the main window
-            // (part of the stack). A floating sibling must not block the dragged
-            // window from docking directly under main.
+            // The dragged child moves off main, and stacks below its sibling only
+            // when that sibling is itself docked to main; a floating sibling must
+            // not block docking directly under main.
             let di = win_idx(dragged);
             let oi = if di == 1 { 2 } else { 1 };
             for _ in 0..4 {
@@ -4012,7 +3986,27 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dock_group_from_main, parse_time, push_off, rects_docked, snap_rect};
+    use super::{dock_group_from_main, parse_time, push_off, rects_docked, scroll_text, snap_rect};
+
+    #[test]
+    fn scroll_text_passthrough_when_fits() {
+        assert_eq!(scroll_text("hi", 0.0, 10), "hi");
+        assert_eq!(scroll_text("abcde", 5.0, 5), "abcde"); // exactly width, offset ignored
+    }
+
+    #[test]
+    fn scroll_text_wraps_to_fixed_width() {
+        let out = scroll_text("abcdefgh", 0.0, 5);
+        assert_eq!(out.chars().count(), 5);
+        assert_eq!(out, "abcde");
+    }
+
+    #[test]
+    fn scroll_text_offset_wraps_modulo() {
+        // padded len = 8 + 7-char separator = 15; offset 15 == offset 0, no panic.
+        assert_eq!(scroll_text("abcdefgh", 15.0, 5), scroll_text("abcdefgh", 0.0, 5));
+        assert_eq!(scroll_text("abcdefgh", 1000.0, 5).chars().count(), 5);
+    }
 
     #[test]
     fn parse_time_formats() {
