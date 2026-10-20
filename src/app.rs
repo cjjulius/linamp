@@ -554,6 +554,8 @@ pub struct LinAmpApp {
     pl_px_h: f32,
     pl_px_w: f32,
     positions_init: bool,
+    /// Hash of the last-persisted session, so we only write on actual changes.
+    session_sig: Option<u64>,
     drag: Option<Dragging>,
     /// While resizing the playlist, the grab offsets (width, height) in px.
     resize_pl: Option<egui::Vec2>,
@@ -712,6 +714,7 @@ impl LinAmpApp {
             pl_px_h: classic::PL_H as f32,
             pl_px_w: classic::MAIN_W as f32,
             positions_init: false,
+            session_sig: None,
             drag: None,
             resize_pl: None,
             root_last: None,
@@ -766,6 +769,13 @@ impl LinAmpApp {
             if let Some(h) = session.pl_height {
                 app.pl_px_h = h.max(87.0);
             }
+            // Restore which windows were open and their collapsed/full state.
+            // Positions aren't remembered; positions_init docks them on frame 1.
+            app.eq_visible = session.eq_visible;
+            app.pl_visible = session.pl_visible;
+            app.main_shade = session.main_shade;
+            app.eq_shade = session.eq_shade;
+            app.pl_shade = session.pl_shade;
         }
         app.refresh_library();
         app.discover_skins();
@@ -1253,6 +1263,60 @@ impl LinAmpApp {
         } else {
             self.player.stop();
             self.fade = None;
+        }
+    }
+
+    /// The persistable last-session snapshot (playlist, window layout, EQ).
+    fn build_session(&self) -> Session {
+        Session {
+            tracks: self
+                .playlist
+                .tracks
+                .iter()
+                .map(|t| t.path.display().to_string())
+                .collect(),
+            current: self.playlist.current,
+            pl_width: Some(self.pl_px_w),
+            pl_height: Some(self.pl_px_h),
+            eq_enabled: self.eq_enabled,
+            eq_auto: self.eq_auto,
+            eq_preamp: self.eq_preamp_db,
+            eq_bands: self.eq_bands.to_vec(),
+            eq_visible: self.eq_visible,
+            pl_visible: self.pl_visible,
+            main_shade: self.main_shade,
+            eq_shade: self.eq_shade,
+            pl_shade: self.pl_shade,
+        }
+    }
+
+    /// Persist the session when any of it has changed since the last write. Run
+    /// every frame; it only touches disk on an actual change, so it doesn't rely
+    /// on eframe's save-on-exit (which isn't invoked here) or its periodic timer.
+    fn persist_session_if_changed(&mut self) {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.eq_visible.hash(&mut h);
+        self.pl_visible.hash(&mut h);
+        self.main_shade.hash(&mut h);
+        self.eq_shade.hash(&mut h);
+        self.pl_shade.hash(&mut h);
+        self.pl_px_w.to_bits().hash(&mut h);
+        self.pl_px_h.to_bits().hash(&mut h);
+        self.playlist.current.hash(&mut h);
+        self.eq_enabled.hash(&mut h);
+        self.eq_auto.hash(&mut h);
+        self.eq_preamp_db.to_bits().hash(&mut h);
+        for b in &self.eq_bands {
+            b.to_bits().hash(&mut h);
+        }
+        for t in &self.playlist.tracks {
+            t.path.hash(&mut h);
+        }
+        let sig = h.finish();
+        if self.session_sig != Some(sig) {
+            self.session_sig = Some(sig);
+            self.build_session().save();
         }
     }
 
@@ -2576,9 +2640,9 @@ impl LinAmpApp {
         if !self.positions_init {
             if let Some(r) = ctx.input(|i| i.viewport().outer_rect) {
                 self.win_pos[0] = r.min;
-                self.win_pos[1] = egui::pos2(r.min.x, r.min.y + self.main_h() * self.scale);
-                self.win_pos[2] =
-                    egui::pos2(r.min.x, r.min.y + (self.main_h() + self.eq_h()) * self.scale);
+                // Dock the (possibly restored) EQ/playlist windows under the main
+                // one, honouring which are visible and their collapsed state.
+                self.restack();
                 self.positions_init = true;
             }
         }
@@ -3555,28 +3619,17 @@ impl eframe::App for LinAmpApp {
     /// Persist the playlist + playlist-window size for next launch (called
     /// periodically and on exit). The skin is saved separately on change.
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
-        let session = Session {
-            tracks: self
-                .playlist
-                .tracks
-                .iter()
-                .map(|t| t.path.display().to_string())
-                .collect(),
-            current: self.playlist.current,
-            pl_width: Some(self.pl_px_w),
-            pl_height: Some(self.pl_px_h),
-            eq_enabled: self.eq_enabled,
-            eq_auto: self.eq_auto,
-            eq_preamp: self.eq_preamp_db,
-            eq_bands: self.eq_bands.to_vec(),
-        };
-        session.save();
+        self.build_session().save();
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
+
+        // Persist the session (playlist, window layout, EQ) whenever it changes,
+        // so it survives exit without relying on eframe's save-on-exit.
+        self.persist_session_if_changed();
 
         if self.mode_init {
             let m = self.ui_mode;
