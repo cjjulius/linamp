@@ -596,6 +596,8 @@ struct TagEditor {
     orig: crate::tags::TagFields,
     editable: bool,
     status: String,
+    /// Showing the "discard unsaved changes?" confirmation.
+    confirm_discard: bool,
 }
 
 /// Jump-to-file dialog state: the search query and the highlighted result row.
@@ -2435,6 +2437,7 @@ impl LinAmpApp {
             fields,
             editable,
             status,
+            confirm_discard: false,
         });
     }
 
@@ -2481,12 +2484,14 @@ impl LinAmpApp {
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let ed = self.tag_editor.as_mut().unwrap();
+                let dirty = ed.fields != ed.orig;
                 let fname = ed
                     .path
                     .file_name()
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                ui.label(RichText::new(fname).strong());
+                let title = if dirty { format!("● {fname}") } else { fname };
+                ui.label(RichText::new(title).strong());
                 ui.separator();
                 egui::Grid::new("tag_grid")
                     .num_columns(2)
@@ -2505,7 +2510,10 @@ impl LinAmpApp {
                         row(ui, "Album artist", &mut ed.fields.album_artist);
                         row(ui, "Year", &mut ed.fields.year);
                         row(ui, "Track", &mut ed.fields.track);
+                        row(ui, "Disc", &mut ed.fields.disc);
                         row(ui, "Genre", &mut ed.fields.genre);
+                        row(ui, "Composer", &mut ed.fields.composer);
+                        row(ui, "BPM", &mut ed.fields.bpm);
                         ui.label("Comment");
                         ui.add(
                             egui::TextEdit::multiline(&mut ed.fields.comment)
@@ -2515,26 +2523,58 @@ impl LinAmpApp {
                         ui.end_row();
                     });
                 ui.add_space(6.0);
-                if !ed.status.is_empty() {
+                if dirty {
+                    ui.label(RichText::new("● Unsaved changes").color(Color32::from_rgb(220, 170, 70)));
+                } else if !ed.status.is_empty() {
                     ui.label(RichText::new(&ed.status).color(Color32::GRAY));
                 }
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.add_enabled_ui(ed.editable, |ui| {
-                        if ui.button("Save").clicked() {
-                            do_save = true;
+                // Ctrl+S saves (even while a text field has focus).
+                let save_key = ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S));
+                if save_key && ed.editable {
+                    do_save = true;
+                }
+                if ed.confirm_discard {
+                    ui.label(
+                        RichText::new("Discard unsaved changes?").color(Color32::from_rgb(220, 120, 70)),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button("Discard").clicked() {
+                            close = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            ed.confirm_discard = false;
                         }
                     });
-                    if ui.button("Revert").clicked() {
-                        ed.fields = ed.orig.clone();
-                    }
-                    if ui.button("Close").clicked() {
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.add_enabled_ui(ed.editable, |ui| {
+                            if ui.button("Save").clicked() {
+                                do_save = true;
+                            }
+                        });
+                        if ui.button("Revert").clicked() {
+                            ed.fields = ed.orig.clone();
+                        }
+                        if ui.button("Close").clicked() {
+                            if dirty {
+                                ed.confirm_discard = true;
+                            } else {
+                                close = true;
+                            }
+                        }
+                    });
+                }
+            });
+            // Esc / window-close: guard unsaved edits instead of losing them.
+            if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
+                if let Some(ed) = self.tag_editor.as_mut() {
+                    if ed.fields != ed.orig {
+                        ed.confirm_discard = true;
+                    } else {
                         close = true;
                     }
-                });
-            });
-            if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
-                close = true;
+                }
             }
         });
         if do_save {

@@ -16,7 +16,10 @@ pub struct TagFields {
     pub album_artist: String,
     pub year: String,
     pub track: String,
+    pub disc: String,
     pub genre: String,
+    pub composer: String,
+    pub bpm: String,
     pub comment: String,
 }
 
@@ -47,10 +50,11 @@ pub fn read(path: &Path) -> TagFields {
             f.comment = tag.comment().map(|s| s.to_string()).unwrap_or_default();
             f.year = tag.year().map(|y| y.to_string()).unwrap_or_default();
             f.track = tag.track().map(|t| t.to_string()).unwrap_or_default();
-            f.album_artist = tag
-                .get_string(&ItemKey::AlbumArtist)
-                .map(|s| s.to_string())
-                .unwrap_or_default();
+            let key = |k: &ItemKey| tag.get_string(k).map(|s| s.to_string()).unwrap_or_default();
+            f.album_artist = key(&ItemKey::AlbumArtist);
+            f.disc = key(&ItemKey::DiscNumber);
+            f.composer = key(&ItemKey::Composer);
+            f.bpm = key(&ItemKey::IntegerBpm);
         }
     }
     f
@@ -96,6 +100,17 @@ pub fn write(path: &Path, fields: &TagFields) -> Result<()> {
         };
     }
 
+    // ItemKey-addressed text frames: clear when blank, else store verbatim.
+    macro_rules! key_field {
+        ($val:expr, $key:expr) => {
+            if $val.trim().is_empty() {
+                tag.remove_key(&$key);
+            } else {
+                tag.insert_text($key, $val.clone());
+            }
+        };
+    }
+
     str_field!(fields.title, set_title, remove_title);
     str_field!(fields.artist, set_artist, remove_artist);
     str_field!(fields.album, set_album, remove_album);
@@ -103,12 +118,10 @@ pub fn write(path: &Path, fields: &TagFields) -> Result<()> {
     str_field!(fields.comment, set_comment, remove_comment);
     num_field!(fields.year, set_year, remove_year);
     num_field!(fields.track, set_track, remove_track);
-
-    if fields.album_artist.trim().is_empty() {
-        tag.remove_key(&ItemKey::AlbumArtist);
-    } else {
-        tag.insert_text(ItemKey::AlbumArtist, fields.album_artist.clone());
-    }
+    key_field!(fields.album_artist, ItemKey::AlbumArtist);
+    key_field!(fields.disc, ItemKey::DiscNumber);
+    key_field!(fields.composer, ItemKey::Composer);
+    key_field!(fields.bpm, ItemKey::IntegerBpm);
 
     tag.save_to_path(path, WriteOptions::default())
         .with_context(|| format!("writing tags to {}", path.display()))?;
@@ -157,7 +170,10 @@ mod tests {
             album_artist: "Various".into(),
             year: "2024".into(),
             track: "3".into(),
+            disc: "1".into(),
             genre: "Ambient".into(),
+            composer: "A. Composer".into(),
+            bpm: "128".into(),
             comment: "a comment".into(),
         };
         write(&tmp, &fields).unwrap();
@@ -169,7 +185,10 @@ mod tests {
         assert_eq!(got.album_artist, "Various");
         assert_eq!(got.year, "2024");
         assert_eq!(got.track, "3");
+        assert_eq!(got.disc, "1");
         assert_eq!(got.genre, "Ambient");
+        assert_eq!(got.composer, "A. Composer");
+        assert_eq!(got.bpm, "128");
         assert_eq!(got.comment, "a comment");
 
         // A blank field clears the tag.
