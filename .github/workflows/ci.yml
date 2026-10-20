@@ -74,7 +74,8 @@ jobs:
           mkdir -p dist
           cp "target/release/${{ matrix.bin }}" dist/
           cp -r skins dist/
-          cp FEATURES.md SHORTCUTS.md dist/ 2>/dev/null || true
+          cp -r music dist/
+          cp README.md FEATURES.md SHORTCUTS.md LICENSE dist/ 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         with:

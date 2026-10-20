@@ -1,16 +1,15 @@
-LinAmp test audio
-=================
+LinAmp sample track
+===================
 
-These files are included only as free test material for exercising LinAmp's
-playback, playlist, library and visualizer.
+LinAmp ships with one sample track so there is something to play out of the box.
 
-SoundHelix-Song-1.mp3
-SoundHelix-Song-2.mp3
-SoundHelix-Song-3.mp3
-  Source: https://www.soundhelix.com/audio-examples
-  Author: T. Schuerger (SoundHelix)
-  These algorithmically generated example tracks are published by SoundHelix
-  as free-to-use demo audio. Credit: "Music by SoundHelix (www.soundhelix.com)".
+"Aria Nocturne - Crystal Harbor.mp3"
+  Audio: SoundHelix-Song-8 by T. Schuerger (SoundHelix),
+         https://www.soundhelix.com/audio-examples — free-to-use demo audio.
+         Credit: "Music by SoundHelix (www.soundhelix.com)".
+  Tagged with demo metadata (artist "Aria Nocturne", title "Crystal Harbor",
+  album "Starlit") only so the out-of-box display looks nice; the audio is the
+  SoundHelix track credited above.
 
-If you redistribute LinAmp, keep this attribution file alongside the audio, or
-replace these files with your own music.
+If you redistribute LinAmp, keep this attribution alongside the audio, or
+replace it with your own music.
