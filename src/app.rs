@@ -45,6 +45,32 @@ fn popup_dims(kind: Popup) -> (f32, f32) {
     (182.0, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
 }
 
+/// If `r` overlaps `keep` (the main window), the position `r` should move to so it
+/// no longer covers it — pushed to `keep`'s nearest edge (least movement). `None`
+/// when they don't overlap (flush/touching counts as not overlapping).
+fn push_off(r: egui::Rect, keep: egui::Rect) -> Option<egui::Pos2> {
+    let separated = r.right() <= keep.left()
+        || r.left() >= keep.right()
+        || r.bottom() <= keep.top()
+        || r.top() >= keep.bottom();
+    if separated {
+        return None;
+    }
+    use egui::vec2;
+    let cands = [
+        vec2(keep.left() - r.right(), 0.0),  // out to the left
+        vec2(keep.right() - r.left(), 0.0),  // out to the right
+        vec2(0.0, keep.top() - r.bottom()),  // out above
+        vec2(0.0, keep.bottom() - r.top()),  // out below
+    ];
+    let best = cands
+        .iter()
+        .min_by(|a, b| a.length().partial_cmp(&b.length()).unwrap())
+        .copied()
+        .unwrap();
+    Some(r.min + best)
+}
+
 /// Two windows are docked when an edge is flush (within tolerance) and they
 /// overlap on the shared axis.
 fn rects_docked(a: egui::Rect, b: egui::Rect) -> bool {
@@ -2015,6 +2041,10 @@ impl LinAmpApp {
             if d.win == ClWin::Main {
                 self.root_last = None;
             }
+            // The main window is never covered: push any EQ/playlist that ended up
+            // over it out to its nearest edge (whether they were dragged onto main
+            // or main was dragged onto them).
+            self.keep_main_uncovered();
         } else {
             // A click with no move: double-click toggles the window shade.
             let now = Instant::now();
@@ -2078,6 +2108,28 @@ impl LinAmpApp {
                 moved: false,
                 group,
             });
+        }
+    }
+
+    /// Push the EQ/playlist windows off the main window so it is never covered.
+    fn keep_main_uncovered(&mut self) {
+        let main = egui::Rect::from_min_size(self.win_pos[0], self.win_inner_size(ClWin::Main));
+        let mut moved = false;
+        for (idx, vis, win) in [
+            (1usize, self.eq_visible, ClWin::Eq),
+            (2usize, self.pl_visible, ClWin::Pl),
+        ] {
+            if !vis {
+                continue;
+            }
+            let r = egui::Rect::from_min_size(self.win_pos[idx], self.win_inner_size(win));
+            if let Some(p) = push_off(r, main) {
+                self.win_pos[idx] = p;
+                moved = true;
+            }
+        }
+        if moved {
+            self.root_last = None;
         }
     }
 
@@ -3894,7 +3946,7 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dock_group_from_main, parse_time, rects_docked};
+    use super::{dock_group_from_main, parse_time, push_off, rects_docked};
 
     #[test]
     fn parse_time_formats() {
@@ -3915,6 +3967,22 @@ mod tests {
     #[test]
     fn stacked_windows_are_docked() {
         assert!(rects_docked(r(0.0, 0.0, 275.0, 116.0), r(0.0, 116.0, 275.0, 116.0)));
+    }
+
+    #[test]
+    fn push_off_main_keeps_it_uncovered() {
+        let main = r(100.0, 100.0, 200.0, 100.0); // x 100..300, y 100..200
+        // Flush below -> not overlapping, no push.
+        assert_eq!(push_off(r(100.0, 200.0, 200.0, 100.0), main), None);
+        // Overlapping mainly on main's left edge -> pushed out to the left.
+        let w = r(60.0, 120.0, 60.0, 40.0);
+        let p = push_off(w, main).unwrap();
+        assert!((p.x + 60.0 - main.left()).abs() < 0.01, "pushed flush to the left edge");
+        // Fully inside -> pushed to the nearest edge; result no longer overlaps.
+        let inside = r(150.0, 130.0, 50.0, 40.0);
+        let p = push_off(inside, main).unwrap();
+        let moved = Rect::from_min_size(p, vec2(50.0, 40.0));
+        assert!(push_off(moved, main).is_none(), "result still overlaps main");
     }
 
     #[test]
