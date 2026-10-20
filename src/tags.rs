@@ -1,8 +1,6 @@
-//! Reading and writing track metadata, via `lofty`.
-//!
-//! Reading works for every format `lofty` understands. Writing starts with
-//! MP3 (ID3v2) — see [`EDITABLE_EXTS`] — and is structured so adding more
-//! formats is just a matter of extending that list once each is verified.
+//! Track metadata via `lofty`: reading works for every format lofty supports;
+//! writing starts with MP3 (ID3v2, see [`EDITABLE_EXTS`]) and extends to more
+//! formats by growing that list as each is verified.
 
 use std::path::Path;
 

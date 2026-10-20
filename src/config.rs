@@ -117,6 +117,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_loads_legacy_json_missing_fields() {
+        // An older session.json without the window-shade/visibility fields must
+        // still load, defaulting the new fields rather than erroring.
+        let json = r#"{"tracks":["a","b"],"current":0,"pl_width":275.0,"pl_height":200.0}"#;
+        let s: Session = serde_json::from_str(json).unwrap();
+        assert_eq!(s.tracks.len(), 2);
+        assert_eq!(s.current, Some(0));
+        assert!(!s.eq_visible && !s.pl_visible);
+        assert!(!s.main_shade && !s.eq_shade && !s.pl_shade);
+        assert!(!s.eq_enabled && !s.eq_auto);
+        assert!(s.eq_bands.is_empty());
+    }
+
+    #[test]
     fn defaults() {
         let p = Prefs::default();
         assert!(p.double_size && p.tag_on_load);
