@@ -57,19 +57,26 @@ fn push_off(r: egui::Rect, keep: egui::Rect) -> Option<egui::Pos2> {
         return None;
     }
     use egui::vec2;
-    // Candidates exclude "push above": the main window should favour the dropped
-    // window ending up below it rather than over the top. Left/right/below compete
-    // on least movement (no left/right preference).
+    // Resolve the overlap by the least movement to an edge, but bias against
+    // "above": below and the sides are favoured, so a window only ends up over the
+    // top when it was clearly dropped mostly above the main window. No left/right
+    // preference.
+    const UP_BIAS: f32 = 1.6;
+    let left = vec2(keep.left() - r.right(), 0.0);
+    let right = vec2(keep.right() - r.left(), 0.0);
+    let down = vec2(0.0, keep.bottom() - r.top());
+    let up = vec2(0.0, keep.top() - r.bottom());
     let cands = [
-        vec2(keep.left() - r.right(), 0.0), // out to the left
-        vec2(keep.right() - r.left(), 0.0), // out to the right
-        vec2(0.0, keep.bottom() - r.top()), // out below
+        (left.length(), left),
+        (right.length(), right),
+        (down.length(), down),
+        (up.length() * UP_BIAS, up),
     ];
     let best = cands
         .iter()
-        .min_by(|a, b| a.length().partial_cmp(&b.length()).unwrap())
-        .copied()
-        .unwrap();
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+        .unwrap()
+        .1;
     Some(r.min + best)
 }
 
@@ -3985,6 +3992,15 @@ mod tests {
         let p = push_off(inside, main).unwrap();
         let moved = Rect::from_min_size(p, vec2(50.0, 40.0));
         assert!(push_off(moved, main).is_none(), "result still overlaps main");
+        // Dropped mostly ABOVE main (only a sliver overlaps its top edge) -> it is
+        // allowed above: pushed up so its bottom meets main's top.
+        let above = r(150.0, 70.0, 50.0, 40.0); // y 70..110, overlaps main's top 100..110
+        let p = push_off(above, main).unwrap();
+        assert!((p.y + 40.0 - main.top()).abs() < 0.01, "clearly-above window snaps above");
+        // Centred vertically -> favours below over above despite similar distance.
+        let centred = r(150.0, 150.0, 50.0, 100.0); // y150..250 around main 100..200
+        let p = push_off(centred, main).unwrap();
+        assert!(p.y >= main.top(), "centred window favours below, not above");
     }
 
     #[test]
