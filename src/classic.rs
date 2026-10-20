@@ -89,6 +89,67 @@ pub fn region_at(x: f32, y: f32) -> Option<Btn> {
         .map(|(b, ..)| *b)
 }
 
+/// Hover-tooltip label for a main-window button, or `None` for regions that
+/// aren't buttons (title bar, sliders, time/viz toggles).
+fn btn_label(b: Btn) -> Option<&'static str> {
+    Some(match b {
+        Btn::Prev => "Previous",
+        Btn::Play => "Play",
+        Btn::Pause => "Pause",
+        Btn::Stop => "Stop",
+        Btn::Next => "Next",
+        Btn::Eject => "Open file(s)",
+        Btn::Shuffle => "Shuffle",
+        Btn::Repeat => "Repeat",
+        Btn::Eq => "Equalizer",
+        Btn::Pl => "Playlist",
+        Btn::Close => "Close",
+        Btn::Minimize => "Minimize",
+        Btn::Options => "Options",
+        _ => return None,
+    })
+}
+
+/// Tooltip (label, x, y, w, h) rects for the main window's buttons, in native
+/// skin pixels. Reuses the click `REGIONS` so hover and hit-testing stay in sync.
+pub fn main_tooltips() -> Vec<(&'static str, i32, i32, i32, i32)> {
+    REGIONS
+        .iter()
+        .filter_map(|(b, x, y, w, h)| btn_label(*b).map(|l| (l, *x, *y, *w, *h)))
+        .collect()
+}
+
+/// Tooltip rects for the equalizer window's buttons, in native skin pixels.
+pub fn eq_tooltips() -> Vec<(&'static str, i32, i32, i32, i32)> {
+    vec![
+        ("On", 14, 18, 26, 12),
+        ("Auto", 40, 18, 32, 12),
+        ("Presets", 217, 18, 44, 12),
+        ("Close", 264, 3, 9, 9),
+    ]
+}
+
+/// Tooltip rects for the playlist window's mini-player transport buttons, in
+/// native skin pixels. Mirrors `PL_MINI_BTNS` / `pl_region_at`.
+pub fn pl_tooltips(width: i32, height: i32) -> Vec<(&'static str, i32, i32, i32, i32)> {
+    let ox = width - 150;
+    PL_MINI_BTNS
+        .iter()
+        .filter_map(|(region, bx, bw)| {
+            let label = match region {
+                PlRegion::MiniPrev => "Previous",
+                PlRegion::MiniPlay => "Play",
+                PlRegion::MiniPause => "Pause",
+                PlRegion::MiniStop => "Stop",
+                PlRegion::MiniNext => "Next",
+                PlRegion::MiniEject => "Open file(s)",
+                _ => return None,
+            };
+            Some((label, ox + *bx, height - 15, *bw, 9))
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PlayUi {
     Playing,
@@ -139,7 +200,28 @@ pub struct MainState {
 pub enum ShadeHit {
     Close,
     TitleBar,
+    // Main window-shade extras (the EQ/playlist shades only use Close/TitleBar).
+    Restore,
+    Options,
+    Prev,
+    Play,
+    Pause,
+    Stop,
+    Next,
+    Eject,
 }
+
+/// Mini-transport buttons baked into the collapsed main window bar:
+/// (hit, x, width) in native skin pixels. Measured from TITLEBAR.BMP's
+/// windowshade sprite (dest x167..224, the row at y~3..11).
+const MAIN_SHADE_BTNS: &[(ShadeHit, i32, i32)] = &[
+    (ShadeHit::Prev, 167, 8),
+    (ShadeHit::Play, 176, 9),
+    (ShadeHit::Pause, 186, 9),
+    (ShadeHit::Stop, 196, 8),
+    (ShadeHit::Next, 205, 9),
+    (ShadeHit::Eject, 215, 9),
+];
 
 pub fn shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
     if y >= 14.0 {
@@ -150,6 +232,31 @@ pub fn shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
     } else {
         Some(ShadeHit::TitleBar)
     }
+}
+
+/// Hit-testing for the collapsed **main** window bar, which (unlike the EQ and
+/// playlist shades) carries the wave/options button, mini-transport buttons, and
+/// a restore button. Anything not on a control is the draggable title bar.
+pub fn main_shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
+    if y >= 14.0 {
+        return None;
+    }
+    if x >= 264.0 && x < 273.0 && y >= 3.0 && y < 12.0 {
+        return Some(ShadeHit::Close);
+    }
+    if x >= 254.0 && x < 263.0 && y >= 3.0 && y < 12.0 {
+        return Some(ShadeHit::Restore);
+    }
+    // Wave/clutter button at the far left opens the Options menu.
+    if x >= 1.0 && x < 18.0 {
+        return Some(ShadeHit::Options);
+    }
+    for (hit, bx, bw) in MAIN_SHADE_BTNS {
+        if x >= *bx as f32 && x < (*bx + *bw) as f32 {
+            return Some(*hit);
+        }
+    }
+    Some(ShadeHit::TitleBar)
 }
 
 /// Decoded sprite sheets from one skin, keyed by lowercased basename.
@@ -319,10 +426,24 @@ impl ClassicSkin {
             blit(&mut c, tb, 254, 3, 0, 18, 9, 9); // shade / restore button
             blit(&mut c, tb, 264, 3, 18, 0, 9, 9); // close button
         }
-        self.draw_text_tinted(&mut c, &st.title, 6, 4, 150, st.fg);
-        let secs = st.pos.max(0.0) as u32;
-        let time = format!("{:02}:{:02}", (secs / 60).min(99), secs % 60);
-        self.draw_text_tinted(&mut c, &time, 224, 4, 28, st.fg);
+        // The main windowshade sprite is a self-contained strip (branding, seek,
+        // time slot, mini transport, buttons) with no song-title LCD, so we only
+        // fill in the time: the digits sit either side of the sprite's baked ":"
+        // separator (~x143). Shows remaining (with a leading minus) when the
+        // elapsed/remaining toggle is on, matching the expanded LCD.
+        let remaining = st.time_remaining && st.duration > 0.0;
+        let secs = if remaining {
+            (st.duration - st.pos).max(0.0) as u32
+        } else {
+            st.pos.max(0.0) as u32
+        };
+        let mm = format!("{:02}", (secs / 60).min(99));
+        let ss = format!("{:02}", secs % 60);
+        self.draw_text_tinted(&mut c, &mm, 132, 4, 10, st.fg);
+        self.draw_text_tinted(&mut c, &ss, 146, 4, 10, st.fg);
+        if remaining {
+            fill_rect(&mut c, 126, 7, 4, 2, st.fg); // minus sign before the minutes
+        }
         c
     }
 
@@ -475,6 +596,13 @@ pub enum PlRegion {
     MiscMenu,
     ListMenu,
     Resize,
+    // Mini-player transport buttons in the bottom-right sprite.
+    MiniPrev,
+    MiniPlay,
+    MiniPause,
+    MiniStop,
+    MiniNext,
+    MiniEject,
 }
 
 #[derive(Clone, Copy)]
@@ -485,8 +613,9 @@ pub struct PlColors {
     pub selbg: [u8; 3],
 }
 
-/// One playlist row: display text, is-playing, is-selected.
-pub type PlRow = (String, bool, bool);
+/// One playlist row: display text, is-playing, is-selected, track length in
+/// seconds (None when not yet known). The length is drawn right-aligned.
+pub type PlRow = (String, bool, bool, Option<f32>);
 
 pub struct PlState<'a> {
     pub focused: bool,
@@ -497,6 +626,10 @@ pub struct PlState<'a> {
     pub pressed: Option<PlRegion>,
     /// Elapsed time of the current track, in seconds (0 when stopped).
     pub elapsed_secs: f32,
+    /// Duration of the current track, for the remaining-time toggle (0 if unknown).
+    pub cur_duration: f32,
+    /// Show the current-track time as remaining (−m:ss) instead of elapsed.
+    pub time_remaining: bool,
     /// Total running time of the whole playlist, in seconds (sum of the known
     /// track durations).
     pub total_secs: f32,
@@ -512,6 +645,19 @@ const PL_BOTTOM_BTNS: &[(PlRegion, i32, i32)] = &[
     (PlRegion::RemMenu, 43, 22),
     (PlRegion::SelMenu, 72, 22),
     (PlRegion::MiscMenu, 101, 22),
+];
+
+/// Mini-player transport buttons in the bottom-right sprite: (region, x, width)
+/// as offsets from the sprite origin (window `width - 150`). Their row sits at
+/// `height - 15 .. height - 7` (the sprite's lower button strip). Measured from
+/// PLEDIT.BMP's bottom-right glyphs (source x132..184).
+const PL_MINI_BTNS: &[(PlRegion, i32, i32)] = &[
+    (PlRegion::MiniPrev, 5, 8),
+    (PlRegion::MiniPlay, 13, 8),
+    (PlRegion::MiniPause, 23, 8),
+    (PlRegion::MiniStop, 33, 8),
+    (PlRegion::MiniNext, 42, 8),
+    (PlRegion::MiniEject, 51, 9),
 ];
 
 
@@ -532,6 +678,17 @@ pub fn pl_region_at(x: f32, y: f32, width: f32, height: f32) -> Option<PlRegion>
     }
     if y < height - 38.0 {
         return Some(PlRegion::List);
+    }
+    // Mini-player transport buttons, in the lower strip of the bottom-right
+    // sprite (checked before the menu band, which overlaps in y but not in x).
+    if y >= height - 15.0 && y < height - 6.0 {
+        let ox = width - 150.0;
+        for (region, bx, bw) in PL_MINI_BTNS {
+            let x0 = ox + *bx as f32;
+            if x >= x0 && x < x0 + *bw as f32 {
+                return Some(*region);
+            }
+        }
     }
     // Bottom-bar menu buttons: the Add/Rem/Sel/Misc cluster is anchored left,
     // the List menu is anchored to the right edge.
@@ -587,6 +744,51 @@ impl ClassicSkin {
             blit(&mut c, e, 217, 18, 224, py, 44, 12);
             // Graph background.
             blit(&mut c, e, 86, 17, 0, 294, 113, 19);
+
+            // EQ response curve through the 10 bands, drawn in the graph box
+            // (dest 86,17 / 113×19) and coloured by EQMAIN's 19-row line
+            // gradient at x=115,y=294 (red = boost at the top, green = cut at the
+            // bottom), the way classic Winamp does. Skipped for skins whose
+            // EQMAIN is too short to carry the gradient (e.g. Alita), matching
+            // how the slider bank degrades.
+            if e.width() > 115 && e.height() >= 294 + 19 {
+                const GX: i32 = 86;
+                const GY: i32 = 17;
+                const GW: i32 = 113;
+                const GH: i32 = 19;
+                let bands = st.bands;
+                // Catmull-Rom sample of the band values at fx in 0.0..=9.0, so
+                // the curve passes smoothly through each slider's value.
+                let sample = |fx: f32| -> f32 {
+                    let i = fx.floor() as i32;
+                    let t = fx - i as f32;
+                    let g = |k: i32| bands[k.clamp(0, 9) as usize];
+                    let (p0, p1, p2, p3) = (g(i - 1), g(i), g(i + 1), g(i + 2));
+                    0.5 * (2.0 * p1
+                        + (-p0 + p2) * t
+                        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t
+                        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t * t * t)
+                };
+                // value (−1..1, bottom..top) -> graph row 0..=18 (top..bottom).
+                let row_of = |v: f32| -> i32 {
+                    (((1.0 - v) * 0.5) * (GH - 1) as f32)
+                        .round()
+                        .clamp(0.0, (GH - 1) as f32) as i32
+                };
+                let mut prev: Option<i32> = None;
+                for gx in 0..GW {
+                    let fx = gx as f32 / (GW - 1) as f32 * 9.0;
+                    let row = row_of(sample(fx).clamp(-1.0, 1.0));
+                    // Fill the span to the previous column so steep sections of
+                    // the curve stay a continuous line rather than dotted.
+                    let (lo, hi) = prev.map_or((row, row), |p| (row.min(p), row.max(p)));
+                    for r in lo..=hi {
+                        let px = *e.get_pixel(115, (294 + r) as u32);
+                        c.put_pixel((GX + gx) as u32, (GY + r) as u32, px);
+                    }
+                    prev = Some(row);
+                }
+            }
 
             // Which of the 28 slider sprites the skin actually provides. A
             // requested position with no sprite snaps to the nearest one the
@@ -687,17 +889,18 @@ impl ClassicSkin {
                 // the wide summary bar at x5..96 / y8..17 and the small elapsed
                 // box at x63..96 / y22..29 (colon baked at x83).
                 let sx0 = w - 150;
+                let cur = fmt_pl_time_signed(st.elapsed_secs, st.cur_duration, st.time_remaining);
                 let summary = format!(
                     "{}/{}{}",
-                    fmt_pl_time(st.elapsed_secs),
+                    cur,
                     fmt_pl_time(st.total_secs),
                     if st.total_partial { "+" } else { "" },
                 );
                 // Left-aligned and vertically centred in the top bar.
                 self.draw_text_tinted(&mut c, &summary, sx0 + 7, by + 10, 89, st.colors.normal);
-                // Current elapsed in the small box, its colon aligned onto the
-                // one baked into the sprite so they don't double up.
-                let el = fmt_pl_time(st.elapsed_secs);
+                // Current time in the small box, its colon aligned onto the one
+                // baked into the sprite so they don't double up.
+                let el = cur.clone();
                 if let Some(ci) = el.rfind(':') {
                     let tx = sx0 + 83 - el[..ci].chars().count() as i32 * 5;
                     self.draw_text_tinted(&mut c, &el, tx, by + 22, sx0 + 98 - tx, st.colors.normal);
@@ -705,15 +908,26 @@ impl ClassicSkin {
             }
         }
 
-        // Track list.
+        // Track list. Each row shows the title on the left and, when known, the
+        // track length right-aligned (as in Winamp), with the title clipped so
+        // the two never overlap.
         let visible = pl_visible_rows(height);
-        for (i, (text, is_cur, is_sel)) in st.rows.iter().skip(st.first).take(visible).enumerate() {
+        for (i, (text, is_cur, is_sel, dur)) in st.rows.iter().skip(st.first).take(visible).enumerate() {
             let ry = PL_LIST_Y + i as i32 * PL_ROW_H;
             if *is_sel {
                 fill_rect(&mut c, PL_LIST_X - 2, ry - 1, w - PL_LIST_X - 22, PL_ROW_H, st.colors.selbg);
             }
             let col = if *is_cur { st.colors.current } else { st.colors.normal };
-            self.draw_text_tinted(&mut c, text, PL_LIST_X, ry, w - PL_LIST_X - 24, col);
+            let time = dur.map(|d| fmt_pl_time(d));
+            // Default title width (no time): up to the right frame.
+            let mut title_w = w - PL_LIST_X - 24;
+            if let Some(t) = &time {
+                let tw = t.chars().count() as i32 * 5;
+                let tx = w - 24 - tw; // right-aligned, just left of the frame
+                self.draw_text_tinted(&mut c, t, tx, ry, tw, col);
+                title_w = tx - PL_LIST_X - 6; // leave a gap before the time
+            }
+            self.draw_text_tinted(&mut c, text, PL_LIST_X, ry, title_w.max(0), col);
         }
         c
     }
@@ -728,7 +942,16 @@ impl ClassicSkin {
         c
     }
 
-    pub fn compose_pl_shade(&self, focused: bool) -> RgbaImage {
+    /// Collapsed (window-shade) playlist bar. Shows the current track and its
+    /// length on the single line, Winamp-style; `text` empty means nothing is
+    /// playing, so only the bar is drawn.
+    pub fn compose_pl_shade(
+        &self,
+        focused: bool,
+        text: &str,
+        time: &str,
+        color: [u8; 3],
+    ) -> RgbaImage {
         let mut c = RgbaImage::new(275, 14);
         if let Some(p) = self.bmp("pledit.bmp") {
             blit(&mut c, p, 0, 0, 72, 42, 25, 14); // left end
@@ -740,6 +963,22 @@ impl ClassicSkin {
             let ry = if focused { 42 } else { 57 };
             blit(&mut c, p, 225, 0, 99, ry, 50, 14); // right end (with buttons)
             blit(&mut c, p, 264, 3, 52, 42, 9, 9); // close
+
+            // Current track + its time on the bar (the app passes elapsed,
+            // −remaining, or the track length as appropriate). The title starts at
+            // the same x as the expanded list's rows (`PL_LIST_X`) so the two line
+            // up; the time is right-aligned before the right-end button cluster,
+            // and the title is clipped so they never overlap.
+            let mut title_w = 225 - PL_LIST_X - 4;
+            if !time.is_empty() {
+                let tw = time.chars().count() as i32 * 5;
+                let tx = 214 - tw;
+                self.draw_text_tinted(&mut c, time, tx, 4, tw, color);
+                title_w = tx - PL_LIST_X - 4;
+            }
+            if !text.is_empty() {
+                self.draw_text_tinted(&mut c, text, PL_LIST_X, 4, title_w.max(0), color);
+            }
         }
         c
     }
@@ -803,13 +1042,23 @@ fn eq_valid_sprites(e: &RgbaImage) -> Vec<i32> {
 /// Format a playlist time like Winamp's bottom bar: `M:SS`, or `H:MM:SS` once it
 /// reaches an hour. Minutes/hours have no leading zero; seconds (and minutes
 /// inside an H:MM:SS) are zero-padded. Negative input clamps to zero.
-fn fmt_pl_time(secs: f32) -> String {
+pub fn fmt_pl_time(secs: f32) -> String {
     let total = secs.max(0.0) as u64;
     let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
     if h > 0 {
         format!("{h}:{m:02}:{s:02}")
     } else {
         format!("{m}:{s:02}")
+    }
+}
+
+/// Current-track time as elapsed, or `-remaining` when the remaining-time toggle
+/// is on and the duration is known.
+pub fn fmt_pl_time_signed(pos: f32, duration: f32, remaining: bool) -> String {
+    if remaining && duration > 0.0 {
+        format!("-{}", fmt_pl_time((duration - pos).max(0.0)))
+    } else {
+        fmt_pl_time(pos)
     }
 }
 
@@ -1050,11 +1299,11 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
         bands: [0.6, 0.3, 0.0, -0.2, -0.4, -0.2, 0.1, 0.3, 0.5, 0.7],
     });
     let rows: Vec<PlRow> = vec![
-        ("1. akira - kaneda theme".to_string(), true, true),
-        ("2. geinoh yamashirogumi - tetsuo".to_string(), false, false),
-        ("3. battle angel alita - gally".to_string(), false, false),
-        ("4. iria - zeiram ost".to_string(), false, false),
-        ("5. evangelion - cruel angel".to_string(), false, false),
+        ("1. akira - kaneda theme".to_string(), true, true, Some(272.0)),
+        ("2. geinoh yamashirogumi - tetsuo".to_string(), false, false, Some(345.0)),
+        ("3. battle angel alita - gally".to_string(), false, false, None),
+        ("4. iria - zeiram ost".to_string(), false, false, Some(201.0)),
+        ("5. evangelion - cruel angel".to_string(), false, false, Some(238.0)),
     ];
     let pl = skin.compose_playlist(
         &PlState {
@@ -1069,6 +1318,8 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
             first: 0,
             pressed: None,
             elapsed_secs: 406.0, // 6:46
+            cur_duration: 272.0,
+            time_remaining: false,
             total_secs: 52.0 * 3600.0 + 48.0 * 60.0 + 36.0, // 52:48:36
             total_partial: true,
         },
@@ -1114,6 +1365,204 @@ mod tests {
         // Resize grip and List menu track the right edge when widened.
         assert_eq!(pl_region_at(360.0, 165.0, 375.0, 180.0), Some(PlRegion::Resize));
         assert_eq!(pl_region_at(375.0 - 30.0, 180.0 - 20.0, 375.0, 180.0), Some(PlRegion::ListMenu));
+    }
+
+    #[test]
+    fn pl_mini_transport_regions() {
+        // The mini-player buttons sit in the bottom-right sprite's lower strip.
+        let (w, h) = (275.0, 180.0);
+        assert_eq!(pl_region_at(142.0, 169.0, w, h), Some(PlRegion::MiniPlay));
+        assert_eq!(pl_region_at(162.0, 169.0, w, h), Some(PlRegion::MiniStop));
+        // They track the right edge when the window is widened.
+        assert_eq!(pl_region_at(142.0 + 100.0, 169.0, w + 100.0, h), Some(PlRegion::MiniPlay));
+        // Just above the strip is the menu band, not a transport button.
+        assert_ne!(pl_region_at(142.0, 155.0, w, h), Some(PlRegion::MiniPlay));
+    }
+
+    #[test]
+    fn every_mini_transport_button_is_hittable() {
+        // Each PL_MINI_BTNS entry's centre must resolve back to that region, and
+        // none may collide with the resize grip at the right edge. Guards the
+        // bottom-bar geometry on both platforms.
+        for &(region, bx, bw) in PL_MINI_BTNS {
+            for &(w, h) in &[(275.0f32, 180.0f32), (420.0, 240.0)] {
+                let cx = (w - 150.0) + bx as f32 + bw as f32 / 2.0;
+                let cy = h - 11.0; // middle of the height-15..height-6 strip
+                assert_eq!(
+                    pl_region_at(cx, cy, w, h),
+                    Some(region),
+                    "mini button {region:?} not hittable at {w}x{h}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tooltips_present_and_in_bounds() {
+        let main = main_tooltips();
+        let labels: Vec<&str> = main.iter().map(|t| t.0).collect();
+        for l in [
+            "Previous", "Play", "Pause", "Stop", "Next", "Open file(s)", "Shuffle", "Repeat",
+            "Equalizer", "Playlist", "Close", "Minimize", "Options",
+        ] {
+            assert!(labels.contains(&l), "main tooltip missing {l}");
+        }
+        for (_, x, y, w, h) in &main {
+            assert!(
+                *x >= 0 && *y >= 0 && (x + w) as u32 <= MAIN_W && (y + h) as u32 <= MAIN_H,
+                "main tooltip rect out of bounds"
+            );
+        }
+        let eq: Vec<&str> = eq_tooltips().iter().map(|t| t.0).collect();
+        for l in ["On", "Auto", "Presets", "Close"] {
+            assert!(eq.contains(&l), "eq tooltip missing {l}");
+        }
+        assert_eq!(pl_tooltips(275, 180).len(), 6);
+    }
+
+    #[test]
+    fn main_tooltips_sit_on_their_buttons() {
+        // Every tooltip rect must cover the button it names, so hover labels and
+        // click targets can't drift apart.
+        for (label, x, y, w, h) in main_tooltips() {
+            let (cx, cy) = ((x + w / 2) as f32, (y + h / 2) as f32);
+            assert_eq!(
+                region_at(cx, cy).and_then(btn_label),
+                Some(label),
+                "tooltip {label:?} centre doesn't hit its button"
+            );
+        }
+    }
+
+    #[test]
+    fn pl_tooltips_track_the_right_edge() {
+        let narrow = pl_tooltips(275, 180);
+        let wide = pl_tooltips(375, 180);
+        assert_eq!(narrow.len(), wide.len());
+        for (n, w) in narrow.iter().zip(&wide) {
+            assert_eq!(n.0, w.0, "label changed");
+            assert_eq!(w.1 - n.1, 100, "{} did not follow the right edge", n.0);
+        }
+    }
+
+    #[test]
+    fn main_shade_ignores_title() {
+        // Regression: the collapsed main bar used to draw the song title over the
+        // baked branding, producing garbled text. It must not draw the title now,
+        // so the output is identical regardless of what the title is.
+        let skin = load_skin("linamp_base_skin.wsz");
+        let mk = |title: &str| MainState {
+            focused: true,
+            play: PlayUi::Playing,
+            pressed: None,
+            shuffle: false,
+            repeat: false,
+            eq_on: false,
+            pl_on: false,
+            pos: 71.0,
+            duration: 200.0,
+            time_remaining: false,
+            volume: 0.5,
+            balance: 0.0,
+            stereo: true,
+            title: title.to_string(),
+            kbps: "128".to_string(),
+            khz: "44".to_string(),
+            fg: [0, 255, 0],
+            viz: None,
+            viz_spectrum: Vec::new(),
+            viz_peak: [0, 0, 0],
+        };
+        let a = skin.compose_main_shade(&mk("")).into_raw();
+        let b = skin.compose_main_shade(&mk("A VERY LONG SONG TITLE 1234567890")).into_raw();
+        assert_eq!(a, b, "the collapsed main bar must not draw the song title");
+    }
+
+    #[test]
+    fn pl_shade_shows_track_and_time() {
+        // #80: the collapsed playlist bar draws the current track + length; with
+        // no current track it draws only the frame.
+        let skin = load_skin("linamp_base_skin.wsz");
+        let color = [0, 255, 0];
+        let text_px = |img: &RgbaImage| -> usize {
+            let mut n = 0;
+            for y in 0..14 {
+                for x in 27..214u32 {
+                    let p = img.get_pixel(x, y);
+                    if p[0] < 80 && p[1] > 180 && p[2] < 80 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        let shown = skin.compose_pl_shade(true, "1. a song", "6:12", color);
+        assert!(text_px(&shown) > 0, "shaded bar should draw the track and time");
+        let empty = skin.compose_pl_shade(true, "", "", color);
+        assert_eq!(text_px(&empty), 0, "no current track -> no text on the bar");
+    }
+
+    #[test]
+    fn playlist_row_draws_track_time() {
+        // #73: a row with a known length renders the time right-aligned; a row
+        // with no length renders none. Checks for normal-coloured text pixels in
+        // the right-hand time column.
+        let skin = load_skin("linamp_base_skin.wsz");
+        let colors = PlColors {
+            bg: [0, 0, 0],
+            normal: [0, 255, 0],
+            current: [255, 255, 255],
+            selbg: [0, 0, 180],
+        };
+        let rows: Vec<PlRow> = vec![
+            ("track one".to_string(), false, false, Some(125.0)), // 2:05
+            ("track two".to_string(), false, false, None),
+        ];
+        let st = PlState {
+            focused: true,
+            colors,
+            rows: &rows,
+            first: 0,
+            pressed: None,
+            elapsed_secs: 0.0,
+            cur_duration: 0.0,
+            time_remaining: false,
+            total_secs: 0.0,
+            total_partial: false,
+        };
+        let w = MAIN_W;
+        let img = skin.compose_playlist(&st, w, PL_H);
+        let time_pixels = |row: usize| -> usize {
+            let ry = PL_LIST_Y + row as i32 * PL_ROW_H;
+            let mut n = 0;
+            for yy in ry..ry + PL_ROW_H {
+                for xx in (w as i32 - 60)..(w as i32 - 22) {
+                    let p = img.get_pixel(xx as u32, yy as u32);
+                    if p[0] < 80 && p[1] > 180 && p[2] < 80 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        assert!(time_pixels(0) > 0, "row with a duration should draw its time");
+        assert_eq!(time_pixels(1), 0, "row without a duration should draw no time");
+    }
+
+    #[test]
+    fn main_shade_regions() {
+        // Collapsed main bar: wave/options, mini-transport, restore, close; the
+        // branding/seek area in between is the draggable title bar.
+        assert_eq!(main_shade_region_at(9.0, 6.0), Some(ShadeHit::Options));
+        assert_eq!(main_shade_region_at(171.0, 6.0), Some(ShadeHit::Prev));
+        assert_eq!(main_shade_region_at(180.0, 6.0), Some(ShadeHit::Play));
+        assert_eq!(main_shade_region_at(200.0, 6.0), Some(ShadeHit::Stop));
+        assert_eq!(main_shade_region_at(219.0, 6.0), Some(ShadeHit::Eject));
+        assert_eq!(main_shade_region_at(258.0, 6.0), Some(ShadeHit::Restore));
+        assert_eq!(main_shade_region_at(268.0, 6.0), Some(ShadeHit::Close));
+        assert_eq!(main_shade_region_at(100.0, 6.0), Some(ShadeHit::TitleBar));
+        // The EQ/playlist shade tester has no transport buttons there.
+        assert_eq!(shade_region_at(180.0, 6.0), Some(ShadeHit::TitleBar));
     }
 
     #[test]
@@ -1183,6 +1632,30 @@ mod tests {
     fn base_skin_has_full_slider_bank() {
         // The reference skin ships all 28 gradient sprites.
         assert_eq!(valid_count("linamp_base_skin.wsz"), 28);
+    }
+
+    #[test]
+    fn base_skin_draws_eq_curve() {
+        // The response curve lives in the graph box (dest 86,17 / 113×19) and is
+        // coloured by EQMAIN's line gradient at x=115, y=294 (row 0 = top). With
+        // every band maxed the curve hugs the top row; fully cut, the bottom row.
+        let skin = load_skin("linamp_base_skin.wsz");
+        let eqmain = skin.bmp("eqmain.bmp").unwrap();
+        let grad_top = *eqmain.get_pixel(115, 294);
+        let grad_bot = *eqmain.get_pixel(115, 294 + 18);
+
+        let mut st = EQ_TEST_STATE;
+        st.bands = [1.0; 10];
+        let img = skin.compose_eq(&st);
+        for gx in [100u32, 140, 180] {
+            assert_eq!(*img.get_pixel(gx, 17), grad_top, "top-row curve at x={gx}");
+        }
+
+        st.bands = [-1.0; 10];
+        let img = skin.compose_eq(&st);
+        for gx in [100u32, 140, 180] {
+            assert_eq!(*img.get_pixel(gx, 35), grad_bot, "bottom-row curve at x={gx}");
+        }
     }
 
     #[test]

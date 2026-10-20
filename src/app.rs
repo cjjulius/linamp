@@ -31,6 +31,14 @@ fn win_idx(w: ClWin) -> usize {
     }
 }
 
+fn idx_win(i: usize) -> ClWin {
+    match i {
+        0 => ClWin::Main,
+        1 => ClWin::Eq,
+        _ => ClWin::Pl,
+    }
+}
+
 /// Window size (points) for a popup menu, from its item/separator count.
 fn popup_dims(kind: Popup) -> (f32, f32) {
     let (buttons, seps) = match kind {
@@ -43,6 +51,93 @@ fn popup_dims(kind: Popup) -> (f32, f32) {
         Popup::EqPresets => (crate::eq::PRESETS.len() as i32, 0),
     };
     (182.0, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
+}
+
+/// If `r` overlaps `keep` (the main window), the position `r` should move to so it
+/// no longer covers it — pushed to `keep`'s nearest edge (least movement). `None`
+/// when they don't overlap (flush/touching counts as not overlapping).
+fn push_off(r: egui::Rect, keep: egui::Rect) -> Option<egui::Pos2> {
+    let separated = r.right() <= keep.left()
+        || r.left() >= keep.right()
+        || r.bottom() <= keep.top()
+        || r.top() >= keep.bottom();
+    if separated {
+        return None;
+    }
+    use egui::vec2;
+    // Resolve the overlap by the least movement, but favour below over above: only
+    // go above when the window is *mostly* above `keep` (its centre is above the
+    // top edge); otherwise the vertical escape is downward. Left/right compete on
+    // least movement (no left/right preference), and we pick whichever axis — the
+    // chosen vertical or the nearest horizontal — needs the least movement.
+    let vpush = if r.center().y < keep.center().y {
+        keep.top() - r.bottom() // up: the window sits higher than main's centre
+    } else {
+        keep.bottom() - r.top() // down: favour below
+    };
+    let hpush = if (keep.left() - r.right()).abs() < (keep.right() - r.left()).abs() {
+        keep.left() - r.right() // out to the left
+    } else {
+        keep.right() - r.left() // out to the right
+    };
+    let push = if vpush.abs() <= hpush.abs() {
+        vec2(0.0, vpush)
+    } else {
+        vec2(hpush, 0.0)
+    };
+    Some(r.min + push)
+}
+
+/// Magnetic snapping for a dragged window `r`: snap to the *nearest* in-range edge
+/// across the other visible windows (`others`) and the screen (`monitor`), choosing
+/// the smallest offset per axis independently.
+///
+/// Snapping must pick the nearest edge, not snap cumulatively in window order:
+/// collapsed windows are 14px tall but [`SNAP`] is 16px, so a window dropped just
+/// above another sits within snap range of several edges at once. Order-dependent
+/// snapping would leapfrog onto the farther edge (e.g. a playlist dropped above a
+/// stacked EQ would jump past it onto the main window below). Returns the snapped
+/// top-left corner.
+fn snap_rect(r: egui::Rect, others: &[egui::Rect], monitor: Option<egui::Vec2>) -> egui::Pos2 {
+    let s = SNAP;
+    let mut best_dx: Option<f32> = None;
+    let mut best_dy: Option<f32> = None;
+    let consider = |cur: &mut Option<f32>, off: f32| {
+        if off.abs() < s && cur.map_or(true, |b: f32| off.abs() < b.abs()) {
+            *cur = Some(off);
+        }
+    };
+    if let Some(m) = monitor {
+        consider(&mut best_dx, -r.left());
+        consider(&mut best_dx, m.x - r.right());
+        consider(&mut best_dy, -r.top());
+        consider(&mut best_dy, m.y - r.bottom());
+    }
+    for o in others {
+        // Stacked (same column): the windows overlap horizontally -> snap the nearer
+        // horizontal edge to edge and align the column's left side.
+        let xover = r.left() < o.right() + s && r.right() > o.left() - s;
+        if xover {
+            consider(&mut best_dy, o.bottom() - r.top());
+            consider(&mut best_dy, o.top() - r.bottom());
+            consider(&mut best_dx, o.left() - r.left());
+        }
+        // Side by side (same row): the windows overlap vertically -> snap the nearer
+        // vertical edge to edge. Align tops only when they are *not* also stacked: a
+        // thin window dropped just above/below another is within the top-alignment
+        // range, and aligning its top would drag it onto the other window (what
+        // blocked collapsed windows from landing above main).
+        let yover = r.top() < o.bottom() + s && r.bottom() > o.top() - s;
+        if yover {
+            consider(&mut best_dx, o.right() - r.left());
+            consider(&mut best_dx, o.left() - r.right());
+            if !xover {
+                consider(&mut best_dy, o.top() - r.top());
+            }
+        }
+    }
+    r.translate(egui::vec2(best_dx.unwrap_or(0.0), best_dy.unwrap_or(0.0)))
+        .min
 }
 
 /// Two windows are docked when an edge is flush (within tolerance) and they
@@ -113,7 +208,15 @@ struct Dragging {
     group: Vec<(usize, egui::Vec2)>,
 }
 
-/// Global cursor position in egui points, if the platform exposes it (Windows).
+/// Global cursor position in egui points, if the platform exposes it.
+///
+/// - **Windows:** `GetCursorPos`.
+/// - **Linux/X11 (incl. XWayland):** `XQueryPointer` on the root window.
+/// - **Native Wayland / everything else:** `None` — the compositor doesn't
+///   expose a global cursor, so the caller falls back to the OS window-drag.
+///
+/// When this returns `Some`, the drag runs in "manual" mode: we drive the
+/// window position ourselves each frame and move the docked group in tandem.
 fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
     #[cfg(windows)]
     {
@@ -132,20 +235,255 @@ fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
         }
         None
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::cursor_px().map(|(x, y)| {
+            let ppp = ctx.pixels_per_point().max(0.1);
+            egui::pos2(x as f32 / ppp, y as f32 / ppp)
+        })
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = ctx;
         None
     }
 }
 
+/// Linux/X11 helpers used for classic-window management: the global cursor query
+/// (for manual tandem dragging) and `WM_TRANSIENT_FOR` window grouping (so the
+/// EQ/playlist windows ride the main window's z-order, raise with it, and don't
+/// get their own taskbar entry — the X11 analogue of the Windows owner-window
+/// grouping). Everything degrades to a no-op when there is no X display (e.g.
+/// native Wayland), so the caller falls back to OS behaviour there.
+#[cfg(all(unix, not(target_os = "macos")))]
+mod x11util {
+    use std::cell::RefCell;
+    use std::ffi::CString;
+    use std::os::raw::{c_int, c_long, c_uchar, c_ulong};
+    use std::ptr;
+    use x11_dl::xlib;
+
+    enum Conn {
+        Untried,
+        Unavailable,
+        Ready(xlib::Xlib, *mut xlib::Display),
+    }
+
+    thread_local! {
+        static CONN: RefCell<Conn> = RefCell::new(Conn::Untried);
+    }
+
+    /// Run `f` with the cached Xlib handle + display, opening the connection on
+    /// first use. `None` when there is no X display.
+    fn with_conn<R>(f: impl FnOnce(&xlib::Xlib, *mut xlib::Display) -> R) -> Option<R> {
+        CONN.with(|cell| {
+            if matches!(*cell.borrow(), Conn::Untried) {
+                let next = match xlib::Xlib::open() {
+                    Ok(xlib) => {
+                        let d = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
+                        if d.is_null() {
+                            Conn::Unavailable
+                        } else {
+                            Conn::Ready(xlib, d)
+                        }
+                    }
+                    Err(_) => Conn::Unavailable,
+                };
+                *cell.borrow_mut() = next;
+            }
+            match &*cell.borrow() {
+                Conn::Ready(xlib, d) => Some(f(xlib, *d)),
+                _ => None,
+            }
+        })
+    }
+
+    /// Global pointer position in physical pixels, or `None` if unavailable.
+    /// Called only during an active title-bar drag.
+    pub fn cursor_px() -> Option<(i32, i32)> {
+        with_conn(|xlib, d| unsafe {
+            let root = (xlib.XDefaultRootWindow)(d);
+            let (mut rr, mut cr): (xlib::Window, xlib::Window) = (0, 0);
+            let (mut rx, mut ry, mut wx, mut wy) = (0i32, 0i32, 0i32, 0i32);
+            let mut mask: u32 = 0;
+            let ok = (xlib.XQueryPointer)(
+                d, root, &mut rr, &mut cr, &mut rx, &mut ry, &mut wx, &mut wy, &mut mask,
+            );
+            // False only means the pointer is on another screen; rx/ry stay valid
+            // global coords, but we treat it as unknown and fall back to OS drag.
+            (ok != 0).then_some((rx, ry))
+        })
+        .flatten()
+    }
+
+    unsafe fn intern(xlib: &xlib::Xlib, d: *mut xlib::Display, name: &str) -> xlib::Atom {
+        let c = CString::new(name).unwrap();
+        (xlib.XInternAtom)(d, c.as_ptr(), 0)
+    }
+
+    /// The root's `_NET_CLIENT_LIST` — the WM's managed top-level windows.
+    unsafe fn client_list(xlib: &xlib::Xlib, d: *mut xlib::Display) -> Vec<xlib::Window> {
+        let root = (xlib.XDefaultRootWindow)(d);
+        let prop = intern(xlib, d, "_NET_CLIENT_LIST");
+        const XA_WINDOW: xlib::Atom = 33;
+        let (mut ty, mut fmt): (xlib::Atom, c_int) = (0, 0);
+        let (mut nitems, mut after): (c_ulong, c_ulong) = (0, 0);
+        let mut data: *mut c_uchar = ptr::null_mut();
+        let st = (xlib.XGetWindowProperty)(
+            d, root, prop, 0, 4096, 0, XA_WINDOW, &mut ty, &mut fmt, &mut nitems, &mut after,
+            &mut data,
+        );
+        let mut out = Vec::new();
+        if st == 0 && !data.is_null() && fmt == 32 {
+            let p = data as *const c_ulong;
+            for i in 0..nitems as isize {
+                out.push(*p.offset(i) as xlib::Window);
+            }
+        }
+        if !data.is_null() {
+            (xlib.XFree)(data as *mut _);
+        }
+        out
+    }
+
+    /// A window's `_NET_WM_NAME` (UTF-8 title), or empty if unset.
+    unsafe fn wm_name(xlib: &xlib::Xlib, d: *mut xlib::Display, w: xlib::Window) -> String {
+        let prop = intern(xlib, d, "_NET_WM_NAME");
+        let utf8 = intern(xlib, d, "UTF8_STRING");
+        let (mut ty, mut fmt): (xlib::Atom, c_int) = (0, 0);
+        let (mut nitems, mut after): (c_ulong, c_ulong) = (0, 0);
+        let mut data: *mut c_uchar = ptr::null_mut();
+        let st = (xlib.XGetWindowProperty)(
+            d, w, prop, 0, 1024, 0, utf8, &mut ty, &mut fmt, &mut nitems, &mut after, &mut data,
+        );
+        let mut s = String::new();
+        if st == 0 && !data.is_null() {
+            s = String::from_utf8_lossy(std::slice::from_raw_parts(data, nitems as usize))
+                .into_owned();
+        }
+        if !data.is_null() {
+            (xlib.XFree)(data as *mut _);
+        }
+        s
+    }
+
+    /// Error handler that swallows async X errors (e.g. a `BadWindow` from a
+    /// window destroyed mid-scan) so a stray property query can never abort the
+    /// process via Xlib's default handler.
+    unsafe extern "C" fn ignore_err(
+        _d: *mut xlib::Display,
+        _e: *mut xlib::XErrorEvent,
+    ) -> c_int {
+        0
+    }
+
+    /// Ask the WM to drop `win` from the taskbar via `_NET_WM_STATE_SKIP_TASKBAR`.
+    /// Sent as an EWMH client message (the correct way to change state on a window
+    /// that is already mapped) so the EQ/playlist windows don't each get their own
+    /// taskbar entry — only the main window represents the group.
+    unsafe fn skip_taskbar(xlib: &xlib::Xlib, d: *mut xlib::Display, win: xlib::Window) {
+        let root = (xlib.XDefaultRootWindow)(d);
+        let net_wm_state = intern(xlib, d, "_NET_WM_STATE");
+        let skip = intern(xlib, d, "_NET_WM_STATE_SKIP_TASKBAR");
+        const NET_WM_STATE_ADD: c_long = 1;
+        let mut ev: xlib::XEvent = std::mem::zeroed();
+        {
+            let cm = &mut ev.client_message;
+            cm.type_ = xlib::ClientMessage;
+            cm.send_event = 1;
+            cm.display = d;
+            cm.window = win;
+            cm.message_type = net_wm_state;
+            cm.format = 32;
+            cm.data.set_long(0, NET_WM_STATE_ADD);
+            cm.data.set_long(1, skip as c_long);
+            cm.data.set_long(2, 0);
+            cm.data.set_long(3, 1); // source indication: normal application
+            cm.data.set_long(4, 0);
+        }
+        let mask = xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask;
+        (xlib.XSendEvent)(d, root, 0, mask, &mut ev);
+    }
+
+    /// Link the EQ/playlist windows to the main window via `WM_TRANSIENT_FOR`.
+    /// Scans and applies only while the links aren't yet in place for the current
+    /// set of visible windows; steady state makes no X calls at all. Re-links
+    /// after a show/hide (which recreates the child window with a new XID).
+    pub fn group(eq_visible: bool, pl_visible: bool) {
+        thread_local! {
+            // (eq_visible, pl_visible, linked?) we last acted on.
+            static STATE: RefCell<(bool, bool, bool)> = RefCell::new((false, false, false));
+        }
+        let cfg = (eq_visible, pl_visible);
+        let done = STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            if (s.0, s.1) != cfg {
+                *s = (cfg.0, cfg.1, false); // visibility changed -> re-link
+            }
+            s.2
+        });
+        if done {
+            return;
+        }
+
+        let linked = with_conn(|xlib, d| unsafe {
+            // Guard the whole scan: querying a window another client just
+            // destroyed would otherwise fire Xlib's fatal default handler.
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            let clients = client_list(xlib, d);
+            let (mut main, mut eq, mut pl) = (0, 0, 0);
+            for &w in &clients {
+                match wm_name(xlib, d, w).as_str() {
+                    "LinAmp" => main = w,
+                    "LinAmp Equalizer" => eq = w,
+                    "LinAmp Playlist" => pl = w,
+                    _ => {}
+                }
+            }
+            let mut ok = main != 0;
+            if main != 0 {
+                if eq_visible {
+                    if eq != 0 {
+                        (xlib.XSetTransientForHint)(d, eq, main);
+                        skip_taskbar(xlib, d, eq);
+                    } else {
+                        ok = false;
+                    }
+                }
+                if pl_visible {
+                    if pl != 0 {
+                        (xlib.XSetTransientForHint)(d, pl, main);
+                        skip_taskbar(xlib, d, pl);
+                    } else {
+                        ok = false;
+                    }
+                }
+            }
+            (xlib.XSync)(d, 0); // deliver any errors to ignore_err before restoring
+            (xlib.XSetErrorHandler)(prev);
+            ok
+        })
+        .unwrap_or(false);
+
+        if linked {
+            STATE.with(|s| s.borrow_mut().2 = true);
+        }
+    }
+}
+
 /// Make the EQ/playlist windows *owned* by the main window so they ride its
 /// z-order as a group (rise together, stay above it, hide when it minimizes) —
 /// Winamp-style window grouping. Idempotent and cheap, so it runs each frame to
-/// cover windows being shown/hidden (which recreates them). Windows-only.
-fn group_child_windows() {
+/// cover windows being shown/hidden (which recreates them). Implemented on
+/// Windows (owner window) and Linux/X11 (`WM_TRANSIENT_FOR`); a no-op elsewhere.
+fn group_child_windows(eq_visible: bool, pl_visible: bool) {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::group(eq_visible, pl_visible);
+    }
     #[cfg(windows)]
     {
+        let _ = (eq_visible, pl_visible);
         #[allow(non_snake_case)]
         extern "system" {
             fn FindWindowW(class: *const u16, title: *const u16) -> isize;
@@ -166,6 +504,10 @@ fn group_child_windows() {
                 }
             }
         }
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+    {
+        let _ = (eq_visible, pl_visible);
     }
 }
 
@@ -302,11 +644,18 @@ pub struct LinAmpApp {
     eq_shade: bool,
     pl_shade: bool,
     tb_last_click: Option<(ClWin, Instant)>,
+    /// Last click on the main time display, for double-click elapsed/remaining.
+    time_last_click: Option<Instant>,
     // multi-window geometry (points)
     win_pos: [egui::Pos2; 3],
     pl_px_h: f32,
     pl_px_w: f32,
     positions_init: bool,
+    /// Hash of the last-persisted session, so we only write on actual changes.
+    session_sig: Option<u64>,
+    /// Frames remaining in a graceful shutdown (set when the WM asks to close),
+    /// used to tear down child viewports before the root to avoid a winit crash.
+    quit_countdown: Option<u8>,
     drag: Option<Dragging>,
     /// While resizing the playlist, the grab offsets (width, height) in px.
     resize_pl: Option<egui::Vec2>,
@@ -461,10 +810,13 @@ impl LinAmpApp {
             eq_shade: false,
             pl_shade: false,
             tb_last_click: None,
+            time_last_click: None,
             win_pos: [egui::pos2(100.0, 100.0); 3],
             pl_px_h: classic::PL_H as f32,
             pl_px_w: classic::MAIN_W as f32,
             positions_init: false,
+            session_sig: None,
+            quit_countdown: None,
             drag: None,
             resize_pl: None,
             root_last: None,
@@ -519,6 +871,13 @@ impl LinAmpApp {
             if let Some(h) = session.pl_height {
                 app.pl_px_h = h.max(87.0);
             }
+            // Restore which windows were open and their collapsed/full state.
+            // Positions aren't remembered; positions_init docks them on frame 1.
+            app.eq_visible = session.eq_visible;
+            app.pl_visible = session.pl_visible;
+            app.main_shade = session.main_shade;
+            app.eq_shade = session.eq_shade;
+            app.pl_shade = session.pl_shade;
         }
         app.refresh_library();
         app.discover_skins();
@@ -997,12 +1356,83 @@ impl LinAmpApp {
         }
     }
 
+    /// Stop playback — fading out first when the "fade out when stopping" pref is
+    /// on (otherwise an immediate cut). Shift+V always forces a fade regardless.
+    fn stop_playback(&mut self) {
+        if self.prefs.fade_on_stop && self.player.state() != PlayState::Stopped {
+            self.fade = Some(FADE_SECS);
+            self.status = "Fading out…".into();
+        } else {
+            self.player.stop();
+            self.fade = None;
+        }
+    }
+
+    /// The persistable last-session snapshot (playlist, window layout, EQ).
+    fn build_session(&self) -> Session {
+        Session {
+            tracks: self
+                .playlist
+                .tracks
+                .iter()
+                .map(|t| t.path.display().to_string())
+                .collect(),
+            current: self.playlist.current,
+            pl_width: Some(self.pl_px_w),
+            pl_height: Some(self.pl_px_h),
+            eq_enabled: self.eq_enabled,
+            eq_auto: self.eq_auto,
+            eq_preamp: self.eq_preamp_db,
+            eq_bands: self.eq_bands.to_vec(),
+            eq_visible: self.eq_visible,
+            pl_visible: self.pl_visible,
+            main_shade: self.main_shade,
+            eq_shade: self.eq_shade,
+            pl_shade: self.pl_shade,
+        }
+    }
+
+    /// Persist the session when any of it has changed since the last write. Run
+    /// every frame; it only touches disk on an actual change, so it doesn't rely
+    /// on eframe's save-on-exit (which isn't invoked here) or its periodic timer.
+    fn persist_session_if_changed(&mut self) {
+        // Don't overwrite the saved layout while shutting down (we hide the child
+        // windows for teardown, which must not be persisted as "closed").
+        if self.quit_countdown.is_some() {
+            return;
+        }
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.eq_visible.hash(&mut h);
+        self.pl_visible.hash(&mut h);
+        self.main_shade.hash(&mut h);
+        self.eq_shade.hash(&mut h);
+        self.pl_shade.hash(&mut h);
+        self.pl_px_w.to_bits().hash(&mut h);
+        self.pl_px_h.to_bits().hash(&mut h);
+        self.playlist.current.hash(&mut h);
+        self.eq_enabled.hash(&mut h);
+        self.eq_auto.hash(&mut h);
+        self.eq_preamp_db.to_bits().hash(&mut h);
+        for b in &self.eq_bands {
+            b.to_bits().hash(&mut h);
+        }
+        for t in &self.playlist.tracks {
+            t.path.hash(&mut h);
+        }
+        let sig = h.finish();
+        if self.session_sig != Some(sig) {
+            self.session_sig = Some(sig);
+            self.build_session().save();
+        }
+    }
+
     fn trigger_classic(&mut self, ctx: &egui::Context, region: Btn) {
         match region {
             Btn::Prev => self.prev(),
             Btn::Play => self.play_pause(),
             Btn::Pause => self.player.pause(),
-            Btn::Stop => self.player.stop(),
+            Btn::Stop => self.stop_playback(),
             Btn::Next => self.next(),
             Btn::Eject => self.open_files(),
             Btn::Shuffle => self.shuffle = !self.shuffle,
@@ -1049,6 +1479,7 @@ impl LinAmpApp {
                     format!("{}. {}", i + 1, t.display_name()),
                     Some(i) == cur,
                     self.pl_selection.contains(&i),
+                    t.duration.map(|d| d.as_secs_f32()),
                 )
             })
             .collect()
@@ -1246,7 +1677,14 @@ impl LinAmpApp {
                             }
                             ui.separator();
                             if item(ui, "Exit") {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                // This runs inside the popup's own viewport, so a
+                                // plain Close would only dismiss the menu. Target
+                                // the root viewport to actually quit the app.
+                                ctx.send_viewport_cmd_to(
+                                    egui::ViewportId::ROOT,
+                                    egui::ViewportCommand::Close,
+                                );
+                                close = true;
                             }
                         }
                         Popup::PlAdd => {
@@ -1397,9 +1835,25 @@ impl LinAmpApp {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;
                 if shaded {
-                    match classic::shade_region_at(nx, ny) {
-                        Some(classic::ShadeHit::Close) => self.close_window(ctx, win),
-                        Some(classic::ShadeHit::TitleBar) => self.start_drag(ctx, win, screen_cursor),
+                    use classic::ShadeHit as H;
+                    // The main shade bar carries extra controls; EQ/PL shades only
+                    // have close + title bar.
+                    let hit = if win == ClWin::Main {
+                        classic::main_shade_region_at(nx, ny)
+                    } else {
+                        classic::shade_region_at(nx, ny)
+                    };
+                    match hit {
+                        Some(H::Close) => self.close_window(ctx, win),
+                        Some(H::Restore) => self.toggle_shade(win),
+                        Some(H::TitleBar) => self.start_drag(ctx, win, screen_cursor),
+                        Some(H::Options) => self.open_popup_in(Popup::Options, win, l),
+                        Some(H::Prev) => self.trigger_classic(ctx, Btn::Prev),
+                        Some(H::Play) => self.trigger_classic(ctx, Btn::Play),
+                        Some(H::Pause) => self.trigger_classic(ctx, Btn::Pause),
+                        Some(H::Stop) => self.trigger_classic(ctx, Btn::Stop),
+                        Some(H::Next) => self.trigger_classic(ctx, Btn::Next),
+                        Some(H::Eject) => self.trigger_classic(ctx, Btn::Eject),
                         None => {}
                     }
                 } else {
@@ -1462,6 +1916,13 @@ impl LinAmpApp {
                                     // Open on release (below) so this click can't dismiss it.
                                     self.pl_menu_press = Some(menu);
                                 }
+                                // Mini-player transport buttons mirror the main window's.
+                                Some(P::MiniPrev) => self.trigger_classic(ctx, Btn::Prev),
+                                Some(P::MiniPlay) => self.trigger_classic(ctx, Btn::Play),
+                                Some(P::MiniPause) => self.trigger_classic(ctx, Btn::Pause),
+                                Some(P::MiniStop) => self.trigger_classic(ctx, Btn::Stop),
+                                Some(P::MiniNext) => self.trigger_classic(ctx, Btn::Next),
+                                Some(P::MiniEject) => self.trigger_classic(ctx, Btn::Eject),
                                 None => {}
                             }
                         }
@@ -1554,6 +2015,20 @@ impl LinAmpApp {
                         if classic::region_at(nx, ny) == Some(r) {
                             if r == Btn::Options {
                                 self.open_popup_in(Popup::Options, win, l);
+                            } else if r == Btn::Time {
+                                // Double-click the time display toggles elapsed vs
+                                // remaining (shown as a negative) everywhere it's shown.
+                                let now = Instant::now();
+                                let dbl = self
+                                    .time_last_click
+                                    .map(|t| now.duration_since(t).as_millis() < 350)
+                                    .unwrap_or(false);
+                                if dbl {
+                                    self.time_remaining = !self.time_remaining;
+                                    self.time_last_click = None;
+                                } else {
+                                    self.time_last_click = Some(now);
+                                }
                             } else {
                                 self.trigger_classic(ctx, r);
                             }
@@ -1635,6 +2110,8 @@ impl LinAmpApp {
             if d.win == ClWin::Main {
                 self.root_last = None;
             }
+            // Main never covered; EQ/playlist never cover each other (they stack).
+            self.resolve_overlaps(d.win);
         } else {
             // A click with no move: double-click toggles the window shade.
             let now = Instant::now();
@@ -1701,6 +2178,67 @@ impl LinAmpApp {
         }
     }
 
+    /// After a drag, resolve window overlaps: the main window is never covered, and
+    /// the EQ/playlist windows never cover each other (they stack). The window that
+    /// gives way is the one just dragged (a child moves off main and off its
+    /// sibling; when main was dragged, the children move off it instead).
+    fn resolve_overlaps(&mut self, dragged: ClWin) {
+        let rect = |app: &Self, i: usize| {
+            egui::Rect::from_min_size(app.win_pos[i], app.win_inner_size(idx_win(i)))
+        };
+        let vis = |app: &Self, i: usize| match i {
+            0 => true,
+            1 => app.eq_visible,
+            2 => app.pl_visible,
+            _ => false,
+        };
+        if dragged == ClWin::Main {
+            // Children give way: push each off main, then separate them if needed.
+            for i in [1usize, 2usize] {
+                if vis(self, i) {
+                    if let Some(p) = push_off(rect(self, i), rect(self, 0)) {
+                        self.win_pos[i] = p;
+                    }
+                }
+            }
+            if vis(self, 1) && vis(self, 2) {
+                // Push the lower one below the higher so they don't overlap.
+                let (hi, lo) = if self.win_pos[1].y <= self.win_pos[2].y {
+                    (1, 2)
+                } else {
+                    (2, 1)
+                };
+                if let Some(p) = push_off(rect(self, lo), rect(self, hi)) {
+                    self.win_pos[lo] = p;
+                }
+            }
+        } else {
+            // The dragged child moves out of the main window, and stacks below its
+            // sibling only when that sibling is itself docked to the main window
+            // (part of the stack). A floating sibling must not block the dragged
+            // window from docking directly under main.
+            let di = win_idx(dragged);
+            let oi = if di == 1 { 2 } else { 1 };
+            for _ in 0..4 {
+                let mut moved = false;
+                if let Some(p) = push_off(rect(self, di), rect(self, 0)) {
+                    self.win_pos[di] = p;
+                    moved = true;
+                }
+                if vis(self, oi) && rects_docked(rect(self, oi), rect(self, 0)) {
+                    if let Some(p) = push_off(rect(self, di), rect(self, oi)) {
+                        self.win_pos[di] = p;
+                        moved = true;
+                    }
+                }
+                if !moved {
+                    break;
+                }
+            }
+        }
+        self.root_last = None;
+    }
+
     fn win_rect_pts(&self, idx: usize) -> egui::Rect {
         let w = match idx {
             0 => ClWin::Main,
@@ -1748,23 +2286,9 @@ impl LinAmpApp {
         size: egui::Vec2,
         monitor: Option<egui::Vec2>,
     ) -> egui::Pos2 {
-        use egui::{vec2, Rect};
-        let s = SNAP;
-        let mut r = Rect::from_min_size(pos, size);
-        if let Some(m) = monitor {
-            if r.left().abs() < s {
-                r = r.translate(vec2(-r.left(), 0.0));
-            }
-            if (m.x - r.right()).abs() < s {
-                r = r.translate(vec2(m.x - r.right(), 0.0));
-            }
-            if r.top().abs() < s {
-                r = r.translate(vec2(0.0, -r.top()));
-            }
-            if (m.y - r.bottom()).abs() < s {
-                r = r.translate(vec2(0.0, m.y - r.bottom()));
-            }
-        }
+        use egui::Rect;
+        let r = Rect::from_min_size(pos, size);
+        let mut others = Vec::new();
         for j in 0..3 {
             if j == idx {
                 continue;
@@ -1778,40 +2302,14 @@ impl LinAmpApp {
             if !vis {
                 continue;
             }
-            {
-                let jwin = match j {
-                    0 => ClWin::Main,
-                    1 => ClWin::Eq,
-                    _ => ClWin::Pl,
-                };
-                let o = Rect::from_min_size(self.win_pos[j], self.win_inner_size(jwin));
-                let xover = r.left() < o.right() + s && r.right() > o.left() - s;
-                if xover {
-                    if (r.top() - o.bottom()).abs() < s {
-                        r = r.translate(vec2(0.0, o.bottom() - r.top()));
-                    }
-                    if (r.bottom() - o.top()).abs() < s {
-                        r = r.translate(vec2(0.0, o.top() - r.bottom()));
-                    }
-                    if (r.left() - o.left()).abs() < s {
-                        r = r.translate(vec2(o.left() - r.left(), 0.0));
-                    }
-                }
-                let yover = r.top() < o.bottom() + s && r.bottom() > o.top() - s;
-                if yover {
-                    if (r.left() - o.right()).abs() < s {
-                        r = r.translate(vec2(o.right() - r.left(), 0.0));
-                    }
-                    if (r.right() - o.left()).abs() < s {
-                        r = r.translate(vec2(o.left() - r.right(), 0.0));
-                    }
-                    if (r.top() - o.top()).abs() < s {
-                        r = r.translate(vec2(0.0, o.top() - r.top()));
-                    }
-                }
-            }
+            let jwin = match j {
+                0 => ClWin::Main,
+                1 => ClWin::Eq,
+                _ => ClWin::Pl,
+            };
+            others.push(Rect::from_min_size(self.win_pos[j], self.win_inner_size(jwin)));
         }
-        r.min
+        snap_rect(r, &others, monitor)
     }
 
     fn close_window(&mut self, ctx: &egui::Context, win: ClWin) {
@@ -1828,8 +2326,8 @@ impl LinAmpApp {
             ClWin::Eq => self.eq_shade = !self.eq_shade,
             ClWin::Pl => self.pl_shade = !self.pl_shade,
         }
-        // Keep the docked stack consistent and resize the root window.
-        self.restack();
+        // Each window keeps its position across collapse/restore (don't restack);
+        // just let the changed window resize next frame.
         self.root_last = None;
     }
 
@@ -1854,7 +2352,7 @@ impl LinAmpApp {
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
             .with_position(screen)
-            .with_inner_size(egui::vec2(330.0, 200.0))
+            .with_inner_size(egui::vec2(340.0, 300.0))
             .with_resizable(false)
             .with_taskbar(false);
         let id = egui::ViewportId::from_hash_of("linamp_prefs");
@@ -1880,6 +2378,23 @@ impl LinAmpApp {
                         self.playlist.load_all();
                     }
                 }
+
+                ui.add_space(8.0);
+                ui.strong("Playback");
+                // Behaviours that otherwise only have keyboard shortcuts, so they
+                // can be clicked instead of memorised. Shuffle/repeat are omitted
+                // here as they already have buttons on the classic main window.
+                ui.checkbox(&mut self.stop_after_current, "Stop after current track (Ctrl+V)");
+                ui.checkbox(&mut self.time_remaining, "Show time remaining (Ctrl+T)");
+                let mut fade = self.prefs.fade_on_stop;
+                if ui
+                    .checkbox(&mut fade, "Fade out when stopping (Shift+V)")
+                    .changed()
+                {
+                    self.prefs.fade_on_stop = fade;
+                    self.prefs.save();
+                }
+
                 ui.add_space(10.0);
                 if ui.button("Close").clicked() {
                     close = true;
@@ -2267,9 +2782,9 @@ impl LinAmpApp {
         if !self.positions_init {
             if let Some(r) = ctx.input(|i| i.viewport().outer_rect) {
                 self.win_pos[0] = r.min;
-                self.win_pos[1] = egui::pos2(r.min.x, r.min.y + self.main_h() * self.scale);
-                self.win_pos[2] =
-                    egui::pos2(r.min.x, r.min.y + (self.main_h() + self.eq_h()) * self.scale);
+                // Dock the (possibly restored) EQ/playlist windows under the main
+                // one, honouring which are visible and their collapsed state.
+                self.restack();
                 self.positions_init = true;
             }
         }
@@ -2323,7 +2838,7 @@ impl LinAmpApp {
         self.draw_popup_viewport(ctx);
 
         // Keep the EQ/playlist windows owned by the main window (z-order group).
-        group_child_windows();
+        group_child_windows(self.eq_visible, self.pl_visible);
     }
 
     fn render_window(&mut self, ctx: &egui::Context, win: ClWin) {
@@ -2355,6 +2870,7 @@ impl LinAmpApp {
             ClWin::Eq => &mut self.eq_tex,
             ClWin::Pl => &mut self.pl_tex,
         };
+        let (nw, nh) = (img.width() as f32, img.height() as f32);
         let tex = upload_tex(slot, ctx, &img, name);
 
         egui::CentralPanel::default()
@@ -2363,6 +2879,27 @@ impl LinAmpApp {
                 let rect = ui.max_rect();
                 let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                 ui.painter().image(tex.id(), rect, uv, Color32::WHITE);
+
+                // Hover tooltips over the classic buttons. These are hover-only
+                // widgets, so they don't intercept the manual click/drag handling;
+                // skipped while a window is shaded (its buttons aren't shown).
+                let tips = match win {
+                    ClWin::Main if !self.main_shade => classic::main_tooltips(),
+                    ClWin::Eq if !self.eq_shade => classic::eq_tooltips(),
+                    ClWin::Pl if !self.pl_shade => {
+                        classic::pl_tooltips(self.pl_px_w as i32, self.pl_px_h as i32)
+                    }
+                    _ => Vec::new(),
+                };
+                if nw > 0.0 && nh > 0.0 {
+                    let (sx, sy) = (rect.width() / nw, rect.height() / nh);
+                    for (label, x, y, w, h) in tips {
+                        let min = rect.min + egui::vec2(x as f32 * sx, y as f32 * sy);
+                        let r = egui::Rect::from_min_size(min, egui::vec2(w as f32 * sx, h as f32 * sy));
+                        ui.interact(r, ui.id().with(("tip", label, x, y)), egui::Sense::hover())
+                            .on_hover_text(label);
+                    }
+                }
             });
     }
 
@@ -2406,7 +2943,29 @@ impl LinAmpApp {
             }
             ClWin::Pl => {
                 if self.pl_shade {
-                    cs.compose_pl_shade(true)
+                    let (text, time) = match self.playlist.current_track() {
+                        Some(t) => {
+                            let n = self.playlist.current.map(|i| i + 1).unwrap_or(0);
+                            let dur = t.duration.map(|d| d.as_secs_f32()).unwrap_or(0.0);
+                            // Playing/paused: the live position, toggling
+                            // elapsed/remaining like the main LCD. Stopped: the
+                            // track length.
+                            let time = if self.player.state() != PlayState::Stopped {
+                                classic::fmt_pl_time_signed(
+                                    self.player.position().as_secs_f32(),
+                                    dur,
+                                    self.time_remaining,
+                                )
+                            } else if dur > 0.0 {
+                                classic::fmt_pl_time(dur)
+                            } else {
+                                String::new()
+                            };
+                            (format!("{}. {}", n, t.display_name()), time)
+                        }
+                        None => (String::new(), String::new()),
+                    };
+                    cs.compose_pl_shade(true, &text, &time, self.pl_colors().normal)
                 } else {
                     let rows = self.build_pl_rows();
                     let colors = self.pl_colors();
@@ -2414,6 +2973,12 @@ impl LinAmpApp {
                         PlayState::Stopped => 0.0,
                         _ => self.player.position().as_secs_f32(),
                     };
+                    let cur_duration = self
+                        .playlist
+                        .current_track()
+                        .and_then(|t| t.duration)
+                        .map(|d| d.as_secs_f32())
+                        .unwrap_or(0.0);
                     let mut total_secs = 0.0;
                     let mut total_partial = false;
                     for t in &self.playlist.tracks {
@@ -2429,6 +2994,8 @@ impl LinAmpApp {
                         first: self.pl_first,
                         pressed: self.pl_pressed_button(),
                         elapsed_secs,
+                        cur_duration,
+                        time_remaining: self.time_remaining,
                         total_secs,
                         total_partial,
                     };
@@ -2546,8 +3113,7 @@ impl LinAmpApp {
                     if self.stop_after_current { "ON" } else { "off" }
                 );
             } else {
-                self.player.stop();
-                self.fade = None;
+                self.stop_playback();
             }
         }
         if k.next {
@@ -3215,28 +3781,39 @@ impl eframe::App for LinAmpApp {
     /// Persist the playlist + playlist-window size for next launch (called
     /// periodically and on exit). The skin is saved separately on change.
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
-        let session = Session {
-            tracks: self
-                .playlist
-                .tracks
-                .iter()
-                .map(|t| t.path.display().to_string())
-                .collect(),
-            current: self.playlist.current,
-            pl_width: Some(self.pl_px_w),
-            pl_height: Some(self.pl_px_h),
-            eq_enabled: self.eq_enabled,
-            eq_auto: self.eq_auto,
-            eq_preamp: self.eq_preamp_db,
-            eq_bands: self.eq_bands.to_vec(),
-        };
-        session.save();
+        self.build_session().save();
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
+
+        // Persist the session (playlist, window layout, EQ) whenever it changes,
+        // so it survives exit without relying on eframe's save-on-exit.
+        self.persist_session_if_changed();
+
+        // Graceful shutdown on a window-manager close (Alt+F4 / WM "X"). Tearing
+        // down the root window while the EQ/playlist/popup viewports still exist
+        // crashes winit (an unwrap on a TranslateCoordinates query of the dying
+        // window). Close the children first, stop drawing the classic windows,
+        // and close the root a couple of frames later once they're gone.
+        if self.quit_countdown.is_none() && ctx.input(|i| i.viewport().close_requested()) {
+            self.eq_visible = false;
+            self.pl_visible = false;
+            self.popup = None;
+            self.quit_countdown = Some(2);
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+        if let Some(n) = self.quit_countdown {
+            ctx.request_repaint();
+            if n == 0 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.quit_countdown = Some(n - 1);
+            }
+            return; // don't render (or query) the classic windows mid-teardown
+        }
 
         if self.mode_init {
             let m = self.ui_mode;
@@ -3435,7 +4012,7 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dock_group_from_main, parse_time, rects_docked};
+    use super::{dock_group_from_main, parse_time, push_off, rects_docked, snap_rect};
 
     #[test]
     fn parse_time_formats() {
@@ -3459,8 +4036,109 @@ mod tests {
     }
 
     #[test]
+    fn push_off_main_keeps_it_uncovered() {
+        let main = r(100.0, 100.0, 200.0, 100.0); // x 100..300, y 100..200
+        // Flush below -> not overlapping, no push.
+        assert_eq!(push_off(r(100.0, 200.0, 200.0, 100.0), main), None);
+        // Overlapping mainly on main's left edge -> pushed out to the left.
+        let w = r(60.0, 120.0, 60.0, 40.0);
+        let p = push_off(w, main).unwrap();
+        assert!((p.x + 60.0 - main.left()).abs() < 0.01, "pushed flush to the left edge");
+        // Fully inside -> pushed to the nearest edge; result no longer overlaps.
+        let inside = r(150.0, 130.0, 50.0, 40.0);
+        let p = push_off(inside, main).unwrap();
+        let moved = Rect::from_min_size(p, vec2(50.0, 40.0));
+        assert!(push_off(moved, main).is_none(), "result still overlaps main");
+        // Dropped mostly ABOVE main (only a sliver overlaps its top edge) -> it is
+        // allowed above: pushed up so its bottom meets main's top.
+        let above = r(150.0, 70.0, 50.0, 40.0); // y 70..110, overlaps main's top 100..110
+        let p = push_off(above, main).unwrap();
+        assert!((p.y + 40.0 - main.top()).abs() < 0.01, "clearly-above window snaps above");
+        // Centred vertically -> favours below over above despite similar distance.
+        let centred = r(150.0, 150.0, 50.0, 100.0); // y150..250 around main 100..200
+        let p = push_off(centred, main).unwrap();
+        assert!(p.y >= main.top(), "centred window favours below, not above");
+    }
+
+    #[test]
     fn gap_is_not_docked() {
         assert!(!rects_docked(r(0.0, 0.0, 275.0, 116.0), r(0.0, 140.0, 275.0, 116.0)));
+    }
+
+    // Collapsed classic windows are 14px tall; SNAP is 16px. These guard the
+    // window-shade docking that was broken: a thin window dropped above another
+    // must land above it, not snap onto / past it onto a farther edge.
+    const COLL: f32 = 14.0;
+
+    #[test]
+    fn collapsed_eq_snaps_flush_above_main() {
+        // Main collapsed at y 473..487; EQ dropped just above it (bottom at 478,
+        // 5px into main). It must snap flush ABOVE main, not onto it.
+        let main = r(800.0, 473.0, 275.0, COLL);
+        let eq = r(794.0, 464.0, 275.0, COLL); // 464..478
+        let p = snap_rect(eq, &[main], None);
+        assert!((p.y + COLL - main.top()).abs() < 0.01, "EQ bottom should meet main top (flush above)");
+        assert!((p.x - main.left()).abs() < 0.01, "EQ should align to main's column");
+        // And the overlap resolver then leaves it alone (already separated).
+        let snapped = r(p.x, p.y, 275.0, COLL);
+        assert!(push_off(snapped, main).is_none(), "flush-above EQ must not be pushed");
+    }
+
+    #[test]
+    fn collapsed_playlist_lands_above_stacked_eq_not_on_main() {
+        // Regression: PL dropped above an EQ that is itself stacked above main must
+        // snap to EQ's top (0px away), not leapfrog past it onto main's top (14px
+        // away) and get shoved below main.
+        let main = r(800.0, 473.0, 275.0, COLL); // 473..487
+        let eq = r(800.0, 459.0, 275.0, COLL); //   459..473 (above main)
+        let pl_drop = r(794.0, 445.0, 275.0, COLL); // 445..459 (above eq)
+        let p = snap_rect(pl_drop, &[main, eq], None);
+        assert!((p.y + COLL - eq.top()).abs() < 0.01, "PL bottom should meet EQ top, staying above EQ");
+        assert!(p.y < main.top(), "PL must not snap down onto/under main");
+        // End-to-end: the child overlap resolver keeps it above both.
+        let pl = r(p.x, p.y, 275.0, COLL);
+        assert!(push_off(pl, main).is_none(), "PL must not overlap main");
+        assert!(rects_docked(eq, main), "EQ is docked to main (part of the stack)");
+        assert!(push_off(pl, eq).is_none(), "PL must not overlap the EQ it sits above");
+    }
+
+    #[test]
+    fn snap_picks_the_nearest_edge() {
+        // A window dropped between two stacked windows, within SNAP of both facing
+        // edges, snaps to the nearer one (not whichever is checked first). Here the
+        // drop sits 2px below the upper window's bottom and 12px above the lower
+        // window's top, so it must snap up to the upper window's bottom.
+        let upper = r(0.0, 0.0, 275.0, COLL); //   0..14
+        let lower = r(0.0, 42.0, 275.0, COLL); // 42..56
+        let drop = r(0.0, 16.0, 275.0, COLL); //  16..30: top 2px from upper.bottom, bottom 12px from lower.top
+        // Pass the farther window first to prove slice order doesn't decide the snap.
+        let p = snap_rect(drop, &[lower, upper], None);
+        assert!((p.y - upper.bottom()).abs() < 0.01, "should snap flush below the nearer (upper) window");
+    }
+
+    #[test]
+    fn eq_docks_below_main_normally() {
+        let main = r(800.0, 100.0, 275.0, 116.0); // 100..216
+        let eq_drop = r(805.0, 210.0, 275.0, 116.0); // top 210, 6px from main bottom
+        let p = snap_rect(eq_drop, &[main], None);
+        assert!((p.y - main.bottom()).abs() < 0.01, "EQ should dock flush below main");
+        assert!((p.x - main.left()).abs() < 0.01, "EQ should align to main's column");
+    }
+
+    #[test]
+    fn window_snaps_flush_to_the_side() {
+        let main = r(800.0, 100.0, 275.0, 116.0); // x 800..1075
+        let side = r(1070.0, 105.0, 275.0, 116.0); // left 1070, 5px from main's right
+        let p = snap_rect(side, &[main], None);
+        assert!((p.x - main.right()).abs() < 0.01, "side window should snap flush to main's right edge");
+    }
+
+    #[test]
+    fn snaps_to_screen_edges() {
+        let mon = Some(egui::vec2(1920.0, 1200.0));
+        let near_top_left = r(5.0, 9.0, 275.0, 116.0);
+        let p = snap_rect(near_top_left, &[], mon);
+        assert!(p.x.abs() < 0.01 && p.y.abs() < 0.01, "should snap into the top-left screen corner");
     }
 
     #[test]
