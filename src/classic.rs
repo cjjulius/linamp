@@ -200,7 +200,28 @@ pub struct MainState {
 pub enum ShadeHit {
     Close,
     TitleBar,
+    // Main window-shade extras (the EQ/playlist shades only use Close/TitleBar).
+    Restore,
+    Options,
+    Prev,
+    Play,
+    Pause,
+    Stop,
+    Next,
+    Eject,
 }
+
+/// Mini-transport buttons baked into the collapsed main window bar:
+/// (hit, x, width) in native skin pixels. Measured from TITLEBAR.BMP's
+/// windowshade sprite (dest x167..224, the row at y~3..11).
+const MAIN_SHADE_BTNS: &[(ShadeHit, i32, i32)] = &[
+    (ShadeHit::Prev, 167, 8),
+    (ShadeHit::Play, 176, 9),
+    (ShadeHit::Pause, 186, 9),
+    (ShadeHit::Stop, 196, 8),
+    (ShadeHit::Next, 205, 9),
+    (ShadeHit::Eject, 215, 9),
+];
 
 pub fn shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
     if y >= 14.0 {
@@ -211,6 +232,31 @@ pub fn shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
     } else {
         Some(ShadeHit::TitleBar)
     }
+}
+
+/// Hit-testing for the collapsed **main** window bar, which (unlike the EQ and
+/// playlist shades) carries the wave/options button, mini-transport buttons, and
+/// a restore button. Anything not on a control is the draggable title bar.
+pub fn main_shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
+    if y >= 14.0 {
+        return None;
+    }
+    if x >= 264.0 && x < 273.0 && y >= 3.0 && y < 12.0 {
+        return Some(ShadeHit::Close);
+    }
+    if x >= 254.0 && x < 263.0 && y >= 3.0 && y < 12.0 {
+        return Some(ShadeHit::Restore);
+    }
+    // Wave/clutter button at the far left opens the Options menu.
+    if x >= 1.0 && x < 18.0 {
+        return Some(ShadeHit::Options);
+    }
+    for (hit, bx, bw) in MAIN_SHADE_BTNS {
+        if x >= *bx as f32 && x < (*bx + *bw) as f32 {
+            return Some(*hit);
+        }
+    }
+    Some(ShadeHit::TitleBar)
 }
 
 /// Decoded sprite sheets from one skin, keyed by lowercased basename.
@@ -1474,6 +1520,22 @@ mod tests {
         };
         assert!(time_pixels(0) > 0, "row with a duration should draw its time");
         assert_eq!(time_pixels(1), 0, "row without a duration should draw no time");
+    }
+
+    #[test]
+    fn main_shade_regions() {
+        // Collapsed main bar: wave/options, mini-transport, restore, close; the
+        // branding/seek area in between is the draggable title bar.
+        assert_eq!(main_shade_region_at(9.0, 6.0), Some(ShadeHit::Options));
+        assert_eq!(main_shade_region_at(171.0, 6.0), Some(ShadeHit::Prev));
+        assert_eq!(main_shade_region_at(180.0, 6.0), Some(ShadeHit::Play));
+        assert_eq!(main_shade_region_at(200.0, 6.0), Some(ShadeHit::Stop));
+        assert_eq!(main_shade_region_at(219.0, 6.0), Some(ShadeHit::Eject));
+        assert_eq!(main_shade_region_at(258.0, 6.0), Some(ShadeHit::Restore));
+        assert_eq!(main_shade_region_at(268.0, 6.0), Some(ShadeHit::Close));
+        assert_eq!(main_shade_region_at(100.0, 6.0), Some(ShadeHit::TitleBar));
+        // The EQ/playlist shade tester has no transport buttons there.
+        assert_eq!(shade_region_at(180.0, 6.0), Some(ShadeHit::TitleBar));
     }
 
     #[test]
