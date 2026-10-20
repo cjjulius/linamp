@@ -70,8 +70,8 @@ fn push_off(r: egui::Rect, keep: egui::Rect) -> Option<egui::Pos2> {
     // top edge); otherwise the vertical escape is downward. Left/right compete on
     // least movement (no left/right preference), and we pick whichever axis — the
     // chosen vertical or the nearest horizontal — needs the least movement.
-    let vpush = if r.center().y < keep.top() {
-        keep.top() - r.bottom() // up: window is mostly above
+    let vpush = if r.center().y < keep.center().y {
+        keep.top() - r.bottom() // up: the window sits higher than main's centre
     } else {
         keep.bottom() - r.top() // down: favour below
     };
@@ -2161,7 +2161,10 @@ impl LinAmpApp {
                 }
             }
         } else {
-            // The dragged child moves out of the main window and its sibling.
+            // The dragged child moves out of the main window, and stacks below its
+            // sibling only when that sibling is itself docked to the main window
+            // (part of the stack). A floating sibling must not block the dragged
+            // window from docking directly under main.
             let di = win_idx(dragged);
             let oi = if di == 1 { 2 } else { 1 };
             for _ in 0..4 {
@@ -2170,7 +2173,7 @@ impl LinAmpApp {
                     self.win_pos[di] = p;
                     moved = true;
                 }
-                if vis(self, oi) {
+                if vis(self, oi) && rects_docked(rect(self, oi), rect(self, 0)) {
                     if let Some(p) = push_off(rect(self, di), rect(self, oi)) {
                         self.win_pos[di] = p;
                         moved = true;
