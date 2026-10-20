@@ -1494,7 +1494,14 @@ impl LinAmpApp {
                             }
                             ui.separator();
                             if item(ui, "Exit") {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                // This runs inside the popup's own viewport, so a
+                                // plain Close would only dismiss the menu. Target
+                                // the root viewport to actually quit the app.
+                                ctx.send_viewport_cmd_to(
+                                    egui::ViewportId::ROOT,
+                                    egui::ViewportCommand::Close,
+                                );
+                                close = true;
                             }
                         }
                         Popup::PlAdd => {
