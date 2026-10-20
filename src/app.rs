@@ -1244,12 +1244,24 @@ impl LinAmpApp {
         }
     }
 
+    /// Stop playback — fading out first when the "fade out when stopping" pref is
+    /// on (otherwise an immediate cut). Shift+V always forces a fade regardless.
+    fn stop_playback(&mut self) {
+        if self.prefs.fade_on_stop && self.player.state() != PlayState::Stopped {
+            self.fade = Some(FADE_SECS);
+            self.status = "Fading out…".into();
+        } else {
+            self.player.stop();
+            self.fade = None;
+        }
+    }
+
     fn trigger_classic(&mut self, ctx: &egui::Context, region: Btn) {
         match region {
             Btn::Prev => self.prev(),
             Btn::Play => self.play_pause(),
             Btn::Pause => self.player.pause(),
-            Btn::Stop => self.player.stop(),
+            Btn::Stop => self.stop_playback(),
             Btn::Next => self.next(),
             Btn::Eject => self.open_files(),
             Btn::Shuffle => self.shuffle = !self.shuffle,
@@ -2132,7 +2144,7 @@ impl LinAmpApp {
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
             .with_position(screen)
-            .with_inner_size(egui::vec2(330.0, 200.0))
+            .with_inner_size(egui::vec2(340.0, 360.0))
             .with_resizable(false)
             .with_taskbar(false);
         let id = egui::ViewportId::from_hash_of("linamp_prefs");
@@ -2158,6 +2170,25 @@ impl LinAmpApp {
                         self.playlist.load_all();
                     }
                 }
+
+                ui.add_space(8.0);
+                ui.strong("Playback");
+                // Behaviours that otherwise only have keyboard shortcuts, so they
+                // can be clicked instead of memorised.
+                ui.checkbox(&mut self.shuffle, "Shuffle (S)");
+                ui.checkbox(&mut self.repeat_all, "Repeat all (R)");
+                ui.checkbox(&mut self.repeat_one, "Repeat one");
+                ui.checkbox(&mut self.stop_after_current, "Stop after current track (Ctrl+V)");
+                ui.checkbox(&mut self.time_remaining, "Show time remaining (Ctrl+T)");
+                let mut fade = self.prefs.fade_on_stop;
+                if ui
+                    .checkbox(&mut fade, "Fade out when stopping (Shift+V)")
+                    .changed()
+                {
+                    self.prefs.fade_on_stop = fade;
+                    self.prefs.save();
+                }
+
                 ui.add_space(10.0);
                 if ui.button("Close").clicked() {
                     close = true;
@@ -2856,8 +2887,7 @@ impl LinAmpApp {
                     if self.stop_after_current { "ON" } else { "off" }
                 );
             } else {
-                self.player.stop();
-                self.fade = None;
+                self.stop_playback();
             }
         }
         if k.next {

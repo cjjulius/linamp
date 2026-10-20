@@ -13,6 +13,8 @@ pub struct Prefs {
     pub tag_on_load: bool,
     /// Path to the skin loaded last; restored on next launch.
     pub last_skin: Option<String>,
+    /// true = the Stop action fades out instead of cutting off immediately.
+    pub fade_on_stop: bool,
 }
 
 impl Default for Prefs {
@@ -21,6 +23,7 @@ impl Default for Prefs {
             double_size: true,
             tag_on_load: true,
             last_skin: None,
+            fade_on_stop: false,
         }
     }
 }
@@ -116,7 +119,7 @@ mod tests {
 
     #[test]
     fn scale_1x() {
-        let p = Prefs { double_size: false, tag_on_load: false, last_skin: None };
+        let p = Prefs { double_size: false, tag_on_load: false, ..Prefs::default() };
         assert_eq!(p.scale(), 1.0);
     }
 
@@ -126,6 +129,7 @@ mod tests {
             double_size: false,
             tag_on_load: true,
             last_skin: Some("C:/skins/x.wsz".into()),
+            ..Prefs::default()
         };
         let s = serde_json::to_string(&p).unwrap();
         let q: Prefs = serde_json::from_str(&s).unwrap();
