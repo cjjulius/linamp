@@ -142,7 +142,7 @@ fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        x11_cursor_px().map(|(x, y)| {
+        x11util::cursor_px().map(|(x, y)| {
             let ppp = ctx.pixels_per_point().max(0.1);
             egui::pos2(x as f32 / ppp, y as f32 / ppp)
         })
@@ -154,78 +154,241 @@ fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
     }
 }
 
-/// Global cursor position in physical pixels via X11's `XQueryPointer`, or
-/// `None` when there is no X display (e.g. native Wayland, where the connection
-/// can't be opened). The Xlib handle and display connection are opened once and
-/// cached per thread — the UI runs on a single thread, and the query is only
-/// made during an active title-bar drag.
+/// Linux/X11 helpers used for classic-window management: the global cursor query
+/// (for manual tandem dragging) and `WM_TRANSIENT_FOR` window grouping (so the
+/// EQ/playlist windows ride the main window's z-order, raise with it, and don't
+/// get their own taskbar entry — the X11 analogue of the Windows owner-window
+/// grouping). Everything degrades to a no-op when there is no X display (e.g.
+/// native Wayland), so the caller falls back to OS behaviour there.
 #[cfg(all(unix, not(target_os = "macos")))]
-fn x11_cursor_px() -> Option<(i32, i32)> {
+mod x11util {
     use std::cell::RefCell;
+    use std::ffi::CString;
+    use std::os::raw::{c_int, c_long, c_uchar, c_ulong};
     use std::ptr;
     use x11_dl::xlib;
 
     enum Conn {
         Untried,
         Unavailable,
-        Ready(xlib::Xlib, *mut xlib::Display, xlib::Window),
+        Ready(xlib::Xlib, *mut xlib::Display),
     }
 
     thread_local! {
-        static X11: RefCell<Conn> = RefCell::new(Conn::Untried);
+        static CONN: RefCell<Conn> = RefCell::new(Conn::Untried);
     }
 
-    X11.with(|cell| {
-        if matches!(*cell.borrow(), Conn::Untried) {
-            let next = match xlib::Xlib::open() {
-                Ok(xlib) => {
-                    let display = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
-                    if display.is_null() {
-                        Conn::Unavailable
-                    } else {
-                        let root = unsafe { (xlib.XDefaultRootWindow)(display) };
-                        Conn::Ready(xlib, display, root)
+    /// Run `f` with the cached Xlib handle + display, opening the connection on
+    /// first use. `None` when there is no X display.
+    fn with_conn<R>(f: impl FnOnce(&xlib::Xlib, *mut xlib::Display) -> R) -> Option<R> {
+        CONN.with(|cell| {
+            if matches!(*cell.borrow(), Conn::Untried) {
+                let next = match xlib::Xlib::open() {
+                    Ok(xlib) => {
+                        let d = unsafe { (xlib.XOpenDisplay)(ptr::null()) };
+                        if d.is_null() {
+                            Conn::Unavailable
+                        } else {
+                            Conn::Ready(xlib, d)
+                        }
                     }
-                }
-                Err(_) => Conn::Unavailable,
-            };
-            *cell.borrow_mut() = next;
+                    Err(_) => Conn::Unavailable,
+                };
+                *cell.borrow_mut() = next;
+            }
+            match &*cell.borrow() {
+                Conn::Ready(xlib, d) => Some(f(xlib, *d)),
+                _ => None,
+            }
+        })
+    }
+
+    /// Global pointer position in physical pixels, or `None` if unavailable.
+    /// Called only during an active title-bar drag.
+    pub fn cursor_px() -> Option<(i32, i32)> {
+        with_conn(|xlib, d| unsafe {
+            let root = (xlib.XDefaultRootWindow)(d);
+            let (mut rr, mut cr): (xlib::Window, xlib::Window) = (0, 0);
+            let (mut rx, mut ry, mut wx, mut wy) = (0i32, 0i32, 0i32, 0i32);
+            let mut mask: u32 = 0;
+            let ok = (xlib.XQueryPointer)(
+                d, root, &mut rr, &mut cr, &mut rx, &mut ry, &mut wx, &mut wy, &mut mask,
+            );
+            // False only means the pointer is on another screen; rx/ry stay valid
+            // global coords, but we treat it as unknown and fall back to OS drag.
+            (ok != 0).then_some((rx, ry))
+        })
+        .flatten()
+    }
+
+    unsafe fn intern(xlib: &xlib::Xlib, d: *mut xlib::Display, name: &str) -> xlib::Atom {
+        let c = CString::new(name).unwrap();
+        (xlib.XInternAtom)(d, c.as_ptr(), 0)
+    }
+
+    /// The root's `_NET_CLIENT_LIST` — the WM's managed top-level windows.
+    unsafe fn client_list(xlib: &xlib::Xlib, d: *mut xlib::Display) -> Vec<xlib::Window> {
+        let root = (xlib.XDefaultRootWindow)(d);
+        let prop = intern(xlib, d, "_NET_CLIENT_LIST");
+        const XA_WINDOW: xlib::Atom = 33;
+        let (mut ty, mut fmt): (xlib::Atom, c_int) = (0, 0);
+        let (mut nitems, mut after): (c_ulong, c_ulong) = (0, 0);
+        let mut data: *mut c_uchar = ptr::null_mut();
+        let st = (xlib.XGetWindowProperty)(
+            d, root, prop, 0, 4096, 0, XA_WINDOW, &mut ty, &mut fmt, &mut nitems, &mut after,
+            &mut data,
+        );
+        let mut out = Vec::new();
+        if st == 0 && !data.is_null() && fmt == 32 {
+            let p = data as *const c_ulong;
+            for i in 0..nitems as isize {
+                out.push(*p.offset(i) as xlib::Window);
+            }
+        }
+        if !data.is_null() {
+            (xlib.XFree)(data as *mut _);
+        }
+        out
+    }
+
+    /// A window's `_NET_WM_NAME` (UTF-8 title), or empty if unset.
+    unsafe fn wm_name(xlib: &xlib::Xlib, d: *mut xlib::Display, w: xlib::Window) -> String {
+        let prop = intern(xlib, d, "_NET_WM_NAME");
+        let utf8 = intern(xlib, d, "UTF8_STRING");
+        let (mut ty, mut fmt): (xlib::Atom, c_int) = (0, 0);
+        let (mut nitems, mut after): (c_ulong, c_ulong) = (0, 0);
+        let mut data: *mut c_uchar = ptr::null_mut();
+        let st = (xlib.XGetWindowProperty)(
+            d, w, prop, 0, 1024, 0, utf8, &mut ty, &mut fmt, &mut nitems, &mut after, &mut data,
+        );
+        let mut s = String::new();
+        if st == 0 && !data.is_null() {
+            s = String::from_utf8_lossy(std::slice::from_raw_parts(data, nitems as usize))
+                .into_owned();
+        }
+        if !data.is_null() {
+            (xlib.XFree)(data as *mut _);
+        }
+        s
+    }
+
+    /// Error handler that swallows async X errors (e.g. a `BadWindow` from a
+    /// window destroyed mid-scan) so a stray property query can never abort the
+    /// process via Xlib's default handler.
+    unsafe extern "C" fn ignore_err(
+        _d: *mut xlib::Display,
+        _e: *mut xlib::XErrorEvent,
+    ) -> c_int {
+        0
+    }
+
+    /// Ask the WM to drop `win` from the taskbar via `_NET_WM_STATE_SKIP_TASKBAR`.
+    /// Sent as an EWMH client message (the correct way to change state on a window
+    /// that is already mapped) so the EQ/playlist windows don't each get their own
+    /// taskbar entry — only the main window represents the group.
+    unsafe fn skip_taskbar(xlib: &xlib::Xlib, d: *mut xlib::Display, win: xlib::Window) {
+        let root = (xlib.XDefaultRootWindow)(d);
+        let net_wm_state = intern(xlib, d, "_NET_WM_STATE");
+        let skip = intern(xlib, d, "_NET_WM_STATE_SKIP_TASKBAR");
+        const NET_WM_STATE_ADD: c_long = 1;
+        let mut ev: xlib::XEvent = std::mem::zeroed();
+        {
+            let cm = &mut ev.client_message;
+            cm.type_ = xlib::ClientMessage;
+            cm.send_event = 1;
+            cm.display = d;
+            cm.window = win;
+            cm.message_type = net_wm_state;
+            cm.format = 32;
+            cm.data.set_long(0, NET_WM_STATE_ADD);
+            cm.data.set_long(1, skip as c_long);
+            cm.data.set_long(2, 0);
+            cm.data.set_long(3, 1); // source indication: normal application
+            cm.data.set_long(4, 0);
+        }
+        let mask = xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask;
+        (xlib.XSendEvent)(d, root, 0, mask, &mut ev);
+    }
+
+    /// Link the EQ/playlist windows to the main window via `WM_TRANSIENT_FOR`.
+    /// Scans and applies only while the links aren't yet in place for the current
+    /// set of visible windows; steady state makes no X calls at all. Re-links
+    /// after a show/hide (which recreates the child window with a new XID).
+    pub fn group(eq_visible: bool, pl_visible: bool) {
+        thread_local! {
+            // (eq_visible, pl_visible, linked?) we last acted on.
+            static STATE: RefCell<(bool, bool, bool)> = RefCell::new((false, false, false));
+        }
+        let cfg = (eq_visible, pl_visible);
+        let done = STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            if (s.0, s.1) != cfg {
+                *s = (cfg.0, cfg.1, false); // visibility changed -> re-link
+            }
+            s.2
+        });
+        if done {
+            return;
         }
 
-        let conn = cell.borrow();
-        let Conn::Ready(xlib, display, root) = &*conn else {
-            return None;
-        };
-        let mut root_ret: xlib::Window = 0;
-        let mut child_ret: xlib::Window = 0;
-        let (mut root_x, mut root_y, mut win_x, mut win_y) = (0i32, 0i32, 0i32, 0i32);
-        let mut mask: u32 = 0;
-        let ok = unsafe {
-            (xlib.XQueryPointer)(
-                *display,
-                *root,
-                &mut root_ret,
-                &mut child_ret,
-                &mut root_x,
-                &mut root_y,
-                &mut win_x,
-                &mut win_y,
-                &mut mask,
-            )
-        };
-        // XQueryPointer returns False only when the pointer is on a different
-        // screen; treat that as "unknown" and fall back to the OS drag.
-        (ok != 0).then_some((root_x, root_y))
-    })
+        let linked = with_conn(|xlib, d| unsafe {
+            // Guard the whole scan: querying a window another client just
+            // destroyed would otherwise fire Xlib's fatal default handler.
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            let clients = client_list(xlib, d);
+            let (mut main, mut eq, mut pl) = (0, 0, 0);
+            for &w in &clients {
+                match wm_name(xlib, d, w).as_str() {
+                    "LinAmp" => main = w,
+                    "LinAmp Equalizer" => eq = w,
+                    "LinAmp Playlist" => pl = w,
+                    _ => {}
+                }
+            }
+            let mut ok = main != 0;
+            if main != 0 {
+                if eq_visible {
+                    if eq != 0 {
+                        (xlib.XSetTransientForHint)(d, eq, main);
+                        skip_taskbar(xlib, d, eq);
+                    } else {
+                        ok = false;
+                    }
+                }
+                if pl_visible {
+                    if pl != 0 {
+                        (xlib.XSetTransientForHint)(d, pl, main);
+                        skip_taskbar(xlib, d, pl);
+                    } else {
+                        ok = false;
+                    }
+                }
+            }
+            (xlib.XSync)(d, 0); // deliver any errors to ignore_err before restoring
+            (xlib.XSetErrorHandler)(prev);
+            ok
+        })
+        .unwrap_or(false);
+
+        if linked {
+            STATE.with(|s| s.borrow_mut().2 = true);
+        }
+    }
 }
 
 /// Make the EQ/playlist windows *owned* by the main window so they ride its
 /// z-order as a group (rise together, stay above it, hide when it minimizes) —
 /// Winamp-style window grouping. Idempotent and cheap, so it runs each frame to
-/// cover windows being shown/hidden (which recreates them). Windows-only.
-fn group_child_windows() {
+/// cover windows being shown/hidden (which recreates them). Implemented on
+/// Windows (owner window) and Linux/X11 (`WM_TRANSIENT_FOR`); a no-op elsewhere.
+fn group_child_windows(eq_visible: bool, pl_visible: bool) {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::group(eq_visible, pl_visible);
+    }
     #[cfg(windows)]
     {
+        let _ = (eq_visible, pl_visible);
         #[allow(non_snake_case)]
         extern "system" {
             fn FindWindowW(class: *const u16, title: *const u16) -> isize;
@@ -246,6 +409,10 @@ fn group_child_windows() {
                 }
             }
         }
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+    {
+        let _ = (eq_visible, pl_visible);
     }
 }
 
@@ -2403,7 +2570,7 @@ impl LinAmpApp {
         self.draw_popup_viewport(ctx);
 
         // Keep the EQ/playlist windows owned by the main window (z-order group).
-        group_child_windows();
+        group_child_windows(self.eq_visible, self.pl_visible);
     }
 
     fn render_window(&mut self, ctx: &egui::Context, win: ClWin) {
