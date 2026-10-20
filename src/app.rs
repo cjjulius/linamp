@@ -549,6 +549,8 @@ pub struct LinAmpApp {
     eq_shade: bool,
     pl_shade: bool,
     tb_last_click: Option<(ClWin, Instant)>,
+    /// Last click on the main time display, for double-click elapsed/remaining.
+    time_last_click: Option<Instant>,
     // multi-window geometry (points)
     win_pos: [egui::Pos2; 3],
     pl_px_h: f32,
@@ -713,6 +715,7 @@ impl LinAmpApp {
             eq_shade: false,
             pl_shade: false,
             tb_last_click: None,
+            time_last_click: None,
             win_pos: [egui::pos2(100.0, 100.0); 3],
             pl_px_h: classic::PL_H as f32,
             pl_px_w: classic::MAIN_W as f32,
@@ -1917,6 +1920,20 @@ impl LinAmpApp {
                         if classic::region_at(nx, ny) == Some(r) {
                             if r == Btn::Options {
                                 self.open_popup_in(Popup::Options, win, l);
+                            } else if r == Btn::Time {
+                                // Double-click the time display toggles elapsed vs
+                                // remaining (shown as a negative) everywhere it's shown.
+                                let now = Instant::now();
+                                let dbl = self
+                                    .time_last_click
+                                    .map(|t| now.duration_since(t).as_millis() < 350)
+                                    .unwrap_or(false);
+                                if dbl {
+                                    self.time_remaining = !self.time_remaining;
+                                    self.time_last_click = None;
+                                } else {
+                                    self.time_last_click = Some(now);
+                                }
                             } else {
                                 self.trigger_classic(ctx, r);
                             }
@@ -2808,17 +2825,29 @@ impl LinAmpApp {
             }
             ClWin::Pl => {
                 if self.pl_shade {
-                    let (text, secs) = match self.playlist.current_track() {
+                    let (text, time) = match self.playlist.current_track() {
                         Some(t) => {
                             let n = self.playlist.current.map(|i| i + 1).unwrap_or(0);
-                            (
-                                format!("{}. {}", n, t.display_name()),
-                                t.duration.map(|d| d.as_secs_f32()),
-                            )
+                            let dur = t.duration.map(|d| d.as_secs_f32()).unwrap_or(0.0);
+                            // Playing/paused: the live position, toggling
+                            // elapsed/remaining like the main LCD. Stopped: the
+                            // track length.
+                            let time = if self.player.state() != PlayState::Stopped {
+                                classic::fmt_pl_time_signed(
+                                    self.player.position().as_secs_f32(),
+                                    dur,
+                                    self.time_remaining,
+                                )
+                            } else if dur > 0.0 {
+                                classic::fmt_pl_time(dur)
+                            } else {
+                                String::new()
+                            };
+                            (format!("{}. {}", n, t.display_name()), time)
                         }
-                        None => (String::new(), None),
+                        None => (String::new(), String::new()),
                     };
-                    cs.compose_pl_shade(true, &text, secs, self.pl_colors().normal)
+                    cs.compose_pl_shade(true, &text, &time, self.pl_colors().normal)
                 } else {
                     let rows = self.build_pl_rows();
                     let colors = self.pl_colors();
@@ -2826,6 +2855,12 @@ impl LinAmpApp {
                         PlayState::Stopped => 0.0,
                         _ => self.player.position().as_secs_f32(),
                     };
+                    let cur_duration = self
+                        .playlist
+                        .current_track()
+                        .and_then(|t| t.duration)
+                        .map(|d| d.as_secs_f32())
+                        .unwrap_or(0.0);
                     let mut total_secs = 0.0;
                     let mut total_partial = false;
                     for t in &self.playlist.tracks {
@@ -2841,6 +2876,8 @@ impl LinAmpApp {
                         first: self.pl_first,
                         pressed: self.pl_pressed_button(),
                         elapsed_secs,
+                        cur_duration,
+                        time_remaining: self.time_remaining,
                         total_secs,
                         total_partial,
                     };
