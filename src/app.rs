@@ -31,6 +31,14 @@ fn win_idx(w: ClWin) -> usize {
     }
 }
 
+fn idx_win(i: usize) -> ClWin {
+    match i {
+        0 => ClWin::Main,
+        1 => ClWin::Eq,
+        _ => ClWin::Pl,
+    }
+}
+
 /// Window size (points) for a popup menu, from its item/separator count.
 fn popup_dims(kind: Popup) -> (f32, f32) {
     let (buttons, seps) = match kind {
@@ -57,27 +65,27 @@ fn push_off(r: egui::Rect, keep: egui::Rect) -> Option<egui::Pos2> {
         return None;
     }
     use egui::vec2;
-    // Resolve the overlap by the least movement to an edge, but bias against
-    // "above": below and the sides are favoured, so a window only ends up over the
-    // top when it was clearly dropped mostly above the main window. No left/right
-    // preference.
-    const UP_BIAS: f32 = 1.6;
-    let left = vec2(keep.left() - r.right(), 0.0);
-    let right = vec2(keep.right() - r.left(), 0.0);
-    let down = vec2(0.0, keep.bottom() - r.top());
-    let up = vec2(0.0, keep.top() - r.bottom());
-    let cands = [
-        (left.length(), left),
-        (right.length(), right),
-        (down.length(), down),
-        (up.length() * UP_BIAS, up),
-    ];
-    let best = cands
-        .iter()
-        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
-        .unwrap()
-        .1;
-    Some(r.min + best)
+    // Resolve the overlap by the least movement, but favour below over above: only
+    // go above when the window is *mostly* above `keep` (its centre is above the
+    // top edge); otherwise the vertical escape is downward. Left/right compete on
+    // least movement (no left/right preference), and we pick whichever axis — the
+    // chosen vertical or the nearest horizontal — needs the least movement.
+    let vpush = if r.center().y < keep.top() {
+        keep.top() - r.bottom() // up: window is mostly above
+    } else {
+        keep.bottom() - r.top() // down: favour below
+    };
+    let hpush = if (keep.left() - r.right()).abs() < (keep.right() - r.left()).abs() {
+        keep.left() - r.right() // out to the left
+    } else {
+        keep.right() - r.left() // out to the right
+    };
+    let push = if vpush.abs() <= hpush.abs() {
+        vec2(0.0, vpush)
+    } else {
+        vec2(hpush, 0.0)
+    };
+    Some(r.min + push)
 }
 
 /// Two windows are docked when an edge is flush (within tolerance) and they
@@ -2050,10 +2058,8 @@ impl LinAmpApp {
             if d.win == ClWin::Main {
                 self.root_last = None;
             }
-            // The main window is never covered: push any EQ/playlist that ended up
-            // over it out to its nearest edge (whether they were dragged onto main
-            // or main was dragged onto them).
-            self.keep_main_uncovered();
+            // Main never covered; EQ/playlist never cover each other (they stack).
+            self.resolve_overlaps(d.win);
         } else {
             // A click with no move: double-click toggles the window shade.
             let now = Instant::now();
@@ -2120,26 +2126,62 @@ impl LinAmpApp {
         }
     }
 
-    /// Push the EQ/playlist windows off the main window so it is never covered.
-    fn keep_main_uncovered(&mut self) {
-        let main = egui::Rect::from_min_size(self.win_pos[0], self.win_inner_size(ClWin::Main));
-        let mut moved = false;
-        for (idx, vis, win) in [
-            (1usize, self.eq_visible, ClWin::Eq),
-            (2usize, self.pl_visible, ClWin::Pl),
-        ] {
-            if !vis {
-                continue;
+    /// After a drag, resolve window overlaps: the main window is never covered, and
+    /// the EQ/playlist windows never cover each other (they stack). The window that
+    /// gives way is the one just dragged (a child moves off main and off its
+    /// sibling; when main was dragged, the children move off it instead).
+    fn resolve_overlaps(&mut self, dragged: ClWin) {
+        let rect = |app: &Self, i: usize| {
+            egui::Rect::from_min_size(app.win_pos[i], app.win_inner_size(idx_win(i)))
+        };
+        let vis = |app: &Self, i: usize| match i {
+            0 => true,
+            1 => app.eq_visible,
+            2 => app.pl_visible,
+            _ => false,
+        };
+        if dragged == ClWin::Main {
+            // Children give way: push each off main, then separate them if needed.
+            for i in [1usize, 2usize] {
+                if vis(self, i) {
+                    if let Some(p) = push_off(rect(self, i), rect(self, 0)) {
+                        self.win_pos[i] = p;
+                    }
+                }
             }
-            let r = egui::Rect::from_min_size(self.win_pos[idx], self.win_inner_size(win));
-            if let Some(p) = push_off(r, main) {
-                self.win_pos[idx] = p;
-                moved = true;
+            if vis(self, 1) && vis(self, 2) {
+                // Push the lower one below the higher so they don't overlap.
+                let (hi, lo) = if self.win_pos[1].y <= self.win_pos[2].y {
+                    (1, 2)
+                } else {
+                    (2, 1)
+                };
+                if let Some(p) = push_off(rect(self, lo), rect(self, hi)) {
+                    self.win_pos[lo] = p;
+                }
+            }
+        } else {
+            // The dragged child moves out of the main window and its sibling.
+            let di = win_idx(dragged);
+            let oi = if di == 1 { 2 } else { 1 };
+            for _ in 0..4 {
+                let mut moved = false;
+                if let Some(p) = push_off(rect(self, di), rect(self, 0)) {
+                    self.win_pos[di] = p;
+                    moved = true;
+                }
+                if vis(self, oi) {
+                    if let Some(p) = push_off(rect(self, di), rect(self, oi)) {
+                        self.win_pos[di] = p;
+                        moved = true;
+                    }
+                }
+                if !moved {
+                    break;
+                }
             }
         }
-        if moved {
-            self.root_last = None;
-        }
+        self.root_last = None;
     }
 
     fn win_rect_pts(&self, idx: usize) -> egui::Rect {
