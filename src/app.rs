@@ -2208,7 +2208,7 @@ impl LinAmpApp {
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
             .with_position(screen)
-            .with_inner_size(egui::vec2(340.0, 360.0))
+            .with_inner_size(egui::vec2(340.0, 300.0))
             .with_resizable(false)
             .with_taskbar(false);
         let id = egui::ViewportId::from_hash_of("linamp_prefs");
@@ -2238,10 +2238,8 @@ impl LinAmpApp {
                 ui.add_space(8.0);
                 ui.strong("Playback");
                 // Behaviours that otherwise only have keyboard shortcuts, so they
-                // can be clicked instead of memorised.
-                ui.checkbox(&mut self.shuffle, "Shuffle (S)");
-                ui.checkbox(&mut self.repeat_all, "Repeat all (R)");
-                ui.checkbox(&mut self.repeat_one, "Repeat one");
+                // can be clicked instead of memorised. Shuffle/repeat are omitted
+                // here as they already have buttons on the classic main window.
                 ui.checkbox(&mut self.stop_after_current, "Stop after current track (Ctrl+V)");
                 ui.checkbox(&mut self.time_remaining, "Show time remaining (Ctrl+T)");
                 let mut fade = self.prefs.fade_on_stop;
