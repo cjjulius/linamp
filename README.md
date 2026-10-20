@@ -1,11 +1,13 @@
 <div align="center">
-<img src="assets/linamp_logo_256.png" alt="LinAmp" width="128">
 
-# LinAmp
+<h1><img src="assets/linamp_logo_64.png" alt="" height="40" align="middle"> &nbsp;LinAmp</h1>
 
 **A Winamp-inspired audio player for Linux and Windows, in Rust.**
 
 Pixel-perfect classic skin · 10-band EQ · live analyzer · playlist · Winamp keyboard shortcuts
+
+<img src="assets/screenshot.png" alt="LinAmp in the classic skin — main player, equalizer and playlist" width="380">
+
 </div>
 
 ---
@@ -25,10 +27,27 @@ coordinates — on a modern cross-platform stack (`eframe`/`egui` UI,
 - **Visualizer** — live FFT spectrum analyzer and oscilloscope, skin-coloured.
 - **Playlist** — add files/folders, drag-and-drop, reorder, sort, search, M3U/PLS.
 - **Tags & library** — read/edit ID3 tags; SQLite-backed media library.
-- **Keyboard shortcuts** matching Winamp — see [SHORTCUTS.md](SHORTCUTS.md).
 
 Full feature list and roadmap: [FEATURES.md](FEATURES.md). The backlog lives in
 [GitHub Issues](https://github.com/cjjulius/linamp/issues).
+
+## Keyboard shortcuts
+
+Matching classic Winamp. (Up/Down move the selection when the playlist window is
+focused, otherwise they change the volume.)
+
+| Keys | Action | | Keys | Action |
+|------|--------|---|------|--------|
+| `X` | Play | | `L` / `Shift+L` | Open file(s) / folder |
+| `C` | Pause | | `J` / `Ctrl+J` | Jump to file / to time |
+| `V` | Stop | | `Alt+G` / `Alt+E` | Toggle equalizer / playlist |
+| `Shift+V` | Stop with fade-out | | `Ctrl+D` | Toggle double size |
+| `Ctrl+V` | Stop after current (toggle) | | `Ctrl+P` | Preferences |
+| `B` / `Z` | Next / previous track | | `Ctrl+T` | Time elapsed / remaining |
+| `Space` | Play/pause toggle | | `Alt+3` | Edit file tags (ID3) |
+| `←` / `→` | Seek −5s / +5s | | `Enter` / `Delete` | Play / remove selected |
+| `↑` / `↓` | Volume up / down | | `Ctrl+A` / `Insert` | Select all / add files |
+| `R` / `S` | Repeat / shuffle | | | |
 
 ## Build & run
 
@@ -65,6 +84,10 @@ folder. Headless preview: `linamp --render-all skin.wsz out.png`.
 
 `cargo test` runs the suite (pure, cross-platform); CI builds and tests on Linux
 and Windows for every push and PR.
+
+> The screenshot is `assets/screenshot.png`, regenerated with
+> `cargo run -- --render-all skins/linamp_base_skin.wsz` (then scaled 2×) when the
+> UI changes substantially.
 
 ## License
 

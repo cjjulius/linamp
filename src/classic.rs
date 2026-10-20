@@ -1274,13 +1274,13 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
         repeat: true,
         eq_on: true,
         pl_on: true,
-        pos: 73.0,
-        duration: 221.0,
+        pos: 73.0, // 1:13
+        duration: 325.0,
         time_remaining: false,
         volume: 0.8,
         balance: 0.0,
         stereo: true,
-        title: "linamp - classic skin test".to_string(),
+        title: "aria nocturne - crystal harbor".to_string(),
         kbps: "192".to_string(),
         khz: "44".to_string(),
         fg: [0, 255, 120],
@@ -1288,20 +1288,22 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
         viz_spectrum: sample_palette(),
         viz_peak: [150, 150, 150],
     });
+    // Rock preset (band gains 8,5,-4,-7,-3,2,6,9,10,10 dB over ±12) so the
+    // colored sliders show their green-boost / red-cut range.
     let eq = skin.compose_eq(&EqState {
         focused: true,
         on: true,
         auto: false,
         pressed: None,
         preamp: 0.0,
-        bands: [0.6, 0.3, 0.0, -0.2, -0.4, -0.2, 0.1, 0.3, 0.5, 0.7],
+        bands: [0.667, 0.417, -0.333, -0.583, -0.25, 0.167, 0.5, 0.75, 0.833, 0.833],
     });
     let rows: Vec<PlRow> = vec![
-        ("1. akira - kaneda theme".to_string(), true, true, Some(272.0)),
-        ("2. geinoh yamashirogumi - tetsuo".to_string(), false, false, Some(345.0)),
-        ("3. battle angel alita - gally".to_string(), false, false, None),
-        ("4. iria - zeiram ost".to_string(), false, false, Some(201.0)),
-        ("5. evangelion - cruel angel".to_string(), false, false, Some(238.0)),
+        ("1. aria nocturne - crystal harbor".to_string(), true, true, Some(325.0)),
+        ("2. midnight ramen - neon skyline".to_string(), false, false, Some(242.0)),
+        ("3. lo-fi samurai - paper lanterns".to_string(), false, false, Some(198.0)),
+        ("4. nova drift - blue hour".to_string(), false, false, Some(276.0)),
+        ("5. the wandering synths - midnight train".to_string(), false, false, Some(263.0)),
     ];
     let pl = skin.compose_playlist(
         &PlState {
@@ -1315,11 +1317,11 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
             rows: &rows,
             first: 0,
             pressed: None,
-            elapsed_secs: 406.0, // 6:46
-            cur_duration: 272.0,
+            elapsed_secs: 73.0, // 1:13, matching the main display
+            cur_duration: 325.0,
             time_remaining: false,
-            total_secs: 52.0 * 3600.0 + 48.0 * 60.0 + 36.0, // 52:48:36
-            total_partial: true,
+            total_secs: 1304.0, // 21:44 across the five tracks
+            total_partial: false,
         },
         MAIN_W,
         PL_H,
