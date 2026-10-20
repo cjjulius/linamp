@@ -1278,6 +1278,117 @@ mod tests {
     }
 
     #[test]
+    fn every_mini_transport_button_is_hittable() {
+        // Each PL_MINI_BTNS entry's centre must resolve back to that region, and
+        // none may collide with the resize grip at the right edge. Guards the
+        // bottom-bar geometry on both platforms.
+        for &(region, bx, bw) in PL_MINI_BTNS {
+            for &(w, h) in &[(275.0f32, 180.0f32), (420.0, 240.0)] {
+                let cx = (w - 150.0) + bx as f32 + bw as f32 / 2.0;
+                let cy = h - 11.0; // middle of the height-15..height-6 strip
+                assert_eq!(
+                    pl_region_at(cx, cy, w, h),
+                    Some(region),
+                    "mini button {region:?} not hittable at {w}x{h}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tooltips_present_and_in_bounds() {
+        let main = main_tooltips();
+        let labels: Vec<&str> = main.iter().map(|t| t.0).collect();
+        for l in [
+            "Previous", "Play", "Pause", "Stop", "Next", "Open file(s)", "Shuffle", "Repeat",
+            "Equalizer", "Playlist", "Close", "Minimize", "Options",
+        ] {
+            assert!(labels.contains(&l), "main tooltip missing {l}");
+        }
+        for (_, x, y, w, h) in &main {
+            assert!(
+                *x >= 0 && *y >= 0 && (x + w) as u32 <= MAIN_W && (y + h) as u32 <= MAIN_H,
+                "main tooltip rect out of bounds"
+            );
+        }
+        let eq: Vec<&str> = eq_tooltips().iter().map(|t| t.0).collect();
+        for l in ["On", "Auto", "Presets", "Close"] {
+            assert!(eq.contains(&l), "eq tooltip missing {l}");
+        }
+        assert_eq!(pl_tooltips(275, 180).len(), 6);
+    }
+
+    #[test]
+    fn main_tooltips_sit_on_their_buttons() {
+        // Every tooltip rect must cover the button it names, so hover labels and
+        // click targets can't drift apart.
+        for (label, x, y, w, h) in main_tooltips() {
+            let (cx, cy) = ((x + w / 2) as f32, (y + h / 2) as f32);
+            assert_eq!(
+                region_at(cx, cy).and_then(btn_label),
+                Some(label),
+                "tooltip {label:?} centre doesn't hit its button"
+            );
+        }
+    }
+
+    #[test]
+    fn pl_tooltips_track_the_right_edge() {
+        let narrow = pl_tooltips(275, 180);
+        let wide = pl_tooltips(375, 180);
+        assert_eq!(narrow.len(), wide.len());
+        for (n, w) in narrow.iter().zip(&wide) {
+            assert_eq!(n.0, w.0, "label changed");
+            assert_eq!(w.1 - n.1, 100, "{} did not follow the right edge", n.0);
+        }
+    }
+
+    #[test]
+    fn playlist_row_draws_track_time() {
+        // #73: a row with a known length renders the time right-aligned; a row
+        // with no length renders none. Checks for normal-coloured text pixels in
+        // the right-hand time column.
+        let skin = load_skin("linamp_base_skin.wsz");
+        let colors = PlColors {
+            bg: [0, 0, 0],
+            normal: [0, 255, 0],
+            current: [255, 255, 255],
+            selbg: [0, 0, 180],
+        };
+        let rows: Vec<PlRow> = vec![
+            ("track one".to_string(), false, false, Some(125.0)), // 2:05
+            ("track two".to_string(), false, false, None),
+        ];
+        let st = PlState {
+            focused: true,
+            colors,
+            rows: &rows,
+            first: 0,
+            pressed: None,
+            elapsed_secs: 0.0,
+            total_secs: 0.0,
+            total_partial: false,
+        };
+        let w = MAIN_W;
+        let img = skin.compose_playlist(&st, w, PL_H);
+        let time_pixels = |row: usize| -> usize {
+            let ry = PL_LIST_Y + row as i32 * PL_ROW_H;
+            let mut n = 0;
+            for yy in ry..ry + PL_ROW_H {
+                for xx in (w as i32 - 60)..(w as i32 - 22) {
+                    let p = img.get_pixel(xx as u32, yy as u32);
+                    if p[0] < 80 && p[1] > 180 && p[2] < 80 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        assert!(time_pixels(0) > 0, "row with a duration should draw its time");
+        assert_eq!(time_pixels(1), 0, "row without a duration should draw no time");
+    }
+
+    #[test]
     fn shade_regions() {
         assert_eq!(shade_region_at(265.0, 5.0), Some(ShadeHit::Close));
         assert_eq!(shade_region_at(50.0, 5.0), Some(ShadeHit::TitleBar));
