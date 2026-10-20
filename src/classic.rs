@@ -27,7 +27,7 @@ const EQ_SLIDER_TOP: f32 = 38.0;
 const EQ_SLIDER_TRAVEL: f32 = 52.0;
 
 /// Clickable / draggable regions of the main window, in 275x116 space.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Btn {
     Prev,
     Play,
@@ -259,6 +259,8 @@ pub fn main_shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
 /// Decoded sprite sheets from one skin, keyed by lowercased basename.
 pub struct ClassicSkin {
     bitmaps: HashMap<String, RgbaImage>,
+    /// EQ slider sprites the skin ships (invariant per skin, computed once).
+    eq_sprites: Vec<i32>,
 }
 
 impl ClassicSkin {
@@ -286,7 +288,14 @@ impl ClassicSkin {
         if !bitmaps.contains_key("main.bmp") {
             anyhow::bail!("skin has no MAIN.BMP");
         }
-        Ok(Self { bitmaps })
+        let eq_sprites = bitmaps
+            .get("eqmain.bmp")
+            .map(eq_valid_sprites)
+            .unwrap_or_default();
+        Ok(Self {
+            bitmaps,
+            eq_sprites,
+        })
     }
 
     fn bmp(&self, name: &str) -> Option<&RgbaImage> {
@@ -525,7 +534,7 @@ fn char_cell(ch: char) -> (u32, u32) {
 
 // ======================= Equalizer window ===================================
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum EqRegion {
     On,
     Auto,
@@ -582,7 +591,7 @@ pub fn eq_value_at_y(y: f32) -> f32 {
 
 // ======================= Playlist window ====================================
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PlRegion {
     Close,
     TitleBar,
@@ -788,10 +797,10 @@ impl ClassicSkin {
             // skin does have, so a partially-skinned EQ keeps the skin's look.
             // When the skin ships no slider bank at all we draw only the thumb
             // over the background rather than synthesize garish bars.
-            let valid = eq_valid_sprites(e);
+            let valid = &self.eq_sprites;
             let draw_thumb = |c: &mut RgbaImage, e: &RgbaImage, colx: i32, v: f32, sel: bool| {
                 let frac = ((1.0 - v) / 2.0).clamp(0.0, 1.0);
-                if let Some(ui) = eq_sprite_index(v, &valid) {
+                if let Some(ui) = eq_sprite_index(v, valid) {
                     let (row, col) = (ui / 14, ui % 14);
                     blit(
                         c,
