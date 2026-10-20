@@ -598,6 +598,9 @@ pub struct LinAmpApp {
     classic_tex: Option<egui::TextureHandle>,
     eq_tex: Option<egui::TextureHandle>,
     pl_tex: Option<egui::TextureHandle>,
+    /// Last composed fingerprint per window (main/eq/pl), to skip re-compositing
+    /// and re-uploading an unchanged frame.
+    tex_fp: [u64; 3],
     active_region: Option<Btn>,
     eq_active: Option<classic::EqRegion>,
     pressed_btn: Option<Btn>,
@@ -653,6 +656,7 @@ pub struct LinAmpApp {
     marquee_offset: f32,
     last_frame: Instant,
     last_device_check: Instant,
+    last_session_check: Instant,
     status: String,
 }
 
@@ -766,6 +770,7 @@ impl LinAmpApp {
             classic_tex: None,
             eq_tex: None,
             pl_tex: None,
+            tex_fp: [0; 3],
             active_region: None,
             eq_active: None,
             pressed_btn: None,
@@ -809,6 +814,7 @@ impl LinAmpApp {
             marquee_offset: 0.0,
             last_frame: Instant::now(),
             last_device_check: Instant::now(),
+            last_session_check: Instant::now(),
             status: "Ready. Press L to open files.".to_string(),
         };
 
@@ -1172,9 +1178,12 @@ impl LinAmpApp {
             }
             Err(e) => self.status = format!("Skin error: {e}"),
         }
-        // Load the classic sprite sheets for the same skin.
+        // Load the classic sprite sheets for the same skin. Drop every cached
+        // window texture so all three re-composite with the new skin.
         self.classic = ClassicSkin::load(path).ok();
         self.classic_tex = None;
+        self.eq_tex = None;
+        self.pl_tex = None;
         // Remember this skin for next launch.
         self.skin_path = Some(path.to_path_buf());
         self.prefs.last_skin = Some(path.display().to_string());
@@ -1265,35 +1274,68 @@ impl LinAmpApp {
     /// the classic analyzer, once per frame.
     fn step_viz(&mut self) {
         match self.viz_mode {
-            VizMode::Spectrum => {
-                self.viz.snapshot(&mut self.viz_samples, FFT_SIZE);
-                let rate = self.viz.rate();
-                let bars =
-                    viz::compute_bars(&self.viz_samples, &*self.fft, FFT_SIZE, CLASSIC_BANDS, rate);
-                for i in 0..CLASSIC_BANDS {
-                    let target = bars.get(i).copied().unwrap_or(0.0);
-                    let cur = self.cviz_bars[i];
-                    // Smoothed rise (not instant) and a steady fall toward the
-                    // current level, so it isn't so jumpy or sticky.
-                    let b = if target > cur {
-                        cur + (target - cur) * 0.55
-                    } else {
-                        (cur - 0.045).max(target)
-                    };
-                    self.cviz_bars[i] = b;
-                    // Peak marker: holds the max, then falls slowly.
-                    self.cviz_peaks[i] = if b > self.cviz_peaks[i] {
-                        b
-                    } else {
-                        (self.cviz_peaks[i] - 0.012).max(0.0)
-                    };
+            // Spectrum: run the FFT only while playing; on stop let the bars fall
+            // to zero (no FFT); while paused freeze them where they are.
+            VizMode::Spectrum => match self.player.state() {
+                PlayState::Playing => {
+                    self.viz.snapshot(&mut self.viz_samples, FFT_SIZE);
+                    let rate = self.viz.rate();
+                    let bars = viz::compute_bars(
+                        &self.viz_samples,
+                        &*self.fft,
+                        FFT_SIZE,
+                        CLASSIC_BANDS,
+                        rate,
+                    );
+                    for i in 0..CLASSIC_BANDS {
+                        let target = bars.get(i).copied().unwrap_or(0.0);
+                        let cur = self.cviz_bars[i];
+                        // Smoothed rise, steady fall, so it isn't jumpy or sticky.
+                        let b = if target > cur {
+                            cur + (target - cur) * 0.55
+                        } else {
+                            (cur - 0.045).max(target)
+                        };
+                        self.cviz_bars[i] = b;
+                        self.cviz_peaks[i] = if b > self.cviz_peaks[i] {
+                            b
+                        } else {
+                            (self.cviz_peaks[i] - 0.012).max(0.0)
+                        };
+                    }
                 }
-            }
+                PlayState::Stopped => {
+                    for i in 0..CLASSIC_BANDS {
+                        self.cviz_bars[i] = (self.cviz_bars[i] - 0.045).max(0.0);
+                        self.cviz_peaks[i] = (self.cviz_peaks[i] - 0.012).max(0.0);
+                    }
+                }
+                PlayState::Paused => {}
+            },
+            // Scope: live while playing; flat (cleared ring) when stopped; frozen
+            // when paused.
             VizMode::Oscilloscope => {
-                self.viz.snapshot(&mut self.viz_samples, 76);
+                if self.player.state() != PlayState::Paused {
+                    self.viz.snapshot(&mut self.viz_samples, 76);
+                }
             }
             VizMode::Off => {}
         }
+    }
+
+    /// Whether the classic UI has live motion and should keep repainting at
+    /// ~30fps. When false the app idles (egui still wakes on input). A stopped
+    /// player with its spectrum bars still falling counts as animating.
+    fn is_animating(&self) -> bool {
+        self.player.state() == PlayState::Playing
+            || self.fade.is_some()
+            || self.drag.is_some()
+            || self.classic_seek_preview.is_some()
+            || self.popup.is_some()
+            || self.quit_countdown.is_some()
+            || (self.player.state() == PlayState::Stopped
+                && self.viz_mode == VizMode::Spectrum
+                && self.cviz_bars.iter().any(|&b| b > 0.001))
     }
 
     /// Height in native px of each classic window given shade state.
@@ -1377,6 +1419,12 @@ impl LinAmpApp {
         if self.quit_countdown.is_some() {
             return;
         }
+        // Change detection hashes every track path, so don't run it every frame.
+        let now = Instant::now();
+        if now.duration_since(self.last_session_check).as_millis() < 300 {
+            return;
+        }
+        self.last_session_check = now;
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.eq_visible.hash(&mut h);
@@ -2815,6 +2863,98 @@ impl LinAmpApp {
         group_child_windows(self.eq_visible, self.pl_visible);
     }
 
+    /// A cheap fingerprint of everything `compose_window(win)` draws from, so the
+    /// expensive re-composite + GPU re-upload can be skipped when nothing changed.
+    fn window_fp(&self, win: ClWin) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let ps: u8 = match self.player.state() {
+            PlayState::Stopped => 0,
+            PlayState::Playing => 1,
+            PlayState::Paused => 2,
+        };
+        self.theme.name.hash(&mut h);
+        ps.hash(&mut h);
+        match win {
+            ClWin::Main => {
+                self.main_shade.hash(&mut h);
+                self.pressed_btn.hash(&mut h);
+                self.shuffle.hash(&mut h);
+                self.repeat_all.hash(&mut h);
+                self.eq_visible.hash(&mut h);
+                self.pl_visible.hash(&mut h);
+                self.time_remaining.hash(&mut h);
+                (self.viz_mode as u8).hash(&mut h);
+                self.player.volume().to_bits().hash(&mut h);
+                self.balance.to_bits().hash(&mut h);
+                let pos = self
+                    .classic_seek_preview
+                    .unwrap_or_else(|| self.player.position().as_secs_f32());
+                pos.to_bits().hash(&mut h);
+                self.marquee_offset.to_bits().hash(&mut h);
+                self.playlist.current.hash(&mut h);
+                if let Some(t) = self.playlist.current_track() {
+                    t.display_name().hash(&mut h);
+                    t.bitrate.hash(&mut h);
+                    t.sample_rate.hash(&mut h);
+                    t.channels.hash(&mut h);
+                    t.duration.hash(&mut h);
+                }
+                self.album_art.is_some().hash(&mut h);
+                // Spectrum animation (rising/falling bars and peaks).
+                for b in self.cviz_bars.iter().chain(self.cviz_peaks.iter()) {
+                    b.to_bits().hash(&mut h);
+                }
+            }
+            ClWin::Eq => {
+                self.eq_shade.hash(&mut h);
+                self.eq_enabled.hash(&mut h);
+                self.eq_auto.hash(&mut h);
+                self.eq_active.hash(&mut h);
+                self.eq_preamp_db.to_bits().hash(&mut h);
+                for b in &self.eq_bands {
+                    b.to_bits().hash(&mut h);
+                }
+            }
+            ClWin::Pl => {
+                self.pl_shade.hash(&mut h);
+                self.pl_px_w.to_bits().hash(&mut h);
+                self.pl_px_h.to_bits().hash(&mut h);
+                self.pl_first.hash(&mut h);
+                self.pl_pressed_button().hash(&mut h);
+                self.time_remaining.hash(&mut h);
+                self.playlist.len().hash(&mut h);
+                self.playlist.current.hash(&mut h);
+                // The bottom-bar / shade time advances once a second while playing.
+                self.player.position().as_secs().hash(&mut h);
+                // Visible rows' identity + text — catches selection, current-row
+                // and lazy tag loads without hashing the whole playlist. (Tags only
+                // load for visible rows, so off-screen rows can't change unseen.)
+                let vis = if self.pl_shade {
+                    0
+                } else {
+                    classic::pl_visible_rows(self.pl_px_h as u32)
+                };
+                let end = (self.pl_first + vis).min(self.playlist.len());
+                for i in self.pl_first..end {
+                    (Some(i) == self.playlist.current).hash(&mut h);
+                    self.pl_selection.contains(&i).hash(&mut h);
+                    if let Some(t) = self.playlist.tracks.get(i) {
+                        t.display_name().hash(&mut h);
+                        t.duration.hash(&mut h);
+                    }
+                }
+                if self.pl_shade {
+                    if let Some(t) = self.playlist.current_track() {
+                        t.display_name().hash(&mut h);
+                        t.duration.hash(&mut h);
+                    }
+                }
+            }
+        }
+        h.finish()
+    }
+
     fn render_window(&mut self, ctx: &egui::Context, win: ClWin) {
         self.handle_window_input(ctx, win);
         self.handle_dropped(ctx);
@@ -2833,19 +2973,41 @@ impl LinAmpApp {
             }
         }
 
-        let img = self.compose_window(win);
-        let name = match win {
-            ClWin::Main => "cl_main",
-            ClWin::Eq => "cl_eq",
-            ClWin::Pl => "cl_pl",
+        // Re-composite + re-upload only when this window's inputs changed; the GPU
+        // keeps the cached texture otherwise (near-zero cost when idle/paused).
+        let idx = win_idx(win);
+        let fp = self.window_fp(win);
+        let tex_empty = match win {
+            ClWin::Main => self.classic_tex.is_none(),
+            ClWin::Eq => self.eq_tex.is_none(),
+            ClWin::Pl => self.pl_tex.is_none(),
         };
-        let slot = match win {
-            ClWin::Main => &mut self.classic_tex,
-            ClWin::Eq => &mut self.eq_tex,
-            ClWin::Pl => &mut self.pl_tex,
+        if self.tex_fp[idx] != fp || tex_empty {
+            let img = self.compose_window(win);
+            self.tex_fp[idx] = fp;
+            let name = match win {
+                ClWin::Main => "cl_main",
+                ClWin::Eq => "cl_eq",
+                ClWin::Pl => "cl_pl",
+            };
+            let slot = match win {
+                ClWin::Main => &mut self.classic_tex,
+                ClWin::Eq => &mut self.eq_tex,
+                ClWin::Pl => &mut self.pl_tex,
+            };
+            let _ = upload_tex(slot, ctx, &img, name);
+        }
+        let tex = match win {
+            ClWin::Main => self.classic_tex.clone(),
+            ClWin::Eq => self.eq_tex.clone(),
+            ClWin::Pl => self.pl_tex.clone(),
+        }
+        .expect("composed above");
+        let nw = match win {
+            ClWin::Pl if !self.pl_shade => self.pl_px_w,
+            _ => classic::MAIN_W as f32,
         };
-        let (nw, nh) = (img.width() as f32, img.height() as f32);
-        let tex = upload_tex(slot, ctx, &img, name);
+        let nh = self.win_native_h(win);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(Color32::BLACK))
@@ -3841,7 +4003,10 @@ impl eframe::App for LinAmpApp {
         // Classic skin view takes over the whole (borderless) window.
         if self.ui_mode == UiMode::Classic && self.classic.is_some() {
             self.render_classic(ctx);
-            ctx.request_repaint_after(Duration::from_millis(33));
+            // Repaint at ~30fps only when something is moving; otherwise idle and
+            // wake slowly (egui still repaints immediately on input).
+            let next = if self.is_animating() { 33 } else { 250 };
+            ctx.request_repaint_after(Duration::from_millis(next));
             return;
         }
 
@@ -3883,12 +4048,7 @@ impl eframe::App for LinAmpApp {
             }
         });
 
-        let interval =
-            if self.player.state() == PlayState::Playing && self.viz_mode != VizMode::Off {
-                33
-            } else {
-                100
-            };
+        let interval = if self.is_animating() { 33 } else { 250 };
         ctx.request_repaint_after(Duration::from_millis(interval));
     }
 }
