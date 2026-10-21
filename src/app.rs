@@ -122,6 +122,9 @@ struct Dragging {
     moved: bool,
     /// Docked windows that move with this one, by offset from it.
     group: Vec<(usize, egui::Vec2)>,
+    /// When the main window carries a docked library, its offset from main so it
+    /// rides along too (the library lives outside `win_pos`).
+    lib_offset: Option<egui::Vec2>,
 }
 
 /// Global cursor in egui points if the platform exposes it: `GetCursorPos`
@@ -2183,10 +2186,14 @@ impl LinAmpApp {
                         let d = self.drag.as_ref().unwrap();
                         let target = g - d.grab;
                         let group = d.group.clone();
+                        let lib_offset = d.lib_offset;
                         let press_pos = d.press_pos;
                         self.win_pos[idx] = target;
                         for (mi, off) in group {
                             self.win_pos[mi] = target + off;
+                        }
+                        if let Some(off) = lib_offset {
+                            self.lib_pos = target + off;
                         }
                         if (target - press_pos).length() > 3.0 {
                             if let Some(dm) = self.drag.as_mut() {
@@ -2337,6 +2344,9 @@ impl LinAmpApp {
                 for (mi, off) in &d.group {
                     self.win_pos[*mi] = self.win_pos[idx] + *off;
                 }
+                if let Some(off) = d.lib_offset {
+                    self.lib_pos = self.win_pos[idx] + off;
+                }
             }
             // Magnetic snap to screen edges / other windows; move the group together.
             let before = self.win_pos[idx];
@@ -2346,6 +2356,9 @@ impl LinAmpApp {
             self.win_pos[idx] = snapped;
             for (mi, _) in &d.group {
                 self.win_pos[*mi] += delta;
+            }
+            if d.lib_offset.is_some() {
+                self.lib_pos += delta;
             }
             if d.win == ClWin::Main {
                 self.root_last = None;
@@ -2400,6 +2413,18 @@ impl LinAmpApp {
             } else {
                 Vec::new()
             };
+            // A library docked to the main group (directly to main, or to an EQ/PL
+            // that itself rides main) moves with the group too.
+            let lib_offset = if win == ClWin::Main && self.lib_visible {
+                let lib = egui::Rect::from_min_size(self.lib_pos, self.lib_size());
+                let docked = rects_docked(lib, self.win_rect_pts(0))
+                    || group
+                        .iter()
+                        .any(|(mi, _)| rects_docked(lib, self.win_rect_pts(*mi)));
+                docked.then(|| self.lib_pos - self.win_pos[0])
+            } else {
+                None
+            };
             let idx = win_idx(win);
             let (manual, grab) = match global_cursor_points(ctx) {
                 Some(g) => (true, g - self.win_pos[idx]),
@@ -2414,6 +2439,7 @@ impl LinAmpApp {
                 started_os: false,
                 moved: false,
                 group,
+                lib_offset,
             });
         }
     }
