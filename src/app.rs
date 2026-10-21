@@ -280,18 +280,19 @@ mod x11util {
     /// Link EQ/playlist to the main window via `WM_TRANSIENT_FOR`. Acts only when
     /// the links aren't current (steady state makes no X calls); re-links after a
     /// show/hide, which recreates the child with a new XID.
-    pub fn group(eq_visible: bool, pl_visible: bool) {
+    pub fn group(eq_visible: bool, pl_visible: bool, lib_visible: bool) {
         thread_local! {
-            // (eq_visible, pl_visible, linked?) we last acted on.
-            static STATE: RefCell<(bool, bool, bool)> = RefCell::new((false, false, false));
+            // (eq_visible, pl_visible, lib_visible, linked?) we last acted on.
+            static STATE: RefCell<(bool, bool, bool, bool)> =
+                RefCell::new((false, false, false, false));
         }
-        let cfg = (eq_visible, pl_visible);
+        let cfg = (eq_visible, pl_visible, lib_visible);
         let done = STATE.with(|s| {
             let mut s = s.borrow_mut();
-            if (s.0, s.1) != cfg {
-                *s = (cfg.0, cfg.1, false); // visibility changed -> re-link
+            if (s.0, s.1, s.2) != cfg {
+                *s = (cfg.0, cfg.1, cfg.2, false); // visibility changed -> re-link
             }
-            s.2
+            s.3
         });
         if done {
             return;
@@ -302,12 +303,13 @@ mod x11util {
             // destroyed would otherwise fire Xlib's fatal default handler.
             let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
             let clients = client_list(xlib, d);
-            let (mut main, mut eq, mut pl) = (0, 0, 0);
+            let (mut main, mut eq, mut pl, mut lib) = (0, 0, 0, 0);
             for &w in &clients {
                 match wm_name(xlib, d, w).as_str() {
                     "LinAmp" => main = w,
                     "LinAmp Equalizer" => eq = w,
                     "LinAmp Playlist" => pl = w,
+                    "LinAmp Library" => lib = w,
                     _ => {}
                 }
             }
@@ -329,6 +331,14 @@ mod x11util {
                         ok = false;
                     }
                 }
+                if lib_visible {
+                    if lib != 0 {
+                        (xlib.XSetTransientForHint)(d, lib, main);
+                        skip_taskbar(xlib, d, lib);
+                    } else {
+                        ok = false;
+                    }
+                }
             }
             (xlib.XSync)(d, 0); // deliver any errors to ignore_err before restoring
             (xlib.XSetErrorHandler)(prev);
@@ -337,7 +347,7 @@ mod x11util {
         .unwrap_or(false);
 
         if linked {
-            STATE.with(|s| s.borrow_mut().2 = true);
+            STATE.with(|s| s.borrow_mut().3 = true);
         }
     }
 }
@@ -346,14 +356,14 @@ mod x11util {
 /// together, stay above, hide on minimize) — Winamp-style grouping. Idempotent,
 /// runs each frame to cover show/hide. Windows (owner window) and Linux/X11
 /// (`WM_TRANSIENT_FOR`); a no-op elsewhere.
-fn group_child_windows(eq_visible: bool, pl_visible: bool) {
+fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visible: bool) {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        x11util::group(eq_visible, pl_visible);
+        x11util::group(eq_visible, pl_visible, lib_visible);
     }
     #[cfg(windows)]
     {
-        let _ = (eq_visible, pl_visible);
+        let _ = (eq_visible, pl_visible, lib_visible);
         #[allow(non_snake_case)]
         extern "system" {
             fn FindWindowW(class: *const u16, title: *const u16) -> isize;
@@ -367,7 +377,7 @@ fn group_child_windows(eq_visible: bool, pl_visible: bool) {
             if main == 0 {
                 return;
             }
-            for title in ["LinAmp Equalizer", "LinAmp Playlist"] {
+            for title in ["LinAmp Equalizer", "LinAmp Playlist", "LinAmp Library"] {
                 let child = FindWindowW(std::ptr::null(), wide(title).as_ptr());
                 if child != 0 && GetWindowLongPtrW(child, GWLP_HWNDPARENT) != main {
                     SetWindowLongPtrW(child, GWLP_HWNDPARENT, main);
@@ -465,6 +475,20 @@ pub struct LinAmpApp {
     sort_key: SortKey,
     lib_query: String,
     lib_results: Vec<crate::playlist::Track>,
+    // Media Library window (dockable, non-shading) + 3-pane browser state.
+    lib_pos: egui::Pos2,
+    lib_pos_init: bool,
+    /// Grab offset (points) while the custom title bar is being dragged.
+    lib_drag: Option<egui::Vec2>,
+    lib_nav: crate::library::LibView,
+    lib_artists: Vec<(String, i64)>,
+    lib_albums: Vec<(String, i64)>,
+    lib_sel_artists: Vec<String>,
+    lib_sel_albums: Vec<String>,
+    lib_sel_tracks: std::collections::BTreeSet<usize>,
+    /// Active background scan receiver + its latest progress text.
+    lib_scan: Option<std::sync::mpsc::Receiver<crate::library::ScanMsg>>,
+    lib_scan_text: String,
 
     // visualization
     viz: Arc<VizShared>,
@@ -542,7 +566,7 @@ pub struct LinAmpApp {
     skin_path: Option<PathBuf>,
     scale: f32,
     prefs_open: bool,
-    library_open: bool,
+    lib_visible: bool,
     tag_editor: Option<TagEditor>,
     /// Jump-to-file search state (Some while the dialog is open).
     jump_file: Option<JumpFile>,
@@ -659,6 +683,17 @@ impl LinAmpApp {
             sort_key: SortKey::Custom,
             lib_query: String::new(),
             lib_results: Vec::new(),
+            lib_pos: egui::Pos2::ZERO,
+            lib_pos_init: false,
+            lib_drag: None,
+            lib_nav: crate::library::LibView::Audio,
+            lib_artists: Vec::new(),
+            lib_albums: Vec::new(),
+            lib_sel_artists: Vec::new(),
+            lib_sel_albums: Vec::new(),
+            lib_sel_tracks: std::collections::BTreeSet::new(),
+            lib_scan: None,
+            lib_scan_text: String::new(),
             viz,
             viz_mode: VizMode::Spectrum,
             viz_bars: vec![0.0; VIZ_BANDS],
@@ -714,7 +749,7 @@ impl LinAmpApp {
             skin_path: None,
             scale,
             prefs_open: false,
-            library_open: false,
+            lib_visible: false,
             tag_editor: None,
             jump_file: None,
             jump_time: None,
@@ -768,6 +803,7 @@ impl LinAmpApp {
             app.main_shade = session.main_shade;
             app.eq_shade = session.eq_shade;
             app.pl_shade = session.pl_shade;
+            app.lib_visible = session.lib_visible;
         }
         app.refresh_library();
         app.discover_skins();
@@ -826,6 +862,11 @@ impl LinAmpApp {
                     self.art_bytes = crate::playlist::read_cover(&track.path);
                     self.art_dirty = true;
                     self.status = format!("Playing: {}", track.display_name());
+                    // Record the play for the library's Most/Recently Played views
+                    // (no-op when the track isn't in the library).
+                    if let Some(lib) = &self.library {
+                        lib.increment_play(&track.path);
+                    }
                 }
                 Err(e) => self.status = format!("Error: {e}"),
             }
@@ -1017,25 +1058,115 @@ impl LinAmpApp {
 
     // ---- library -----------------------------------------------------------
 
-    fn refresh_library(&mut self) {
-        if let Some(lib) = &self.library {
-            let q = self.lib_query.trim();
-            self.lib_results = if q.is_empty() {
-                lib.all(1000)
-            } else {
-                lib.search(q, 1000)
-            };
+    /// Fixed window size of the Media Library (logical points; unaffected by the
+    /// 1x/2x "double size" toggle, like the other egui dialogs).
+    fn lib_size(&self) -> egui::Vec2 {
+        egui::vec2(640.0, 460.0)
+    }
+
+    /// Show/hide the Media Library window.
+    fn toggle_library(&mut self) {
+        self.lib_visible = !self.lib_visible;
+        if self.lib_visible {
+            if !self.lib_pos_init {
+                self.lib_pos = self.library_default_pos();
+                self.lib_pos_init = true;
+            }
+            self.refresh_library();
         }
     }
 
-    fn scan_into_library(&mut self) {
-        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-            if let Some(lib) = &self.library {
-                match lib.scan_folder(&dir) {
-                    Ok(n) => self.status = format!("Scanned {n} file(s) into library."),
-                    Err(e) => self.status = format!("Scan error: {e}"),
-                }
+    /// Default library placement: just below the current window stack.
+    fn library_default_pos(&self) -> egui::Pos2 {
+        let base = self.win_pos[0];
+        let mut y = base.y + self.main_h() * self.scale;
+        if self.eq_visible {
+            y += self.eq_h() * self.scale;
+        }
+        if self.pl_visible {
+            y += self.win_native_h(ClWin::Pl) * self.scale;
+        }
+        egui::pos2(base.x, y)
+    }
+
+    /// Snap the library window to the player windows / screen edges on drag end.
+    fn snap_lib_pos(&self, pos: egui::Pos2, monitor: Option<egui::Vec2>) -> egui::Pos2 {
+        let r = egui::Rect::from_min_size(pos, self.lib_size());
+        let mut others = vec![self.win_rect_pts(0)];
+        if self.eq_visible {
+            others.push(self.win_rect_pts(1));
+        }
+        if self.pl_visible {
+            others.push(self.win_rect_pts(2));
+        }
+        snap_rect(r, &others, monitor)
+    }
+
+    /// Rebuild the library panes/results from the active nav node, search text
+    /// and artist/album selection.
+    fn refresh_library(&mut self) {
+        let Some(lib) = &self.library else {
+            return;
+        };
+        let q = self.lib_query.trim().to_string();
+        if !q.is_empty() {
+            // A search overrides the nav node and the artist/album panes.
+            self.lib_results = lib.search(&q, 2000);
+            self.lib_artists.clear();
+            self.lib_albums.clear();
+            self.lib_sel_tracks.clear();
+            return;
+        }
+        match self.lib_nav {
+            crate::library::LibView::Audio => {
+                self.lib_artists = lib.artists();
+                self.lib_albums = lib.albums(&self.lib_sel_artists);
+                self.lib_results = lib.tracks_for(&self.lib_sel_artists, &self.lib_sel_albums);
             }
+            other => {
+                self.lib_artists.clear();
+                self.lib_albums.clear();
+                self.lib_results = lib.view(other, 2000);
+            }
+        }
+        self.lib_sel_tracks.clear();
+    }
+
+    /// Pick a folder and index it into the library on a background thread.
+    fn scan_into_library(&mut self) {
+        if self.lib_scan.is_some() {
+            return; // a scan is already running
+        }
+        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+            self.lib_scan = Some(crate::library::scan_folder_bg(dir));
+            self.lib_scan_text = "Scanning…".into();
+        }
+    }
+
+    /// Poll the background scan; refresh and clear when it finishes.
+    fn poll_library_scan(&mut self) {
+        let Some(rx) = &self.lib_scan else {
+            return;
+        };
+        let mut done = None;
+        let mut err = None;
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                crate::library::ScanMsg::Progress { done: d, total } => {
+                    self.lib_scan_text = format!("Scanning… {d}/{total}");
+                }
+                crate::library::ScanMsg::Done(n) => done = Some(n),
+                crate::library::ScanMsg::Error(e) => err = Some(e),
+            }
+        }
+        if let Some(e) = err {
+            self.status = format!("Scan error: {e}");
+            self.lib_scan = None;
+            self.lib_scan_text.clear();
+        } else if let Some(n) = done {
+            self.status = format!("Scanned {n} file(s) into library.");
+            self.lib_scan = None;
+            self.lib_scan_text.clear();
             self.refresh_library();
         }
     }
@@ -1320,6 +1451,7 @@ impl LinAmpApp {
             main_shade: self.main_shade,
             eq_shade: self.eq_shade,
             pl_shade: self.pl_shade,
+            lib_visible: self.lib_visible,
         }
     }
 
@@ -1345,6 +1477,7 @@ impl LinAmpApp {
         self.main_shade.hash(&mut h);
         self.eq_shade.hash(&mut h);
         self.pl_shade.hash(&mut h);
+        self.lib_visible.hash(&mut h);
         self.pl_px_w.to_bits().hash(&mut h);
         self.pl_px_h.to_bits().hash(&mut h);
         self.playlist.current.hash(&mut h);
@@ -1596,9 +1729,9 @@ impl LinAmpApp {
                                 close = true;
                             }
                             ui.separator();
-                            if item(ui, "Media Library…") {
-                                self.library_open = true;
-                                self.refresh_library();
+                            let libl = if self.lib_visible { "Hide Media Library" } else { "Show Media Library" };
+                            if item(ui, libl) {
+                                self.toggle_library();
                                 close = true;
                             }
                             if item(ui, "Edit file tags… (Alt+3)") {
@@ -2255,6 +2388,10 @@ impl LinAmpApp {
             };
             others.push(Rect::from_min_size(self.win_pos[j], self.win_inner_size(jwin)));
         }
+        // The library is a snap target too (but never pushes / is pushed).
+        if self.lib_visible {
+            others.push(Rect::from_min_size(self.lib_pos, self.lib_size()));
+        }
         snap_rect(r, &others, monitor)
     }
 
@@ -2387,31 +2524,93 @@ impl LinAmpApp {
 
     /// The media library + search, in its own window (the classic UI has no
     /// built-in library view). Reuses the same list UI as the modern view.
+    /// The Media Library: a borderless, themed window that docks to the player
+    /// windows (via a custom title bar) but never window-shades.
     fn ui_library_window(&mut self, ctx: &egui::Context) {
-        if !self.library_open {
+        if !self.lib_visible {
             return;
         }
-        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
         let builder = egui::ViewportBuilder::default()
-            .with_title("LinAmp Media Library")
-            .with_position(screen)
-            .with_inner_size(egui::vec2(460.0, 360.0))
-            .with_min_inner_size(egui::vec2(320.0, 200.0))
+            .with_title("LinAmp Library")
+            .with_position(self.lib_pos)
+            .with_inner_size(self.lib_size())
+            .with_decorations(false)
+            .with_resizable(false)
             .with_taskbar(false)
             .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_library");
         let mut close = false;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                self.ui_library(ui);
-            });
-            if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
+            // Global shortcuts while this window has keyboard focus.
+            self.handle_shortcuts(ctx, ClWin::Main);
+            let panel = ctx.style().visuals.panel_fill;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none().fill(panel))
+                .show(ctx, |ui| {
+                    self.ui_library_titlebar(ctx, ui, &mut close);
+                    self.ui_library(ui);
+                });
+            if ctx.input(|i| i.viewport().close_requested()) {
                 close = true;
             }
         });
         if close {
-            self.library_open = false;
+            self.lib_visible = false;
         }
+    }
+
+    /// Draw the library's custom title bar and handle drag-to-move / close.
+    fn ui_library_titlebar(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, close: &mut bool) {
+        let full = ui.available_width();
+        let (bar, bar_resp) =
+            ui.allocate_exact_size(egui::vec2(full, 20.0), egui::Sense::click_and_drag());
+        let accent = self.theme.accent;
+        let txt = skin::contrast_text(accent);
+        ui.painter().rect_filled(bar, 0.0, accent);
+        ui.painter().text(
+            bar.left_center() + egui::vec2(6.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            "LinAmp Library",
+            egui::FontId::proportional(13.0),
+            txt,
+        );
+        // Close box on the right.
+        let x_rect = egui::Rect::from_min_size(
+            egui::pos2(bar.right() - 18.0, bar.center().y - 7.0),
+            egui::vec2(14.0, 14.0),
+        );
+        let x_resp = ui.interact(x_rect, ui.id().with("lib_close"), egui::Sense::click());
+        ui.painter()
+            .rect_stroke(x_rect, 2.0, egui::Stroke::new(1.0_f32, txt));
+        ui.painter().text(
+            x_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "×",
+            egui::FontId::proportional(13.0),
+            txt,
+        );
+        if x_resp.clicked() {
+            *close = true;
+        }
+        // Drag the title bar to move + dock the window (skip when over the X).
+        if bar_resp.drag_started() && !x_resp.hovered() {
+            if let Some(g) = global_cursor_points(ctx) {
+                self.lib_drag = Some(g - self.lib_pos);
+            }
+        }
+        if bar_resp.dragged() {
+            if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.lib_drag) {
+                self.lib_pos = g - grab;
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.lib_pos));
+            }
+        }
+        if bar_resp.drag_stopped() {
+            self.lib_drag = None;
+            let monitor = ctx.input(|i| i.viewport().monitor_size);
+            self.lib_pos = self.snap_lib_pos(self.lib_pos, monitor);
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.lib_pos));
+        }
+        ui.add_space(2.0);
     }
 
     /// Open the file-info / tag editor for the selected row (or current track).
@@ -3111,8 +3310,10 @@ impl LinAmpApp {
         // The options / playlist menus render in their own (unclipped) window.
         self.draw_popup_viewport(ctx);
 
-        // Keep the EQ/playlist windows owned by the main window (z-order group).
-        group_child_windows(self.eq_visible, self.pl_visible);
+        // Keep the EQ/playlist/library windows owned by the main window (z-order
+        // group), and feed any running background scan.
+        group_child_windows(self.eq_visible, self.pl_visible, self.lib_visible);
+        self.poll_library_scan();
     }
 
     /// A cheap fingerprint of everything `compose_window(win)` draws from, so the
@@ -3513,7 +3714,7 @@ impl LinAmpApp {
         if k.toggle {
             self.play_pause();
         }
-        if k.open {
+        if k.open && !k.alt {
             if k.shift {
                 self.open_folder();
             } else {
@@ -3579,6 +3780,9 @@ impl LinAmpApp {
             if self.pl_visible {
                 self.restack();
             }
+        }
+        if k.alt && k.open {
+            self.toggle_library();
         }
         // Playlist edit.
         if k.ctrl && k.key_a {
@@ -4061,107 +4265,466 @@ impl LinAmpApp {
         }
     }
 
+    /// The 3-pane Media Library browser (nav tree, artist/album columns, track
+    /// table, bottom Play/Enqueue bar), themed from the active skin. Shared by
+    /// the docked window and the modern `View::Library` tab.
     fn ui_library(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("Search:");
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.lib_query)
-                        .hint_text("title / artist / album")
-                        .desired_width(160.0),
-                )
-                .changed()
-            {
-                self.refresh_library();
-            }
-            if ui.button("Scan folder...").clicked() {
-                self.scan_into_library();
-            }
-        });
+        use crate::library::LibView;
+        let panel_fill = ui.visuals().panel_fill;
+        let list_fill = self.theme.list_bg;
+        let row_col = self.theme.list_normal;
+        let sel_bg = self.theme.list_sel_bg;
+        let sel_col = skin::contrast_text(sel_bg);
+        let accent = self.theme.accent;
+        let dim = skin::blend(row_col, list_fill, 0.45);
+        let panel_frame = egui::Frame::none()
+            .fill(panel_fill)
+            .inner_margin(egui::Margin::same(4.0));
 
-        ui.horizontal(|ui| {
-            match &self.library {
-                Some(lib) => ui.label(
-                    RichText::new(format!("{} tracks in library", lib.count()))
-                        .color(Color32::GRAY),
-                ),
-                None => ui.colored_label(Color32::LIGHT_RED, "Library database unavailable"),
-            };
-            if !self.lib_results.is_empty() && ui.button("Add all shown to playlist").clicked() {
-                let was_empty = self.playlist.is_empty();
-                for t in self.lib_results.clone() {
-                    self.playlist.tracks.push(t);
-                }
-                if was_empty && !self.playlist.is_empty() {
-                    self.play_index(0);
-                }
-                self.status = format!("{} track(s) in playlist.", self.playlist.len());
-            }
-        });
-        ui.separator();
+        // Deferred actions (collected while `self` is borrowed immutably).
+        let mut nav_click: Option<LibView> = None;
+        let mut artist_click: Option<(Option<String>, bool)> = None; // (None = "All", ctrl)
+        let mut album_click: Option<(Option<String>, bool)> = None;
+        let mut track_click: Option<(usize, bool)> = None;
+        let mut dbl_track: Option<usize> = None;
+        let mut rate: Option<i64> = None;
+        let mut do_play = false;
+        let mut do_enqueue = false;
+        let mut do_scan = false;
+        let mut do_clear = false;
+        let mut search_changed = false;
 
-        let mut add_play: Option<usize> = None;
-        let mut add_only: Option<usize> = None;
+        let browsing = self.lib_query.trim().is_empty() && self.lib_nav == LibView::Audio;
 
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if self.lib_results.is_empty() {
-                    ui.label(
-                        RichText::new("No results. Use \"Scan folder...\" to index your music.")
-                            .color(Color32::GRAY)
-                            .italics(),
-                    );
-                }
-                for (i, track) in self.lib_results.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        let resp = ui.add(
-                            egui::Label::new(
-                                RichText::new(track.display_name()).color(Color32::LIGHT_GRAY),
-                            )
-                            .sense(egui::Sense::click())
-                            .truncate(),
-                        );
-                        if resp.double_clicked() {
-                            add_play = Some(i);
-                        }
-                        resp.context_menu(|ui| {
-                            if ui.button("Add to playlist").clicked() {
-                                add_only = Some(i);
-                                ui.close_menu();
-                            }
-                            if ui.button("Add & play").clicked() {
-                                add_play = Some(i);
-                                ui.close_menu();
-                            }
-                        });
-                        if let Some(d) = track.duration {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.label(
-                                        RichText::new(fmt_time(d)).monospace().color(Color32::GRAY),
-                                    );
-                                },
-                            );
-                        }
-                    });
-                }
+        // ---- top: search + scan -------------------------------------------
+        egui::TopBottomPanel::top("lib_top")
+            .frame(panel_frame)
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Search:");
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.lib_query)
+                                .hint_text("title / artist / album")
+                                .desired_width(190.0),
+                        )
+                        .changed()
+                    {
+                        search_changed = true;
+                    }
+                    if ui.button("Clear").clicked() {
+                        do_clear = true;
+                    }
+                    ui.separator();
+                    if ui
+                        .add_enabled(self.lib_scan.is_none(), egui::Button::new("Scan folder…"))
+                        .clicked()
+                    {
+                        do_scan = true;
+                    }
+                    if !self.lib_scan_text.is_empty() {
+                        ui.label(RichText::new(&self.lib_scan_text).color(accent));
+                    }
+                });
             });
 
-        if let Some(i) = add_only {
-            if let Some(t) = self.lib_results.get(i).cloned() {
-                self.playlist.tracks.push(t);
-                self.status = format!("{} track(s) in playlist.", self.playlist.len());
+        // ---- bottom: play / enqueue / rating / status ---------------------
+        let total_secs: u64 = self
+            .lib_results
+            .iter()
+            .filter_map(|t| t.duration)
+            .map(|d| d.as_secs())
+            .sum();
+        let rating_target = self
+            .lib_sel_tracks
+            .iter()
+            .next()
+            .and_then(|&i| self.lib_results.get(i))
+            .map(|t| t.path.clone());
+        let cur_rating = match (&self.library, &rating_target) {
+            (Some(lib), Some(p)) => lib.rating(p),
+            _ => 0,
+        };
+        egui::TopBottomPanel::bottom("lib_bottom")
+            .frame(panel_frame)
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button(mnem("Play", 0)).clicked() {
+                        do_play = true;
+                    }
+                    if ui.button(mnem("Enqueue", 0)).clicked() {
+                        do_enqueue = true;
+                    }
+                    ui.separator();
+                    ui.add_enabled_ui(rating_target.is_some(), |ui| {
+                        ui.spacing_mut().item_spacing.x = 1.0;
+                        for s in 1..=5i64 {
+                            let star = if s <= cur_rating { "★" } else { "☆" };
+                            if ui
+                                .add(
+                                    egui::Label::new(RichText::new(star).color(accent).size(15.0))
+                                        .sense(egui::Sense::click()),
+                                )
+                                .clicked()
+                            {
+                                rate = Some(if cur_rating == s { 0 } else { s });
+                            }
+                        }
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let status =
+                            format!("{} items  [{}]", self.lib_results.len(), hms(total_secs));
+                        ui.label(RichText::new(status).color(dim));
+                    });
+                });
+            });
+
+        // ---- left: nav tree -----------------------------------------------
+        egui::SidePanel::left("lib_nav")
+            .resizable(false)
+            .exact_width(140.0)
+            .frame(panel_frame)
+            .show_inside(ui, |ui| {
+                ui.add_space(2.0);
+                ui.label(RichText::new("Local Media").color(dim).size(11.0));
+                let mut nav = |ui: &mut egui::Ui, label: &str, v: LibView| {
+                    let indent = egui::RichText::new(format!("   {label}"));
+                    if ui.selectable_label(self.lib_nav == v, indent).clicked() {
+                        nav_click = Some(v);
+                    }
+                };
+                nav(ui, "Audio", LibView::Audio);
+                ui.add_space(4.0);
+                ui.label(RichText::new("Views").color(dim).size(11.0));
+                nav(ui, "Most Played", LibView::MostPlayed);
+                nav(ui, "Recently Added", LibView::RecentlyAdded);
+                nav(ui, "Recently Played", LibView::RecentlyPlayed);
+                nav(ui, "Never Played", LibView::NeverPlayed);
+                nav(ui, "Top Rated", LibView::TopRated);
+                ui.add_space(6.0);
+                ui.label(RichText::new("Playlists").color(dim).size(11.0).italics());
+                ui.label(RichText::new("Bookmarks").color(dim).size(11.0).italics());
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| match &self.library {
+                    Some(lib) => {
+                        ui.label(RichText::new(format!("{} tracks", lib.count())).color(dim).size(11.0));
+                    }
+                    None => {
+                        ui.colored_label(Color32::LIGHT_RED, "DB unavailable");
+                    }
+                });
+            });
+
+        // ---- center: artist/album columns + track table -------------------
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(list_fill))
+            .show_inside(ui, |ui| {
+                if browsing {
+                    egui::TopBottomPanel::top("lib_cols")
+                        .resizable(false)
+                        .exact_height(148.0)
+                        .frame(egui::Frame::none().fill(list_fill))
+                        .show_inside(ui, |ui| {
+                            ui.columns(2, |cols| {
+                                // Artist column.
+                                let c = &mut cols[0];
+                                let all_artists = self.lib_sel_artists.is_empty();
+                                let n = self.lib_artists.len();
+                                c.label(RichText::new("Artist").color(dim).size(11.0));
+                                egui::ScrollArea::vertical()
+                                    .id_salt("lib_artists")
+                                    .auto_shrink([false, false])
+                                    .show(c, |ui| {
+                                        if ui
+                                            .selectable_label(
+                                                all_artists,
+                                                RichText::new(format!("All ({n} artists)"))
+                                                    .color(row_col),
+                                            )
+                                            .clicked()
+                                        {
+                                            artist_click = Some((None, false));
+                                        }
+                                        for (name, cnt) in &self.lib_artists {
+                                            let sel = self.lib_sel_artists.contains(name);
+                                            if pane_row(ui, sel, name, *cnt, row_col, dim).clicked() {
+                                                let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+                                                artist_click = Some((Some(name.clone()), ctrl));
+                                            }
+                                        }
+                                    });
+                                // Album column.
+                                let c = &mut cols[1];
+                                let all_albums = self.lib_sel_albums.is_empty();
+                                let m = self.lib_albums.len();
+                                c.label(RichText::new("Album").color(dim).size(11.0));
+                                egui::ScrollArea::vertical()
+                                    .id_salt("lib_albums")
+                                    .auto_shrink([false, false])
+                                    .show(c, |ui| {
+                                        if ui
+                                            .selectable_label(
+                                                all_albums,
+                                                RichText::new(format!("All ({m} albums)"))
+                                                    .color(row_col),
+                                            )
+                                            .clicked()
+                                        {
+                                            album_click = Some((None, false));
+                                        }
+                                        for (name, cnt) in &self.lib_albums {
+                                            let label = if name.is_empty() { "(no album)" } else { name };
+                                            let sel = self.lib_sel_albums.contains(name);
+                                            if pane_row(ui, sel, label, *cnt, row_col, dim).clicked() {
+                                                let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+                                                album_click = Some((Some(name.clone()), ctrl));
+                                            }
+                                        }
+                                    });
+                            });
+                        });
+                }
+
+                // Track table.
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none().fill(list_fill).inner_margin(egui::Margin::same(2.0)))
+                    .show_inside(ui, |ui| {
+                        let w = ui.available_width();
+                        let dur_w = 48.0;
+                        let body = (w - dur_w - 12.0).max(120.0);
+                        let (aw, tw, bw) = (body * 0.28, body * 0.42, body * 0.30);
+                        // Header.
+                        paint_track_row(ui, 15.0, false, sel_bg, |rect, paint| {
+                            let mut x = rect.left() + 2.0;
+                            for (label, cw) in [("Artist", aw), ("Title", tw), ("Album", bw)] {
+                                paint(x, cw, label, dim, false);
+                                x += cw;
+                            }
+                            paint(rect.right() - dur_w, dur_w, "Time", dim, true);
+                        });
+                        egui::ScrollArea::vertical()
+                            .id_salt("lib_tracks")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                if self.lib_results.is_empty() {
+                                    ui.label(
+                                        RichText::new("No tracks. Use \u{201c}Scan folder\u{2026}\u{201d} to index your music.")
+                                            .color(dim)
+                                            .italics(),
+                                    );
+                                }
+                                for (i, t) in self.lib_results.iter().enumerate() {
+                                    let selected = self.lib_sel_tracks.contains(&i);
+                                    let is_cur = self
+                                        .playlist
+                                        .current
+                                        .and_then(|c| self.playlist.tracks.get(c))
+                                        .map(|c| c.path == t.path)
+                                        .unwrap_or(false);
+                                    let tc = if selected {
+                                        sel_col
+                                    } else if is_cur {
+                                        self.theme.list_current
+                                    } else {
+                                        row_col
+                                    };
+                                    let resp = paint_track_row(ui, 16.0, selected, sel_bg, |rect, paint| {
+                                        let artist = if t.artist.is_empty() { "(unknown)" } else { &t.artist };
+                                        let album = if t.album.is_empty() { "(no album)" } else { &t.album };
+                                        let mut x = rect.left() + 2.0;
+                                        paint(x, aw, artist, tc, false);
+                                        x += aw;
+                                        paint(x, tw, &t.title, tc, false);
+                                        x += tw;
+                                        paint(x, bw, album, tc, false);
+                                        let d = t.duration.map(fmt_time).unwrap_or_default();
+                                        paint(rect.right() - dur_w, dur_w, &d, tc, true);
+                                    });
+                                    if resp.clicked() {
+                                        let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+                                        track_click = Some((i, ctrl));
+                                    }
+                                    if resp.double_clicked() {
+                                        dbl_track = Some(i);
+                                    }
+                                    resp.context_menu(|ui| {
+                                        if ui.button("Play").clicked() {
+                                            dbl_track = Some(i);
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Enqueue").clicked() {
+                                            track_click = Some((i, true));
+                                            do_enqueue = true;
+                                            ui.close_menu();
+                                        }
+                                    });
+                                }
+                            });
+                    });
+            });
+
+        // ---- apply deferred actions ---------------------------------------
+        if do_clear {
+            self.lib_query.clear();
+            self.refresh_library();
+        }
+        if search_changed {
+            self.refresh_library();
+        }
+        if let Some(v) = nav_click {
+            self.lib_nav = v;
+            self.lib_sel_artists.clear();
+            self.lib_sel_albums.clear();
+            self.lib_query.clear();
+            self.refresh_library();
+        }
+        if let Some((name, ctrl)) = artist_click {
+            apply_sel(&mut self.lib_sel_artists, name, ctrl);
+            self.lib_sel_albums.clear();
+            self.refresh_library();
+        }
+        if let Some((name, ctrl)) = album_click {
+            apply_sel(&mut self.lib_sel_albums, name, ctrl);
+            self.refresh_library();
+        }
+        if let Some((i, ctrl)) = track_click {
+            if ctrl {
+                if !self.lib_sel_tracks.insert(i) {
+                    self.lib_sel_tracks.remove(&i);
+                }
+            } else {
+                self.lib_sel_tracks.clear();
+                self.lib_sel_tracks.insert(i);
             }
         }
-        if let Some(i) = add_play {
+        if let Some(r) = rate {
+            if let Some(lib) = &self.library {
+                for &i in &self.lib_sel_tracks {
+                    if let Some(t) = self.lib_results.get(i) {
+                        lib.set_rating(&t.path, r);
+                    }
+                }
+            }
+            if self.lib_nav == LibView::TopRated {
+                self.refresh_library();
+            }
+        }
+        if do_scan {
+            self.scan_into_library();
+        }
+
+        // Gather the target tracks for Play/Enqueue (selection, else all shown).
+        let targets: Vec<crate::playlist::Track> = if self.lib_sel_tracks.is_empty() {
+            self.lib_results.clone()
+        } else {
+            self.lib_sel_tracks
+                .iter()
+                .filter_map(|&i| self.lib_results.get(i).cloned())
+                .collect()
+        };
+        if do_play && !targets.is_empty() {
+            self.playlist.tracks.clear();
+            self.playlist.current = None;
+            for t in &targets {
+                self.playlist.tracks.push(t.clone());
+            }
+            self.play_index(0);
+        }
+        if do_enqueue && !targets.is_empty() {
+            for t in &targets {
+                self.playlist.tracks.push(t.clone());
+            }
+            self.status = format!("{} track(s) in playlist.", self.playlist.len());
+        }
+        if let Some(i) = dbl_track {
             if let Some(t) = self.lib_results.get(i).cloned() {
                 self.playlist.tracks.push(t);
                 let idx = self.playlist.tracks.len() - 1;
                 self.play_index(idx);
             }
         }
+    }
+}
+
+/// Toggle/replace a selection list: ctrl-click toggles, plain click replaces,
+/// `None` means the "All" row (clear the selection).
+fn apply_sel(sel: &mut Vec<String>, name: Option<String>, ctrl: bool) {
+    match name {
+        None => sel.clear(),
+        Some(n) if ctrl => {
+            if let Some(pos) = sel.iter().position(|x| *x == n) {
+                sel.remove(pos);
+            } else {
+                sel.push(n);
+            }
+        }
+        Some(n) => {
+            sel.clear();
+            sel.push(n);
+        }
+    }
+}
+
+/// An artist/album pane row: a full-width selectable name plus a right-aligned
+/// count. Returns the selectable's response.
+fn pane_row(
+    ui: &mut egui::Ui,
+    selected: bool,
+    name: &str,
+    count: i64,
+    text: Color32,
+    dim: Color32,
+) -> egui::Response {
+    ui.horizontal(|ui| {
+        let w = (ui.available_width() - 34.0).max(20.0);
+        let r = ui.add_sized(
+            [w, 16.0],
+            egui::SelectableLabel::new(selected, RichText::new(name).color(text)),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(RichText::new(count.to_string()).color(dim));
+        });
+        r
+    })
+    .inner
+}
+
+/// Allocate a full-width row and run `draw(rect, paint)` where `paint(x, width,
+/// text, color, right_align)` renders a clipped column. Paints the selection
+/// background first. Returns the row's click response.
+fn paint_track_row(
+    ui: &mut egui::Ui,
+    h: f32,
+    selected: bool,
+    sel_bg: Color32,
+    draw: impl FnOnce(egui::Rect, &dyn Fn(f32, f32, &str, Color32, bool)),
+) -> egui::Response {
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::click());
+    if selected {
+        ui.painter().rect_filled(rect, 0.0, sel_bg);
+    }
+    let painter = ui.painter().clone();
+    let paint = move |x: f32, width: f32, text: &str, color: Color32, right: bool| {
+        let area = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(width, rect.height()));
+        let p = painter.with_clip_rect(area);
+        let (pos, anchor) = if right {
+            (area.right_center() - egui::vec2(2.0, 0.0), egui::Align2::RIGHT_CENTER)
+        } else {
+            (area.left_center(), egui::Align2::LEFT_CENTER)
+        };
+        p.text(pos, anchor, text, egui::FontId::proportional(12.0), color);
+    };
+    draw(rect, &paint);
+    resp
+}
+
+/// `h:mm:ss` (or `mm:ss`) for a whole-second total.
+fn hms(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
     }
 }
 
@@ -4189,6 +4752,7 @@ impl eframe::App for LinAmpApp {
         if self.quit_countdown.is_none() && ctx.input(|i| i.viewport().close_requested()) {
             self.eq_visible = false;
             self.pl_visible = false;
+            self.lib_visible = false;
             self.popup = None;
             self.quit_countdown = Some(2);
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
