@@ -505,6 +505,74 @@ const GEN_BORDER_B: u32 = 14; // bottom bar height
 const GEN_CORNER_W: u32 = 25; // title-bar corner / bracket width
 const GEN_BOTTOM_SIDE_W: u32 = 125; // bottom-left / bottom-right piece width
 
+// GEN.BMP title font: uppercase A–Z glyphs (src_x, width) on the bottom rows,
+// measured from the base skin. Highlighted row at y=88, normal row at y=96; both
+// 7px tall. The cyan key colour marks transparency.
+const GEN_FONT_Y_SELECTED: u32 = 88;
+const GEN_FONT_Y_NORMAL: u32 = 96;
+const GEN_FONT_H: u32 = 7;
+const GEN_KEY: [u8; 3] = [0, 198, 255];
+const GEN_FONT: [(u32, u32); 26] = [
+    (1, 6), (8, 7), (16, 7), (24, 6), (31, 6), (38, 6), (45, 7), (53, 6), (60, 4),
+    (65, 6), (72, 7), (80, 5), (86, 8), (95, 6), (102, 6), (109, 6), (116, 7),
+    (124, 7), (132, 6), (139, 5), (145, 6), (152, 6), (159, 8), (168, 7), (175, 7),
+    (183, 5),
+];
+
+fn gen_glyph(c: char) -> Option<(u32, u32)> {
+    if c.is_ascii_uppercase() {
+        Some(GEN_FONT[(c as u8 - b'A') as usize])
+    } else {
+        None
+    }
+}
+
+/// Copy `src[sx..+sw, sy..+sh]` to `dst` at (dx,dy), skipping pixels that match the
+/// key colour (transparent).
+fn blit_keyed(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, sy: u32, w: u32, h: u32, key: [u8; 3]) {
+    let (sw, sh) = src.dimensions();
+    let (dw, dh) = dst.dimensions();
+    for j in 0..h {
+        let (syy, dyy) = (sy + j, dy + j as i32);
+        if syy >= sh || dyy < 0 || dyy >= dh as i32 {
+            continue;
+        }
+        for i in 0..w {
+            let (sxx, dxx) = (sx + i, dx + i as i32);
+            if sxx >= sw || dxx < 0 || dxx >= dw as i32 {
+                continue;
+            }
+            let p = *src.get_pixel(sxx, syy);
+            if [p[0], p[1], p[2]] != key {
+                dst.put_pixel(dxx as u32, dyy as u32, p);
+            }
+        }
+    }
+}
+
+/// Draw `title` (uppercased) centred in the title bar using GEN.BMP's own font.
+fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool) {
+    let up = title.to_uppercase();
+    let fy = if active { GEN_FONT_Y_SELECTED } else { GEN_FONT_Y_NORMAL };
+    let total: u32 = up
+        .chars()
+        .map(|c| if c == ' ' { 4 } else { gen_glyph(c).map(|(_, w)| w + 1).unwrap_or(0) })
+        .sum();
+    let dw = dst.width();
+    let mut x = (dw / 2).saturating_sub(total / 2);
+    let ty = (GEN_TB_H.saturating_sub(GEN_FONT_H)) / 2;
+    for c in up.chars() {
+        if c == ' ' {
+            x += 4;
+            continue;
+        }
+        if let Some((sx, w)) = gen_glyph(c) {
+            blit_keyed(dst, g, x as i32, ty as i32, sx, fy, w, GEN_FONT_H, GEN_KEY);
+            x += w + 1;
+        }
+    }
+}
+
 /// Horizontally tile `src[sx..+sw, sy..+sh]` across the destination span `[x0, x1)`.
 fn tile_h(dst: &mut RgbaImage, src: &RgbaImage, x0: u32, x1: u32, dy: i32, sx: u32, sy: u32, sw: u32, sh: u32) {
     let mut x = x0;
@@ -566,7 +634,7 @@ impl ClassicSkin {
     /// the interior with the window background colour. `title_w` reserves a centred
     /// span of the title bar for the caption (drawn by the caller). Returns `None`
     /// when the skin has no gen art.
-    pub fn compose_gen_window(&self, w: u32, h: u32, active: bool, title_w: u32) -> Option<RgbaImage> {
+    pub fn compose_gen_window(&self, w: u32, h: u32, active: bool, title: &str) -> Option<RgbaImage> {
         let g = self.bmp("gen.bmp")?;
         let cols = self.gen_colors()?;
         let w = w.max(2 * GEN_CORNER_W + 10);
@@ -578,18 +646,14 @@ impl ClassicSkin {
         }
         let ry = if active { 0 } else { 21 };
 
-        // --- Title bar (y 0..20): corner, bracket, tiled centre, bracket, corner.
-        let title_w = title_w.min(w.saturating_sub(4 * GEN_CORNER_W));
-        let cstart = (w / 2).saturating_sub(title_w / 2);
-        let cend = cstart + title_w;
+        // --- Title bar (y 0..20): corner, bracket, one continuous centre fill,
+        // bracket, corner — then the caption over the centre in GEN.BMP's font.
         blit(&mut img, g, 0, 0, 0, ry, GEN_CORNER_W, GEN_TB_H); // TOP_LEFT
         blit(&mut img, g, GEN_CORNER_W as i32, 0, 26, ry, GEN_CORNER_W, GEN_TB_H); // TOP_LEFT_END
-        // left fill, centre (caption), right fill, using the fill/centre tiles.
-        tile_h(&mut img, g, 2 * GEN_CORNER_W, cstart.max(2 * GEN_CORNER_W), 0, 104, ry, GEN_CORNER_W, GEN_TB_H);
-        tile_h(&mut img, g, cstart, cend, 0, 52, ry, GEN_CORNER_W, GEN_TB_H);
-        tile_h(&mut img, g, cend, w - 2 * GEN_CORNER_W, 0, 104, ry, GEN_CORNER_W, GEN_TB_H);
+        tile_h(&mut img, g, 2 * GEN_CORNER_W, w - 2 * GEN_CORNER_W, 0, 52, ry, GEN_CORNER_W, GEN_TB_H);
         blit(&mut img, g, (w - 2 * GEN_CORNER_W) as i32, 0, 78, ry, GEN_CORNER_W, GEN_TB_H); // TOP_RIGHT_END
         blit(&mut img, g, (w - GEN_CORNER_W) as i32, 0, 130, ry, GEN_CORNER_W, GEN_TB_H); // TOP_RIGHT (close)
+        blit_gen_title(&mut img, g, title, active);
 
         // --- Side walls (tiled vertically between the title bar and bottom bar).
         let side_top = GEN_TB_H;
@@ -1501,7 +1565,7 @@ pub fn render_gen_png(skin_path: &Path, out: &Path) -> Result<()> {
         anyhow::bail!("skin has no GEN.BMP/GENEX.BMP");
     }
     let frame = skin
-        .compose_gen_window(550, 300, true, 150)
+        .compose_gen_window(550, 300, true, "LinAmp Library")
         .ok_or_else(|| anyhow::anyhow!("failed to compose gen window"))?;
     frame.save(out)?;
     Ok(())
