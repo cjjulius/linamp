@@ -2602,14 +2602,36 @@ impl LinAmpApp {
         self.root_last = None;
     }
 
+    /// Whether the library window is currently edge-docked to the player group.
+    fn library_docked(&self) -> bool {
+        if !self.lib_visible {
+            return false;
+        }
+        let lib = egui::Rect::from_min_size(self.lib_pos, self.lib_size());
+        rects_docked(lib, self.win_rect_pts(0))
+            || (self.eq_visible && rects_docked(lib, self.win_rect_pts(1)))
+            || (self.pl_visible && rects_docked(lib, self.win_rect_pts(2)))
+    }
+
     fn set_double_size(&mut self, _ctx: &egui::Context, dbl: bool) {
         if self.prefs.double_size == dbl {
             return;
         }
+        // Remember whether the library rides with the group so it can re-dock to
+        // the resized stack; a floating library is left to resize in place.
+        let lib_docked = self.library_docked();
+        let old_scale = self.scale;
         self.prefs.double_size = dbl;
         self.scale = self.prefs.scale();
         self.prefs.save();
         self.restack();
+        if lib_docked && old_scale > 0.0 {
+            // The whole group scales from the main window's top-left, so scaling the
+            // library's offset from main by the same ratio keeps it docked.
+            let ratio = self.scale / old_scale;
+            let main = self.win_pos[0];
+            self.lib_pos = main + (self.lib_pos - main) * ratio;
+        }
         self.root_last = None; // force the root window to resize next frame
     }
 
