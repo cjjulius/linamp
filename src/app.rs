@@ -3250,6 +3250,12 @@ impl LinAmpApp {
                 // Dock the (possibly restored) EQ/playlist windows under the main
                 // one, honouring which are visible and their collapsed state.
                 self.restack();
+                // A library restored as visible needs its position seeded too,
+                // or it would open at the screen origin until first dragged.
+                if !self.lib_pos_init {
+                    self.lib_pos = self.library_default_pos();
+                    self.lib_pos_init = true;
+                }
                 self.positions_init = true;
             }
         }
