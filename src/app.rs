@@ -2658,10 +2658,13 @@ impl LinAmpApp {
                 } else {
                     id3_resp.rect
                 };
-                let jy = group.response.rect.top();
+                // Span from the tab's own bottom edge to the box's top edge so
+                // the join holds even if the tab row is taller than the button.
+                let box_top = group.response.rect.top();
+                let tab_bot = active_rect.bottom();
                 let seam = egui::Rect::from_x_y_ranges(
                     (active_rect.left() + line.width)..=(active_rect.right() - line.width),
-                    (jy - 1.5)..=(jy + 1.5),
+                    (tab_bot.min(box_top) - 1.0)..=(tab_bot.max(box_top) + 1.0),
                 );
                 ui.painter().rect_filled(seam, 0.0, panel);
                 ui.spacing_mut().item_spacing.y = prev_y;
@@ -4336,6 +4339,10 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
     visuals.widgets.hovered.bg_fill = skin::blend(t.panel, Color32::WHITE, 0.12);
     visuals.widgets.active.bg_fill = t.accent;
     visuals.selection.bg_fill = t.list_sel_bg;
+    // Outline colour, derived from the skin so bevels/outlines track the theme
+    // (used by the tag editor's tabs, buttons and field frames).
+    let outline = egui::Stroke::new(1.0_f32, skin::blend(t.bg, skin::contrast_text(t.bg), 0.35));
+    visuals.widgets.noninteractive.bg_stroke = outline;
     visuals.override_text_color = Some(skin::contrast_text(t.bg));
     ctx.set_visuals(visuals);
 
