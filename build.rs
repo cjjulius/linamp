@@ -5,6 +5,7 @@
 use std::{env, fs, path::PathBuf};
 
 fn main() {
+    embed_windows_icon();
     println!("cargo:rerun-if-changed=skins");
 
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -30,3 +31,18 @@ fn main() {
         }
     }
 }
+
+/// On Windows, embed `assets/linamp.ico` into the executable so Explorer and the
+/// taskbar show the LinAmp icon. No-op on other platforms.
+#[cfg(windows)]
+fn embed_windows_icon() {
+    println!("cargo:rerun-if-changed=assets/linamp.ico");
+    if std::path::Path::new("assets/linamp.ico").exists() {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("assets/linamp.ico");
+        let _ = res.compile();
+    }
+}
+
+#[cfg(not(windows))]
+fn embed_windows_icon() {}
