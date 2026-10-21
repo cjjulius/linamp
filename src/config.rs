@@ -87,6 +87,8 @@ pub struct Session {
     pub main_shade: bool,
     pub eq_shade: bool,
     pub pl_shade: bool,
+    /// Whether the (dockable, non-shading) Media Library window was open.
+    pub lib_visible: bool,
 }
 
 impl Session {
@@ -177,6 +179,7 @@ mod tests {
             main_shade: true,
             eq_shade: false,
             pl_shade: true,
+            lib_visible: true,
         };
         let j = serde_json::to_string(&s).unwrap();
         let q: Session = serde_json::from_str(&j).unwrap();
@@ -187,5 +190,6 @@ mod tests {
         assert_eq!(q.eq_bands.len(), 10);
         assert!(q.eq_visible && !q.pl_visible);
         assert!(q.main_shade && !q.eq_shade && q.pl_shade);
+        assert!(q.lib_visible);
     }
 }
