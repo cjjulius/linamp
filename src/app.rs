@@ -2729,7 +2729,7 @@ impl LinAmpApp {
             if let Some(img) = self
                 .classic
                 .as_ref()
-                .and_then(|c| c.compose_gen_window(w, h, active, 150))
+                .and_then(|c| c.compose_gen_window(w, h, active, "LinAmp Library"))
             {
                 let color = egui::ColorImage::from_rgba_unmultiplied(
                     [w as usize, h as usize],
@@ -2740,12 +2740,6 @@ impl LinAmpApp {
             }
         }
         let (top, right, bottom, left) = classic::ClassicSkin::gen_insets();
-        let wt = self
-            .classic
-            .as_ref()
-            .and_then(|c| c.gen_colors())
-            .map(|g| Color32::from_rgb(g.window_text[0], g.window_text[1], g.window_text[2]))
-            .unwrap_or(Color32::WHITE);
         egui::CentralPanel::default()
             .frame(egui::Frame::none())
             .show(ctx, |ui| {
@@ -2754,15 +2748,7 @@ impl LinAmpApp {
                     let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                     ui.painter().image(tex.id(), full, uv, Color32::WHITE);
                 }
-                // Caption, centred in the title bar.
-                let tb_mid = full.top() + top as f32 / 2.0;
-                ui.painter().text(
-                    egui::pos2(full.center().x, tb_mid),
-                    egui::Align2::CENTER_CENTER,
-                    "LinAmp Library",
-                    egui::FontId::proportional(11.0),
-                    wt,
-                );
+                // (The caption is drawn into the frame with GEN.BMP's own font.)
                 // Close button (top-right corner of the frame).
                 let close_rect = egui::Rect::from_min_max(
                     egui::pos2(full.right() - 20.0, full.top() + 3.0),
