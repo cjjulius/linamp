@@ -2588,6 +2588,11 @@ impl LinAmpApp {
                                         for g in crate::tags::GENRES {
                                             if ui.selectable_label(val == g, *g).clicked() {
                                                 *val = (*g).to_string();
+                                                // Close the popup ourselves: egui
+                                                // only auto-closes on a mouse click,
+                                                // so a keyboard Enter would leave the
+                                                // list open otherwise.
+                                                ui.memory_mut(|m| m.close_popup());
                                             }
                                         }
                                     });
