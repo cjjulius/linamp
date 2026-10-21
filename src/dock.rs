@@ -68,15 +68,18 @@ pub(crate) fn snap_rect(
             consider(&mut best_dx, o.left() - r.left());
         }
         // Side by side (same row): the windows overlap vertically -> snap the nearer
-        // vertical edge to edge. Align tops only when they are *not* also stacked: a
-        // thin window dropped just above/below another is within the top-alignment
-        // range, and aligning its top would drag it onto the other window (what
-        // blocked collapsed windows from landing above main).
+        // vertical edge to edge, and align the tops so a window docked to the side
+        // (e.g. the library right of main) lines up flush with the other's top.
+        // Top-align only when actually side-docked (a vertical edge is flush), not
+        // when merely stacked: a thin window dropped just above/below another is
+        // within top-alignment range, and aligning its top would drag it onto the
+        // other window (what blocked collapsed windows from landing above main).
         let yover = r.top() < o.bottom() + s && r.bottom() > o.top() - s;
         if yover {
             consider(&mut best_dx, o.right() - r.left());
             consider(&mut best_dx, o.left() - r.right());
-            if !xover {
+            let side_adj = (o.right() - r.left()).abs() < s || (o.left() - r.right()).abs() < s;
+            if side_adj {
                 consider(&mut best_dy, o.top() - r.top());
             }
         }
@@ -338,6 +341,18 @@ mod tests {
         let side = r(1070.0, 105.0, 275.0, 116.0); // left 1070, 5px from main's right
         let p = snap_rect(side, &[main], None);
         assert!((p.x - main.right()).abs() < 0.01, "side window should snap flush to main's right edge");
+        assert!((p.y - main.top()).abs() < 0.01, "a side-docked window should align to main's top");
+    }
+
+    #[test]
+    fn side_docked_library_aligns_to_main_top() {
+        // The library (wide) dropped flush to main's right but a few px low should
+        // snap its left to main's right *and* its top to main's top.
+        let main = r(800.0, 100.0, 275.0, 116.0); // right 1075, top 100
+        let lib = r(1073.0, 108.0, 640.0, 460.0); // 2px off right, 8px below top
+        let p = snap_rect(lib, &[main], None);
+        assert!((p.x - main.right()).abs() < 0.01, "library left should meet main's right");
+        assert!((p.y - main.top()).abs() < 0.01, "library top should align to main's top");
     }
 
     #[test]

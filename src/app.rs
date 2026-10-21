@@ -1555,14 +1555,14 @@ impl LinAmpApp {
                         self.cviz_peaks[i] = if b > self.cviz_peaks[i] {
                             b
                         } else {
-                            (self.cviz_peaks[i] - 0.010).max(0.0)
+                            (self.cviz_peaks[i] - 0.009).max(0.0)
                         };
                     }
                 }
                 PlayState::Stopped => {
                     for i in 0..CLASSIC_BANDS {
                         self.cviz_bars[i] = (self.cviz_bars[i] - 0.045).max(0.0);
-                        self.cviz_peaks[i] = (self.cviz_peaks[i] - 0.010).max(0.0);
+                        self.cviz_peaks[i] = (self.cviz_peaks[i] - 0.009).max(0.0);
                     }
                 }
                 PlayState::Paused => {}
