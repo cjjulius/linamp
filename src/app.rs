@@ -2184,10 +2184,27 @@ impl LinAmpApp {
                     // free), moving the docked group in tandem each frame.
                     if let Some(g) = global_cursor_points(ctx) {
                         let d = self.drag.as_ref().unwrap();
-                        let target = g - d.grab;
+                        let mut target = g - d.grab;
                         let group = d.group.clone();
                         let lib_offset = d.lib_offset;
                         let press_pos = d.press_pos;
+                        // Clamp so the dragged window — and, for the main window, its
+                        // whole docked block (EQ/PL + library) — stops at the screen
+                        // edge instead of being pushed off it.
+                        if let Some(m) = ctx.input(|i| i.viewport().monitor_size) {
+                            let mut lo = egui::vec2(0.0, 0.0);
+                            let mut hi = self.win_inner_size(win);
+                            for (mi, off) in &group {
+                                lo = lo.min(*off);
+                                hi = hi.max(*off + self.win_inner_size(idx_win(*mi)));
+                            }
+                            if let Some(loff) = lib_offset {
+                                lo = lo.min(loff);
+                                hi = hi.max(loff + self.lib_size());
+                            }
+                            target.x = target.x.clamp(-lo.x, (m.x - hi.x).max(-lo.x));
+                            target.y = target.y.clamp(-lo.y, (m.y - hi.y).max(-lo.y));
+                        }
                         self.win_pos[idx] = target;
                         for (mi, off) in group {
                             self.win_pos[mi] = target + off;
@@ -2852,7 +2869,14 @@ impl LinAmpApp {
         }
         if resp.dragged() {
             if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.lib_drag) {
-                self.lib_pos = g - grab;
+                let mut p = g - grab;
+                // Stop the library at the screen edge instead of pushing it off.
+                if let Some(m) = ctx.input(|i| i.viewport().monitor_size) {
+                    let size = self.lib_size();
+                    p.x = p.x.clamp(0.0, (m.x - size.x).max(0.0));
+                    p.y = p.y.clamp(0.0, (m.y - size.y).max(0.0));
+                }
+                self.lib_pos = p;
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.lib_pos));
             }
         }
