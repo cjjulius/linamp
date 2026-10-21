@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=LinAmp
+GenericName=Audio Player
+Comment=A Winamp-inspired audio player
+Exec=@PREFIX@/linamp %U
+Path=@PREFIX@
+Icon=linamp
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+MimeType=audio/mpeg;audio/flac;audio/ogg;audio/x-wav;audio/mp4;audio/aac;audio/x-aiff;
+StartupNotify=true
