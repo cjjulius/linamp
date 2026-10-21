@@ -1153,8 +1153,15 @@ impl LinAmpApp {
 
     /// Fixed window size of the Media Library (logical points; unaffected by the
     /// 1x/2x "double size" toggle, like the other egui dialogs).
-    fn lib_size(&self) -> egui::Vec2 {
+    /// The library window's base (1x) size in points.
+    fn lib_base_size(&self) -> egui::Vec2 {
         egui::vec2(640.0, 460.0)
+    }
+
+    /// The library window's on-screen size, scaled with the double-size setting
+    /// so it grows with the classic windows.
+    fn lib_size(&self) -> egui::Vec2 {
+        self.lib_base_size() * self.scale
     }
 
     /// Show/hide the Media Library window.
@@ -2721,9 +2728,10 @@ impl LinAmpApp {
     /// behind the content, draw the caption, and inset the browser into the frame.
     fn ui_library_gen(&mut self, ctx: &egui::Context, close: &mut bool) {
         let active = ctx.input(|i| i.viewport().focused).unwrap_or(true);
-        let size = self.lib_size();
-        let (w, h) = (size.x as u32, size.y as u32);
-        // (Re)composite the frame only when the skin, focus, or size changes.
+        // Compose the frame at the base (1x) size; it is drawn to the (possibly
+        // scaled) window rect and upscaled like the classic windows.
+        let base = self.lib_base_size();
+        let (w, h) = (base.x as u32, base.y as u32);
         let sig = (self.theme.name.clone(), active, w, h);
         if self.lib_tex_sig.as_ref() != Some(&sig) {
             if let Some(img) = self
@@ -2739,7 +2747,15 @@ impl LinAmpApp {
                 self.lib_tex_sig = Some(sig);
             }
         }
+        let s = self.scale;
         let (top, right, bottom, left) = classic::ClassicSkin::gen_insets();
+        // Insets scale with the window (the 1x frame is upscaled into it).
+        let (top, right, bottom, left) = (
+            top as f32 * s,
+            right as f32 * s,
+            bottom as f32 * s,
+            left as f32 * s,
+        );
         egui::CentralPanel::default()
             .frame(egui::Frame::none())
             .show(ctx, |ui| {
@@ -2751,8 +2767,8 @@ impl LinAmpApp {
                 // (The caption is drawn into the frame with GEN.BMP's own font.)
                 // Close button (top-right corner of the frame).
                 let close_rect = egui::Rect::from_min_max(
-                    egui::pos2(full.right() - 20.0, full.top() + 3.0),
-                    egui::pos2(full.right() - 6.0, full.top() + 17.0),
+                    egui::pos2(full.right() - 20.0 * s, full.top() + 3.0 * s),
+                    egui::pos2(full.right() - 6.0 * s, full.top() + 17.0 * s),
                 );
                 if ui
                     .interact(close_rect, ui.id().with("lib_gen_close"), egui::Sense::click())
@@ -2763,15 +2779,15 @@ impl LinAmpApp {
                 // Drag the title bar (minus the close corner) to move / dock.
                 let drag_rect = egui::Rect::from_min_max(
                     full.min,
-                    egui::pos2(full.right() - 24.0, full.top() + top as f32),
+                    egui::pos2(full.right() - 24.0 * s, full.top() + top),
                 );
                 let dresp =
                     ui.interact(drag_rect, ui.id().with("lib_gen_drag"), egui::Sense::click_and_drag());
                 self.handle_lib_drag(ctx, &dresp);
                 // Inset the browser into the frame interior.
                 let content = egui::Rect::from_min_max(
-                    egui::pos2(full.left() + left as f32, full.top() + top as f32),
-                    egui::pos2(full.right() - right as f32, full.bottom() - bottom as f32),
+                    egui::pos2(full.left() + left, full.top() + top),
+                    egui::pos2(full.right() - right, full.bottom() - bottom),
                 );
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(content), |ui| {
                     self.ui_library(ui);
@@ -4579,9 +4595,24 @@ impl LinAmpApp {
             };
         let sel_col = skin::contrast_text(sel_bg);
         let dim = skin::blend(row_col, list_fill, 0.45);
+
+        // Scale the whole browser with the double-size setting so it grows with
+        // the classic windows. egui widgets follow the (scaled) style; the custom
+        // row painters take `s` explicitly, and fixed sizes below are multiplied.
+        let s = self.scale;
+        if (s - 1.0).abs() > 0.01 {
+            let st = ui.style_mut();
+            for (_, f) in st.text_styles.iter_mut() {
+                f.size *= s;
+            }
+            st.spacing.item_spacing *= s;
+            st.spacing.button_padding *= s;
+            st.spacing.interact_size *= s;
+            st.spacing.scroll.bar_width *= s;
+        }
         let panel_frame = egui::Frame::none()
             .fill(panel_fill)
-            .inner_margin(egui::Margin::same(4.0));
+            .inner_margin(egui::Margin::same(4.0 * s));
 
         // Deferred actions (collected while `self` is borrowed immutably).
         let mut nav_click: Option<LibView> = None;
@@ -4615,7 +4646,7 @@ impl LinAmpApp {
                         .add(
                             egui::TextEdit::singleline(&mut self.lib_query)
                                 .hint_text("title / artist / album")
-                                .desired_width(190.0),
+                                .desired_width(190.0 * s),
                         )
                         .changed()
                     {
@@ -4666,17 +4697,17 @@ impl LinAmpApp {
                     }
                     ui.separator();
                     ui.add_enabled_ui(rating_target.is_some(), |ui| {
-                        ui.spacing_mut().item_spacing.x = 1.0;
-                        for s in 1..=5i64 {
-                            let star = if s <= cur_rating { "★" } else { "☆" };
+                        ui.spacing_mut().item_spacing.x = 1.0 * s;
+                        for n in 1..=5i64 {
+                            let star = if n <= cur_rating { "★" } else { "☆" };
                             if ui
                                 .add(
-                                    egui::Label::new(RichText::new(star).color(accent).size(15.0))
+                                    egui::Label::new(RichText::new(star).color(accent).size(15.0 * s))
                                         .sense(egui::Sense::click()),
                                 )
                                 .clicked()
                             {
-                                rate = Some(if cur_rating == s { 0 } else { s });
+                                rate = Some(if cur_rating == n { 0 } else { n });
                             }
                         }
                     });
@@ -4691,11 +4722,11 @@ impl LinAmpApp {
         // ---- left: nav tree -----------------------------------------------
         egui::SidePanel::left("lib_nav")
             .resizable(false)
-            .exact_width(140.0)
+            .exact_width(140.0 * s)
             .frame(panel_frame)
             .show_inside(ui, |ui| {
-                ui.add_space(2.0);
-                ui.label(RichText::new("Local Media").color(dim).size(11.0));
+                ui.add_space(2.0 * s);
+                ui.label(RichText::new("Local Media").color(dim).size(11.0 * s));
                 let mut nav = |ui: &mut egui::Ui, label: &str, v: LibView| {
                     let indent = egui::RichText::new(format!("   {label}"));
                     if ui.selectable_label(self.lib_nav == v, indent).clicked() {
@@ -4703,19 +4734,19 @@ impl LinAmpApp {
                     }
                 };
                 nav(ui, "Audio", LibView::Audio);
-                ui.add_space(4.0);
-                ui.label(RichText::new("Views").color(dim).size(11.0));
+                ui.add_space(4.0 * s);
+                ui.label(RichText::new("Views").color(dim).size(11.0 * s));
                 nav(ui, "Most Played", LibView::MostPlayed);
                 nav(ui, "Recently Added", LibView::RecentlyAdded);
                 nav(ui, "Recently Played", LibView::RecentlyPlayed);
                 nav(ui, "Never Played", LibView::NeverPlayed);
                 nav(ui, "Top Rated", LibView::TopRated);
-                ui.add_space(6.0);
-                ui.label(RichText::new("Playlists").color(dim).size(11.0).italics());
-                ui.label(RichText::new("Bookmarks").color(dim).size(11.0).italics());
+                ui.add_space(6.0 * s);
+                ui.label(RichText::new("Playlists").color(dim).size(11.0 * s).italics());
+                ui.label(RichText::new("Bookmarks").color(dim).size(11.0 * s).italics());
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| match &self.library {
                     Some(lib) => {
-                        ui.label(RichText::new(format!("{} tracks", lib.count())).color(dim).size(11.0));
+                        ui.label(RichText::new(format!("{} tracks", lib.count())).color(dim).size(11.0 * s));
                     }
                     None => {
                         ui.colored_label(Color32::LIGHT_RED, "DB unavailable");
@@ -4730,7 +4761,7 @@ impl LinAmpApp {
                 if browsing {
                     egui::TopBottomPanel::top("lib_cols")
                         .resizable(false)
-                        .exact_height(148.0)
+                        .exact_height(148.0 * s)
                         .frame(egui::Frame::none().fill(list_fill))
                         .show_inside(ui, |ui| {
                             ui.columns(2, |cols| {
@@ -4738,7 +4769,7 @@ impl LinAmpApp {
                                 let c = &mut cols[0];
                                 let all_artists = self.lib_sel_artists.is_empty();
                                 let n = self.lib_artists.len();
-                                c.label(RichText::new("Artist").color(dim).size(11.0));
+                                c.label(RichText::new("Artist").color(dim).size(11.0 * s));
                                 egui::ScrollArea::vertical()
                                     .id_salt("lib_artists")
                                     .auto_shrink([false, false])
@@ -4755,7 +4786,7 @@ impl LinAmpApp {
                                         }
                                         for (name, cnt) in &self.lib_artists {
                                             let sel = self.lib_sel_artists.contains(name);
-                                            let resp = pane_row(ui, sel, name, *cnt, row_col, dim);
+                                            let resp = pane_row(ui, sel, name, *cnt, row_col, dim, s);
                                             if resp.clicked() {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                 artist_click = Some((Some(name.clone()), ctrl));
@@ -4779,7 +4810,7 @@ impl LinAmpApp {
                                 let c = &mut cols[1];
                                 let all_albums = self.lib_sel_albums.is_empty();
                                 let m = self.lib_albums.len();
-                                c.label(RichText::new("Album").color(dim).size(11.0));
+                                c.label(RichText::new("Album").color(dim).size(11.0 * s));
                                 egui::ScrollArea::vertical()
                                     .id_salt("lib_albums")
                                     .auto_shrink([false, false])
@@ -4797,7 +4828,7 @@ impl LinAmpApp {
                                         for (name, cnt) in &self.lib_albums {
                                             let label = if name.is_empty() { "(no album)" } else { name };
                                             let sel = self.lib_sel_albums.contains(name);
-                                            let resp = pane_row(ui, sel, label, *cnt, row_col, dim);
+                                            let resp = pane_row(ui, sel, label, *cnt, row_col, dim, s);
                                             if resp.clicked() {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                 album_click = Some((Some(name.clone()), ctrl));
@@ -4823,26 +4854,26 @@ impl LinAmpApp {
 
                 // Track table.
                 egui::CentralPanel::default()
-                    .frame(egui::Frame::none().fill(list_fill).inner_margin(egui::Margin::same(2.0)))
+                    .frame(egui::Frame::none().fill(list_fill).inner_margin(egui::Margin::same(2.0 * s)))
                     .show_inside(ui, |ui| {
                         let w = ui.available_width();
-                        let dur_w = 48.0;
+                        let dur_w = 48.0 * s;
                         // Reserve the scrollbar gutter so the header and the rows
                         // (which are narrower once the list scrolls) share one column
                         // layout, and anchor the Time column from the left so the
                         // right-aligned times line up with the header either way.
-                        let sb = ui.spacing().scroll.bar_width + 2.0;
-                        let body = (w - dur_w - 12.0 - sb).max(120.0);
+                        let sb = ui.spacing().scroll.bar_width + 2.0 * s;
+                        let body = (w - dur_w - 12.0 * s - sb).max(120.0 * s);
                         let fa = self.lib_col_fr[0];
                         let ft = self.lib_col_fr[1];
                         let fb = (1.0 - fa - ft).max(0.1);
                         let (aw, tw, bw) = (body * fa, body * ft, body * fb);
-                        let time_off = 2.0 + body + 6.0;
+                        let time_off = 2.0 * s + body + 6.0 * s;
                         let col3 = if show_rating { "Rating" } else { "Album" };
                         let (sort_col, sort_asc) = self.lib_sort.unwrap_or((u8::MAX, true));
                         // Header (filled with the header background colour).
-                        let hdr = paint_track_row(ui, 15.0, true, header_bg, |rect, paint| {
-                            let mut x = rect.left() + 2.0;
+                        let hdr = paint_track_row(ui, 15.0 * s, true, header_bg, s, |rect, paint| {
+                            let mut x = rect.left() + 2.0 * s;
                             for (label, cw) in [("Artist", aw), ("Title", tw), (col3, bw)] {
                                 paint(x, cw, label, header_fg, false);
                                 x += cw;
@@ -4853,26 +4884,27 @@ impl LinAmpApp {
                         // ▲/▼ glyphs aren't in the bundled fonts, so a text arrow
                         // renders as tofu). Placed near the right edge of its column.
                         if sort_col != u8::MAX {
-                            let b = hdr.rect.left() + 2.0;
+                            let b = hdr.rect.left() + 2.0 * s;
+                            let off = 7.0 * s;
                             let ax = match sort_col {
-                                0 => b + aw - 7.0,
-                                1 => b + aw + tw - 7.0,
-                                2 => b + aw + tw + bw - 7.0,
-                                _ => b + aw + tw + bw + 7.0, // Time column
+                                0 => b + aw - off,
+                                1 => b + aw + tw - off,
+                                2 => b + aw + tw + bw - off,
+                                _ => b + aw + tw + bw + off, // Time column
                             };
                             let cy = hdr.rect.center().y;
-                            let s = 3.5;
+                            let tri = 3.5 * s;
                             let pts = if sort_asc {
                                 vec![
-                                    egui::pos2(ax, cy - s),
-                                    egui::pos2(ax - s, cy + s),
-                                    egui::pos2(ax + s, cy + s),
+                                    egui::pos2(ax, cy - tri),
+                                    egui::pos2(ax - tri, cy + tri),
+                                    egui::pos2(ax + tri, cy + tri),
                                 ]
                             } else {
                                 vec![
-                                    egui::pos2(ax - s, cy - s),
-                                    egui::pos2(ax + s, cy - s),
-                                    egui::pos2(ax, cy + s),
+                                    egui::pos2(ax - tri, cy - tri),
+                                    egui::pos2(ax + tri, cy - tri),
+                                    egui::pos2(ax, cy + tri),
                                 ]
                             };
                             ui.painter()
@@ -4881,7 +4913,7 @@ impl LinAmpApp {
                         // Clicking a header column sorts by it (toggles direction on
                         // repeat). Added before the divider handles so a click in the
                         // column body sorts while a drag on the boundary resizes.
-                        let base0 = hdr.rect.left() + 2.0;
+                        let base0 = hdr.rect.left() + 2.0 * s;
                         let zones = [
                             (0u8, base0, base0 + aw),
                             (1, base0 + aw, base0 + aw + tw),
@@ -4907,8 +4939,8 @@ impl LinAmpApp {
                         let base = hdr.rect.left() + 2.0;
                         for (k, bx) in [(0usize, base + aw), (1usize, base + aw + tw)] {
                             let hit = egui::Rect::from_min_max(
-                                egui::pos2(bx - 3.0, hdr.rect.top()),
-                                egui::pos2(bx + 3.0, hdr.rect.bottom()),
+                                egui::pos2(bx - 3.0 * s, hdr.rect.top()),
+                                egui::pos2(bx + 3.0 * s, hdr.rect.bottom()),
                             );
                             let dr = ui.interact(hit, ui.id().with(("lib_col_div", k)), egui::Sense::drag());
                             let hot = dr.hovered() || dr.dragged();
@@ -4971,9 +5003,9 @@ impl LinAmpApp {
                                     } else {
                                         t.album.clone()
                                     };
-                                    let resp = paint_track_row(ui, 16.0, selected, sel_bg, |rect, paint| {
+                                    let resp = paint_track_row(ui, 16.0 * s, selected, sel_bg, s, |rect, paint| {
                                         let artist = if t.artist.is_empty() { "(unknown)" } else { &t.artist };
-                                        let mut x = rect.left() + 2.0;
+                                        let mut x = rect.left() + 2.0 * s;
                                         paint(x, aw, artist, tc, false);
                                         x += aw;
                                         paint(x, tw, &t.title, tc, false);
@@ -5273,11 +5305,12 @@ fn pane_row(
     count: i64,
     text: Color32,
     dim: Color32,
+    scale: f32,
 ) -> egui::Response {
     ui.horizontal(|ui| {
-        let w = (ui.available_width() - 34.0).max(20.0);
+        let w = (ui.available_width() - 34.0 * scale).max(20.0 * scale);
         let r = ui.add_sized(
-            [w, 16.0],
+            [w, 16.0 * scale],
             egui::SelectableLabel::new(selected, RichText::new(name).color(text)),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -5296,6 +5329,7 @@ fn paint_track_row(
     h: f32,
     selected: bool,
     sel_bg: Color32,
+    scale: f32,
     draw: impl FnOnce(egui::Rect, &dyn Fn(f32, f32, &str, Color32, bool)),
 ) -> egui::Response {
     let (rect, resp) =
@@ -5309,13 +5343,13 @@ fn paint_track_row(
         // Lay the cell out as a single line that truncates with an ellipsis. Inset
         // the text a little on both sides so a long value never runs into — or even
         // touches — the neighbouring column or the resize divider at the boundary.
-        const GAP: f32 = 6.0; // right gap before the next column
-        const LPAD: f32 = 3.0; // left gap after the column boundary / divider
-        let avail = (width - GAP - LPAD).max(0.0);
+        let gap = 6.0 * scale; // right gap before the next column
+        let lpad = 3.0 * scale; // left gap after the column boundary / divider
+        let avail = (width - gap - lpad).max(0.0);
         let mut job = LayoutJob::single_section(
             text.to_owned(),
             TextFormat {
-                font_id: egui::FontId::proportional(12.0),
+                font_id: egui::FontId::proportional(12.0 * scale),
                 color,
                 ..Default::default()
             },
@@ -5329,9 +5363,9 @@ fn paint_track_row(
         let galley = painter.layout_job(job);
         let gy = rect.center().y - galley.size().y / 2.0;
         let pos = if right {
-            egui::pos2(x + width - 2.0 - galley.size().x, gy)
+            egui::pos2(x + width - 2.0 * scale - galley.size().x, gy)
         } else {
-            egui::pos2(x + LPAD, gy)
+            egui::pos2(x + lpad, gy)
         };
         painter.galley(pos, galley, color);
     };
