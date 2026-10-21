@@ -8,6 +8,27 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "opus", "wv", "aiff", "aif",
 ];
 
+/// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
+/// happens with ID3v2 frames whose encoding byte says ISO-8859-1 while the bytes
+/// are actually UTF-8 (common in the wild, e.g. zing.vn MP3s), so an accented
+/// title like "Bằng Kiều" comes back as "Bá»±ng Kiá»u".
+///
+/// When every char is U+00..=U+FF the original bytes are recoverable: map each
+/// char back to its byte and re-decode as UTF-8. Only used when that yields valid
+/// UTF-8 that actually changed, so correctly-tagged text (and plain ASCII/Latin-1
+/// that isn't disguised UTF-8) is left untouched. Idempotent — repaired text has
+/// chars above U+00FF, so a second pass is a no-op.
+fn repair_mojibake(s: &str) -> String {
+    if s.is_empty() || !s.chars().all(|c| (c as u32) <= 0xFF) {
+        return s.to_string();
+    }
+    let bytes: Vec<u8> = s.chars().map(|c| c as u8).collect();
+    match std::str::from_utf8(&bytes) {
+        Ok(fixed) if fixed != s => fixed.to_string(),
+        _ => s.to_string(),
+    }
+}
+
 /// A single track in the playlist with cached metadata.
 #[derive(Clone, Debug)]
 pub struct Track {
@@ -62,15 +83,16 @@ impl Track {
 
             if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
                 if let Some(t) = tag.title() {
+                    let t = repair_mojibake(&t);
                     if !t.trim().is_empty() {
-                        self.title = t.to_string();
+                        self.title = t;
                     }
                 }
                 if let Some(a) = tag.artist() {
-                    self.artist = a.to_string();
+                    self.artist = repair_mojibake(&a);
                 }
                 if let Some(al) = tag.album() {
-                    self.album = al.to_string();
+                    self.album = repair_mojibake(&al);
                 }
             }
         }
@@ -335,6 +357,25 @@ mod tests {
         assert!(is_supported(Path::new("A.FLAC")));
         assert!(!is_supported(Path::new("a.txt")));
         assert!(!is_supported(Path::new("noext")));
+    }
+
+    #[test]
+    fn repair_mojibake_fixes_utf8_read_as_latin1() {
+        // "Bằng Kiều" / "Những Ngày Đẹp Trời" encoded UTF-8 then (wrongly)
+        // decoded as Latin-1 is what lofty hands back for these tags.
+        for correct in ["Bằng Kiều", "Những Ngày Đẹp Trời", "Café del Mar", "日本語"] {
+            let garbled: String = correct.bytes().map(|b| b as char).collect();
+            assert_eq!(repair_mojibake(&garbled), correct, "should recover {correct:?}");
+        }
+    }
+
+    #[test]
+    fn repair_mojibake_leaves_clean_text_alone() {
+        // Plain ASCII, already-correct Unicode, and real Latin-1 that doesn't
+        // happen to form valid UTF-8 must pass through unchanged.
+        for s in ["Hello World", "Bằng Kiều", "café", "naïve", "Mötley Crüe"] {
+            assert_eq!(repair_mojibake(s), s, "should not alter {s:?}");
+        }
     }
 
     #[test]
