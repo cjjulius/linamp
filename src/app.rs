@@ -1004,7 +1004,11 @@ impl LinAmpApp {
                     if app.prefs.tag_on_load {
                         app.playlist.load_all();
                     }
-                    app.playlist.current = (!app.playlist.is_empty()).then_some(0);
+                    // First run only: start the bundled song playing. On later
+                    // launches a saved session exists, so this never re-fires.
+                    if !app.playlist.is_empty() {
+                        app.play_index(0);
+                    }
                 }
             }
         }
