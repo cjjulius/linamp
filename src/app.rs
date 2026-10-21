@@ -45,6 +45,19 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+/// Open the folder containing `path` in the system file manager.
+fn open_in_file_manager(path: &std::path::Path) {
+    let dir = path.parent().unwrap_or(path);
+    #[cfg(target_os = "linux")]
+    let cmd = "xdg-open";
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(target_os = "windows")]
+    let cmd = "explorer";
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    let _ = std::process::Command::new(cmd).arg(dir).spawn();
+}
+
 fn win_idx(w: ClWin) -> usize {
     match w {
         ClWin::Main => 0,
@@ -433,6 +446,23 @@ const EQ_LABELS: [&str; 10] = [
 enum View {
     Playlist,
     Library,
+}
+
+/// A deferred Media Library action, raised by a context menu while `self` is
+/// borrowed immutably and applied after the UI pass. Track actions carry row
+/// indices into `lib_results`; artist/album actions carry the name.
+enum LibAction {
+    Play(Vec<usize>),
+    Enqueue(Vec<usize>),
+    PlayArtist(String),
+    EnqueueArtist(String),
+    PlayAlbum(String),
+    EnqueueAlbum(String),
+    Rate(Vec<usize>, i64),
+    EditTags(usize),
+    Explore(usize),
+    Remove(Vec<usize>),
+    SelectAll,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -872,6 +902,25 @@ impl LinAmpApp {
     }
 
     // ---- transport helpers -------------------------------------------------
+
+    /// Replace the playlist with `tracks` and start playing the first.
+    fn play_tracks(&mut self, tracks: Vec<crate::playlist::Track>) {
+        if tracks.is_empty() {
+            return;
+        }
+        self.playlist.tracks = tracks;
+        self.playlist.current = None;
+        self.play_index(0);
+    }
+
+    /// Append `tracks` to the playlist without changing what's playing.
+    fn enqueue_tracks(&mut self, tracks: Vec<crate::playlist::Track>) {
+        if tracks.is_empty() {
+            return;
+        }
+        self.playlist.tracks.extend(tracks);
+        self.status = format!("{} track(s) in playlist.", self.playlist.len());
+    }
 
     fn play_index(&mut self, idx: usize) {
         self.playlist.ensure_loaded(idx);
@@ -2681,6 +2730,35 @@ impl LinAmpApp {
         });
     }
 
+    /// Open the tag editor for a file by path (e.g. a Media Library row that may
+    /// not be in the playlist). `index` is a sentinel so saving doesn't touch a
+    /// playlist row.
+    fn open_tag_editor_path(&mut self, path: std::path::PathBuf) {
+        let (v1, v2) = crate::tags::read_id3(&path);
+        let info = crate::tags::read_info(&path);
+        let editable = crate::tags::can_edit(&path);
+        let (v1_on, v2_on) = (v1.is_some(), v2.is_some());
+        let v1 = v1.unwrap_or_default();
+        let v2 = v2.unwrap_or_default();
+        let status = if editable {
+            String::new()
+        } else {
+            "Read-only: tag writing isn't supported for this format yet.".into()
+        };
+        self.tag_editor = Some(TagEditor {
+            index: usize::MAX,
+            path,
+            info,
+            v1,
+            v2,
+            v1_on,
+            v2_on,
+            tab: TagTab::Basic,
+            editable,
+            status,
+        });
+    }
+
     /// Write the editor's tags back to the file and refresh the playlist row.
     /// Returns `true` when the write succeeded (so the caller can close).
     fn save_tag_editor(&mut self) -> bool {
@@ -4325,6 +4403,7 @@ impl LinAmpApp {
         let mut do_scan = false;
         let mut do_clear = false;
         let mut search_changed = false;
+        let mut lib_action: Option<LibAction> = None;
 
         let browsing = self.lib_query.trim().is_empty() && self.lib_nav == LibView::Audio;
 
@@ -4478,10 +4557,21 @@ impl LinAmpApp {
                                         }
                                         for (name, cnt) in &self.lib_artists {
                                             let sel = self.lib_sel_artists.contains(name);
-                                            if pane_row(ui, sel, name, *cnt, row_col, dim).clicked() {
+                                            let resp = pane_row(ui, sel, name, *cnt, row_col, dim);
+                                            if resp.clicked() {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                 artist_click = Some((Some(name.clone()), ctrl));
                                             }
+                                            resp.context_menu(|ui| {
+                                                if ui.button(format!("Play all by \u{201c}{name}\u{201d}")).clicked() {
+                                                    lib_action = Some(LibAction::PlayArtist(name.clone()));
+                                                    ui.close_menu();
+                                                }
+                                                if ui.button(format!("Enqueue all by \u{201c}{name}\u{201d}")).clicked() {
+                                                    lib_action = Some(LibAction::EnqueueArtist(name.clone()));
+                                                    ui.close_menu();
+                                                }
+                                            });
                                         }
                                     });
                                 // Album column.
@@ -4506,10 +4596,21 @@ impl LinAmpApp {
                                         for (name, cnt) in &self.lib_albums {
                                             let label = if name.is_empty() { "(no album)" } else { name };
                                             let sel = self.lib_sel_albums.contains(name);
-                                            if pane_row(ui, sel, label, *cnt, row_col, dim).clicked() {
+                                            let resp = pane_row(ui, sel, label, *cnt, row_col, dim);
+                                            if resp.clicked() {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                 album_click = Some((Some(name.clone()), ctrl));
                                             }
+                                            resp.context_menu(|ui| {
+                                                if ui.button(format!("Play all from \u{201c}{label}\u{201d}")).clicked() {
+                                                    lib_action = Some(LibAction::PlayAlbum(name.clone()));
+                                                    ui.close_menu();
+                                                }
+                                                if ui.button(format!("Enqueue all from \u{201c}{label}\u{201d}")).clicked() {
+                                                    lib_action = Some(LibAction::EnqueueAlbum(name.clone()));
+                                                    ui.close_menu();
+                                                }
+                                            });
                                         }
                                     });
                             });
@@ -4600,13 +4701,62 @@ impl LinAmpApp {
                                         dbl_track = Some(i);
                                     }
                                     resp.context_menu(|ui| {
+                                        // Act on the selection when the right-clicked
+                                        // row is part of it; otherwise just this row.
+                                        let rows: Vec<usize> = if selected && !self.lib_sel_tracks.is_empty() {
+                                            self.lib_sel_tracks.iter().copied().collect()
+                                        } else {
+                                            vec![i]
+                                        };
                                         if ui.button("Play").clicked() {
-                                            dbl_track = Some(i);
+                                            lib_action = Some(LibAction::Play(rows.clone()));
                                             ui.close_menu();
                                         }
                                         if ui.button("Enqueue").clicked() {
-                                            track_click = Some((i, true));
-                                            do_enqueue = true;
+                                            lib_action = Some(LibAction::Enqueue(rows.clone()));
+                                            ui.close_menu();
+                                        }
+                                        ui.separator();
+                                        if !t.artist.is_empty()
+                                            && ui.button(format!("Play all by \u{201c}{}\u{201d}", t.artist)).clicked()
+                                        {
+                                            lib_action = Some(LibAction::PlayArtist(t.artist.clone()));
+                                            ui.close_menu();
+                                        }
+                                        if !t.album.is_empty()
+                                            && ui.button(format!("Play all from \u{201c}{}\u{201d}", t.album)).clicked()
+                                        {
+                                            lib_action = Some(LibAction::PlayAlbum(t.album.clone()));
+                                            ui.close_menu();
+                                        }
+                                        ui.separator();
+                                        if ui.button("Select all").clicked() {
+                                            lib_action = Some(LibAction::SelectAll);
+                                            ui.close_menu();
+                                        }
+                                        ui.menu_button("Rate", |ui| {
+                                            for s in 1..=5i64 {
+                                                if ui.button("\u{2605}".repeat(s as usize)).clicked() {
+                                                    lib_action = Some(LibAction::Rate(rows.clone(), s));
+                                                    ui.close_menu();
+                                                }
+                                            }
+                                            if ui.button("Clear rating").clicked() {
+                                                lib_action = Some(LibAction::Rate(rows.clone(), 0));
+                                                ui.close_menu();
+                                            }
+                                        });
+                                        if ui.button("Edit tags\u{2026}").clicked() {
+                                            lib_action = Some(LibAction::EditTags(i));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Explore folder").clicked() {
+                                            lib_action = Some(LibAction::Explore(i));
+                                            ui.close_menu();
+                                        }
+                                        ui.separator();
+                                        if ui.button("Remove from library").clicked() {
+                                            lib_action = Some(LibAction::Remove(rows.clone()));
                                             ui.close_menu();
                                         }
                                     });
@@ -4663,6 +4813,82 @@ impl LinAmpApp {
         }
         if do_scan {
             self.scan_into_library();
+        }
+
+        if let Some(act) = lib_action {
+            let rows_to_tracks = |app: &Self, rows: &[usize]| -> Vec<crate::playlist::Track> {
+                rows.iter()
+                    .filter_map(|&i| app.lib_results.get(i).cloned())
+                    .collect()
+            };
+            let by = |app: &Self, artists: &[String], albums: &[String]| {
+                app.library
+                    .as_ref()
+                    .map(|l| l.tracks_for(artists, albums))
+                    .unwrap_or_default()
+            };
+            match act {
+                LibAction::SelectAll => {
+                    self.lib_sel_tracks = (0..self.lib_results.len()).collect();
+                }
+                LibAction::Play(rows) => {
+                    let ts = rows_to_tracks(self, &rows);
+                    self.play_tracks(ts);
+                }
+                LibAction::Enqueue(rows) => {
+                    let ts = rows_to_tracks(self, &rows);
+                    self.enqueue_tracks(ts);
+                }
+                LibAction::PlayArtist(a) => {
+                    let ts = by(self, std::slice::from_ref(&a), &[]);
+                    self.play_tracks(ts);
+                }
+                LibAction::EnqueueArtist(a) => {
+                    let ts = by(self, std::slice::from_ref(&a), &[]);
+                    self.enqueue_tracks(ts);
+                }
+                LibAction::PlayAlbum(al) => {
+                    let ts = by(self, &[], std::slice::from_ref(&al));
+                    self.play_tracks(ts);
+                }
+                LibAction::EnqueueAlbum(al) => {
+                    let ts = by(self, &[], std::slice::from_ref(&al));
+                    self.enqueue_tracks(ts);
+                }
+                LibAction::Rate(rows, r) => {
+                    if let Some(lib) = &self.library {
+                        for &i in &rows {
+                            if let Some(t) = self.lib_results.get(i) {
+                                lib.set_rating(&t.path, r);
+                            }
+                        }
+                    }
+                    if self.lib_nav == LibView::TopRated {
+                        self.refresh_library();
+                    }
+                }
+                LibAction::EditTags(i) => {
+                    if let Some(t) = self.lib_results.get(i).cloned() {
+                        self.open_tag_editor_path(t.path);
+                    }
+                }
+                LibAction::Explore(i) => {
+                    if let Some(t) = self.lib_results.get(i) {
+                        open_in_file_manager(&t.path);
+                    }
+                }
+                LibAction::Remove(rows) => {
+                    let paths: Vec<_> = rows
+                        .iter()
+                        .filter_map(|&i| self.lib_results.get(i).map(|t| t.path.clone()))
+                        .collect();
+                    if let Some(lib) = &self.library {
+                        lib.remove_paths(&paths);
+                    }
+                    self.lib_sel_tracks.clear();
+                    self.refresh_library();
+                }
+            }
         }
 
         // Gather the target tracks for Play/Enqueue (selection, else all shown).

@@ -198,6 +198,17 @@ impl Library {
         );
     }
 
+    /// Remove tracks from the library by path. Only drops the DB rows; the files
+    /// on disk are left untouched.
+    pub fn remove_paths(&self, paths: &[PathBuf]) {
+        for p in paths {
+            let _ = self.conn.execute(
+                "DELETE FROM tracks WHERE path = ?1",
+                params![p.to_string_lossy()],
+            );
+        }
+    }
+
     /// Set a track's 0–5 star rating (0 clears it).
     pub fn set_rating(&self, path: &Path, rating: i64) {
         let _ = self.conn.execute(
