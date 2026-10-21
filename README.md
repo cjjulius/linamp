@@ -49,7 +49,40 @@ focused, otherwise they change the volume.)
 | `↑` / `↓` | Volume up / down | | `Ctrl+A` / `Insert` | Select all / add files |
 | `R` / `S` | Repeat / shuffle | | | |
 
-## Build & run
+## Install
+
+Grab the latest installer from the
+**[Releases page](https://github.com/cjjulius/linamp/releases/latest)**. Both are
+**per-user** installs — no admin or `sudo` — and keep your data on uninstall.
+
+### Windows (10/11, 64-bit)
+
+Download and run **`LinAmp-<version>-Setup.exe`**. It installs just for your user
+(no UAC prompt) under `%LOCALAPPDATA%\Programs\LinAmp`, adds a Start-Menu and
+optional desktop shortcut, and can be removed from **Settings → Apps → LinAmp**.
+Your library, config and session live in `%LOCALAPPDATA%\LinAmp` and are kept on
+uninstall.
+
+### Linux (per-user)
+
+Extract the tarball (`linamp-<version>-linux-x86_64.tar.gz`) and run
+`./install.sh` — no sudo. Launch **LinAmp** from your app menu or run
+`~/.local/bin/linamp`. `./uninstall.sh` removes it. Files land in the standard
+per-user locations:
+
+| Path | What |
+|------|------|
+| `~/.local/bin/linamp` | launcher (symlink) |
+| `~/.local/lib/linamp/` | the app — binary + bundled skins |
+| `~/.local/share/LinAmp/` | your data — library, config, session |
+| `~/.local/share/applications/linamp.desktop`, `…/icons/hicolor/*/apps/linamp.*` | menu entry + icon |
+
+Uninstalling removes everything except `~/.local/share/LinAmp/` — your library
+and settings are kept; delete that folder too for a full wipe. Target distros are
+Ubuntu-based (Pop!_OS, Mint); audio goes to PipeWire via ALSA. See
+[LINUX.md](LINUX.md) for details.
+
+## Build from source
 
 Install [Rust](https://rustup.rs), then:
 
@@ -64,22 +97,8 @@ Pass files or folders to open them: `linamp song.flac album/`.
 - **Linux** needs a few system libraries (ALSA, GTK, X11/Wayland) — see
   [LINUX.md](LINUX.md). Audio targets PipeWire via ALSA.
 
-## Install (Linux, per-user)
-
-From a release tarball (`linamp-<version>-linux-x86_64.tar.gz`), extract it and
-run `./install.sh` — a per-user install, no sudo. Launch **LinAmp** from your
-app menu or run `~/.local/bin/linamp`. `./uninstall.sh` removes it. Files land in
-the standard per-user locations:
-
-| Path | What |
-|------|------|
-| `~/.local/bin/linamp` | launcher (symlink) |
-| `~/.local/lib/linamp/` | the app — binary + bundled skins |
-| `~/.local/share/LinAmp/` | your data — library, config, session |
-| `~/.local/share/applications/linamp.desktop`, `…/icons/hicolor/*/apps/linamp.*` | menu entry + icon |
-
-Uninstalling removes everything except `~/.local/share/LinAmp/` — your library
-and settings are kept; delete that folder too for a full wipe.
+Packaging the installers (Inno Setup / tarball) is documented in
+[packaging/RELEASE.md](packaging/RELEASE.md).
 
 ## Skins
 
