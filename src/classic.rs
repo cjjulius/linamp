@@ -265,6 +265,8 @@ pub struct ClassicSkin {
     /// the glyph from its backing regardless of whether the font is light-on-dark
     /// or dark-on-light.
     text_bg: [u8; 3],
+    /// Window-shape masks from REGION.TXT (empty = rectangular windows).
+    pub regions: crate::region::SkinRegions,
 }
 
 impl ClassicSkin {
@@ -272,6 +274,7 @@ impl ClassicSkin {
         let file = File::open(path)?;
         let mut zip = ZipArchive::new(file)?;
         let mut bitmaps = HashMap::new();
+        let mut region_txt = String::new();
         for i in 0..zip.len() {
             let mut f = zip.by_index(i)?;
             let name = f.name().to_string();
@@ -287,11 +290,17 @@ impl ClassicSkin {
                         bitmaps.insert(base, img.to_rgba8());
                     }
                 }
+            } else if base == "region.txt" {
+                let mut buf = Vec::new();
+                if f.read_to_end(&mut buf).is_ok() {
+                    region_txt = String::from_utf8_lossy(&buf).into_owned();
+                }
             }
         }
         if !bitmaps.contains_key("main.bmp") {
             anyhow::bail!("skin has no MAIN.BMP");
         }
+        let regions = crate::region::parse(&region_txt);
         let eq_sprites = bitmaps
             .get("eqmain.bmp")
             .map(eq_valid_sprites)
@@ -304,6 +313,7 @@ impl ClassicSkin {
             bitmaps,
             eq_sprites,
             text_bg,
+            regions,
         })
     }
 

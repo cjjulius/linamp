@@ -235,7 +235,7 @@ fn virtual_desktop_rect(ctx: &egui::Context) -> Option<egui::Rect> {
 mod x11util {
     use std::cell::RefCell;
     use std::ffi::CString;
-    use std::os::raw::{c_int, c_long, c_uchar, c_ulong};
+    use std::os::raw::{c_char, c_int, c_long, c_uchar, c_ulong, c_void};
     use std::ptr;
     use x11_dl::xlib;
 
@@ -464,6 +464,106 @@ mod x11util {
             STATE.with(|s| s.borrow_mut().3 = true);
         }
     }
+
+    #[repr(C)]
+    struct XRectangle {
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+    }
+
+    type ShapeFn = unsafe extern "C" fn(
+        *mut xlib::Display,
+        xlib::Window,
+        c_int, // dest_kind (ShapeBounding = 0)
+        c_int, // x_off
+        c_int, // y_off
+        *const XRectangle,
+        c_int, // n_rects
+        c_int, // op (ShapeSet = 0)
+        c_int, // ordering (Unsorted = 0)
+    );
+
+    /// Resolve `XShapeCombineRectangles` from libXext (not in x11-dl), cached.
+    /// `None` when libXext is unavailable, so shaping degrades to rectangular.
+    fn shape_fn() -> Option<ShapeFn> {
+        thread_local! {
+            static F: RefCell<Option<Option<ShapeFn>>> = const { RefCell::new(None) };
+        }
+        F.with(|c| {
+            if c.borrow().is_none() {
+                let resolved = unsafe {
+                    extern "C" {
+                        fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
+                        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+                    }
+                    let mut handle = ptr::null_mut();
+                    for name in [b"libXext.so.6\0".as_slice(), b"libXext.so\0".as_slice()] {
+                        handle = dlopen(name.as_ptr() as *const c_char, 2 /* RTLD_NOW */);
+                        if !handle.is_null() {
+                            break;
+                        }
+                    }
+                    if handle.is_null() {
+                        None
+                    } else {
+                        let sym = dlsym(
+                            handle,
+                            b"XShapeCombineRectangles\0".as_ptr() as *const c_char,
+                        );
+                        if sym.is_null() {
+                            None
+                        } else {
+                            Some(std::mem::transmute::<*mut c_void, ShapeFn>(sym))
+                        }
+                    }
+                };
+                *c.borrow_mut() = Some(resolved);
+            }
+            c.borrow().unwrap()
+        })
+    }
+
+    /// Clip the window titled `title` to `rects` (window-pixel coords) via the X11
+    /// Shape extension. An empty slice clears the shape (full rectangle). Returns
+    /// false when X11/libXext/the window is unavailable (caller treats as no-op).
+    pub fn set_shape(title: &str, rects: &[(i16, i16, u16, u16)]) -> bool {
+        let Some(shape) = shape_fn() else {
+            return false;
+        };
+        with_conn(|xlib, d| unsafe {
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            let clients = client_list(xlib, d);
+            let mut win: xlib::Window = 0;
+            for &w in &clients {
+                if wm_name(xlib, d, w) == title {
+                    win = w;
+                    break;
+                }
+            }
+            let ok = if win != 0 {
+                const SHAPE_BOUNDING: c_int = 0;
+                const SHAPE_SET: c_int = 0;
+                const UNSORTED: c_int = 0;
+                let xr: Vec<XRectangle> = rects
+                    .iter()
+                    .map(|&(x, y, width, height)| XRectangle { x, y, width, height })
+                    .collect();
+                shape(
+                    d, win, SHAPE_BOUNDING, 0, 0, xr.as_ptr(), xr.len() as c_int, SHAPE_SET,
+                    UNSORTED,
+                );
+                (xlib.XFlush)(d);
+                true
+            } else {
+                false
+            };
+            (xlib.XSetErrorHandler)(prev);
+            ok
+        })
+        .unwrap_or(false)
+    }
 }
 
 /// Make EQ/playlist *owned* by the main window so they ride its z-order (rise
@@ -502,6 +602,19 @@ fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visible: bool) {
     #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = (eq_visible, pl_visible);
+    }
+}
+
+/// Apply (or clear) a window-shape mask to a classic window by title. X11 only
+/// (via the Shape extension); a no-op elsewhere, where windows stay rectangular.
+fn set_window_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::set_shape(title, rects);
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = (title, rects);
     }
 }
 
@@ -659,6 +772,11 @@ pub struct LinAmpApp {
     /// so it is only re-composited when something changes.
     lib_tex: Option<egui::TextureHandle>,
     lib_tex_sig: Option<(String, bool, u32, u32)>,
+    /// Per-window (main/eq/pl) X11 shape fingerprint, so REGION.TXT masks are only
+    /// re-applied on change; `shaped_any` tracks whether any shape was ever set (to
+    /// reset windows to rectangular when switching to a skin without regions).
+    shape_sig: [Option<u64>; 3],
+    shaped_any: bool,
     /// Last composed fingerprint per window (main/eq/pl), to skip re-compositing
     /// and re-uploading an unchanged frame.
     tex_fp: [u64; 3],
@@ -849,6 +967,8 @@ impl LinAmpApp {
             lib_drag: None,
             lib_tex: None,
             lib_tex_sig: None,
+            shape_sig: [None; 3],
+            shaped_any: false,
             lib_nav: crate::library::LibView::Audio,
             lib_artists: Vec::new(),
             lib_albums: Vec::new(),
@@ -3739,6 +3859,87 @@ impl LinAmpApp {
         }
     }
 
+    /// Apply each classic window's REGION.TXT shape (main/EQ/playlist, per shade
+    /// state, scaled). Fingerprinted so the X calls only happen on change. No-op
+    /// for skins without regions (unless we previously shaped — then reset to
+    /// rectangular). X11 only; a no-op on other platforms.
+    fn apply_window_shapes(&mut self) {
+        use crate::region::Polygon;
+        let (has, main_r, main_sr, eq_r, eq_sr, pl_r) = match self.classic.as_ref() {
+            Some(cs) => (
+                !cs.regions.is_empty(),
+                cs.regions.main.clone(),
+                cs.regions.main_shade.clone(),
+                cs.regions.eq.clone(),
+                cs.regions.eq_shade.clone(),
+                cs.regions.playlist.clone(),
+            ),
+            None => return,
+        };
+        if !has && !self.shaped_any {
+            return; // normal skin, never shaped — leave windows rectangular
+        }
+        let skin = self.theme.name.clone();
+        let main: &[Polygon] = if self.main_shade { &main_sr } else { &main_r };
+        self.shape_one(0, "LinAmp", true, main, classic::MAIN_W, self.main_h() as u32, &skin);
+        let eq: &[Polygon] = if self.eq_shade { &eq_sr } else { &eq_r };
+        let eqv = self.eq_visible;
+        self.shape_one(1, "LinAmp Equalizer", eqv, eq, classic::MAIN_W, self.eq_h() as u32, &skin);
+        let (plw, plh) = if self.pl_shade {
+            (classic::MAIN_W, 14)
+        } else {
+            (self.pl_px_w as u32, self.pl_px_h as u32)
+        };
+        let pl: &[Polygon] = if self.pl_shade { &[] } else { &pl_r };
+        let plv = self.pl_visible;
+        self.shape_one(2, "LinAmp Playlist", plv, pl, plw, plh, &skin);
+        self.shaped_any = true;
+    }
+
+    fn shape_one(
+        &mut self,
+        idx: usize,
+        title: &str,
+        visible: bool,
+        polys: &[crate::region::Polygon],
+        w: u32,
+        h: u32,
+        skin: &str,
+    ) {
+        if !visible {
+            // A hidden window's XID is gone; forget its shape so it re-applies when
+            // shown again (the new window starts rectangular).
+            self.shape_sig[idx] = None;
+            return;
+        }
+        use std::hash::{Hash, Hasher};
+        let mut hh = std::collections::hash_map::DefaultHasher::new();
+        (skin, idx, self.scale.to_bits(), w, h, polys.is_empty()).hash(&mut hh);
+        let sig = hh.finish();
+        if self.shape_sig[idx] == Some(sig) {
+            return;
+        }
+        let s = self.scale;
+        let rects: Vec<(i16, i16, u16, u16)> = if polys.is_empty() {
+            // Reset to a full rectangle (undoes a prior shape on skin change).
+            vec![(0, 0, (w as f32 * s) as u16, (h as f32 * s) as u16)]
+        } else {
+            crate::region::polygons_to_rects(polys, w, h)
+                .into_iter()
+                .map(|(x, y, rw, rh)| {
+                    (
+                        (x as f32 * s) as i16,
+                        (y as f32 * s) as i16,
+                        (rw as f32 * s).ceil() as u16,
+                        (rh as f32 * s).ceil() as u16,
+                    )
+                })
+                .collect()
+        };
+        set_window_shape(title, &rects);
+        self.shape_sig[idx] = Some(sig);
+    }
+
     fn render_classic(&mut self, ctx: &egui::Context) {
         if self.classic.is_none() {
             return;
@@ -3876,6 +4077,7 @@ impl LinAmpApp {
         // Keep the EQ/playlist/library windows owned by the main window (z-order
         // group), and feed any running background scan.
         group_child_windows(self.eq_visible, self.pl_visible, self.lib_visible);
+        self.apply_window_shapes();
         self.poll_library_scan();
     }
 
