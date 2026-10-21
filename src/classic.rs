@@ -479,6 +479,134 @@ impl ClassicSkin {
     }
 }
 
+/// The generic-window ("gen.bmp"/"genex.bmp") colour scheme a skin defines for
+/// its general-purpose windows (the Media Library). Colours are single pixels on
+/// the top row of GENEX.BMP; see the GENEX colour map (x=48,50,… at y=0).
+#[derive(Clone, Copy, Debug)]
+#[allow(dead_code)] // several colours are consumed by the live library integration
+pub struct GenColors {
+    pub item_bg: [u8; 3],
+    pub item_fg: [u8; 3],
+    pub window_bg: [u8; 3],
+    pub button_text: [u8; 3],
+    pub window_text: [u8; 3],
+    pub divider: [u8; 3],
+    pub selection: [u8; 3],
+    pub header_bg: [u8; 3],
+    pub header_text: [u8; 3],
+}
+
+// GEN.BMP sprite rectangles (x, y, w, h), from the webamp project. The active
+// ("selected") title-bar row is at y=0; the inactive one at y=21.
+const GEN_TB_H: u32 = 20; // title bar height
+const GEN_BORDER_L: u32 = 11; // left side wall width
+const GEN_BORDER_R: u32 = 8; // right side wall width
+const GEN_BORDER_B: u32 = 14; // bottom bar height
+const GEN_CORNER_W: u32 = 25; // title-bar corner / bracket width
+const GEN_BOTTOM_SIDE_W: u32 = 125; // bottom-left / bottom-right piece width
+
+/// Horizontally tile `src[sx..+sw, sy..+sh]` across the destination span `[x0, x1)`.
+fn tile_h(dst: &mut RgbaImage, src: &RgbaImage, x0: u32, x1: u32, dy: i32, sx: u32, sy: u32, sw: u32, sh: u32) {
+    let mut x = x0;
+    while x < x1 {
+        let w = sw.min(x1 - x);
+        blit(dst, src, x as i32, dy, sx, sy, w, sh);
+        x += sw;
+    }
+}
+
+/// Vertically tile `src[sx..+sw, sy..+sh]` down the destination span `[y0, y1)`.
+fn tile_v(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, y0: u32, y1: u32, sx: u32, sy: u32, sw: u32, sh: u32) {
+    let mut y = y0;
+    while y < y1 {
+        let h = sh.min(y1 - y);
+        blit(dst, src, dx, y as i32, sx, sy, sw, h);
+        y += sh;
+    }
+}
+
+impl ClassicSkin {
+    /// Whether this skin ships the general-purpose window art for the Media Library.
+    pub fn has_gen(&self) -> bool {
+        self.bmp("gen.bmp").is_some() && self.bmp("genex.bmp").is_some()
+    }
+
+    /// The Media Library colour scheme from GENEX.BMP, if the skin defines it.
+    pub fn gen_colors(&self) -> Option<GenColors> {
+        let g = self.bmp("genex.bmp")?;
+        let px = |x: u32| -> [u8; 3] {
+            if x < g.width() {
+                let p = g.get_pixel(x, 0);
+                [p[0], p[1], p[2]]
+            } else {
+                [0, 0, 0]
+            }
+        };
+        Some(GenColors {
+            item_bg: px(48),
+            item_fg: px(50),
+            window_bg: px(52),
+            button_text: px(54),
+            window_text: px(56),
+            divider: px(58),
+            selection: px(60),
+            header_bg: px(62),
+            header_text: px(64),
+        })
+    }
+
+    /// Inset (top, right, bottom, left) in native px that the gen frame occupies,
+    /// i.e. where the window content area begins.
+    #[allow(dead_code)] // used by the live library integration
+    pub fn gen_insets() -> (u32, u32, u32, u32) {
+        (GEN_TB_H, GEN_BORDER_R, GEN_BORDER_B, GEN_BORDER_L)
+    }
+
+    /// Composite the general-purpose window frame at native size `w`×`h`, filling
+    /// the interior with the window background colour. `title_w` reserves a centred
+    /// span of the title bar for the caption (drawn by the caller). Returns `None`
+    /// when the skin has no gen art.
+    pub fn compose_gen_window(&self, w: u32, h: u32, active: bool, title_w: u32) -> Option<RgbaImage> {
+        let g = self.bmp("gen.bmp")?;
+        let cols = self.gen_colors()?;
+        let w = w.max(2 * GEN_CORNER_W + 10);
+        let h = h.max(GEN_TB_H + GEN_BORDER_B + 10);
+        let mut img = RgbaImage::new(w, h);
+        let wb = Rgba([cols.window_bg[0], cols.window_bg[1], cols.window_bg[2], 255]);
+        for p in img.pixels_mut() {
+            *p = wb;
+        }
+        let ry = if active { 0 } else { 21 };
+
+        // --- Title bar (y 0..20): corner, bracket, tiled centre, bracket, corner.
+        let title_w = title_w.min(w.saturating_sub(4 * GEN_CORNER_W));
+        let cstart = (w / 2).saturating_sub(title_w / 2);
+        let cend = cstart + title_w;
+        blit(&mut img, g, 0, 0, 0, ry, GEN_CORNER_W, GEN_TB_H); // TOP_LEFT
+        blit(&mut img, g, GEN_CORNER_W as i32, 0, 26, ry, GEN_CORNER_W, GEN_TB_H); // TOP_LEFT_END
+        // left fill, centre (caption), right fill, using the fill/centre tiles.
+        tile_h(&mut img, g, 2 * GEN_CORNER_W, cstart.max(2 * GEN_CORNER_W), 0, 104, ry, GEN_CORNER_W, GEN_TB_H);
+        tile_h(&mut img, g, cstart, cend, 0, 52, ry, GEN_CORNER_W, GEN_TB_H);
+        tile_h(&mut img, g, cend, w - 2 * GEN_CORNER_W, 0, 104, ry, GEN_CORNER_W, GEN_TB_H);
+        blit(&mut img, g, (w - 2 * GEN_CORNER_W) as i32, 0, 78, ry, GEN_CORNER_W, GEN_TB_H); // TOP_RIGHT_END
+        blit(&mut img, g, (w - GEN_CORNER_W) as i32, 0, 130, ry, GEN_CORNER_W, GEN_TB_H); // TOP_RIGHT (close)
+
+        // --- Side walls (tiled vertically between the title bar and bottom bar).
+        let side_top = GEN_TB_H;
+        let side_bot = h - GEN_BORDER_B;
+        tile_v(&mut img, g, 0, side_top, side_bot, 127, 42, GEN_BORDER_L, 29);
+        tile_v(&mut img, g, (w - GEN_BORDER_R) as i32, side_top, side_bot, 139, 42, GEN_BORDER_R, 29);
+
+        // --- Bottom bar: left piece, tiled fill, right piece.
+        let by = (h - GEN_BORDER_B) as i32;
+        blit(&mut img, g, 0, by, 0, 42, GEN_BOTTOM_SIDE_W, GEN_BORDER_B); // BOTTOM_LEFT
+        blit(&mut img, g, (w - GEN_BOTTOM_SIDE_W) as i32, by, 0, 57, GEN_BOTTOM_SIDE_W, GEN_BORDER_B); // BOTTOM_RIGHT
+        tile_h(&mut img, g, GEN_BOTTOM_SIDE_W, w - GEN_BOTTOM_SIDE_W, by, 127, 72, GEN_CORNER_W, GEN_BORDER_B);
+
+        Some(img)
+    }
+}
+
 /// Copy a sub-rectangle of `src` to `dst` at (dx,dy), clipping to both.
 fn blit(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, sy: u32, w: u32, h: u32) {
     let (sw, sh) = src.dimensions();
@@ -1362,6 +1490,20 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
     blit(&mut canvas, &eq, 0, MAIN_H as i32, 0, 0, 275, EQ_H);
     blit(&mut canvas, &pl, 0, (MAIN_H + EQ_H) as i32, 0, 0, 275, PL_H);
     canvas.save(out)?;
+    Ok(())
+}
+
+/// Headless preview of the general-purpose (Media Library) window frame at a
+/// sample size, for eyeballing the gen.bmp chrome without the GUI.
+pub fn render_gen_png(skin_path: &Path, out: &Path) -> Result<()> {
+    let skin = ClassicSkin::load(skin_path)?;
+    if !skin.has_gen() {
+        anyhow::bail!("skin has no GEN.BMP/GENEX.BMP");
+    }
+    let frame = skin
+        .compose_gen_window(550, 300, true, 150)
+        .ok_or_else(|| anyhow::anyhow!("failed to compose gen window"))?;
+    frame.save(out)?;
     Ok(())
 }
 

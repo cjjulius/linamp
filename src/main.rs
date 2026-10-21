@@ -52,6 +52,20 @@ fn main() -> eframe::Result<()> {
         }
     }
 
+    // Headless Media Library frame preview: `linamp --render-gen in.wsz out.png`.
+    if let Some(i) = args.iter().position(|a| a == "--render-gen") {
+        if let (Some(inp), Some(out)) = (args.get(i + 1), args.get(i + 2)) {
+            let (inp, out) = (std::path::Path::new(inp), std::path::Path::new(out));
+            match classic::render_gen_png(inp, out) {
+                Ok(()) => println!("rendered gen {} -> {}", inp.display(), out.display()),
+                Err(e) => println!("render error: {e}"),
+            }
+        } else {
+            println!("usage: linamp --render-gen <in.wsz> <out.png>");
+        }
+        return Ok(());
+    }
+
     // Start borderless at classic skin size (the app sets the real mode on the
     // first frame once it knows whether a skin loaded).
     let mut viewport = egui::ViewportBuilder::default()
