@@ -2520,6 +2520,15 @@ impl LinAmpApp {
                 {
                     close = true;
                 }
+                // While Alt is held the letters are menu shortcuts, not text, so
+                // drop the character events before a focused field types them (e.g.
+                // Alt-U would otherwise insert a "u"). AltGr (Ctrl+Alt) is left
+                // alone so accented input still works.
+                ctx.input_mut(|i| {
+                    if i.modifiers.alt && !i.modifiers.ctrl {
+                        i.events.retain(|e| !matches!(e, egui::Event::Text(_)));
+                    }
+                });
 
                 // Theme-derived colours so the dialog tracks the active skin.
                 let line = ui.visuals().widgets.noninteractive.bg_stroke;
