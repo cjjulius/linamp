@@ -603,22 +603,9 @@ struct TagEditor {
     v2: crate::tags::Id3Fields,
     v1_on: bool,
     v2_on: bool,
-    orig_v1: crate::tags::Id3Fields,
-    orig_v2: crate::tags::Id3Fields,
-    orig_v1_on: bool,
-    orig_v2_on: bool,
     tab: TagTab,
     editable: bool,
     status: String,
-}
-
-impl TagEditor {
-    fn dirty(&self) -> bool {
-        self.v1 != self.orig_v1
-            || self.v2 != self.orig_v2
-            || self.v1_on != self.orig_v1_on
-            || self.v2_on != self.orig_v2_on
-    }
 }
 
 /// Jump-to-file dialog state: the search query and the highlighted result row.
@@ -2459,10 +2446,6 @@ impl LinAmpApp {
             index,
             path,
             info,
-            orig_v1: v1.clone(),
-            orig_v2: v2.clone(),
-            orig_v1_on: v1_on,
-            orig_v2_on: v2_on,
             v1,
             v2,
             v1_on,
@@ -2474,7 +2457,8 @@ impl LinAmpApp {
     }
 
     /// Write the editor's tags back to the file and refresh the playlist row.
-    fn save_tag_editor(&mut self) {
+    /// Returns `true` when the write succeeded (so the caller can close).
+    fn save_tag_editor(&mut self) -> bool {
         let (index, path, v1, v2, v1_on, v2_on) = match &self.tag_editor {
             Some(ed) if ed.editable => (
                 ed.index,
@@ -2484,7 +2468,7 @@ impl LinAmpApp {
                 ed.v1_on,
                 ed.v2_on,
             ),
-            _ => return,
+            _ => return false,
         };
         let result = crate::tags::write_id3(
             &path,
@@ -2497,18 +2481,14 @@ impl LinAmpApp {
                 t.load();
             }
         }
-        if let Some(ed) = self.tag_editor.as_mut() {
-            match result {
-                Ok(()) => {
-                    ed.orig_v1 = ed.v1.clone();
-                    ed.orig_v2 = ed.v2.clone();
-                    ed.orig_v1_on = ed.v1_on;
-                    ed.orig_v2_on = ed.v2_on;
-                    ed.status = "Saved.".into();
-                }
-                Err(e) => ed.status = format!("Error: {e}"),
+        // On success the caller closes the window, so only an error needs a
+        // status message left behind.
+        if let Err(e) = &result {
+            if let Some(ed) = self.tag_editor.as_mut() {
+                ed.status = format!("Error: {e}");
             }
         }
+        result.is_ok()
     }
 
     /// The tag editor window (own viewport, like preferences / library).
@@ -2530,20 +2510,49 @@ impl LinAmpApp {
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let ed = self.tag_editor.as_mut().unwrap();
-                let dirty = ed.dirty();
                 let on = ed.editable;
 
-                // Path + unsaved marker.
-                let dot = if dirty { "● " } else { "" };
-                ui.label(RichText::new(format!("{dot}{}", ed.info.path)).strong());
+                // Theme-derived colours so the dialog tracks the active skin.
+                let line = ui.visuals().widgets.noninteractive.bg_stroke;
+                let panel = ui.visuals().panel_fill;
+                let idle_fill = ui.visuals().faint_bg_color;
+                // Outline idle widgets so buttons/fields don't blur into the panel.
+                ui.visuals_mut().widgets.inactive.bg_stroke = line;
+
+                // Path.
+                ui.label(RichText::new(&ed.info.path).strong());
                 ui.add_space(4.0);
-                // Tab strip sitting on the panel below, so it reads as real tabs.
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 3.0;
-                    ui.selectable_value(&mut ed.tab, TagTab::Basic, mnem("Basic Info", 0));
-                    ui.selectable_value(&mut ed.tab, TagTab::Id3, mnem("ID3", 0));
-                });
-                egui::Frame::group(ui.style()).show(ui, |ui| {
+
+                // Tab strip that sits on — and joins into — the content box below.
+                let top_round = egui::Rounding { nw: 4.0, ne: 4.0, sw: 0.0, se: 0.0 };
+                let tab_btn = |ui: &mut egui::Ui, label: &str, active: bool| {
+                    let fill = if active { panel } else { idle_fill };
+                    ui.add(
+                        egui::Button::new(mnem(label, 0))
+                            .fill(fill)
+                            .stroke(line)
+                            .rounding(top_round)
+                            .min_size(egui::vec2(0.0, 24.0)),
+                    )
+                };
+                let prev_y = ui.spacing().item_spacing.y;
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let (basic_resp, id3_resp) = ui
+                    .horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        let b = tab_btn(ui, "Basic Info", ed.tab == TagTab::Basic);
+                        let i = tab_btn(ui, "ID3", ed.tab == TagTab::Id3);
+                        (b, i)
+                    })
+                    .inner;
+                if basic_resp.clicked() {
+                    ed.tab = TagTab::Basic;
+                }
+                if id3_resp.clicked() {
+                    ed.tab = TagTab::Id3;
+                }
+
+                let group = egui::Frame::group(ui.style()).fill(panel).show(ui, |ui| {
                     ui.set_min_width(624.0);
                     ui.set_min_height(300.0);
                     match ed.tab {
@@ -2568,6 +2577,7 @@ impl LinAmpApp {
                                     r("Original", if i.original { "Yes" } else { "No" }.into());
                                     r("Emphasis", i.emphasis.clone());
                                 });
+                            None
                         }
                         TagTab::Id3 => {
                             let genre_combo = |ui: &mut egui::Ui, salt: &str, val: &mut String| {
@@ -2582,9 +2592,9 @@ impl LinAmpApp {
                                         }
                                     });
                             };
-                            ui.columns(2, |cols| {
+                            let resps = ui.columns(2, |cols| {
                                 // ----- ID3v1 (left) -----
-                                cols[0].checkbox(&mut ed.v1_on, mnem("ID3v1 Tag", 4));
+                                let r1 = cols[0].checkbox(&mut ed.v1_on, mnem("ID3v1 Tag", 4));
                                 cols[0].add_enabled_ui(on && ed.v1_on, |ui| {
                                     egui::Grid::new("v1_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
                                         let f = &mut ed.v1;
@@ -2607,7 +2617,7 @@ impl LinAmpApp {
                                     });
                                 });
                                 // ----- ID3v2 (right) -----
-                                cols[1].checkbox(&mut ed.v2_on, mnem("ID3v2 Tag", 4));
+                                let r2 = cols[1].checkbox(&mut ed.v2_on, mnem("ID3v2 Tag", 4));
                                 cols[1].add_enabled_ui(on && ed.v2_on, |ui| {
                                     egui::Grid::new("v2_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
                                         let f = &mut ed.v2;
@@ -2634,22 +2644,41 @@ impl LinAmpApp {
                                         row(ui, "Encoded by", &mut f.encoded_by);
                                     });
                                 });
+                                (r1, r2)
                             });
+                            Some(resps)
                         }
                     }
                 });
+                let checks = group.inner;
+                // Erase the seam under the active tab so it reads as one surface
+                // with the content box (the classic folder-tab join).
+                let active_rect = if ed.tab == TagTab::Basic {
+                    basic_resp.rect
+                } else {
+                    id3_resp.rect
+                };
+                let jy = group.response.rect.top();
+                let seam = egui::Rect::from_x_y_ranges(
+                    (active_rect.left() + line.width)..=(active_rect.right() - line.width),
+                    (jy - 1.5)..=(jy + 1.5),
+                );
+                ui.painter().rect_filled(seam, 0.0, panel);
+                ui.spacing_mut().item_spacing.y = prev_y;
 
+                // Only surface an error (e.g. a failed write) — no "changed"
+                // chatter, the dialog is busy enough.
                 ui.add_space(6.0);
-                if dirty {
-                    ui.label(RichText::new("● Unsaved changes").color(Color32::from_rgb(220, 170, 70)));
-                } else if !ed.status.is_empty() {
-                    ui.label(RichText::new(&ed.status).color(Color32::GRAY));
+                if !ed.status.is_empty() {
+                    ui.label(RichText::new(&ed.status).color(ui.visuals().error_fg_color));
                 }
                 ui.add_space(4.0);
 
                 // Shortcuts: Alt-B/Alt-I pick the tab, Alt-1/2 toggle the tags,
                 // Alt-U update, Alt-C cancel, Alt-T/Alt-F copy to/from ID3v1 (read
-                // raw so a focused field doesn't swallow them).
+                // raw so a focused field doesn't swallow them). Each shortcut also
+                // moves keyboard focus to the control it acts on, so a following
+                // Tab continues from there.
                 let (k_basic, k_id3, k_v1, k_v2, k_up, k_cancel, k_to, k_from) = ctx.input(|i| {
                     let a = i.modifiers.alt;
                     (
@@ -2665,16 +2694,24 @@ impl LinAmpApp {
                 });
                 if k_basic {
                     ed.tab = TagTab::Basic;
+                    basic_resp.request_focus();
                 }
                 if k_id3 {
                     ed.tab = TagTab::Id3;
+                    id3_resp.request_focus();
                 }
                 let id3 = ed.tab == TagTab::Id3;
                 if on && id3 && k_v1 {
                     ed.v1_on = !ed.v1_on;
+                    if let Some((r1, _)) = &checks {
+                        r1.request_focus();
+                    }
                 }
                 if on && id3 && k_v2 {
                     ed.v2_on = !ed.v2_on;
+                    if let Some((_, r2)) = &checks {
+                        r2.request_focus();
+                    }
                 }
                 if on && id3 && k_up {
                     do_save = true;
@@ -2697,11 +2734,19 @@ impl LinAmpApp {
                     }
                     if id3 {
                         ui.add_enabled_ui(can_copy, |ui| {
-                            if ui.button(mnem("Copy to ID3v1", 5)).clicked() {
+                            let to = ui.button(mnem("Copy to ID3v1", 5));
+                            if to.clicked() {
                                 do_copy_to = true;
                             }
-                            if ui.button(mnem("Copy from ID3v1", 5)).clicked() {
+                            if k_to {
+                                to.request_focus();
+                            }
+                            let from = ui.button(mnem("Copy from ID3v1", 5));
+                            if from.clicked() {
                                 do_copy_from = true;
+                            }
+                            if k_from {
+                                from.request_focus();
                             }
                         });
                     }
@@ -2746,10 +2791,11 @@ impl LinAmpApp {
                 close = true;
             }
         });
-        if do_save {
-            self.save_tag_editor();
-        }
+        // Cancel/Esc discards; Update closes only when the write succeeds, so a
+        // failed save leaves the window open with its error.
         if close {
+            self.tag_editor = None;
+        } else if do_save && self.save_tag_editor() {
             self.tag_editor = None;
         }
     }
