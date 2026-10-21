@@ -23,6 +23,28 @@ const CLASSIC_BANDS: usize = 19;
 /// Duration of the stop-with-fade (Shift+V) fade-out, in seconds.
 const FADE_SECS: f32 = 2.0;
 
+/// Register a broad-Unicode fallback font so egui-rendered text (the Media
+/// Library, the modern UI, dialogs) can display scripts the default font lacks —
+/// e.g. Vietnamese. It is appended as a fallback, so the default look is kept for
+/// characters it already covers; only missing glyphs fall through to Noto Sans.
+/// The classic skin windows draw text from the skin's own bitmap font and are
+/// unaffected by this.
+fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "noto_sans".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSans-Regular.ttf")),
+    );
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push("noto_sans".to_owned());
+    }
+    ctx.set_fonts(fonts);
+}
+
 fn win_idx(w: ClWin) -> usize {
     match w {
         ClWin::Main => 0,
@@ -659,6 +681,7 @@ fn parse_time(s: &str) -> Option<f32> {
 
 impl LinAmpApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        install_fonts(&cc.egui_ctx);
         let player = Player::new().expect("failed to open audio output device");
         let viz = player.viz();
         let library = Library::open().ok();
@@ -1371,6 +1394,9 @@ impl LinAmpApp {
             || self.classic_seek_preview.is_some()
             || self.popup.is_some()
             || self.quit_countdown.is_some()
+            // Keep repainting while a background scan runs so its progress and the
+            // final refresh show up without waiting on the next input.
+            || self.lib_scan.is_some()
             || (self.player.state() == PlayState::Stopped
                 && self.viz_mode == VizMode::Spectrum
                 // Bars *and* peak markers — the peaks fall slower, so without
@@ -4518,11 +4544,26 @@ impl LinAmpApp {
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
                                 if self.lib_results.is_empty() {
-                                    ui.label(
-                                        RichText::new("No tracks. Use \u{201c}Scan folder\u{2026}\u{201d} to index your music.")
-                                            .color(dim)
-                                            .italics(),
-                                    );
+                                    // Only prompt to scan when the library is actually
+                                    // empty; an empty smart view / filter over a
+                                    // populated library gets a message that fits it.
+                                    let lib_empty =
+                                        self.library.as_ref().map(|l| l.count()).unwrap_or(0) == 0;
+                                    let msg = if lib_empty {
+                                        "No tracks. Use \u{201c}Scan folder\u{2026}\u{201d} to index your music."
+                                    } else if !self.lib_query.trim().is_empty() {
+                                        "No tracks match your search."
+                                    } else {
+                                        match self.lib_nav {
+                                            LibView::TopRated => "No rated tracks yet.",
+                                            LibView::MostPlayed => "No tracks have been played yet.",
+                                            LibView::RecentlyPlayed => "No tracks have been played yet.",
+                                            LibView::NeverPlayed => "Every track has been played.",
+                                            LibView::RecentlyAdded => "No tracks have been added recently.",
+                                            LibView::Audio => "No tracks match the selected artist/album.",
+                                        }
+                                    };
+                                    ui.label(RichText::new(msg).color(dim).italics());
                                 }
                                 for (i, t) in self.lib_results.iter().enumerate() {
                                     let selected = self.lib_sel_tracks.contains(&i);
