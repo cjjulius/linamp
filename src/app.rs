@@ -2512,6 +2512,15 @@ impl LinAmpApp {
                 let ed = self.tag_editor.as_mut().unwrap();
                 let on = ed.editable;
 
+                // Escape closes the window without saving. Consume it here, before
+                // the text fields can swallow it, but let an open dropdown close
+                // first.
+                if !ctx.memory(|m| m.any_popup_open())
+                    && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                {
+                    close = true;
+                }
+
                 // Theme-derived colours so the dialog tracks the active skin.
                 let line = ui.visuals().widgets.noninteractive.bg_stroke;
                 let panel = ui.visuals().panel_fill;
@@ -2519,8 +2528,15 @@ impl LinAmpApp {
                 // Outline idle widgets so buttons/fields don't blur into the panel.
                 ui.visuals_mut().widgets.inactive.bg_stroke = line;
 
-                // Path.
-                ui.label(RichText::new(&ed.info.path).strong());
+                // Path, in a sunken box that sets it apart from the tags below.
+                egui::Frame::group(ui.style())
+                    .fill(ui.visuals().extreme_bg_color)
+                    .show(ui, |ui| {
+                        ui.set_min_width(624.0);
+                        ui.add(
+                            egui::Label::new(RichText::new(&ed.info.path).strong()).truncate(),
+                        );
+                    });
                 ui.add_space(4.0);
 
                 // Tab strip that sits on — and joins into — the content box below.
@@ -2581,21 +2597,28 @@ impl LinAmpApp {
                         }
                         TagTab::Id3 => {
                             let genre_combo = |ui: &mut egui::Ui, salt: &str, val: &mut String| {
-                                egui::ComboBox::from_id_salt(salt)
+                                let combo = egui::ComboBox::from_id_salt(salt)
                                     .selected_text(if val.is_empty() { "—".into() } else { val.clone() })
                                     .width(140.0)
                                     .show_ui(ui, |ui| {
+                                        let mut picked = false;
                                         for g in crate::tags::GENRES {
                                             if ui.selectable_label(val == g, *g).clicked() {
                                                 *val = (*g).to_string();
-                                                // Close the popup ourselves: egui
-                                                // only auto-closes on a mouse click,
-                                                // so a keyboard Enter would leave the
-                                                // list open otherwise.
-                                                ui.memory_mut(|m| m.close_popup());
+                                                picked = true;
                                             }
                                         }
+                                        picked
                                     });
+                                if combo.inner == Some(true) {
+                                    // egui only auto-closes the popup on a mouse
+                                    // click, so close it ourselves for keyboard
+                                    // selection — and keep focus on the combo so the
+                                    // next Tab moves to the following field rather
+                                    // than jumping back to the top.
+                                    ui.memory_mut(|m| m.close_popup());
+                                    combo.response.request_focus();
+                                }
                             };
                             let resps = ui.columns(2, |cols| {
                                 // ----- ID3v1 (left) -----
@@ -2794,8 +2817,9 @@ impl LinAmpApp {
                     cp(&mut ed.v2.comment, &ed.v1.comment);
                 }
             });
-            // Esc / window-close: discard without saving or prompting.
-            if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
+            // Window-close (the title-bar X): discard without saving. Escape is
+            // handled at the top of the panel, before the fields can swallow it.
+            if ctx.input(|i| i.viewport().close_requested()) {
                 close = true;
             }
         });
