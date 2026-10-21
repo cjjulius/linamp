@@ -576,6 +576,10 @@ pub struct LinAmpApp {
     classic_tex: Option<egui::TextureHandle>,
     eq_tex: Option<egui::TextureHandle>,
     pl_tex: Option<egui::TextureHandle>,
+    /// Composed GEN.BMP library-window frame + a fingerprint (skin, active, size)
+    /// so it is only re-composited when something changes.
+    lib_tex: Option<egui::TextureHandle>,
+    lib_tex_sig: Option<(String, bool, u32, u32)>,
     /// Last composed fingerprint per window (main/eq/pl), to skip re-compositing
     /// and re-uploading an unchanged frame.
     tex_fp: [u64; 3],
@@ -751,6 +755,8 @@ impl LinAmpApp {
             lib_pos: egui::Pos2::ZERO,
             lib_pos_init: false,
             lib_drag: None,
+            lib_tex: None,
+            lib_tex_sig: None,
             lib_nav: crate::library::LibView::Audio,
             lib_artists: Vec::new(),
             lib_albums: Vec::new(),
@@ -2686,22 +2692,125 @@ impl LinAmpApp {
             .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_library");
         let mut close = false;
+        let gen = self.ui_mode == UiMode::Classic
+            && self.classic.as_ref().map(|c| c.has_gen()).unwrap_or(false);
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             // Global shortcuts while this window has keyboard focus.
             self.handle_shortcuts(ctx, ClWin::Main);
-            let panel = ctx.style().visuals.panel_fill;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none().fill(panel))
-                .show(ctx, |ui| {
-                    self.ui_library_titlebar(ctx, ui, &mut close);
-                    self.ui_library(ui);
-                });
+            if gen {
+                self.ui_library_gen(ctx, &mut close);
+            } else {
+                let panel = ctx.style().visuals.panel_fill;
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none().fill(panel))
+                    .show(ctx, |ui| {
+                        self.ui_library_titlebar(ctx, ui, &mut close);
+                        self.ui_library(ui);
+                    });
+            }
             if ctx.input(|i| i.viewport().close_requested()) {
                 close = true;
             }
         });
         if close {
             self.lib_visible = false;
+        }
+    }
+
+    /// Library window themed with the skin's GEN.BMP frame: composite the frame
+    /// behind the content, draw the caption, and inset the browser into the frame.
+    fn ui_library_gen(&mut self, ctx: &egui::Context, close: &mut bool) {
+        let active = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        let size = self.lib_size();
+        let (w, h) = (size.x as u32, size.y as u32);
+        // (Re)composite the frame only when the skin, focus, or size changes.
+        let sig = (self.theme.name.clone(), active, w, h);
+        if self.lib_tex_sig.as_ref() != Some(&sig) {
+            if let Some(img) = self
+                .classic
+                .as_ref()
+                .and_then(|c| c.compose_gen_window(w, h, active, 150))
+            {
+                let color = egui::ColorImage::from_rgba_unmultiplied(
+                    [w as usize, h as usize],
+                    img.as_raw(),
+                );
+                self.lib_tex = Some(ctx.load_texture("lib_gen", color, egui::TextureOptions::NEAREST));
+                self.lib_tex_sig = Some(sig);
+            }
+        }
+        let (top, right, bottom, left) = classic::ClassicSkin::gen_insets();
+        let wt = self
+            .classic
+            .as_ref()
+            .and_then(|c| c.gen_colors())
+            .map(|g| Color32::from_rgb(g.window_text[0], g.window_text[1], g.window_text[2]))
+            .unwrap_or(Color32::WHITE);
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none())
+            .show(ctx, |ui| {
+                let full = ui.max_rect();
+                if let Some(tex) = &self.lib_tex {
+                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                    ui.painter().image(tex.id(), full, uv, Color32::WHITE);
+                }
+                // Caption, centred in the title bar.
+                let tb_mid = full.top() + top as f32 / 2.0;
+                ui.painter().text(
+                    egui::pos2(full.center().x, tb_mid),
+                    egui::Align2::CENTER_CENTER,
+                    "LinAmp Library",
+                    egui::FontId::proportional(11.0),
+                    wt,
+                );
+                // Close button (top-right corner of the frame).
+                let close_rect = egui::Rect::from_min_max(
+                    egui::pos2(full.right() - 20.0, full.top() + 3.0),
+                    egui::pos2(full.right() - 6.0, full.top() + 17.0),
+                );
+                if ui
+                    .interact(close_rect, ui.id().with("lib_gen_close"), egui::Sense::click())
+                    .clicked()
+                {
+                    *close = true;
+                }
+                // Drag the title bar (minus the close corner) to move / dock.
+                let drag_rect = egui::Rect::from_min_max(
+                    full.min,
+                    egui::pos2(full.right() - 24.0, full.top() + top as f32),
+                );
+                let dresp =
+                    ui.interact(drag_rect, ui.id().with("lib_gen_drag"), egui::Sense::click_and_drag());
+                self.handle_lib_drag(ctx, &dresp);
+                // Inset the browser into the frame interior.
+                let content = egui::Rect::from_min_max(
+                    egui::pos2(full.left() + left as f32, full.top() + top as f32),
+                    egui::pos2(full.right() - right as f32, full.bottom() - bottom as f32),
+                );
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(content), |ui| {
+                    self.ui_library(ui);
+                });
+            });
+    }
+
+    /// Shared title-bar drag/dock handling for the library window.
+    fn handle_lib_drag(&mut self, ctx: &egui::Context, resp: &egui::Response) {
+        if resp.drag_started() {
+            if let Some(g) = global_cursor_points(ctx) {
+                self.lib_drag = Some(g - self.lib_pos);
+            }
+        }
+        if resp.dragged() {
+            if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.lib_drag) {
+                self.lib_pos = g - grab;
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.lib_pos));
+            }
+        }
+        if resp.drag_stopped() {
+            self.lib_drag = None;
+            let monitor = ctx.input(|i| i.viewport().monitor_size);
+            self.lib_pos = self.snap_lib_pos(self.lib_pos, monitor);
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.lib_pos));
         }
     }
 
@@ -4451,12 +4560,38 @@ impl LinAmpApp {
     /// the docked window and the modern `View::Library` tab.
     fn ui_library(&mut self, ui: &mut egui::Ui) {
         use crate::library::LibView;
-        let panel_fill = ui.visuals().panel_fill;
-        let list_fill = self.theme.list_bg;
-        let row_col = self.theme.list_normal;
-        let sel_bg = self.theme.list_sel_bg;
+        // When the skin ships general-purpose window art (GEN.BMP/GENEX.BMP), use
+        // its defined Media Library colour scheme; otherwise fall back to the
+        // palette sampled from the skin.
+        let gen = if self.ui_mode == UiMode::Classic {
+            self.classic.as_ref().and_then(|c| c.gen_colors())
+        } else {
+            None
+        };
+        let rgb = |c: [u8; 3]| Color32::from_rgb(c[0], c[1], c[2]);
+        let (panel_fill, list_fill, row_col, sel_bg, accent, header_bg, header_fg) =
+            if let Some(g) = gen {
+                (
+                    rgb(g.window_bg),
+                    rgb(g.item_bg),
+                    rgb(g.item_fg),
+                    rgb(g.selection),
+                    rgb(g.item_fg),
+                    rgb(g.header_bg),
+                    rgb(g.header_text),
+                )
+            } else {
+                (
+                    ui.visuals().panel_fill,
+                    self.theme.list_bg,
+                    self.theme.list_normal,
+                    self.theme.list_sel_bg,
+                    self.theme.accent,
+                    skin::blend(self.theme.list_normal, self.theme.list_bg, 0.3),
+                    self.theme.list_normal,
+                )
+            };
         let sel_col = skin::contrast_text(sel_bg);
-        let accent = self.theme.accent;
         let dim = skin::blend(row_col, list_fill, 0.45);
         let panel_frame = egui::Frame::none()
             .fill(panel_fill)
@@ -4719,14 +4854,14 @@ impl LinAmpApp {
                         let time_off = 2.0 + body + 6.0;
                         let col3 = if show_rating { "Rating" } else { "Album" };
                         let (sort_col, sort_asc) = self.lib_sort.unwrap_or((u8::MAX, true));
-                        // Header.
-                        let hdr = paint_track_row(ui, 15.0, false, sel_bg, |rect, paint| {
+                        // Header (filled with the header background colour).
+                        let hdr = paint_track_row(ui, 15.0, true, header_bg, |rect, paint| {
                             let mut x = rect.left() + 2.0;
                             for (label, cw) in [("Artist", aw), ("Title", tw), (col3, bw)] {
-                                paint(x, cw, label, dim, false);
+                                paint(x, cw, label, header_fg, false);
                                 x += cw;
                             }
-                            paint(rect.left() + time_off, dur_w, "Time", dim, true);
+                            paint(rect.left() + time_off, dur_w, "Time", header_fg, true);
                         });
                         // Sort arrow on the active column, drawn as a triangle (the
                         // ▲/▼ glyphs aren't in the bundled fonts, so a text arrow
