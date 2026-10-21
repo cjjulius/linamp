@@ -550,17 +550,24 @@ fn blit_keyed(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, s
     }
 }
 
+/// Pixel width of `title` rendered in the gen title font.
+fn gen_title_width(title: &str) -> u32 {
+    title
+        .to_uppercase()
+        .chars()
+        .map(|c| if c == ' ' { 4 } else { gen_glyph(c).map(|(_, w)| w + 1).unwrap_or(0) })
+        .sum::<u32>()
+        .saturating_sub(1)
+}
+
 /// Draw `title` (uppercased) centred in the title bar using GEN.BMP's own font.
 fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool) {
     let up = title.to_uppercase();
     let fy = if active { GEN_FONT_Y_SELECTED } else { GEN_FONT_Y_NORMAL };
-    let total: u32 = up
-        .chars()
-        .map(|c| if c == ' ' { 4 } else { gen_glyph(c).map(|(_, w)| w + 1).unwrap_or(0) })
-        .sum();
     let dw = dst.width();
-    let mut x = (dw / 2).saturating_sub(total / 2);
-    let ty = (GEN_TB_H.saturating_sub(GEN_FONT_H)) / 2;
+    let mut x = (dw / 2).saturating_sub((gen_title_width(title) + 1) / 2);
+    // Nudged up 1px from the geometric centre: the title band sits a touch high.
+    let ty = GEN_TB_H.saturating_sub(GEN_FONT_H) / 2 - 1;
     for c in up.chars() {
         if c == ' ' {
             x += 4;
@@ -646,13 +653,23 @@ impl ClassicSkin {
         }
         let ry = if active { 0 } else { 21 };
 
-        // --- Title bar (y 0..20): corner, bracket, one continuous centre fill,
-        // bracket, corner — then the caption over the centre in GEN.BMP's font.
-        blit(&mut img, g, 0, 0, 0, ry, GEN_CORNER_W, GEN_TB_H); // TOP_LEFT
-        blit(&mut img, g, GEN_CORNER_W as i32, 0, 26, ry, GEN_CORNER_W, GEN_TB_H); // TOP_LEFT_END
-        tile_h(&mut img, g, 2 * GEN_CORNER_W, w - 2 * GEN_CORNER_W, 0, 52, ry, GEN_CORNER_W, GEN_TB_H);
-        blit(&mut img, g, (w - 2 * GEN_CORNER_W) as i32, 0, 78, ry, GEN_CORNER_W, GEN_TB_H); // TOP_RIGHT_END
-        blit(&mut img, g, (w - GEN_CORNER_W) as i32, 0, 130, ry, GEN_CORNER_W, GEN_TB_H); // TOP_RIGHT (close)
+        // --- Title bar (y 0..20). Winamp layout, left→right: corner, striped
+        // fill running inward, an end-cap, the title (its own centre fill with the
+        // caption), the other end-cap, striped fill, corner — so the bars run all
+        // the way to the caption like the main window.
+        let cap = GEN_CORNER_W; // end-cap / corner width (25)
+        let tw = (gen_title_width(title) + 10).min(w.saturating_sub(4 * cap));
+        let tleft = (w / 2).saturating_sub(tw / 2);
+        let tright = tleft + tw;
+        blit(&mut img, g, 0, 0, 0, ry, cap, GEN_TB_H); // TOP_LEFT (corner)
+        blit(&mut img, g, (w - cap) as i32, 0, 130, ry, cap, GEN_TB_H); // TOP_RIGHT (corner + close)
+        // Striped fill (TOP_LEFT_RIGHT_FILL) between the corners and the end-caps.
+        tile_h(&mut img, g, cap, tleft.saturating_sub(cap).max(cap), 0, 104, ry, cap, GEN_TB_H);
+        tile_h(&mut img, g, tright + cap, w - cap, 0, 104, ry, cap, GEN_TB_H);
+        // End-caps flanking the title, then the title's own centre fill.
+        blit(&mut img, g, tleft.saturating_sub(cap) as i32, 0, 26, ry, cap, GEN_TB_H); // TOP_LEFT_END
+        blit(&mut img, g, tright as i32, 0, 78, ry, cap, GEN_TB_H); // TOP_RIGHT_END
+        tile_h(&mut img, g, tleft, tright, 0, 52, ry, cap, GEN_TB_H); // TOP_CENTER_FILL
         blit_gen_title(&mut img, g, title, active);
 
         // --- Side walls (tiled vertically between the title bar and bottom bar).
