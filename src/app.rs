@@ -4718,26 +4718,45 @@ impl LinAmpApp {
                         let (aw, tw, bw) = (body * fa, body * ft, body * fb);
                         let time_off = 2.0 + body + 6.0;
                         let col3 = if show_rating { "Rating" } else { "Album" };
-                        // Header labels, with a sort arrow on the active column.
                         let (sort_col, sort_asc) = self.lib_sort.unwrap_or((u8::MAX, true));
-                        let lbl = |ci: u8, base: &str| -> String {
-                            if ci == sort_col {
-                                format!("{base} {}", if sort_asc { "\u{25B2}" } else { "\u{25BC}" })
-                            } else {
-                                base.to_string()
-                            }
-                        };
-                        let (l_art, l_tit, l_col3, l_time) =
-                            (lbl(0, "Artist"), lbl(1, "Title"), lbl(2, col3), lbl(3, "Time"));
                         // Header.
                         let hdr = paint_track_row(ui, 15.0, false, sel_bg, |rect, paint| {
                             let mut x = rect.left() + 2.0;
-                            for (label, cw) in [(&l_art, aw), (&l_tit, tw), (&l_col3, bw)] {
+                            for (label, cw) in [("Artist", aw), ("Title", tw), (col3, bw)] {
                                 paint(x, cw, label, dim, false);
                                 x += cw;
                             }
-                            paint(rect.left() + time_off, dur_w, &l_time, dim, true);
+                            paint(rect.left() + time_off, dur_w, "Time", dim, true);
                         });
+                        // Sort arrow on the active column, drawn as a triangle (the
+                        // ▲/▼ glyphs aren't in the bundled fonts, so a text arrow
+                        // renders as tofu). Placed near the right edge of its column.
+                        if sort_col != u8::MAX {
+                            let b = hdr.rect.left() + 2.0;
+                            let ax = match sort_col {
+                                0 => b + aw - 7.0,
+                                1 => b + aw + tw - 7.0,
+                                2 => b + aw + tw + bw - 7.0,
+                                _ => b + aw + tw + bw + 7.0, // Time column
+                            };
+                            let cy = hdr.rect.center().y;
+                            let s = 3.5;
+                            let pts = if sort_asc {
+                                vec![
+                                    egui::pos2(ax, cy - s),
+                                    egui::pos2(ax - s, cy + s),
+                                    egui::pos2(ax + s, cy + s),
+                                ]
+                            } else {
+                                vec![
+                                    egui::pos2(ax - s, cy - s),
+                                    egui::pos2(ax + s, cy - s),
+                                    egui::pos2(ax, cy + s),
+                                ]
+                            };
+                            ui.painter()
+                                .add(egui::Shape::convex_polygon(pts, row_col, egui::Stroke::NONE));
+                        }
                         // Clicking a header column sorts by it (toggles direction on
                         // repeat). Added before the divider handles so a click in the
                         // column body sorts while a drag on the boundary resizes.
