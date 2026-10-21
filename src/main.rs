@@ -64,6 +64,12 @@ fn main() -> eframe::Result<()> {
     }
     let options = eframe::NativeOptions {
         viewport,
+        // The classic UI uses several borderless child windows rendered as
+        // immediate viewports. With vsync on, each frame blocks ~16ms on the
+        // first child window's buffer swap, pegging the main thread and making
+        // input feel laggy. We throttle repaints ourselves (30fps when active,
+        // 4fps idle), so vsync buys nothing here — turn it off.
+        vsync: false,
         ..Default::default()
     };
 
