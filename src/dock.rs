@@ -99,16 +99,22 @@ pub(crate) fn rects_docked(a: egui::Rect, b: egui::Rect) -> bool {
 }
 
 /// Which of the three windows are transitively docked to the main window (0).
-pub(crate) fn dock_group_from_main(rects: &[egui::Rect; 3], visible: &[bool; 3]) -> [bool; 3] {
-    let mut in_group = [true, false, false];
+/// Which windows are transitively edge-docked to the main window (index 0).
+/// Works for any node count (3 for main/EQ/playlist, 4 when a library is added).
+pub(crate) fn dock_group_from_main(rects: &[egui::Rect], visible: &[bool]) -> Vec<bool> {
+    let n = rects.len();
+    let mut in_group = vec![false; n];
+    if n > 0 {
+        in_group[0] = true; // the main window
+    }
     let mut changed = true;
     while changed {
         changed = false;
-        for j in [1usize, 2usize] {
+        for j in 1..n {
             if in_group[j] || !visible[j] {
                 continue;
             }
-            if (0..3).any(|k| in_group[k] && rects_docked(rects[j], rects[k])) {
+            if (0..n).any(|k| in_group[k] && visible[k] && rects_docked(rects[j], rects[k])) {
                 in_group[j] = true;
                 changed = true;
             }
@@ -349,7 +355,7 @@ mod tests {
             r(0.0, 116.0, 275.0, 116.0),
             r(0.0, 232.0, 275.0, 180.0),
         ];
-        assert_eq!(dock_group_from_main(&rects, &[true, true, true]), [true, true, true]);
+        assert_eq!(dock_group_from_main(&rects, &[true, true, true]), vec![true, true, true]);
     }
 
     #[test]
@@ -360,7 +366,7 @@ mod tests {
             r(600.0, 0.0, 275.0, 116.0),
             r(600.0, 116.0, 275.0, 180.0),
         ];
-        assert_eq!(dock_group_from_main(&rects, &[true, true, true]), [true, false, false]);
+        assert_eq!(dock_group_from_main(&rects, &[true, true, true]), vec![true, false, false]);
     }
 
     #[test]
@@ -371,7 +377,7 @@ mod tests {
             r(0.0, 300.0, 275.0, 116.0),
             r(0.0, 416.0, 275.0, 180.0),
         ];
-        assert_eq!(dock_group_from_main(&rects, &[true, true, true]), [true, false, false]);
+        assert_eq!(dock_group_from_main(&rects, &[true, true, true]), vec![true, false, false]);
     }
 
     #[test]
@@ -382,6 +388,20 @@ mod tests {
             r(0.0, 232.0, 275.0, 180.0),
         ];
         // eq hidden -> it can't be in the group, and can't bridge to pl.
-        assert_eq!(dock_group_from_main(&rects, &[true, false, true]), [true, false, false]);
+        assert_eq!(dock_group_from_main(&rects, &[true, false, true]), vec![true, false, false]);
+    }
+
+    #[test]
+    fn library_bridges_the_group_to_the_playlist() {
+        // 4 nodes: main(0), eq(1, floating), pl(2), library(3). Main–library–pl is
+        // a horizontal chain; pl rides main *through* the library.
+        let rects = [
+            r(0.0, 0.0, 275.0, 116.0),       // main
+            r(2000.0, 2000.0, 275.0, 116.0), // eq, floating away
+            r(915.0, 0.0, 275.0, 180.0),     // pl, flush right of the library
+            r(275.0, 0.0, 640.0, 460.0),     // library, flush right of main
+        ];
+        let vis = [true, true, true, true];
+        assert_eq!(dock_group_from_main(&rects, &vis), vec![true, false, true, true]);
     }
 }
