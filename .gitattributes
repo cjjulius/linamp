@@ -1,0 +1,10 @@
+# Shell scripts and desktop entries must keep LF endings so they run on Linux,
+# even when checked out on Windows (which may default to CRLF).
+*.sh    text eol=lf
+*.desktop text eol=lf
+
+# Binary assets — never line-ending convert.
+*.ico   binary
+*.png   binary
+*.wsz   binary
+*.mp3   binary

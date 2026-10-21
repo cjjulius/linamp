@@ -37,47 +37,77 @@ jobs:
       - name: Test
         run: cargo test --verbose
 
-  release:
-    name: Release artifact (${{ matrix.os }})
+  # Build the per-user installers. Runs on a v* tag (official release) or a
+  # manual dispatch (dry run — artifacts only, no GitHub Release).
+  package:
+    name: Installer (${{ matrix.os }})
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            artifact: linamp-linux-x86_64
-            bin: linamp
-          - os: windows-latest
-            artifact: linamp-windows-x86_64
-            bin: linamp.exe
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux audio dev libraries
+      - name: Install Linux build libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+          sudo apt-get install -y libasound2-dev libgtk-3-dev pkg-config
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build release
-        run: cargo build --release
+      # ---- Linux: per-user tarball ----
+      - name: Build Linux tarball
+        if: runner.os == 'Linux'
+        run: sh packaging/linux/build-tarball.sh
 
-      - name: Package
-        shell: bash
-        run: |
-          mkdir -p dist
-          cp "target/release/${{ matrix.bin }}" dist/
-          cp -r skins dist/
-          cp -r music dist/
-          cp README.md FEATURES.md SHORTCUTS.md LICENSE dist/ 2>/dev/null || true
-
-      - uses: actions/upload-artifact@v4
+      - name: Upload Linux tarball
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist
+          name: linamp-linux-tarball
+          path: dist/*.tar.gz
+
+      # ---- Windows: per-user Inno Setup installer ----
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        run: choco install innosetup -y --no-progress
+
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --release
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging\windows\linamp.iss
+
+      - name: Upload Windows installer
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linamp-windows-installer
+          path: dist/*Setup.exe
+
+  # Publish a GitHub Release with both installers — tag pushes only.
+  publish:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
