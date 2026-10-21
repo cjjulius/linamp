@@ -60,6 +60,18 @@ fn open_in_file_manager(path: &std::path::Path) {
     let _ = std::process::Command::new(cmd).arg(dir).spawn();
 }
 
+/// The bundled demo `music/` folder (next to the exe for an installed build, or
+/// in the working directory for a dev run), if present. Used only on first run.
+fn first_run_music_dir() -> Option<std::path::PathBuf> {
+    let mut dirs = vec![std::path::PathBuf::from("music")];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(d) = exe.parent() {
+            dirs.push(d.join("music"));
+        }
+    }
+    dirs.into_iter().find(|d| d.is_dir())
+}
+
 fn win_idx(w: ClWin) -> usize {
     match w {
         ClWin::Main => 0,
@@ -939,6 +951,7 @@ impl LinAmpApp {
             }
         } else {
             // Restore last session's playlist/window size (but don't auto-play).
+            let first_run = !Session::exists();
             let session = Session::load();
             for t in &session.tracks {
                 app.playlist.add_file(PathBuf::from(t));
@@ -977,6 +990,22 @@ impl LinAmpApp {
                 app.lib_pos = p(session.lib_pos, app.win_pos[0]);
                 app.lib_pos_init = true;
                 app.has_pos_memory = true;
+            }
+
+            // Fresh install (no saved session): the classic trio open and
+            // stacked (at the 1x default), the library closed, and the bundled
+            // demo song cued in the playlist. The base skin loads by default.
+            if first_run {
+                app.eq_visible = true;
+                app.pl_visible = true;
+                app.lib_visible = false;
+                if let Some(dir) = first_run_music_dir() {
+                    app.playlist.add_folder(&dir);
+                    if app.prefs.tag_on_load {
+                        app.playlist.load_all();
+                    }
+                    app.playlist.current = (!app.playlist.is_empty()).then_some(0);
+                }
             }
         }
         app.refresh_library();
