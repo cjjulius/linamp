@@ -163,6 +163,56 @@ fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
     }
 }
 
+/// The full virtual desktop (all monitors) in egui points, if the platform
+/// exposes it. Drags are clamped to this instead of a single monitor, so a
+/// dragged window (and its docked group) can cross to another display but can't
+/// be pushed off the desktop entirely. `None` → no manual clamp (OS handles it).
+/// Specialised to Windows (virtual-screen metrics) and X11 (Mint/Pop!_OS).
+fn virtual_desktop_rect(ctx: &egui::Context) -> Option<egui::Rect> {
+    let ppp = ctx.pixels_per_point().max(0.1);
+    let _ = ppp;
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn GetSystemMetrics(index: i32) -> i32;
+        }
+        const SM_XVIRTUALSCREEN: i32 = 76;
+        const SM_YVIRTUALSCREEN: i32 = 77;
+        const SM_CXVIRTUALSCREEN: i32 = 78;
+        const SM_CYVIRTUALSCREEN: i32 = 79;
+        unsafe {
+            let (x, y) = (
+                GetSystemMetrics(SM_XVIRTUALSCREEN),
+                GetSystemMetrics(SM_YVIRTUALSCREEN),
+            );
+            let (w, h) = (
+                GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                GetSystemMetrics(SM_CYVIRTUALSCREEN),
+            );
+            if w > 0 && h > 0 {
+                return Some(egui::Rect::from_min_size(
+                    egui::pos2(x as f32 / ppp, y as f32 / ppp),
+                    egui::vec2(w as f32 / ppp, h as f32 / ppp),
+                ));
+            }
+        }
+        None
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::screen_px().map(|(w, h)| {
+            egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(w as f32 / ppp, h as f32 / ppp),
+            )
+        })
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+    {
+        None
+    }
+}
+
 /// Linux/X11 helpers for classic-window management: the global cursor query
 /// (manual tandem drag) and `WM_TRANSIENT_FOR` grouping (EQ/playlist ride the
 /// main window's z-order, no separate taskbar entry). A no-op without an X
@@ -224,6 +274,18 @@ mod x11util {
             // False only means the pointer is on another screen; rx/ry stay valid
             // global coords, but we treat it as unknown and fall back to OS drag.
             (ok != 0).then_some((rx, ry))
+        })
+        .flatten()
+    }
+
+    /// The default screen's size in physical pixels. On Mint/Pop!_OS (X11) the
+    /// screen spans all monitors, so this is the virtual-desktop extent.
+    pub fn screen_px() -> Option<(i32, i32)> {
+        with_conn(|xlib, d| unsafe {
+            let s = (xlib.XDefaultScreen)(d);
+            let w = (xlib.XDisplayWidth)(d, s);
+            let h = (xlib.XDisplayHeight)(d, s);
+            (w > 0 && h > 0).then_some((w, h))
         })
         .flatten()
     }
@@ -1156,9 +1218,11 @@ impl LinAmpApp {
 
     /// Fixed window size of the Media Library (logical points; unaffected by the
     /// 1x/2x "double size" toggle, like the other egui dialogs).
-    /// The library window's base (1x) size in points.
+    /// The library window's base (1x) size in points. Height is exactly four
+    /// main-window heights so that, docked to the right of the Main/EQ/Playlist
+    /// stack, the group reads as one rectangle.
     fn lib_base_size(&self) -> egui::Vec2 {
-        egui::vec2(640.0, 460.0)
+        egui::vec2(640.0, 4.0 * classic::MAIN_H as f32)
     }
 
     /// The library window's on-screen size, scaled with the double-size setting
@@ -1491,14 +1555,14 @@ impl LinAmpApp {
                         self.cviz_peaks[i] = if b > self.cviz_peaks[i] {
                             b
                         } else {
-                            (self.cviz_peaks[i] - 0.012).max(0.0)
+                            (self.cviz_peaks[i] - 0.010).max(0.0)
                         };
                     }
                 }
                 PlayState::Stopped => {
                     for i in 0..CLASSIC_BANDS {
                         self.cviz_bars[i] = (self.cviz_bars[i] - 0.045).max(0.0);
-                        self.cviz_peaks[i] = (self.cviz_peaks[i] - 0.012).max(0.0);
+                        self.cviz_peaks[i] = (self.cviz_peaks[i] - 0.010).max(0.0);
                     }
                 }
                 PlayState::Paused => {}
@@ -1899,10 +1963,12 @@ impl LinAmpApp {
                                 self.load_skin_dialog(ctx);
                                 close = true;
                             }
+                            // ASCII box: the bundled Noto Sans has no U+2713 check
+                            // glyph, so a literal ✓ renders as tofu here.
                             let aot = if self.prefs.always_on_top {
-                                "[✓] Always on top"
+                                "[x] Always on top"
                             } else {
-                                "[  ] Always on top"
+                                "[ ] Always on top"
                             };
                             if item(ui, aot) {
                                 self.prefs.always_on_top = !self.prefs.always_on_top;
@@ -2186,7 +2252,10 @@ impl LinAmpApp {
                         // Clamp so the dragged window — and, for the main window, its
                         // whole docked block (EQ/PL + library) — stops at the screen
                         // edge instead of being pushed off it.
-                        if let Some(m) = ctx.input(|i| i.viewport().monitor_size) {
+                        // Clamp to the whole virtual desktop (all monitors), so the
+                        // block can be dragged onto another display but not off the
+                        // desktop. Only the dragged block's bounding offsets matter.
+                        if let Some(vr) = virtual_desktop_rect(ctx) {
                             let mut lo = egui::vec2(0.0, 0.0);
                             let mut hi = self.win_inner_size(win);
                             for (mi, off) in &group {
@@ -2197,8 +2266,10 @@ impl LinAmpApp {
                                 lo = lo.min(loff);
                                 hi = hi.max(loff + self.lib_size());
                             }
-                            target.x = target.x.clamp(-lo.x, (m.x - hi.x).max(-lo.x));
-                            target.y = target.y.clamp(-lo.y, (m.y - hi.y).max(-lo.y));
+                            let min_x = vr.min.x - lo.x;
+                            let min_y = vr.min.y - lo.y;
+                            target.x = target.x.clamp(min_x, (vr.max.x - hi.x).max(min_x));
+                            target.y = target.y.clamp(min_y, (vr.max.y - hi.y).max(min_y));
                         }
                         self.win_pos[idx] = target;
                         for (mi, off) in group {
@@ -2861,11 +2932,12 @@ impl LinAmpApp {
         if resp.dragged() {
             if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.lib_drag) {
                 let mut p = g - grab;
-                // Stop the library at the screen edge instead of pushing it off.
-                if let Some(m) = ctx.input(|i| i.viewport().monitor_size) {
+                // Clamp to the whole virtual desktop so the library can be dragged
+                // onto another monitor but not off the desktop.
+                if let Some(vr) = virtual_desktop_rect(ctx) {
                     let size = self.lib_size();
-                    p.x = p.x.clamp(0.0, (m.x - size.x).max(0.0));
-                    p.y = p.y.clamp(0.0, (m.y - size.y).max(0.0));
+                    p.x = p.x.clamp(vr.min.x, (vr.max.x - size.x).max(vr.min.x));
+                    p.y = p.y.clamp(vr.min.y, (vr.max.y - size.y).max(vr.min.y));
                 }
                 self.lib_pos = p;
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.lib_pos));
