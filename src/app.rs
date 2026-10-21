@@ -683,6 +683,16 @@ pub struct LinAmpApp {
     /// true when the last session's window positions were restored, so frame 1
     /// keeps them (clamped on-screen) instead of applying the default layout.
     has_pos_memory: bool,
+    /// App-level focus: true while any LinAmp window is focused. All windows show
+    /// their active title bar together and their inactive one only when the whole
+    /// app loses focus (e.g. to another application), matching Winamp — rather
+    /// than one window dimming when another LinAmp window is clicked. Per-window
+    /// focus is tracked in `foc_*` and OR'd each frame.
+    app_focused: bool,
+    foc_root: bool,
+    foc_eq: bool,
+    foc_pl: bool,
+    foc_lib: bool,
     /// Hash of the last-persisted session, so we only write on actual changes.
     session_sig: Option<u64>,
     /// Frames remaining in a graceful shutdown (set when the WM asks to close),
@@ -880,6 +890,11 @@ impl LinAmpApp {
             pl_px_w: classic::MAIN_W as f32,
             positions_init: false,
             has_pos_memory: false,
+            app_focused: true,
+            foc_root: true,
+            foc_eq: false,
+            foc_pl: false,
+            foc_lib: false,
             session_sig: None,
             quit_countdown: None,
             drag: None,
@@ -1506,7 +1521,7 @@ impl LinAmpApp {
             .unwrap_or_else(|| self.player.position().as_secs_f32());
 
         MainState {
-            focused: true,
+            focused: self.app_focused,
             play,
             pressed: self.pressed_btn,
             shuffle: self.shuffle,
@@ -1787,7 +1802,7 @@ impl LinAmpApp {
 
     fn make_eq_state(&self) -> classic::EqState {
         classic::EqState {
-            focused: true,
+            focused: self.app_focused,
             on: self.eq_enabled,
             auto: self.eq_auto,
             pressed: self.eq_active,
@@ -2891,7 +2906,10 @@ impl LinAmpApp {
     /// Library window themed with the skin's GEN.BMP frame: composite the frame
     /// behind the content, draw the caption, and inset the browser into the frame.
     fn ui_library_gen(&mut self, ctx: &egui::Context, close: &mut bool) {
-        let active = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        self.foc_lib = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_lib);
+        // Use the shared app-level focus so the library doesn't dim merely because
+        // another LinAmp window was clicked.
+        let active = self.app_focused;
         // Compose the frame at the base (1x) size; it is drawn to the (possibly
         // scaled) window rect and upscaled like the classic windows.
         let base = self.lib_base_size();
@@ -3693,6 +3711,22 @@ impl LinAmpApp {
             return;
         }
 
+        // App-level focus for this frame: this frame's root focus OR'd with last
+        // frame's child-window focus (children render later, below). Hidden
+        // windows don't hold focus. So all windows share one active/inactive
+        // title-bar state and only dim when the whole app is unfocused.
+        self.foc_root = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_root);
+        if !self.eq_visible {
+            self.foc_eq = false;
+        }
+        if !self.pl_visible {
+            self.foc_pl = false;
+        }
+        if !self.lib_visible {
+            self.foc_lib = false;
+        }
+        self.app_focused = self.foc_root || self.foc_eq || self.foc_pl || self.foc_lib;
+
         // Root viewport = main window.
         self.render_window(ctx, ClWin::Main);
         self.ui_prefs(ctx);
@@ -3780,6 +3814,7 @@ impl LinAmpApp {
                 // Fire global shortcuts while this window has focus (keyboard
                 // input goes to the focused viewport, not the root).
                 self.handle_shortcuts(ctx, ClWin::Eq);
+                self.foc_eq = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_eq);
                 self.render_window(ctx, ClWin::Eq);
             });
         }
@@ -3797,6 +3832,7 @@ impl LinAmpApp {
             let id = egui::ViewportId::from_hash_of("linamp_pl");
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
                 self.handle_shortcuts(ctx, ClWin::Pl);
+                self.foc_pl = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_pl);
                 self.render_window(ctx, ClWin::Pl);
             });
         }
@@ -3822,6 +3858,8 @@ impl LinAmpApp {
         };
         self.theme.name.hash(&mut h);
         ps.hash(&mut h);
+        // Active/inactive title bar follows app focus (all windows together).
+        self.app_focused.hash(&mut h);
         match win {
             ClWin::Main => {
                 self.main_shade.hash(&mut h);
@@ -4019,7 +4057,7 @@ impl LinAmpApp {
             }
             ClWin::Eq => {
                 if self.eq_shade {
-                    cs.compose_eq_shade(true)
+                    cs.compose_eq_shade(self.app_focused)
                 } else {
                     cs.compose_eq(&self.make_eq_state())
                 }
@@ -4048,7 +4086,7 @@ impl LinAmpApp {
                         }
                         None => (String::new(), String::new()),
                     };
-                    cs.compose_pl_shade(true, &text, &time, self.pl_colors().normal)
+                    cs.compose_pl_shade(self.app_focused, &text, &time, self.pl_colors().normal)
                 } else {
                     let rows = self.build_pl_rows();
                     let colors = self.pl_colors();
@@ -4071,7 +4109,7 @@ impl LinAmpApp {
                         }
                     }
                     let st = classic::PlState {
-                        focused: true,
+                        focused: self.app_focused,
                         colors,
                         rows: &rows,
                         first: self.pl_first,
