@@ -2425,22 +2425,13 @@ impl LinAmpApp {
             // Only the main window carries a group: the set of windows actually
             // docked (edge-flush) to it. EQ/playlist always move on their own,
             // even when docked to each other.
-            let group = if win == ClWin::Main {
-                self.main_dock_group()
+            // The main window carries its whole transitively-docked block (EQ/PL
+            // and the library, including chains through the library). Other windows
+            // move on their own.
+            let (group, lib_offset) = if win == ClWin::Main {
+                self.main_drag_group()
             } else {
-                Vec::new()
-            };
-            // A library docked to the main group (directly to main, or to an EQ/PL
-            // that itself rides main) moves with the group too.
-            let lib_offset = if win == ClWin::Main && self.lib_visible {
-                let lib = egui::Rect::from_min_size(self.lib_pos, self.lib_size());
-                let docked = rects_docked(lib, self.win_rect_pts(0))
-                    || group
-                        .iter()
-                        .any(|(mi, _)| rects_docked(lib, self.win_rect_pts(*mi)));
-                docked.then(|| self.lib_pos - self.win_pos[0])
-            } else {
-                None
+                (Vec::new(), None)
             };
             let idx = win_idx(win);
             let (manual, grab) = match global_cursor_points(ctx) {
@@ -2529,20 +2520,25 @@ impl LinAmpApp {
         egui::Rect::from_min_size(self.win_pos[idx], self.win_inner_size(w))
     }
 
-    /// Windows transitively docked to the main window (by offset from main).
-    fn main_dock_group(&self) -> Vec<(usize, egui::Vec2)> {
+    /// The full drag group for a main-window move: the EQ/playlist windows (by
+    /// offset) and the library (by offset) that are transitively docked to main —
+    /// including chains that pass *through* the library (e.g. main–library–playlist).
+    fn main_drag_group(&self) -> (Vec<(usize, egui::Vec2)>, Option<egui::Vec2>) {
         let rects = [
             self.win_rect_pts(0),
             self.win_rect_pts(1),
             self.win_rect_pts(2),
+            egui::Rect::from_min_size(self.lib_pos, self.lib_size()),
         ];
-        let vis = [true, self.eq_visible, self.pl_visible];
+        let vis = [true, self.eq_visible, self.pl_visible, self.lib_visible];
         let in_group = dock_group_from_main(&rects, &vis);
-        [1usize, 2usize]
+        let group = [1usize, 2]
             .into_iter()
             .filter(|&j| in_group[j])
             .map(|j| (j, self.win_pos[j] - self.win_pos[0]))
-            .collect()
+            .collect();
+        let lib_offset = in_group[3].then(|| self.lib_pos - self.win_pos[0]);
+        (group, lib_offset)
     }
 
     /// Canonical stacking: EQ then playlist dock directly below the main window,
