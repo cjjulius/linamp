@@ -91,6 +91,13 @@ pub struct Session {
     pub lib_visible: bool,
     /// User-resized Media Library column fractions [artist, title]; None = defaults.
     pub lib_col_fr: Option<[f32; 2]>,
+    /// Last on-screen top-left (logical points) of each window; `None` until the
+    /// window has been positioned. When `main_pos` is present the saved layout is
+    /// restored instead of the default dock arrangement.
+    pub main_pos: Option<(f32, f32)>,
+    pub eq_pos: Option<(f32, f32)>,
+    pub pl_pos: Option<(f32, f32)>,
+    pub lib_pos: Option<(f32, f32)>,
 }
 
 impl Session {
@@ -183,6 +190,10 @@ mod tests {
             pl_shade: true,
             lib_visible: true,
             lib_col_fr: Some([0.3, 0.4]),
+            main_pos: Some((100.0, 200.0)),
+            eq_pos: Some((100.0, 316.0)),
+            pl_pos: None,
+            lib_pos: Some((375.0, 200.0)),
         };
         let j = serde_json::to_string(&s).unwrap();
         let q: Session = serde_json::from_str(&j).unwrap();
@@ -194,5 +205,8 @@ mod tests {
         assert!(q.eq_visible && !q.pl_visible);
         assert!(q.main_shade && !q.eq_shade && q.pl_shade);
         assert!(q.lib_visible);
+        assert_eq!(q.main_pos, Some((100.0, 200.0)));
+        assert_eq!(q.pl_pos, None);
+        assert_eq!(q.lib_pos, Some((375.0, 200.0)));
     }
 }

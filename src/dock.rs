@@ -88,6 +88,21 @@ pub(crate) fn snap_rect(
         .min
 }
 
+/// Offset needed to move the span `[lo, hi]` inside `[bmin, bmax]`, prioritising
+/// the low edge so a span larger than the bounds keeps its start visible. `0`
+/// when already inside. Used at launch to nudge a restored window layout back
+/// onto a (possibly smaller) screen.
+pub(crate) fn nudge_onto(lo: f32, hi: f32, bmin: f32, bmax: f32) -> f32 {
+    let mut d = 0.0;
+    if hi + d > bmax {
+        d = bmax - hi; // move left/up so the far edge is visible
+    }
+    if lo + d < bmin {
+        d = bmin - lo; // but keep the near edge visible (wins when oversized)
+    }
+    d
+}
+
 /// Two windows are docked when an edge is flush (within tolerance) and they
 /// overlap on the shared axis.
 pub(crate) fn rects_docked(a: egui::Rect, b: egui::Rect) -> bool {
@@ -268,6 +283,20 @@ mod tests {
         let centred = r(150.0, 150.0, 50.0, 100.0); // y150..250 around main 100..200
         let p = push_off(centred, main).unwrap();
         assert!(p.y >= main.top(), "centred window favours below, not above");
+    }
+
+    #[test]
+    fn nudge_onto_pushes_offscreen_spans_back() {
+        // Already inside -> no move.
+        assert_eq!(nudge_onto(10.0, 90.0, 0.0, 100.0), 0.0);
+        // Hanging off the right edge -> shift left just enough.
+        assert_eq!(nudge_onto(60.0, 140.0, 0.0, 100.0), -40.0);
+        // Off the left edge -> shift right.
+        assert_eq!(nudge_onto(-30.0, 50.0, 0.0, 100.0), 30.0);
+        // Span wider than the bounds -> keep the low edge visible (start at bmin).
+        assert_eq!(nudge_onto(50.0, 250.0, 0.0, 100.0), -50.0);
+        // Works with a non-zero origin (second monitor / negative virtual origin).
+        assert_eq!(nudge_onto(-900.0, -820.0, -1000.0, -200.0), 0.0);
     }
 
     #[test]

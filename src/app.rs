@@ -8,7 +8,9 @@ use rustfft::{Fft, FftPlanner};
 
 use crate::classic::{self, Btn, ClassicSkin, MainState, PlayUi};
 use crate::config::{Prefs, Session};
-use crate::dock::{dock_group_from_main, docked_group_below, push_off, rects_docked, snap_rect};
+use crate::dock::{
+    dock_group_from_main, docked_group_below, nudge_onto, push_off, rects_docked, snap_rect,
+};
 use crate::library::Library;
 use crate::player::{PlayState, Player};
 use crate::playlist::{save_playlist_file, Playlist};
@@ -678,6 +680,9 @@ pub struct LinAmpApp {
     pl_px_h: f32,
     pl_px_w: f32,
     positions_init: bool,
+    /// true when the last session's window positions were restored, so frame 1
+    /// keeps them (clamped on-screen) instead of applying the default layout.
+    has_pos_memory: bool,
     /// Hash of the last-persisted session, so we only write on actual changes.
     session_sig: Option<u64>,
     /// Frames remaining in a graceful shutdown (set when the WM asks to close),
@@ -874,6 +879,7 @@ impl LinAmpApp {
             pl_px_h: classic::PL_H as f32,
             pl_px_w: classic::MAIN_W as f32,
             positions_init: false,
+            has_pos_memory: false,
             session_sig: None,
             quit_countdown: None,
             drag: None,
@@ -942,6 +948,20 @@ impl LinAmpApp {
             app.lib_visible = session.lib_visible;
             if let Some(fr) = session.lib_col_fr {
                 app.lib_col_fr = fr;
+            }
+            // Restore the saved window layout (absolute top-lefts). When present
+            // it replaces the default dock arrangement; frame 1 clamps it on-
+            // screen. Positions are absolute so docking is preserved exactly.
+            if let Some((x, y)) = session.main_pos {
+                let p = |o: Option<(f32, f32)>, d: egui::Pos2| {
+                    o.map(|(x, y)| egui::pos2(x, y)).unwrap_or(d)
+                };
+                app.win_pos[0] = egui::pos2(x, y);
+                app.win_pos[1] = p(session.eq_pos, app.win_pos[0]);
+                app.win_pos[2] = p(session.pl_pos, app.win_pos[0]);
+                app.lib_pos = p(session.lib_pos, app.win_pos[0]);
+                app.lib_pos_init = true;
+                app.has_pos_memory = true;
             }
         }
         app.refresh_library();
@@ -1673,6 +1693,12 @@ impl LinAmpApp {
             pl_shade: self.pl_shade,
             lib_visible: self.lib_visible,
             lib_col_fr: Some(self.lib_col_fr),
+            // Remember the window layout once it's been established on frame 1.
+            main_pos: self.positions_init.then_some((self.win_pos[0].x, self.win_pos[0].y)),
+            eq_pos: self.positions_init.then_some((self.win_pos[1].x, self.win_pos[1].y)),
+            pl_pos: self.positions_init.then_some((self.win_pos[2].x, self.win_pos[2].y)),
+            lib_pos: (self.positions_init && self.lib_pos_init)
+                .then_some((self.lib_pos.x, self.lib_pos.y)),
         }
     }
 
@@ -1683,6 +1709,11 @@ impl LinAmpApp {
         // Don't overwrite the saved layout while shutting down (we hide the child
         // windows for teardown, which must not be persisted as "closed").
         if self.quit_countdown.is_some() {
+            return;
+        }
+        // Don't churn the file every 300ms during a drag; the final resting
+        // position is saved on the next cycle after the button is released.
+        if self.drag.is_some() || self.lib_drag.is_some() {
             return;
         }
         // Change detection hashes every track path, so don't run it every frame.
@@ -1701,6 +1732,12 @@ impl LinAmpApp {
         self.lib_visible.hash(&mut h);
         self.pl_px_w.to_bits().hash(&mut h);
         self.pl_px_h.to_bits().hash(&mut h);
+        for p in &self.win_pos {
+            p.x.to_bits().hash(&mut h);
+            p.y.to_bits().hash(&mut h);
+        }
+        self.lib_pos.x.to_bits().hash(&mut h);
+        self.lib_pos.y.to_bits().hash(&mut h);
         self.playlist.current.hash(&mut h);
         self.eq_enabled.hash(&mut h);
         self.eq_auto.hash(&mut h);
@@ -3664,18 +3701,48 @@ impl LinAmpApp {
         self.ui_jump_file(ctx);
         self.ui_jump_time(ctx);
 
-        // Initialise window positions from the real main window, once.
+        // Initialise window positions, once.
         if !self.positions_init {
             if let Some(r) = ctx.input(|i| i.viewport().outer_rect) {
-                self.win_pos[0] = r.min;
-                // Dock the (possibly restored) EQ/playlist windows under the main
-                // one, honouring which are visible and their collapsed state.
-                self.restack();
-                // A library restored as visible needs its position seeded too,
-                // or it would open at the screen origin until first dragged.
-                if !self.lib_pos_init {
-                    self.lib_pos = self.library_default_pos();
-                    self.lib_pos_init = true;
+                if self.has_pos_memory {
+                    // Restore the saved layout. If it would sit (partly) off the
+                    // current virtual desktop — e.g. after a resolution drop — nudge
+                    // the whole visible cluster back on, prioritising the top-left so
+                    // the windows stay grabbable. Shifting every window by the same
+                    // delta preserves the docking.
+                    if let Some(vr) = virtual_desktop_rect(ctx) {
+                        let mut union = self.win_rect_pts(0);
+                        if self.eq_visible {
+                            union = union.union(self.win_rect_pts(1));
+                        }
+                        if self.pl_visible {
+                            union = union.union(self.win_rect_pts(2));
+                        }
+                        if self.lib_visible {
+                            union = union
+                                .union(egui::Rect::from_min_size(self.lib_pos, self.lib_size()));
+                        }
+                        let delta = egui::vec2(
+                            nudge_onto(union.min.x, union.max.x, vr.min.x, vr.max.x),
+                            nudge_onto(union.min.y, union.max.y, vr.min.y, vr.max.y),
+                        );
+                        for p in self.win_pos.iter_mut() {
+                            *p += delta;
+                        }
+                        self.lib_pos += delta;
+                    }
+                    self.root_last = None; // move the root window to the restored pos
+                } else {
+                    self.win_pos[0] = r.min;
+                    // Dock the EQ/playlist windows under the main one, honouring
+                    // which are visible and their collapsed state.
+                    self.restack();
+                    // Seed the library position (docked right of main) if it was
+                    // restored visible but never positioned.
+                    if !self.lib_pos_init {
+                        self.lib_pos = self.library_default_pos();
+                        self.lib_pos_init = true;
+                    }
                 }
                 self.positions_init = true;
             }
