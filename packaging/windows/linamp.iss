@@ -49,7 +49,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "{#RepoRoot}\target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 ; Skins must sit next to the exe — the app discovers them relative to itself.
-Source: "{#RepoRoot}\skins\*"; DestDir: "{app}\skins"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#RepoRoot}\skins\*"; DestDir: "{app}\skins"; Excludes: "backup\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Optional bundled demo music.
 Source: "{#RepoRoot}\music\*"; DestDir: "{app}\music"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
