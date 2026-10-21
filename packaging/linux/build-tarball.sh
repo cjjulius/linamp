@@ -18,6 +18,7 @@ echo "==> Staging $STAGE"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 install -m 0755 target/release/linamp "$STAGE/linamp"
 cp -r skins "$STAGE/skins"
+rm -rf "$STAGE/skins/backup"   # dev-only skin backups, not for release
 [ -d music ] && cp -r music "$STAGE/music" || true
 cp packaging/linux/install.sh packaging/linux/uninstall.sh packaging/linux/linamp.desktop "$STAGE/"
 chmod +x "$STAGE/install.sh" "$STAGE/uninstall.sh"
