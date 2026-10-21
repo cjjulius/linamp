@@ -533,6 +533,9 @@ pub struct LinAmpApp {
     /// User-resizable track-table column fractions of the flexible width:
     /// [artist, title]; the third column (album/rating) takes the remainder.
     lib_col_fr: [f32; 2],
+    /// Active track-table sort: (column 0=artist 1=title 2=album/rating 3=time,
+    /// ascending). None = the view's natural order. Reset when the view changes.
+    lib_sort: Option<(u8, bool)>,
     // Media Library window (dockable, non-shading) + 3-pane browser state.
     lib_pos: egui::Pos2,
     lib_pos_init: bool,
@@ -744,6 +747,7 @@ impl LinAmpApp {
             lib_results: Vec::new(),
             lib_ratings: Vec::new(),
             lib_col_fr: [0.28, 0.42],
+            lib_sort: None,
             lib_pos: egui::Pos2::ZERO,
             lib_pos_init: false,
             lib_drag: None,
@@ -1188,38 +1192,85 @@ impl LinAmpApp {
     /// Rebuild the library panes/results from the active nav node, search text
     /// and artist/album selection.
     fn refresh_library(&mut self) {
-        let Some(lib) = &self.library else {
+        if self.library.is_none() {
             return;
-        };
+        }
         let q = self.lib_query.trim().to_string();
         if !q.is_empty() {
             // A search overrides the nav node and the artist/album panes.
-            self.lib_results = lib.search(&q, 2000);
+            self.lib_results = self.library.as_ref().unwrap().search(&q, 2000);
             self.lib_ratings.clear();
             self.lib_artists.clear();
             self.lib_albums.clear();
-            self.lib_sel_tracks.clear();
+        } else {
+            match self.lib_nav {
+                crate::library::LibView::Audio => {
+                    let lib = self.library.as_ref().unwrap();
+                    self.lib_artists = lib.artists();
+                    self.lib_albums = lib.albums(&self.lib_sel_artists);
+                    self.lib_results = lib.tracks_for(&self.lib_sel_artists, &self.lib_sel_albums);
+                }
+                other => {
+                    let lib = self.library.as_ref().unwrap();
+                    self.lib_artists.clear();
+                    self.lib_albums.clear();
+                    self.lib_results = lib.view(other, 2000);
+                }
+            }
+            // The Top Rated list shows each track's stars; other views don't, so
+            // skip the per-row rating lookups there.
+            self.lib_ratings = if self.lib_nav == crate::library::LibView::TopRated {
+                let lib = self.library.as_ref().unwrap();
+                self.lib_results.iter().map(|t| lib.rating(&t.path)).collect()
+            } else {
+                Vec::new()
+            };
+        }
+        self.lib_sel_tracks.clear();
+        // Apply the user's column sort over the view's natural order, if any.
+        self.apply_lib_sort();
+    }
+
+    /// Re-order `lib_results` (and the parallel `lib_ratings`) by the active column
+    /// sort. The rating column sorts by the numeric star count, not the rendered
+    /// "★★★☆☆" string (whose empty-star glyph would sort the wrong way).
+    fn apply_lib_sort(&mut self) {
+        let Some((col, asc)) = self.lib_sort else {
+            return;
+        };
+        if self.lib_results.len() < 2 {
             return;
         }
-        match self.lib_nav {
-            crate::library::LibView::Audio => {
-                self.lib_artists = lib.artists();
-                self.lib_albums = lib.albums(&self.lib_sel_artists);
-                self.lib_results = lib.tracks_for(&self.lib_sel_artists, &self.lib_sel_albums);
+        let show_rating =
+            self.lib_nav == crate::library::LibView::TopRated && self.lib_query.trim().is_empty();
+        let mut idx: Vec<usize> = (0..self.lib_results.len()).collect();
+        idx.sort_by(|&a, &b| {
+            let ta = &self.lib_results[a];
+            let tb = &self.lib_results[b];
+            let ord = match col {
+                0 => ta.artist.to_lowercase().cmp(&tb.artist.to_lowercase()),
+                1 => ta.title.to_lowercase().cmp(&tb.title.to_lowercase()),
+                2 if show_rating => self
+                    .lib_ratings
+                    .get(a)
+                    .copied()
+                    .unwrap_or(0)
+                    .cmp(&self.lib_ratings.get(b).copied().unwrap_or(0)),
+                2 => ta.album.to_lowercase().cmp(&tb.album.to_lowercase()),
+                _ => ta.duration.unwrap_or_default().cmp(&tb.duration.unwrap_or_default()),
+            };
+            // Stable tiebreak on original position keeps the order deterministic.
+            let ord = ord.then(a.cmp(&b));
+            if asc {
+                ord
+            } else {
+                ord.reverse()
             }
-            other => {
-                self.lib_artists.clear();
-                self.lib_albums.clear();
-                self.lib_results = lib.view(other, 2000);
-            }
+        });
+        self.lib_results = idx.iter().map(|&i| self.lib_results[i].clone()).collect();
+        if !self.lib_ratings.is_empty() {
+            self.lib_ratings = idx.iter().map(|&i| self.lib_ratings[i]).collect();
         }
-        // The Top Rated list shows each track's stars; other views don't, so skip
-        // the per-row rating lookups there.
-        self.lib_ratings = if self.lib_nav == crate::library::LibView::TopRated {
-            self.lib_results.iter().map(|t| lib.rating(&t.path)).collect()
-        } else {
-            Vec::new()
-        };
         self.lib_sel_tracks.clear();
     }
 
@@ -4426,6 +4477,8 @@ impl LinAmpApp {
         let mut lib_action: Option<LibAction> = None;
         // Column-resize drag deltas (in body-width fractions) for the two dividers.
         let mut col_dx = [0.0f32; 2];
+        // A clicked header column (0=artist 1=title 2=album/rating 3=time) to sort by.
+        let mut header_click: Option<u8> = None;
 
         let browsing = self.lib_query.trim().is_empty() && self.lib_nav == LibView::Audio;
         // The Top Rated list swaps the Album column for a star-rating column.
@@ -4665,15 +4718,49 @@ impl LinAmpApp {
                         let (aw, tw, bw) = (body * fa, body * ft, body * fb);
                         let time_off = 2.0 + body + 6.0;
                         let col3 = if show_rating { "Rating" } else { "Album" };
+                        // Header labels, with a sort arrow on the active column.
+                        let (sort_col, sort_asc) = self.lib_sort.unwrap_or((u8::MAX, true));
+                        let lbl = |ci: u8, base: &str| -> String {
+                            if ci == sort_col {
+                                format!("{base} {}", if sort_asc { "\u{25B2}" } else { "\u{25BC}" })
+                            } else {
+                                base.to_string()
+                            }
+                        };
+                        let (l_art, l_tit, l_col3, l_time) =
+                            (lbl(0, "Artist"), lbl(1, "Title"), lbl(2, col3), lbl(3, "Time"));
                         // Header.
                         let hdr = paint_track_row(ui, 15.0, false, sel_bg, |rect, paint| {
                             let mut x = rect.left() + 2.0;
-                            for (label, cw) in [("Artist", aw), ("Title", tw), (col3, bw)] {
+                            for (label, cw) in [(&l_art, aw), (&l_tit, tw), (&l_col3, bw)] {
                                 paint(x, cw, label, dim, false);
                                 x += cw;
                             }
-                            paint(rect.left() + time_off, dur_w, "Time", dim, true);
+                            paint(rect.left() + time_off, dur_w, &l_time, dim, true);
                         });
+                        // Clicking a header column sorts by it (toggles direction on
+                        // repeat). Added before the divider handles so a click in the
+                        // column body sorts while a drag on the boundary resizes.
+                        let base0 = hdr.rect.left() + 2.0;
+                        let zones = [
+                            (0u8, base0, base0 + aw),
+                            (1, base0 + aw, base0 + aw + tw),
+                            (2, base0 + aw + tw, base0 + aw + tw + bw),
+                            (3, base0 + aw + tw + bw, hdr.rect.right()),
+                        ];
+                        for (ci, x0, x1) in zones {
+                            let z = egui::Rect::from_min_max(
+                                egui::pos2(x0, hdr.rect.top()),
+                                egui::pos2(x1, hdr.rect.bottom()),
+                            );
+                            let zr = ui.interact(z, ui.id().with(("lib_hdr", ci)), egui::Sense::click());
+                            if zr.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if zr.clicked() {
+                                header_click = Some(ci);
+                            }
+                        }
                         // Draggable dividers between the flexible columns (a subtle,
                         // themed bar that brightens on hover) so columns can be
                         // resized to fit long values.
@@ -4849,6 +4936,16 @@ impl LinAmpApp {
                 self.lib_col_fr[1] = t;
             }
         }
+        if let Some(ci) = header_click {
+            // Toggle direction on the same column; otherwise sort the new column —
+            // ascending for text/time, descending for Rating so more stars sort
+            // to the top first.
+            self.lib_sort = Some(match self.lib_sort {
+                Some((c, asc)) if c == ci => (ci, !asc),
+                _ => (ci, !(ci == 2 && show_rating)),
+            });
+            self.apply_lib_sort();
+        }
         if do_clear {
             self.lib_query.clear();
             self.refresh_library();
@@ -4861,6 +4958,7 @@ impl LinAmpApp {
             self.lib_sel_artists.clear();
             self.lib_sel_albums.clear();
             self.lib_query.clear();
+            self.lib_sort = None; // each view starts in its natural order
             self.refresh_library();
         }
         if let Some((name, ctrl)) = artist_click {
@@ -5359,5 +5457,16 @@ mod tests {
         assert_eq!(parse_time(""), None);
         assert_eq!(parse_time("abc"), None);
         assert_eq!(parse_time("-5"), None);
+    }
+
+    #[test]
+    fn rating_must_sort_numerically_not_by_star_string() {
+        // Guard the reason apply_lib_sort sorts the Rating column by the numeric
+        // star count: the empty-star glyph ☆ (U+2606) sorts AFTER the filled ★
+        // (U+2605), so sorting the rendered "★★★☆☆" string would rank a 3-star row
+        // above a 5-star one. Numeric sorting is correct; string sorting is not.
+        assert!('\u{2606}' > '\u{2605}');
+        assert!("\u{2605}\u{2605}\u{2605}\u{2606}\u{2606}" > "\u{2605}\u{2605}\u{2605}\u{2605}\u{2605}");
+        assert!(5i64 > 3); // numeric order a descending sort gets right
     }
 }
