@@ -8,7 +8,9 @@ use rustfft::{Fft, FftPlanner};
 
 use crate::classic::{self, Btn, ClassicSkin, MainState, PlayUi};
 use crate::config::{Prefs, Session};
-use crate::dock::{dock_group_from_main, docked_group_below, push_off, rects_docked, snap_rect};
+use crate::dock::{
+    dock_group_from_main, docked_group_below, nudge_onto, push_off, rects_docked, snap_rect,
+};
 use crate::library::Library;
 use crate::player::{PlayState, Player};
 use crate::playlist::{save_playlist_file, Playlist};
@@ -163,6 +165,56 @@ fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
     }
 }
 
+/// The full virtual desktop (all monitors) in egui points, if the platform
+/// exposes it. Drags are clamped to this instead of a single monitor, so a
+/// dragged window (and its docked group) can cross to another display but can't
+/// be pushed off the desktop entirely. `None` → no manual clamp (OS handles it).
+/// Specialised to Windows (virtual-screen metrics) and X11 (Mint/Pop!_OS).
+fn virtual_desktop_rect(ctx: &egui::Context) -> Option<egui::Rect> {
+    let ppp = ctx.pixels_per_point().max(0.1);
+    let _ = ppp;
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn GetSystemMetrics(index: i32) -> i32;
+        }
+        const SM_XVIRTUALSCREEN: i32 = 76;
+        const SM_YVIRTUALSCREEN: i32 = 77;
+        const SM_CXVIRTUALSCREEN: i32 = 78;
+        const SM_CYVIRTUALSCREEN: i32 = 79;
+        unsafe {
+            let (x, y) = (
+                GetSystemMetrics(SM_XVIRTUALSCREEN),
+                GetSystemMetrics(SM_YVIRTUALSCREEN),
+            );
+            let (w, h) = (
+                GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                GetSystemMetrics(SM_CYVIRTUALSCREEN),
+            );
+            if w > 0 && h > 0 {
+                return Some(egui::Rect::from_min_size(
+                    egui::pos2(x as f32 / ppp, y as f32 / ppp),
+                    egui::vec2(w as f32 / ppp, h as f32 / ppp),
+                ));
+            }
+        }
+        None
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::screen_px().map(|(w, h)| {
+            egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(w as f32 / ppp, h as f32 / ppp),
+            )
+        })
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+    {
+        None
+    }
+}
+
 /// Linux/X11 helpers for classic-window management: the global cursor query
 /// (manual tandem drag) and `WM_TRANSIENT_FOR` grouping (EQ/playlist ride the
 /// main window's z-order, no separate taskbar entry). A no-op without an X
@@ -224,6 +276,18 @@ mod x11util {
             // False only means the pointer is on another screen; rx/ry stay valid
             // global coords, but we treat it as unknown and fall back to OS drag.
             (ok != 0).then_some((rx, ry))
+        })
+        .flatten()
+    }
+
+    /// The default screen's size in physical pixels. On Mint/Pop!_OS (X11) the
+    /// screen spans all monitors, so this is the virtual-desktop extent.
+    pub fn screen_px() -> Option<(i32, i32)> {
+        with_conn(|xlib, d| unsafe {
+            let s = (xlib.XDefaultScreen)(d);
+            let w = (xlib.XDisplayWidth)(d, s);
+            let h = (xlib.XDisplayHeight)(d, s);
+            (w > 0 && h > 0).then_some((w, h))
         })
         .flatten()
     }
@@ -616,6 +680,19 @@ pub struct LinAmpApp {
     pl_px_h: f32,
     pl_px_w: f32,
     positions_init: bool,
+    /// true when the last session's window positions were restored, so frame 1
+    /// keeps them (clamped on-screen) instead of applying the default layout.
+    has_pos_memory: bool,
+    /// App-level focus: true while any LinAmp window is focused. All windows show
+    /// their active title bar together and their inactive one only when the whole
+    /// app loses focus (e.g. to another application), matching Winamp — rather
+    /// than one window dimming when another LinAmp window is clicked. Per-window
+    /// focus is tracked in `foc_*` and OR'd each frame.
+    app_focused: bool,
+    foc_root: bool,
+    foc_eq: bool,
+    foc_pl: bool,
+    foc_lib: bool,
     /// Hash of the last-persisted session, so we only write on actual changes.
     session_sig: Option<u64>,
     /// Frames remaining in a graceful shutdown (set when the WM asks to close),
@@ -812,6 +889,12 @@ impl LinAmpApp {
             pl_px_h: classic::PL_H as f32,
             pl_px_w: classic::MAIN_W as f32,
             positions_init: false,
+            has_pos_memory: false,
+            app_focused: true,
+            foc_root: true,
+            foc_eq: false,
+            foc_pl: false,
+            foc_lib: false,
             session_sig: None,
             quit_countdown: None,
             drag: None,
@@ -880,6 +963,20 @@ impl LinAmpApp {
             app.lib_visible = session.lib_visible;
             if let Some(fr) = session.lib_col_fr {
                 app.lib_col_fr = fr;
+            }
+            // Restore the saved window layout (absolute top-lefts). When present
+            // it replaces the default dock arrangement; frame 1 clamps it on-
+            // screen. Positions are absolute so docking is preserved exactly.
+            if let Some((x, y)) = session.main_pos {
+                let p = |o: Option<(f32, f32)>, d: egui::Pos2| {
+                    o.map(|(x, y)| egui::pos2(x, y)).unwrap_or(d)
+                };
+                app.win_pos[0] = egui::pos2(x, y);
+                app.win_pos[1] = p(session.eq_pos, app.win_pos[0]);
+                app.win_pos[2] = p(session.pl_pos, app.win_pos[0]);
+                app.lib_pos = p(session.lib_pos, app.win_pos[0]);
+                app.lib_pos_init = true;
+                app.has_pos_memory = true;
             }
         }
         app.refresh_library();
@@ -1156,9 +1253,11 @@ impl LinAmpApp {
 
     /// Fixed window size of the Media Library (logical points; unaffected by the
     /// 1x/2x "double size" toggle, like the other egui dialogs).
-    /// The library window's base (1x) size in points.
+    /// The library window's base (1x) size in points. Height is exactly four
+    /// main-window heights so that, docked to the right of the Main/EQ/Playlist
+    /// stack, the group reads as one rectangle.
     fn lib_base_size(&self) -> egui::Vec2 {
-        egui::vec2(640.0, 460.0)
+        egui::vec2(640.0, 4.0 * classic::MAIN_H as f32)
     }
 
     /// The library window's on-screen size, scaled with the double-size setting
@@ -1422,7 +1521,7 @@ impl LinAmpApp {
             .unwrap_or_else(|| self.player.position().as_secs_f32());
 
         MainState {
-            focused: true,
+            focused: self.app_focused,
             play,
             pressed: self.pressed_btn,
             shuffle: self.shuffle,
@@ -1491,14 +1590,14 @@ impl LinAmpApp {
                         self.cviz_peaks[i] = if b > self.cviz_peaks[i] {
                             b
                         } else {
-                            (self.cviz_peaks[i] - 0.012).max(0.0)
+                            (self.cviz_peaks[i] - 0.009).max(0.0)
                         };
                     }
                 }
                 PlayState::Stopped => {
                     for i in 0..CLASSIC_BANDS {
                         self.cviz_bars[i] = (self.cviz_bars[i] - 0.045).max(0.0);
-                        self.cviz_peaks[i] = (self.cviz_peaks[i] - 0.012).max(0.0);
+                        self.cviz_peaks[i] = (self.cviz_peaks[i] - 0.009).max(0.0);
                     }
                 }
                 PlayState::Paused => {}
@@ -1609,6 +1708,12 @@ impl LinAmpApp {
             pl_shade: self.pl_shade,
             lib_visible: self.lib_visible,
             lib_col_fr: Some(self.lib_col_fr),
+            // Remember the window layout once it's been established on frame 1.
+            main_pos: self.positions_init.then_some((self.win_pos[0].x, self.win_pos[0].y)),
+            eq_pos: self.positions_init.then_some((self.win_pos[1].x, self.win_pos[1].y)),
+            pl_pos: self.positions_init.then_some((self.win_pos[2].x, self.win_pos[2].y)),
+            lib_pos: (self.positions_init && self.lib_pos_init)
+                .then_some((self.lib_pos.x, self.lib_pos.y)),
         }
     }
 
@@ -1619,6 +1724,11 @@ impl LinAmpApp {
         // Don't overwrite the saved layout while shutting down (we hide the child
         // windows for teardown, which must not be persisted as "closed").
         if self.quit_countdown.is_some() {
+            return;
+        }
+        // Don't churn the file every 300ms during a drag; the final resting
+        // position is saved on the next cycle after the button is released.
+        if self.drag.is_some() || self.lib_drag.is_some() {
             return;
         }
         // Change detection hashes every track path, so don't run it every frame.
@@ -1637,6 +1747,12 @@ impl LinAmpApp {
         self.lib_visible.hash(&mut h);
         self.pl_px_w.to_bits().hash(&mut h);
         self.pl_px_h.to_bits().hash(&mut h);
+        for p in &self.win_pos {
+            p.x.to_bits().hash(&mut h);
+            p.y.to_bits().hash(&mut h);
+        }
+        self.lib_pos.x.to_bits().hash(&mut h);
+        self.lib_pos.y.to_bits().hash(&mut h);
         self.playlist.current.hash(&mut h);
         self.eq_enabled.hash(&mut h);
         self.eq_auto.hash(&mut h);
@@ -1686,7 +1802,7 @@ impl LinAmpApp {
 
     fn make_eq_state(&self) -> classic::EqState {
         classic::EqState {
-            focused: true,
+            focused: self.app_focused,
             on: self.eq_enabled,
             auto: self.eq_auto,
             pressed: self.eq_active,
@@ -1899,10 +2015,12 @@ impl LinAmpApp {
                                 self.load_skin_dialog(ctx);
                                 close = true;
                             }
+                            // ASCII box: the bundled Noto Sans has no U+2713 check
+                            // glyph, so a literal ✓ renders as tofu here.
                             let aot = if self.prefs.always_on_top {
-                                "[✓] Always on top"
+                                "[x] Always on top"
                             } else {
-                                "[  ] Always on top"
+                                "[ ] Always on top"
                             };
                             if item(ui, aot) {
                                 self.prefs.always_on_top = !self.prefs.always_on_top;
@@ -2186,7 +2304,10 @@ impl LinAmpApp {
                         // Clamp so the dragged window — and, for the main window, its
                         // whole docked block (EQ/PL + library) — stops at the screen
                         // edge instead of being pushed off it.
-                        if let Some(m) = ctx.input(|i| i.viewport().monitor_size) {
+                        // Clamp to the whole virtual desktop (all monitors), so the
+                        // block can be dragged onto another display but not off the
+                        // desktop. Only the dragged block's bounding offsets matter.
+                        if let Some(vr) = virtual_desktop_rect(ctx) {
                             let mut lo = egui::vec2(0.0, 0.0);
                             let mut hi = self.win_inner_size(win);
                             for (mi, off) in &group {
@@ -2197,8 +2318,10 @@ impl LinAmpApp {
                                 lo = lo.min(loff);
                                 hi = hi.max(loff + self.lib_size());
                             }
-                            target.x = target.x.clamp(-lo.x, (m.x - hi.x).max(-lo.x));
-                            target.y = target.y.clamp(-lo.y, (m.y - hi.y).max(-lo.y));
+                            let min_x = vr.min.x - lo.x;
+                            let min_y = vr.min.y - lo.y;
+                            target.x = target.x.clamp(min_x, (vr.max.x - hi.x).max(min_x));
+                            target.y = target.y.clamp(min_y, (vr.max.y - hi.y).max(min_y));
                         }
                         self.win_pos[idx] = target;
                         for (mi, off) in group {
@@ -2783,7 +2906,10 @@ impl LinAmpApp {
     /// Library window themed with the skin's GEN.BMP frame: composite the frame
     /// behind the content, draw the caption, and inset the browser into the frame.
     fn ui_library_gen(&mut self, ctx: &egui::Context, close: &mut bool) {
-        let active = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        self.foc_lib = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_lib);
+        // Use the shared app-level focus so the library doesn't dim merely because
+        // another LinAmp window was clicked.
+        let active = self.app_focused;
         // Compose the frame at the base (1x) size; it is drawn to the (possibly
         // scaled) window rect and upscaled like the classic windows.
         let base = self.lib_base_size();
@@ -2861,11 +2987,12 @@ impl LinAmpApp {
         if resp.dragged() {
             if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.lib_drag) {
                 let mut p = g - grab;
-                // Stop the library at the screen edge instead of pushing it off.
-                if let Some(m) = ctx.input(|i| i.viewport().monitor_size) {
+                // Clamp to the whole virtual desktop so the library can be dragged
+                // onto another monitor but not off the desktop.
+                if let Some(vr) = virtual_desktop_rect(ctx) {
                     let size = self.lib_size();
-                    p.x = p.x.clamp(0.0, (m.x - size.x).max(0.0));
-                    p.y = p.y.clamp(0.0, (m.y - size.y).max(0.0));
+                    p.x = p.x.clamp(vr.min.x, (vr.max.x - size.x).max(vr.min.x));
+                    p.y = p.y.clamp(vr.min.y, (vr.max.y - size.y).max(vr.min.y));
                 }
                 self.lib_pos = p;
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.lib_pos));
@@ -3584,6 +3711,22 @@ impl LinAmpApp {
             return;
         }
 
+        // App-level focus for this frame: this frame's root focus OR'd with last
+        // frame's child-window focus (children render later, below). Hidden
+        // windows don't hold focus. So all windows share one active/inactive
+        // title-bar state and only dim when the whole app is unfocused.
+        self.foc_root = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_root);
+        if !self.eq_visible {
+            self.foc_eq = false;
+        }
+        if !self.pl_visible {
+            self.foc_pl = false;
+        }
+        if !self.lib_visible {
+            self.foc_lib = false;
+        }
+        self.app_focused = self.foc_root || self.foc_eq || self.foc_pl || self.foc_lib;
+
         // Root viewport = main window.
         self.render_window(ctx, ClWin::Main);
         self.ui_prefs(ctx);
@@ -3592,18 +3735,48 @@ impl LinAmpApp {
         self.ui_jump_file(ctx);
         self.ui_jump_time(ctx);
 
-        // Initialise window positions from the real main window, once.
+        // Initialise window positions, once.
         if !self.positions_init {
             if let Some(r) = ctx.input(|i| i.viewport().outer_rect) {
-                self.win_pos[0] = r.min;
-                // Dock the (possibly restored) EQ/playlist windows under the main
-                // one, honouring which are visible and their collapsed state.
-                self.restack();
-                // A library restored as visible needs its position seeded too,
-                // or it would open at the screen origin until first dragged.
-                if !self.lib_pos_init {
-                    self.lib_pos = self.library_default_pos();
-                    self.lib_pos_init = true;
+                if self.has_pos_memory {
+                    // Restore the saved layout. If it would sit (partly) off the
+                    // current virtual desktop — e.g. after a resolution drop — nudge
+                    // the whole visible cluster back on, prioritising the top-left so
+                    // the windows stay grabbable. Shifting every window by the same
+                    // delta preserves the docking.
+                    if let Some(vr) = virtual_desktop_rect(ctx) {
+                        let mut union = self.win_rect_pts(0);
+                        if self.eq_visible {
+                            union = union.union(self.win_rect_pts(1));
+                        }
+                        if self.pl_visible {
+                            union = union.union(self.win_rect_pts(2));
+                        }
+                        if self.lib_visible {
+                            union = union
+                                .union(egui::Rect::from_min_size(self.lib_pos, self.lib_size()));
+                        }
+                        let delta = egui::vec2(
+                            nudge_onto(union.min.x, union.max.x, vr.min.x, vr.max.x),
+                            nudge_onto(union.min.y, union.max.y, vr.min.y, vr.max.y),
+                        );
+                        for p in self.win_pos.iter_mut() {
+                            *p += delta;
+                        }
+                        self.lib_pos += delta;
+                    }
+                    self.root_last = None; // move the root window to the restored pos
+                } else {
+                    self.win_pos[0] = r.min;
+                    // Dock the EQ/playlist windows under the main one, honouring
+                    // which are visible and their collapsed state.
+                    self.restack();
+                    // Seed the library position (docked right of main) if it was
+                    // restored visible but never positioned.
+                    if !self.lib_pos_init {
+                        self.lib_pos = self.library_default_pos();
+                        self.lib_pos_init = true;
+                    }
                 }
                 self.positions_init = true;
             }
@@ -3641,6 +3814,7 @@ impl LinAmpApp {
                 // Fire global shortcuts while this window has focus (keyboard
                 // input goes to the focused viewport, not the root).
                 self.handle_shortcuts(ctx, ClWin::Eq);
+                self.foc_eq = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_eq);
                 self.render_window(ctx, ClWin::Eq);
             });
         }
@@ -3658,6 +3832,7 @@ impl LinAmpApp {
             let id = egui::ViewportId::from_hash_of("linamp_pl");
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
                 self.handle_shortcuts(ctx, ClWin::Pl);
+                self.foc_pl = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_pl);
                 self.render_window(ctx, ClWin::Pl);
             });
         }
@@ -3683,6 +3858,8 @@ impl LinAmpApp {
         };
         self.theme.name.hash(&mut h);
         ps.hash(&mut h);
+        // Active/inactive title bar follows app focus (all windows together).
+        self.app_focused.hash(&mut h);
         match win {
             ClWin::Main => {
                 self.main_shade.hash(&mut h);
@@ -3880,7 +4057,7 @@ impl LinAmpApp {
             }
             ClWin::Eq => {
                 if self.eq_shade {
-                    cs.compose_eq_shade(true)
+                    cs.compose_eq_shade(self.app_focused)
                 } else {
                     cs.compose_eq(&self.make_eq_state())
                 }
@@ -3909,7 +4086,7 @@ impl LinAmpApp {
                         }
                         None => (String::new(), String::new()),
                     };
-                    cs.compose_pl_shade(true, &text, &time, self.pl_colors().normal)
+                    cs.compose_pl_shade(self.app_focused, &text, &time, self.pl_colors().normal)
                 } else {
                     let rows = self.build_pl_rows();
                     let colors = self.pl_colors();
@@ -3932,7 +4109,7 @@ impl LinAmpApp {
                         }
                     }
                     let st = classic::PlState {
-                        focused: true,
+                        focused: self.app_focused,
                         colors,
                         rows: &rows,
                         first: self.pl_first,
