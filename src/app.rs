@@ -4496,8 +4496,14 @@ impl LinAmpApp {
                     .show_inside(ui, |ui| {
                         let w = ui.available_width();
                         let dur_w = 48.0;
-                        let body = (w - dur_w - 12.0).max(120.0);
+                        // Reserve the scrollbar gutter so the header and the rows
+                        // (which are narrower once the list scrolls) share one column
+                        // layout, and anchor the Time column from the left so the
+                        // right-aligned times line up with the header either way.
+                        let sb = ui.spacing().scroll.bar_width + 2.0;
+                        let body = (w - dur_w - 12.0 - sb).max(120.0);
                         let (aw, tw, bw) = (body * 0.28, body * 0.42, body * 0.30);
+                        let time_off = 2.0 + body + 6.0;
                         // Header.
                         paint_track_row(ui, 15.0, false, sel_bg, |rect, paint| {
                             let mut x = rect.left() + 2.0;
@@ -4505,7 +4511,7 @@ impl LinAmpApp {
                                 paint(x, cw, label, dim, false);
                                 x += cw;
                             }
-                            paint(rect.right() - dur_w, dur_w, "Time", dim, true);
+                            paint(rect.left() + time_off, dur_w, "Time", dim, true);
                         });
                         egui::ScrollArea::vertical()
                             .id_salt("lib_tracks")
@@ -4543,7 +4549,7 @@ impl LinAmpApp {
                                         x += tw;
                                         paint(x, bw, album, tc, false);
                                         let d = t.duration.map(fmt_time).unwrap_or_default();
-                                        paint(rect.right() - dur_w, dur_w, &d, tc, true);
+                                        paint(rect.left() + time_off, dur_w, &d, tc, true);
                                     });
                                     if resp.clicked() {
                                         let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
@@ -4866,6 +4872,15 @@ impl eframe::App for LinAmpApp {
             ui.separator();
             match self.view {
                 View::Playlist => self.ui_playlist(ui),
+                // The library has its own docked window; don't render it a second
+                // time in this tab (it would reuse the same panel ids in-frame).
+                View::Library if self.lib_visible => {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("The Media Library is open in its own window.")
+                            .color(Color32::GRAY),
+                    );
+                }
                 View::Library => self.ui_library(ui),
             }
         });

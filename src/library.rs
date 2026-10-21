@@ -257,15 +257,26 @@ pub fn scan_folder_bg(dir: PathBuf) -> mpsc::Receiver<ScanMsg> {
         };
         let files = supported_files(&dir);
         let total = files.len();
-        let txn = lib.conn.unchecked_transaction();
+        // Commit in batches rather than one transaction for the whole scan: the
+        // WAL writer lock is released between batches, so the app connection's
+        // play/rating writes aren't starved out (and get silently dropped) during
+        // a long scan, and committed rows become visible as it progresses.
+        const BATCH: usize = 200;
+        let mut txn = lib.conn.unchecked_transaction().ok();
         for (i, p) in files.iter().enumerate() {
             let _ = lib.upsert(&Track::from_path(p.clone()));
+            if (i + 1) % BATCH == 0 {
+                if let Some(t) = txn.take() {
+                    let _ = t.commit();
+                }
+                txn = lib.conn.unchecked_transaction().ok();
+            }
             if i % 25 == 0 {
                 let _ = tx.send(ScanMsg::Progress { done: i, total });
             }
         }
-        if let Ok(txn) = txn {
-            let _ = txn.commit();
+        if let Some(t) = txn.take() {
+            let _ = t.commit();
         }
         let _ = tx.send(ScanMsg::Done(total));
     });
