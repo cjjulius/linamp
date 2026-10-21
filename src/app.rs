@@ -1180,16 +1180,11 @@ impl LinAmpApp {
     }
 
     /// Default library placement: just below the current window stack.
+    /// Default position when the library is first opened: docked to the right edge
+    /// of the main window, top-aligned with it.
     fn library_default_pos(&self) -> egui::Pos2 {
         let base = self.win_pos[0];
-        let mut y = base.y + self.main_h() * self.scale;
-        if self.eq_visible {
-            y += self.eq_h() * self.scale;
-        }
-        if self.pl_visible {
-            y += self.win_native_h(ClWin::Pl) * self.scale;
-        }
-        egui::pos2(base.x, y)
+        egui::pos2(base.x + classic::MAIN_W as f32 * self.scale, base.y)
     }
 
     /// Snap the library window to the player windows / screen edges on drag end.
