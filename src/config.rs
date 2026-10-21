@@ -22,7 +22,9 @@ pub struct Prefs {
 impl Default for Prefs {
     fn default() -> Self {
         Self {
-            double_size: true,
+            // First launch opens at classic 1x size (authentic Winamp scale);
+            // the user can switch to 2x, which then persists.
+            double_size: false,
             tag_on_load: true,
             last_skin: None,
             fade_on_stop: false,
@@ -108,6 +110,11 @@ impl Session {
             .join("session.json")
     }
 
+    /// Whether a saved session exists — false on a truly first launch.
+    pub fn exists() -> bool {
+        Self::path().exists()
+    }
+
     pub fn load() -> Self {
         std::fs::read_to_string(Self::path())
             .ok()
@@ -147,8 +154,9 @@ mod tests {
     #[test]
     fn defaults() {
         let p = Prefs::default();
-        assert!(p.double_size && p.tag_on_load);
-        assert_eq!(p.scale(), 2.0);
+        // First launch is 1x (classic Winamp size) with tag-on-load.
+        assert!(!p.double_size && p.tag_on_load);
+        assert_eq!(p.scale(), 1.0);
         assert!(p.last_skin.is_none());
     }
 

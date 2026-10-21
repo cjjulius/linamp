@@ -64,6 +64,23 @@ Pass files or folders to open them: `linamp song.flac album/`.
 - **Linux** needs a few system libraries (ALSA, GTK, X11/Wayland) — see
   [LINUX.md](LINUX.md). Audio targets PipeWire via ALSA.
 
+## Install (Linux, per-user)
+
+From a release tarball (`linamp-<version>-linux-x86_64.tar.gz`), extract it and
+run `./install.sh` — a per-user install, no sudo. Launch **LinAmp** from your
+app menu or run `~/.local/bin/linamp`. `./uninstall.sh` removes it. Files land in
+the standard per-user locations:
+
+| Path | What |
+|------|------|
+| `~/.local/bin/linamp` | launcher (symlink) |
+| `~/.local/lib/linamp/` | the app — binary + bundled skins |
+| `~/.local/share/LinAmp/` | your data — library, config, session |
+| `~/.local/share/applications/linamp.desktop`, `…/icons/hicolor/*/apps/linamp.*` | menu entry + icon |
+
+Uninstalling removes everything except `~/.local/share/LinAmp/` — your library
+and settings are kept; delete that folder too for a full wipe.
+
 ## Skins
 
 LinAmp auto-discovers `.wsz` skins in `./skins` (several are bundled). Load any
