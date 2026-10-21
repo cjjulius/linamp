@@ -5,7 +5,10 @@ set -eu
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
-PREFIX="$DATA/linamp"              # binary + skins live together here
+# Program files go under ~/.local/lib (binary + skins together); user data lives
+# separately under $DATA/LinAmp. Keeping the app out of $DATA avoids a confusing
+# case-only clash with that data dir.
+PREFIX="$HOME/.local/lib/linamp"
 BINDIR="$HOME/.local/bin"
 APPDIR="$DATA/applications"
 ICONS="$DATA/icons/hicolor"

@@ -3,13 +3,15 @@
 set -eu
 
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
-PREFIX="$DATA/linamp"
+PREFIX="$HOME/.local/lib/linamp"
 BINDIR="$HOME/.local/bin"
 APPDIR="$DATA/applications"
 ICONS="$DATA/icons/hicolor"
+# Also remove an install made by an earlier build that used $DATA/linamp.
+LEGACY_PREFIX="$DATA/linamp"
 
 echo "Removing LinAmp…"
-rm -rf "$PREFIX"
+rm -rf "$PREFIX" "$LEGACY_PREFIX"
 rm -f "$BINDIR/linamp"
 rm -f "$APPDIR/linamp.desktop"
 rm -f "$ICONS/256x256/apps/linamp.png" "$ICONS/scalable/apps/linamp.svg"
