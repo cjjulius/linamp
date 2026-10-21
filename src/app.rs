@@ -527,6 +527,9 @@ pub struct LinAmpApp {
     sort_key: SortKey,
     lib_query: String,
     lib_results: Vec<crate::playlist::Track>,
+    /// Star rating (0–5) for each row in `lib_results`, parallel-indexed. Only
+    /// populated for the Top Rated view, where the list shows the stars.
+    lib_ratings: Vec<i64>,
     // Media Library window (dockable, non-shading) + 3-pane browser state.
     lib_pos: egui::Pos2,
     lib_pos_init: bool,
@@ -736,6 +739,7 @@ impl LinAmpApp {
             sort_key: SortKey::Custom,
             lib_query: String::new(),
             lib_results: Vec::new(),
+            lib_ratings: Vec::new(),
             lib_pos: egui::Pos2::ZERO,
             lib_pos_init: false,
             lib_drag: None,
@@ -1184,6 +1188,7 @@ impl LinAmpApp {
         if !q.is_empty() {
             // A search overrides the nav node and the artist/album panes.
             self.lib_results = lib.search(&q, 2000);
+            self.lib_ratings.clear();
             self.lib_artists.clear();
             self.lib_albums.clear();
             self.lib_sel_tracks.clear();
@@ -1201,6 +1206,13 @@ impl LinAmpApp {
                 self.lib_results = lib.view(other, 2000);
             }
         }
+        // The Top Rated list shows each track's stars; other views don't, so skip
+        // the per-row rating lookups there.
+        self.lib_ratings = if self.lib_nav == crate::library::LibView::TopRated {
+            self.lib_results.iter().map(|t| lib.rating(&t.path)).collect()
+        } else {
+            Vec::new()
+        };
         self.lib_sel_tracks.clear();
     }
 
@@ -4406,6 +4418,8 @@ impl LinAmpApp {
         let mut lib_action: Option<LibAction> = None;
 
         let browsing = self.lib_query.trim().is_empty() && self.lib_nav == LibView::Audio;
+        // The Top Rated list swaps the Album column for a star-rating column.
+        let show_rating = self.lib_nav == LibView::TopRated && self.lib_query.trim().is_empty();
 
         // ---- top: search + scan -------------------------------------------
         egui::TopBottomPanel::top("lib_top")
@@ -4562,6 +4576,9 @@ impl LinAmpApp {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                 artist_click = Some((Some(name.clone()), ctrl));
                                             }
+                                            if resp.secondary_clicked() && !sel {
+                                                artist_click = Some((Some(name.clone()), false));
+                                            }
                                             resp.context_menu(|ui| {
                                                 if ui.button(format!("Play all by \u{201c}{name}\u{201d}")).clicked() {
                                                     lib_action = Some(LibAction::PlayArtist(name.clone()));
@@ -4601,6 +4618,9 @@ impl LinAmpApp {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                 album_click = Some((Some(name.clone()), ctrl));
                                             }
+                                            if resp.secondary_clicked() && !sel {
+                                                album_click = Some((Some(name.clone()), false));
+                                            }
                                             resp.context_menu(|ui| {
                                                 if ui.button(format!("Play all from \u{201c}{label}\u{201d}")).clicked() {
                                                     lib_action = Some(LibAction::PlayAlbum(name.clone()));
@@ -4631,10 +4651,11 @@ impl LinAmpApp {
                         let body = (w - dur_w - 12.0 - sb).max(120.0);
                         let (aw, tw, bw) = (body * 0.28, body * 0.42, body * 0.30);
                         let time_off = 2.0 + body + 6.0;
+                        let col3 = if show_rating { "Rating" } else { "Album" };
                         // Header.
                         paint_track_row(ui, 15.0, false, sel_bg, |rect, paint| {
                             let mut x = rect.left() + 2.0;
-                            for (label, cw) in [("Artist", aw), ("Title", tw), ("Album", bw)] {
+                            for (label, cw) in [("Artist", aw), ("Title", tw), (col3, bw)] {
                                 paint(x, cw, label, dim, false);
                                 x += cw;
                             }
@@ -4681,21 +4702,35 @@ impl LinAmpApp {
                                     } else {
                                         row_col
                                     };
+                                    // Third column: stars in Top Rated, else album.
+                                    let col3_text = if show_rating {
+                                        let r = self.lib_ratings.get(i).copied().unwrap_or(0).clamp(0, 5) as usize;
+                                        format!("{}{}", "\u{2605}".repeat(r), "\u{2606}".repeat(5 - r))
+                                    } else if t.album.is_empty() {
+                                        "(no album)".to_string()
+                                    } else {
+                                        t.album.clone()
+                                    };
                                     let resp = paint_track_row(ui, 16.0, selected, sel_bg, |rect, paint| {
                                         let artist = if t.artist.is_empty() { "(unknown)" } else { &t.artist };
-                                        let album = if t.album.is_empty() { "(no album)" } else { &t.album };
                                         let mut x = rect.left() + 2.0;
                                         paint(x, aw, artist, tc, false);
                                         x += aw;
                                         paint(x, tw, &t.title, tc, false);
                                         x += tw;
-                                        paint(x, bw, album, tc, false);
+                                        paint(x, bw, &col3_text, tc, false);
                                         let d = t.duration.map(fmt_time).unwrap_or_default();
                                         paint(rect.left() + time_off, dur_w, &d, tc, true);
                                     });
                                     if resp.clicked() {
                                         let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                         track_click = Some((i, ctrl));
+                                    }
+                                    // Right-click selects the row it targets (unless it's
+                                    // already part of the selection) so the menu's target
+                                    // is highlighted.
+                                    if resp.secondary_clicked() && !selected {
+                                        track_click = Some((i, false));
                                     }
                                     if resp.double_clicked() {
                                         dbl_track = Some(i);
