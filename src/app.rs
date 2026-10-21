@@ -530,6 +530,9 @@ pub struct LinAmpApp {
     /// Star rating (0–5) for each row in `lib_results`, parallel-indexed. Only
     /// populated for the Top Rated view, where the list shows the stars.
     lib_ratings: Vec<i64>,
+    /// User-resizable track-table column fractions of the flexible width:
+    /// [artist, title]; the third column (album/rating) takes the remainder.
+    lib_col_fr: [f32; 2],
     // Media Library window (dockable, non-shading) + 3-pane browser state.
     lib_pos: egui::Pos2,
     lib_pos_init: bool,
@@ -740,6 +743,7 @@ impl LinAmpApp {
             lib_query: String::new(),
             lib_results: Vec::new(),
             lib_ratings: Vec::new(),
+            lib_col_fr: [0.28, 0.42],
             lib_pos: egui::Pos2::ZERO,
             lib_pos_init: false,
             lib_drag: None,
@@ -861,6 +865,9 @@ impl LinAmpApp {
             app.eq_shade = session.eq_shade;
             app.pl_shade = session.pl_shade;
             app.lib_visible = session.lib_visible;
+            if let Some(fr) = session.lib_col_fr {
+                app.lib_col_fr = fr;
+            }
         }
         app.refresh_library();
         app.discover_skins();
@@ -1539,6 +1546,7 @@ impl LinAmpApp {
             eq_shade: self.eq_shade,
             pl_shade: self.pl_shade,
             lib_visible: self.lib_visible,
+            lib_col_fr: Some(self.lib_col_fr),
         }
     }
 
@@ -4416,6 +4424,8 @@ impl LinAmpApp {
         let mut do_clear = false;
         let mut search_changed = false;
         let mut lib_action: Option<LibAction> = None;
+        // Column-resize drag deltas (in body-width fractions) for the two dividers.
+        let mut col_dx = [0.0f32; 2];
 
         let browsing = self.lib_query.trim().is_empty() && self.lib_nav == LibView::Audio;
         // The Top Rated list swaps the Album column for a star-rating column.
@@ -4649,11 +4659,14 @@ impl LinAmpApp {
                         // right-aligned times line up with the header either way.
                         let sb = ui.spacing().scroll.bar_width + 2.0;
                         let body = (w - dur_w - 12.0 - sb).max(120.0);
-                        let (aw, tw, bw) = (body * 0.28, body * 0.42, body * 0.30);
+                        let fa = self.lib_col_fr[0];
+                        let ft = self.lib_col_fr[1];
+                        let fb = (1.0 - fa - ft).max(0.1);
+                        let (aw, tw, bw) = (body * fa, body * ft, body * fb);
                         let time_off = 2.0 + body + 6.0;
                         let col3 = if show_rating { "Rating" } else { "Album" };
                         // Header.
-                        paint_track_row(ui, 15.0, false, sel_bg, |rect, paint| {
+                        let hdr = paint_track_row(ui, 15.0, false, sel_bg, |rect, paint| {
                             let mut x = rect.left() + 2.0;
                             for (label, cw) in [("Artist", aw), ("Title", tw), (col3, bw)] {
                                 paint(x, cw, label, dim, false);
@@ -4661,6 +4674,26 @@ impl LinAmpApp {
                             }
                             paint(rect.left() + time_off, dur_w, "Time", dim, true);
                         });
+                        // Draggable dividers between the flexible columns (a subtle,
+                        // themed bar that brightens on hover) so columns can be
+                        // resized to fit long values.
+                        let base = hdr.rect.left() + 2.0;
+                        for (k, bx) in [(0usize, base + aw), (1usize, base + aw + tw)] {
+                            let hit = egui::Rect::from_min_max(
+                                egui::pos2(bx - 3.0, hdr.rect.top()),
+                                egui::pos2(bx + 3.0, hdr.rect.bottom()),
+                            );
+                            let dr = ui.interact(hit, ui.id().with(("lib_col_div", k)), egui::Sense::drag());
+                            let hot = dr.hovered() || dr.dragged();
+                            if hot {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                            }
+                            let stroke = egui::Stroke::new(1.0_f32, if hot { row_col } else { dim });
+                            ui.painter().vline(bx, hdr.rect.y_range(), stroke);
+                            if dr.dragged() && body > 1.0 {
+                                col_dx[k] += dr.drag_delta().x / body;
+                            }
+                        }
                         egui::ScrollArea::vertical()
                             .id_salt("lib_tracks")
                             .auto_shrink([false, false])
@@ -4801,6 +4834,21 @@ impl LinAmpApp {
             });
 
         // ---- apply deferred actions ---------------------------------------
+        // Column resize: divider 0 is artist|title (album fixed), divider 1 is
+        // title|album (artist fixed). Keep every column at least 12% wide.
+        if col_dx[0] != 0.0 {
+            let a = (self.lib_col_fr[0] + col_dx[0]).clamp(0.12, 0.70);
+            let t = (self.lib_col_fr[1] - col_dx[0]).clamp(0.12, 0.70);
+            if a + t <= 0.88 {
+                self.lib_col_fr = [a, t];
+            }
+        }
+        if col_dx[1] != 0.0 {
+            let t = (self.lib_col_fr[1] + col_dx[1]).clamp(0.12, 0.70);
+            if self.lib_col_fr[0] + t <= 0.88 {
+                self.lib_col_fr[1] = t;
+            }
+        }
         if do_clear {
             self.lib_query.clear();
             self.refresh_library();
@@ -5019,14 +5067,34 @@ fn paint_track_row(
     }
     let painter = ui.painter().clone();
     let paint = move |x: f32, width: f32, text: &str, color: Color32, right: bool| {
-        let area = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(width, rect.height()));
-        let p = painter.with_clip_rect(area);
-        let (pos, anchor) = if right {
-            (area.right_center() - egui::vec2(2.0, 0.0), egui::Align2::RIGHT_CENTER)
-        } else {
-            (area.left_center(), egui::Align2::LEFT_CENTER)
+        use egui::text::{LayoutJob, TextFormat, TextWrapping};
+        // Lay the cell out as a single line that truncates with an ellipsis, with a
+        // small gap before the next column, so a long value never runs into — or
+        // even touches — the neighbouring column.
+        const GAP: f32 = 6.0;
+        let avail = (width - GAP).max(0.0);
+        let mut job = LayoutJob::single_section(
+            text.to_owned(),
+            TextFormat {
+                font_id: egui::FontId::proportional(12.0),
+                color,
+                ..Default::default()
+            },
+        );
+        job.wrap = TextWrapping {
+            max_width: avail,
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('\u{2026}'),
         };
-        p.text(pos, anchor, text, egui::FontId::proportional(12.0), color);
+        let galley = painter.layout_job(job);
+        let gy = rect.center().y - galley.size().y / 2.0;
+        let pos = if right {
+            egui::pos2(x + width - 2.0 - galley.size().x, gy)
+        } else {
+            egui::pos2(x, gy)
+        };
+        painter.galley(pos, galley, color);
     };
     draw(rect, &paint);
     resp
