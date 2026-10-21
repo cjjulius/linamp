@@ -5068,11 +5068,12 @@ fn paint_track_row(
     let painter = ui.painter().clone();
     let paint = move |x: f32, width: f32, text: &str, color: Color32, right: bool| {
         use egui::text::{LayoutJob, TextFormat, TextWrapping};
-        // Lay the cell out as a single line that truncates with an ellipsis, with a
-        // small gap before the next column, so a long value never runs into — or
-        // even touches — the neighbouring column.
-        const GAP: f32 = 6.0;
-        let avail = (width - GAP).max(0.0);
+        // Lay the cell out as a single line that truncates with an ellipsis. Inset
+        // the text a little on both sides so a long value never runs into — or even
+        // touches — the neighbouring column or the resize divider at the boundary.
+        const GAP: f32 = 6.0; // right gap before the next column
+        const LPAD: f32 = 3.0; // left gap after the column boundary / divider
+        let avail = (width - GAP - LPAD).max(0.0);
         let mut job = LayoutJob::single_section(
             text.to_owned(),
             TextFormat {
@@ -5092,7 +5093,7 @@ fn paint_track_row(
         let pos = if right {
             egui::pos2(x + width - 2.0 - galley.size().x, gy)
         } else {
-            egui::pos2(x, gy)
+            egui::pos2(x + LPAD, gy)
         };
         painter.galley(pos, galley, color);
     };
