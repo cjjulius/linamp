@@ -628,6 +628,52 @@ mod x11util {
         })
     }
 
+    /// Resolve the X window whose title is `title`, cached by title so the whole
+    /// client list isn't rescanned every frame. The cached id is validated (its
+    /// title re-checked), so a reopened window with a new id still resolves.
+    unsafe fn window_by_title(
+        xlib: &xlib::Xlib,
+        d: *mut xlib::Display,
+        title: &str,
+    ) -> xlib::Window {
+        thread_local! {
+            static WIN_CACHE: RefCell<std::collections::HashMap<String, xlib::Window>> =
+                RefCell::new(std::collections::HashMap::new());
+        }
+        WIN_CACHE.with(|c| {
+            if let Some(&w) = c.borrow().get(title) {
+                if w != 0 && wm_name(xlib, d, w) == title {
+                    return w;
+                }
+            }
+            let win = client_list(xlib, d)
+                .into_iter()
+                .find(|&c| wm_name(xlib, d, c) == title)
+                .unwrap_or(0);
+            let mut cache = c.borrow_mut();
+            if win != 0 {
+                cache.insert(title.to_string(), win);
+            } else {
+                cache.remove(title);
+            }
+            win
+        })
+    }
+
+    /// Restore the default cursor on the window titled `title` (used when the
+    /// custom-cursor option is turned off).
+    pub fn unset_cursor(title: &str) {
+        with_conn(|xlib, d| unsafe {
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            let win = window_by_title(xlib, d, title);
+            if win != 0 {
+                (xlib.XUndefineCursor)(d, win);
+                (xlib.XFlush)(d);
+            }
+            (xlib.XSetErrorHandler)(prev);
+        });
+    }
+
     /// Set the cursor of the window titled `title` to a custom ARGB cursor.
     /// `cache_key` dedupes the created X cursor (e.g. "skin:posbar"). Premultiplied
     /// ARGB pixels, row-major. Returns false when unavailable (caller no-ops).
@@ -649,14 +695,7 @@ mod x11util {
         }
         with_conn(|xlib, d| unsafe {
             let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
-            let clients = client_list(xlib, d);
-            let mut win: xlib::Window = 0;
-            for &c in &clients {
-                if wm_name(xlib, d, c) == title {
-                    win = c;
-                    break;
-                }
-            }
+            let win = window_by_title(xlib, d, title);
             let ok = if win != 0 {
                 let cursor = CACHE.with(|cache| {
                     if let Some(&cur) = cache.borrow().get(cache_key) {
@@ -770,6 +809,19 @@ fn set_window_cursor(title: &str, cache_key: &str, cur: &crate::cursor::CursorIm
     #[cfg(not(all(unix, not(target_os = "macos"))))]
     {
         let _ = (title, cache_key, cur);
+    }
+}
+
+/// Restore the default cursor on a window (when custom cursors are turned off).
+/// X11 only; a no-op elsewhere.
+fn unset_window_cursor(title: &str) {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::unset_cursor(title);
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = title;
     }
 }
 
@@ -3114,7 +3166,7 @@ impl LinAmpApp {
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
             .with_position(screen)
-            .with_inner_size(egui::vec2(340.0, 300.0))
+            .with_inner_size(egui::vec2(340.0, 345.0))
             .with_resizable(false)
             .with_taskbar(false)
             .with_window_level(self.window_level());
@@ -3158,11 +3210,30 @@ impl LinAmpApp {
                     self.prefs.save();
                 }
 
+                ui.add_space(8.0);
+                ui.strong("Appearance");
+                let mut disable_cur = self.prefs.disable_skin_cursors;
+                if ui
+                    .checkbox(&mut disable_cur, "Disable Skin Cursors")
+                    .changed()
+                {
+                    self.prefs.disable_skin_cursors = disable_cur;
+                    self.prefs.save();
+                    // Drop the custom cursors immediately when turning the option
+                    // off; re-enabling reapplies them as windows are hovered.
+                    if disable_cur {
+                        self.clear_skin_cursors();
+                    } else {
+                        self.cur_cursor = [None; 3];
+                    }
+                }
+
                 ui.add_space(10.0);
                 if ui.button("Close").clicked() {
                     close = true;
                 }
             });
+            self.apply_base_cursor(ctx, "LinAmp Preferences");
             if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }
@@ -3206,6 +3277,7 @@ impl LinAmpApp {
                         self.ui_library(ui);
                     });
             }
+            self.apply_base_cursor(ctx, "LinAmp Library");
             if ctx.input(|i| i.viewport().close_requested()) {
                 close = true;
             }
@@ -3813,6 +3885,7 @@ impl LinAmpApp {
                     cp(&mut ed.v2.comment, &ed.v1.comment);
                 }
             });
+            self.apply_base_cursor(ctx, "LinAmp — File Info");
             // Window-close (the title-bar X): discard without saving. Escape is
             // handled at the top of the panel, before the fields can swallow it.
             if ctx.input(|i| i.viewport().close_requested()) {
@@ -3934,6 +4007,7 @@ impl LinAmpApp {
                     close = true;
                 }
             });
+            self.apply_base_cursor(ctx, "LinAmp — Jump to file");
         });
         if let Some(i) = play {
             self.play_index(i);
@@ -3989,6 +4063,7 @@ impl LinAmpApp {
                     close = true;
                 }
             });
+            self.apply_base_cursor(ctx, "LinAmp — Jump to time");
         });
         if let Some(s) = seek_to {
             self.player.seek(Duration::from_secs_f32(s));
@@ -4142,6 +4217,9 @@ impl LinAmpApp {
     /// Update `win`'s X cursor from the skin's `.cur` set based on the hovered
     /// region, only when it changes. No-op for skins without custom cursors.
     fn update_cursor(&mut self, ctx: &egui::Context, win: ClWin, rect: egui::Rect) {
+        if self.prefs.disable_skin_cursors {
+            return;
+        }
         if !self.classic.as_ref().map(|c| c.has_cursors()).unwrap_or(false) {
             return;
         }
@@ -4171,6 +4249,49 @@ impl LinAmpApp {
             }
         }
         self.cur_cursor[idx] = Some(name);
+    }
+
+    /// Apply the skin's base cursor to an auxiliary window (library, editor,
+    /// preferences, the jump dialogs) so the custom cursor is uniform across every
+    /// window, not just the classic ones. These windows use real egui widgets, so
+    /// egui otherwise swaps the cursor per widget; we pin egui's cursor to a
+    /// constant (stopping it from fighting us) and reassert the skin cursor each
+    /// frame the pointer is inside. Call at the end of the window's viewport
+    /// closure, with that viewport's `ctx`.
+    fn apply_base_cursor(&self, ctx: &egui::Context, title: &str) {
+        if self.prefs.disable_skin_cursors {
+            return;
+        }
+        let Some(cs) = self.classic.as_ref() else {
+            return;
+        };
+        if !cs.has_cursors() || ctx.pointer_hover_pos().is_none() {
+            return;
+        }
+        // Keep egui from re-applying its own cursor (which would overwrite ours):
+        // a constant icon means egui-winit only sets it once.
+        ctx.set_cursor_icon(egui::CursorIcon::Default);
+        if let Some(ci) = cs.cursor("normal") {
+            set_window_cursor(title, &format!("{}:normal", self.theme.name), ci);
+        }
+    }
+
+    /// Restore the system cursor on every window — used when the custom-cursor
+    /// option is switched off, since our `XDefineCursor` otherwise persists.
+    fn clear_skin_cursors(&mut self) {
+        for title in [
+            "LinAmp",
+            "LinAmp Equalizer",
+            "LinAmp Playlist",
+            "LinAmp Library",
+            "LinAmp Preferences",
+            "LinAmp — File Info",
+            "LinAmp — Jump to file",
+            "LinAmp — Jump to time",
+        ] {
+            unset_window_cursor(title);
+        }
+        self.cur_cursor = [None; 3];
     }
 
     fn render_classic(&mut self, ctx: &egui::Context) {
