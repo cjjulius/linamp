@@ -534,6 +534,22 @@ mod x11util {
         });
     }
 
+    /// Unmap (hide) the window titled `title` immediately. Used to drop the
+    /// always-on-top context-menu popup before a modal file dialog opens, since
+    /// the blocking dialog freezes the egui loop before it can close the viewport.
+    /// egui tears the window down on the next frame once `self.popup` is cleared.
+    pub fn unmap_window(title: &str) {
+        with_conn(|xlib, d| unsafe {
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            let win = window_by_title(xlib, d, title);
+            if win != 0 {
+                (xlib.XUnmapWindow)(d, win);
+                (xlib.XFlush)(d);
+            }
+            (xlib.XSetErrorHandler)(prev);
+        });
+    }
+
     /// Set the cursor of the window titled `title` to a custom ARGB cursor.
     /// `cache_key` dedupes the created X cursor (e.g. "skin:posbar"). Premultiplied
     /// ARGB pixels, row-major. Returns false when unavailable (caller no-ops).
@@ -654,6 +670,10 @@ pub(crate) fn hide_popup_window() {
                 ShowWindow(h, SW_HIDE);
             }
         }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::unmap_window("LinAmp Menu");
     }
 }
 
