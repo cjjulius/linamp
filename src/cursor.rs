@@ -7,6 +7,9 @@
 //! premultiplied ARGB ready for `XcursorImage`.
 
 /// A decoded cursor: premultiplied ARGB pixels (row-major) plus the hotspot.
+// Fields are consumed only by the X11 cursor path; on other platforms the data
+// is decoded but not applied (custom cursors are X11-only for now).
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
 #[derive(Clone)]
 pub struct CursorImage {
     pub width: u32,
