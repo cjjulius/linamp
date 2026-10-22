@@ -564,6 +564,16 @@ fn gen_glyph(c: char) -> Option<(u32, u32)> {
 /// Copy `src[sx..+sw, sy..+sh]` to `dst` at (dx,dy), skipping pixels that match the
 /// key colour (transparent).
 fn blit_keyed(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, sy: u32, w: u32, h: u32, key: [u8; 3]) {
+    // Treat pixels *near* the key colour as transparent too, not just an exact
+    // match. This drops faint anti-alias fringe pixels that were blended toward
+    // the key (e.g. the base skin's stray ~20%-blend cyan dot above the "Y") —
+    // such fringing is an artifact once the glyph is composited onto the title
+    // bar's own (non-key) background. The tolerance stays well below any real
+    // glyph pixel (white/grey letters), so letters are untouched.
+    const TOL: u8 = 60;
+    let near_key = |p: &image::Rgba<u8>| {
+        p[0].abs_diff(key[0]) <= TOL && p[1].abs_diff(key[1]) <= TOL && p[2].abs_diff(key[2]) <= TOL
+    };
     let (sw, sh) = src.dimensions();
     let (dw, dh) = dst.dimensions();
     for j in 0..h {
@@ -576,9 +586,9 @@ fn blit_keyed(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, s
             if sxx >= sw || dxx < 0 || dxx >= dw as i32 {
                 continue;
             }
-            let p = *src.get_pixel(sxx, syy);
-            if [p[0], p[1], p[2]] != key {
-                dst.put_pixel(dxx as u32, dyy as u32, p);
+            let p = src.get_pixel(sxx, syy);
+            if !near_key(p) {
+                dst.put_pixel(dxx as u32, dyy as u32, *p);
             }
         }
     }
