@@ -2,7 +2,7 @@
 /dist
 /scratch_brand
 /preview
-/.claude
+/qa-tools
 /skins/backup
 *.output
 __pycache__/
