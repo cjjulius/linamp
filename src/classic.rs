@@ -594,12 +594,67 @@ fn gen_title_width(title: &str) -> u32 {
         .saturating_sub(1)
 }
 
+/// Per-glyph `(src_x, width)` for A–Z on font row `fy`, measured from the BMP as
+/// runs of non-`key` columns. Returns `Some` only when exactly 26 glyphs are found
+/// — so a skin whose font layout differs from the base (e.g. Green Dimension's
+/// fixed-width grid) renders from its own metrics, while anything unexpected
+/// (including the base skin, whose X and Y touch → 25 runs) falls back to the
+/// fixed `GEN_FONT` table.
+fn gen_font_table(g: &RgbaImage, fy: u32, key: [u8; 3]) -> Option<Vec<(u32, u32)>> {
+    if fy + GEN_FONT_H > g.height() {
+        return None;
+    }
+    let col_ink = |x: u32| {
+        (0..GEN_FONT_H).any(|j| {
+            let p = g.get_pixel(x, fy + j);
+            [p[0], p[1], p[2]] != key
+        })
+    };
+    let mut runs = Vec::new();
+    let (w, mut x) = (g.width(), 0);
+    while x < w {
+        if col_ink(x) {
+            let start = x;
+            while x < w && col_ink(x) {
+                x += 1;
+            }
+            runs.push((start, x - start));
+        } else {
+            x += 1;
+        }
+    }
+    (runs.len() == 26).then_some(runs)
+}
+
 /// Draw `title` (uppercased) centred in the title bar using GEN.BMP's own font.
 fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool) {
     let up = title.to_uppercase();
     let fy = if active { GEN_FONT_Y_SELECTED } else { GEN_FONT_Y_NORMAL };
+    // The font's transparency key varies per skin (cyan in the base skin, maroon
+    // in Green Dimension, …). Sample it from the 1px margin left of the first
+    // glyph (A starts at x=1) on this font row; fall back to the common cyan when
+    // the skin's GEN.BMP is too short to hold the font rows.
+    let key = if fy < g.height() {
+        let p = g.get_pixel(0, fy);
+        [p[0], p[1], p[2]]
+    } else {
+        GEN_KEY
+    };
+    // Prefer the skin's measured glyph metrics; fall back to the fixed table.
+    let table = gen_font_table(g, fy, key);
+    let glyph = |c: char| -> Option<(u32, u32)> {
+        c.is_ascii_uppercase().then(|| {
+            let i = (c as u8 - b'A') as usize;
+            table.as_ref().map(|t| t[i]).unwrap_or(GEN_FONT[i])
+        })
+    };
+    let total: u32 = up
+        .chars()
+        .map(|c| if c == ' ' { 4 } else { glyph(c).map(|(_, w)| w + 1).unwrap_or(0) })
+        .sum::<u32>()
+        .saturating_sub(1);
     let dw = dst.width();
-    let mut x = (dw / 2).saturating_sub((gen_title_width(title) + 1) / 2);
+    let mut x = (dw / 2).saturating_sub((total + 1) / 2);
     // Nudged up 1px from the geometric centre: the title band sits a touch high.
     let ty = GEN_TB_H.saturating_sub(GEN_FONT_H) / 2 - 1;
     for c in up.chars() {
@@ -607,8 +662,8 @@ fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool)
             x += 4;
             continue;
         }
-        if let Some((sx, w)) = gen_glyph(c) {
-            blit_keyed(dst, g, x as i32, ty as i32, sx, fy, w, GEN_FONT_H, GEN_KEY);
+        if let Some((sx, w)) = glyph(c) {
+            blit_keyed(dst, g, x as i32, ty as i32, sx, fy, w, GEN_FONT_H, key);
             x += w + 1;
         }
     }
