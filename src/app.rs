@@ -855,19 +855,17 @@ fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visible: bool) {
         let _ = (eq_visible, pl_visible, lib_visible);
         #[allow(non_snake_case)]
         extern "system" {
-            fn FindWindowW(class: *const u16, title: *const u16) -> isize;
             fn SetWindowLongPtrW(hwnd: isize, index: i32, new: isize) -> isize;
             fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
         }
         const GWLP_HWNDPARENT: i32 = -8;
-        let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+        let main = find_window("LinAmp");
+        if main == 0 {
+            return;
+        }
         unsafe {
-            let main = FindWindowW(std::ptr::null(), wide("LinAmp").as_ptr());
-            if main == 0 {
-                return;
-            }
             for title in ["LinAmp Equalizer", "LinAmp Playlist", "LinAmp Library"] {
-                let child = FindWindowW(std::ptr::null(), wide(title).as_ptr());
+                let child = find_window(title);
                 if child != 0 && GetWindowLongPtrW(child, GWLP_HWNDPARENT) != main {
                     SetWindowLongPtrW(child, GWLP_HWNDPARENT, main);
                 }
@@ -892,7 +890,7 @@ fn hide_popup_window() {
             fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
         }
         const SW_HIDE: i32 = 0;
-        let h = find_menu_window();
+        let h = find_window("LinAmp Menu");
         if h != 0 {
             unsafe {
                 ShowWindow(h, SW_HIDE);
@@ -901,19 +899,21 @@ fn hide_popup_window() {
     }
 }
 
-/// Find the borderless context-menu window ("LinAmp Menu") by title, or 0 when it
-/// isn't currently shown. Windows only; the single place that locates the popup.
+/// A NUL-terminated UTF-16 string for the Win32 `*W` APIs.
 #[cfg(windows)]
-fn find_menu_window() -> isize {
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Find a top-level window by exact title, or 0 when it isn't present. The single
+/// place that declares `FindWindowW`. Windows only.
+#[cfg(windows)]
+fn find_window(title: &str) -> isize {
     #[allow(non_snake_case)]
     extern "system" {
         fn FindWindowW(class: *const u16, title: *const u16) -> isize;
     }
-    let wide: Vec<u16> = "LinAmp Menu"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    unsafe { FindWindowW(std::ptr::null(), wide.as_ptr()) }
+    unsafe { FindWindowW(std::ptr::null(), wide(title).as_ptr()) }
 }
 
 /// Clip the borderless context-menu window to a rounded rectangle (corner radius
@@ -932,7 +932,7 @@ fn round_popup_window(radius: i32) -> bool {
             fn DeleteObject(obj: isize) -> i32;
         }
         unsafe {
-            let h = find_menu_window();
+            let h = find_window("LinAmp Menu");
             if h == 0 {
                 return false;
             }
@@ -986,16 +986,14 @@ fn set_window_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
 fn win_set_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
     #[allow(non_snake_case)]
     extern "system" {
-        fn FindWindowW(class: *const u16, title: *const u16) -> isize;
         fn CreateRectRgn(x1: i32, y1: i32, x2: i32, y2: i32) -> isize;
         fn CombineRgn(dst: isize, src1: isize, src2: isize, mode: i32) -> i32;
         fn SetWindowRgn(hwnd: isize, hrgn: isize, redraw: i32) -> i32;
         fn DeleteObject(o: isize) -> i32;
     }
     const RGN_OR: i32 = 2;
-    let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    let hwnd = find_window(title);
     unsafe {
-        let hwnd = FindWindowW(std::ptr::null(), wide.as_ptr());
         if hwnd == 0 {
             return;
         }
@@ -1165,6 +1163,10 @@ pub struct LinAmpApp {
     pl_search: String,
     sort_key: SortKey,
     lib_query: String,
+    /// When set, a search is pending: run it once the clock passes this instant,
+    /// so fast typing coalesces into one query instead of a full-table LIKE scan
+    /// per keystroke (#96).
+    lib_search_at: Option<std::time::Instant>,
     lib_results: Vec<crate::playlist::Track>,
     /// Star rating (0–5) for each row in `lib_results`, parallel-indexed. Only
     /// populated for the Top Rated view, where the list shows the stars.
@@ -1425,6 +1427,7 @@ impl LinAmpApp {
             pl_search: String::new(),
             sort_key: SortKey::Custom,
             lib_query: String::new(),
+            lib_search_at: None,
             lib_results: Vec::new(),
             lib_ratings: Vec::new(),
             lib_col_fr: [0.28, 0.42],
@@ -1549,6 +1552,14 @@ impl LinAmpApp {
                 app.playlist.add_file(PathBuf::from(t));
             }
             app.playlist.current = session.current.filter(|&i| i < app.playlist.len());
+            // Restore volume/balance; absent (older session) keeps the default.
+            if let Some(v) = session.volume {
+                app.player.set_volume(v.clamp(0.0, 1.0));
+            }
+            if let Some(b) = session.balance {
+                app.balance = b.clamp(-1.0, 1.0);
+                app.player.set_balance(app.balance);
+            }
             if app.prefs.tag_on_load {
                 app.playlist.load_all();
             }
@@ -2328,6 +2339,8 @@ impl LinAmpApp {
                 .map(|t| t.path.display().to_string())
                 .collect(),
             current: self.playlist.current,
+            volume: Some(self.player.volume()),
+            balance: Some(self.balance),
             pl_width: Some(self.pl_px_w),
             pl_height: Some(self.pl_px_h),
             eq_enabled: self.eq_enabled,
@@ -3220,13 +3233,11 @@ impl LinAmpApp {
                     self.apply_eq_slider(er, ny);
                 }
                 if let Some(grab) = self.resize_pl {
-                    let hstep = 29.0;
-                    let raw_h = (ny + grab.y).max(87.0);
-                    self.pl_px_h = ((raw_h / hstep).round() * hstep).max(87.0);
-                    let wstep = 25.0;
-                    let min_w = classic::MAIN_W as f32;
-                    let raw_w = (nx + grab.x).max(min_w);
-                    self.pl_px_w = (((raw_w - min_w) / wstep).round() * wstep + min_w).max(min_w);
+                    // Resize smoothly during the drag; the 25/29px grid is applied
+                    // only on release (#61), so the rows don't re-flow and jiggle
+                    // as the size jumps between grid steps mid-drag.
+                    self.pl_px_h = (ny + grab.y).max(87.0);
+                    self.pl_px_w = (nx + grab.x).max(classic::MAIN_W as f32);
                 }
             }
         }
@@ -3244,6 +3255,16 @@ impl LinAmpApp {
         }
 
         if released {
+            if self.resize_pl.is_some() {
+                // Quantize to Winamp's 25px (width) / 29px (height) grid now the
+                // drag is finished (#61).
+                let hstep = 29.0;
+                self.pl_px_h = ((self.pl_px_h / hstep).round() * hstep).max(87.0);
+                let wstep = 25.0;
+                let min_w = classic::MAIN_W as f32;
+                self.pl_px_w =
+                    (((self.pl_px_w - min_w) / wstep).round() * wstep + min_w).max(min_w);
+            }
             self.resize_pl = None;
             if let Some(l) = local {
                 let nx = l.x / self.scale;
@@ -4977,7 +4998,10 @@ impl LinAmpApp {
                 self.marquee_offset.to_bits().hash(&mut h);
                 self.playlist.current.hash(&mut h);
                 if let Some(t) = self.playlist.current_track() {
-                    t.display_name().hash(&mut h);
+                    // Hash the title fields directly; display_name() would allocate
+                    // a String every frame on this animating path.
+                    t.artist.hash(&mut h);
+                    t.title.hash(&mut h);
                     t.bitrate.hash(&mut h);
                     t.sample_rate.hash(&mut h);
                     t.channels.hash(&mut h);
@@ -5023,13 +5047,15 @@ impl LinAmpApp {
                     (Some(i) == self.playlist.current).hash(&mut h);
                     self.pl_selection.contains(&i).hash(&mut h);
                     if let Some(t) = self.playlist.tracks.get(i) {
-                        t.display_name().hash(&mut h);
+                        t.artist.hash(&mut h);
+                        t.title.hash(&mut h);
                         t.duration.hash(&mut h);
                     }
                 }
                 if self.pl_shade {
                     if let Some(t) = self.playlist.current_track() {
-                        t.display_name().hash(&mut h);
+                        t.artist.hash(&mut h);
+                        t.title.hash(&mut h);
                         t.duration.hash(&mut h);
                     }
                 }
@@ -5934,6 +5960,11 @@ impl LinAmpApp {
     /// the docked window and the modern `View::Library` tab.
     fn ui_library(&mut self, ui: &mut egui::Ui) {
         use crate::library::LibView;
+        // Run a debounced search once the typing pause has elapsed (#96).
+        if self.lib_search_at.is_some_and(|at| std::time::Instant::now() >= at) {
+            self.lib_search_at = None;
+            self.refresh_library();
+        }
         // Mirror the classic popups' click-away for the library's egui menus: a
         // primary press on another window (or a classic popup opening) clears the
         // open flag, so the gate below stops attaching the menu and it closes. The
@@ -6534,16 +6565,22 @@ impl LinAmpApp {
         }
         if do_clear {
             self.lib_query.clear();
+            self.lib_search_at = None; // cancel any pending debounced search
             self.refresh_library();
         }
         if search_changed {
-            self.refresh_library();
+            // Debounce: wait for a typing pause before the (un-indexable) LIKE
+            // scan, so holding/typing fast runs one query, not one per keystroke.
+            let delay = std::time::Duration::from_millis(150);
+            self.lib_search_at = Some(std::time::Instant::now() + delay);
+            ui.ctx().request_repaint_after(delay);
         }
         if let Some(v) = nav_click {
             self.lib_nav = v;
             self.lib_sel_artists.clear();
             self.lib_sel_albums.clear();
             self.lib_query.clear();
+            self.lib_search_at = None; // nav refreshes now; drop any pending search
             self.lib_sort = None; // each view starts in its natural order
             self.refresh_library();
         }

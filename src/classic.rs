@@ -521,14 +521,10 @@ impl ClassicSkin {
 /// its general-purpose windows (the Media Library). Colours are single pixels on
 /// the top row of GENEX.BMP; see the GENEX colour map (x=48,50,… at y=0).
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)] // several colours are consumed by the live library integration
 pub struct GenColors {
     pub item_bg: [u8; 3],
     pub item_fg: [u8; 3],
     pub window_bg: [u8; 3],
-    pub button_text: [u8; 3],
-    pub window_text: [u8; 3],
-    pub divider: [u8; 3],
     pub selection: [u8; 3],
     pub header_bg: [u8; 3],
     pub header_text: [u8; 3],
@@ -568,6 +564,16 @@ fn gen_glyph(c: char) -> Option<(u32, u32)> {
 /// Copy `src[sx..+sw, sy..+sh]` to `dst` at (dx,dy), skipping pixels that match the
 /// key colour (transparent).
 fn blit_keyed(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, sy: u32, w: u32, h: u32, key: [u8; 3]) {
+    // Treat pixels *near* the key colour as transparent too, not just an exact
+    // match. This drops faint anti-alias fringe pixels that were blended toward
+    // the key (e.g. the base skin's stray ~20%-blend cyan dot above the "Y") —
+    // such fringing is an artifact once the glyph is composited onto the title
+    // bar's own (non-key) background. The tolerance stays well below any real
+    // glyph pixel (white/grey letters), so letters are untouched.
+    const TOL: u8 = 60;
+    let near_key = |p: &image::Rgba<u8>| {
+        p[0].abs_diff(key[0]) <= TOL && p[1].abs_diff(key[1]) <= TOL && p[2].abs_diff(key[2]) <= TOL
+    };
     let (sw, sh) = src.dimensions();
     let (dw, dh) = dst.dimensions();
     for j in 0..h {
@@ -580,9 +586,9 @@ fn blit_keyed(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, s
             if sxx >= sw || dxx < 0 || dxx >= dw as i32 {
                 continue;
             }
-            let p = *src.get_pixel(sxx, syy);
-            if [p[0], p[1], p[2]] != key {
-                dst.put_pixel(dxx as u32, dyy as u32, p);
+            let p = src.get_pixel(sxx, syy);
+            if !near_key(p) {
+                dst.put_pixel(dxx as u32, dyy as u32, *p);
             }
         }
     }
@@ -598,21 +604,77 @@ fn gen_title_width(title: &str) -> u32 {
         .saturating_sub(1)
 }
 
+/// Per-glyph `(src_x, width)` for A–Z on font row `fy`, measured from the BMP as
+/// runs of non-`key` columns. Returns `Some` only when exactly 26 glyphs are found
+/// — so a skin whose font layout differs from the base (e.g. Green Dimension's
+/// fixed-width grid) renders from its own metrics, while anything unexpected
+/// (including the base skin, whose X and Y touch → 25 runs) falls back to the
+/// fixed `GEN_FONT` table.
+fn gen_font_table(g: &RgbaImage, fy: u32, key: [u8; 3]) -> Option<Vec<(u32, u32)>> {
+    if fy + GEN_FONT_H > g.height() {
+        return None;
+    }
+    let col_ink = |x: u32| {
+        (0..GEN_FONT_H).any(|j| {
+            let p = g.get_pixel(x, fy + j);
+            [p[0], p[1], p[2]] != key
+        })
+    };
+    let mut runs = Vec::new();
+    let (w, mut x) = (g.width(), 0);
+    while x < w {
+        if col_ink(x) {
+            let start = x;
+            while x < w && col_ink(x) {
+                x += 1;
+            }
+            runs.push((start, x - start));
+        } else {
+            x += 1;
+        }
+    }
+    (runs.len() == 26).then_some(runs)
+}
+
 /// Draw `title` (uppercased) centred in the title bar using GEN.BMP's own font.
 fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool) {
     let up = title.to_uppercase();
     let fy = if active { GEN_FONT_Y_SELECTED } else { GEN_FONT_Y_NORMAL };
+    // The font's transparency key varies per skin (cyan in the base skin, maroon
+    // in Green Dimension, …). Sample it from the 1px margin left of the first
+    // glyph (A starts at x=1) on this font row; fall back to the common cyan when
+    // the skin's GEN.BMP is too short to hold the font rows.
+    let key = if fy < g.height() {
+        let p = g.get_pixel(0, fy);
+        [p[0], p[1], p[2]]
+    } else {
+        GEN_KEY
+    };
+    // Prefer the skin's measured glyph metrics; fall back to the fixed table.
+    let table = gen_font_table(g, fy, key);
+    let glyph = |c: char| -> Option<(u32, u32)> {
+        c.is_ascii_uppercase().then(|| {
+            let i = (c as u8 - b'A') as usize;
+            table.as_ref().map(|t| t[i]).unwrap_or(GEN_FONT[i])
+        })
+    };
+    let total: u32 = up
+        .chars()
+        .map(|c| if c == ' ' { 4 } else { glyph(c).map(|(_, w)| w + 1).unwrap_or(0) })
+        .sum::<u32>()
+        .saturating_sub(1);
     let dw = dst.width();
-    let mut x = (dw / 2).saturating_sub((gen_title_width(title) + 1) / 2);
-    // Nudged up 1px from the geometric centre: the title band sits a touch high.
-    let ty = GEN_TB_H.saturating_sub(GEN_FONT_H) / 2 - 1;
+    let mut x = (dw / 2).saturating_sub((total + 1) / 2);
+    // Nudged up 2px from the geometric centre so the caption lines up with the
+    // classic windows' own title text (which sits a little above centre).
+    let ty = GEN_TB_H.saturating_sub(GEN_FONT_H) / 2 - 2;
     for c in up.chars() {
         if c == ' ' {
             x += 4;
             continue;
         }
-        if let Some((sx, w)) = gen_glyph(c) {
-            blit_keyed(dst, g, x as i32, ty as i32, sx, fy, w, GEN_FONT_H, GEN_KEY);
+        if let Some((sx, w)) = glyph(c) {
+            blit_keyed(dst, g, x as i32, ty as i32, sx, fy, w, GEN_FONT_H, key);
             x += w + 1;
         }
     }
@@ -659,9 +721,6 @@ impl ClassicSkin {
             item_bg: px(48),
             item_fg: px(50),
             window_bg: px(52),
-            button_text: px(54),
-            window_text: px(56),
-            divider: px(58),
             selection: px(60),
             header_bg: px(62),
             header_text: px(64),
@@ -670,7 +729,6 @@ impl ClassicSkin {
 
     /// Inset (top, right, bottom, left) in native px that the gen frame occupies,
     /// i.e. where the window content area begins.
-    #[allow(dead_code)] // used by the live library integration
     pub fn gen_insets() -> (u32, u32, u32, u32) {
         (GEN_TB_H, GEN_BORDER_R, GEN_BORDER_B, GEN_BORDER_L)
     }
