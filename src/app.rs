@@ -1187,15 +1187,6 @@ pub struct LinAmpApp {
     foc_eq: bool,
     foc_pl: bool,
     foc_lib: bool,
-    /// Mutual exclusion between a classic popup and a Media Library context menu
-    /// (egui menus aren't tracked by `any_popup_open()`). A monotonic counter
-    /// stamps each menu as it opens so the newer one wins; `lib_menu_live` is set
-    /// by `ui_library` each frame, and `suppress_lib_menu` asks it to dismiss.
-    menu_epoch: u64,
-    popup_epoch: u64,
-    lib_menu_epoch: u64,
-    lib_menu_live: bool,
-    suppress_lib_menu: bool,
     /// Hash of the last-persisted session, so we only write on actual changes.
     session_sig: Option<u64>,
     /// Frames remaining in a graceful shutdown (set when the WM asks to close),
@@ -1402,11 +1393,6 @@ impl LinAmpApp {
             foc_eq: false,
             foc_pl: false,
             foc_lib: false,
-            menu_epoch: 0,
-            popup_epoch: 0,
-            lib_menu_epoch: 0,
-            lib_menu_live: false,
-            suppress_lib_menu: false,
             session_sig: None,
             quit_countdown: None,
             drag: None,
@@ -2802,10 +2788,6 @@ impl LinAmpApp {
     fn open_popup_in(&mut self, kind: Popup, win: ClWin, local: egui::Pos2) {
         self.popup = Some((kind, win, local));
         self.popup_fresh = true;
-        // Stamp this open so the newest-menu-wins resolution can close an older
-        // Media Library context menu (see `render_classic`).
-        self.menu_epoch += 1;
-        self.popup_epoch = self.menu_epoch;
     }
 
     /// Per-window input in local (viewport) coordinates.
@@ -4777,23 +4759,6 @@ impl LinAmpApp {
             });
         }
 
-        // A classic popup and a Media Library context menu must never be open
-        // together. `any_popup_open()` doesn't track egui context menus, so we
-        // resolve by recency instead: whichever opened later wins. The library's
-        // open menu (`lib_menu_live`, set in `ui_library`) can only be closed from
-        // inside its own closure, so when the classic popup is newer we ask it to
-        // dismiss itself next frame (`suppress_lib_menu`); when the library menu is
-        // newer we drop the classic popup here and now.
-        if self.popup.is_some() && self.lib_menu_live {
-            if self.popup_epoch > self.lib_menu_epoch {
-                self.suppress_lib_menu = true;
-            } else {
-                self.popup = None;
-            }
-        } else {
-            self.suppress_lib_menu = false;
-        }
-
         // The options / playlist menus render in their own (unclipped) window.
         self.draw_popup_viewport(ctx);
 
@@ -5696,6 +5661,7 @@ impl LinAmpApp {
                                 to_play = Some(i);
                             }
                             resp.context_menu(|ui| {
+                                ui.set_min_width(150.0);
                                 if ui.button("Play").clicked() {
                                     to_play = Some(i);
                                     ui.close_menu();
@@ -5792,11 +5758,6 @@ impl LinAmpApp {
     /// the docked window and the modern `View::Library` tab.
     fn ui_library(&mut self, ui: &mut egui::Ui) {
         use crate::library::LibView;
-        // Mutual exclusion with a classic popup menu (see `render_classic`):
-        // `suppress` asks our context menus to dismiss themselves; `menu_live`
-        // reports whether any is open this frame, folded back into `self` at the end.
-        let suppress = self.suppress_lib_menu;
-        let mut menu_live = false;
         // When the skin ships general-purpose window art (GEN.BMP/GENEX.BMP), use
         // its defined Media Library colour scheme; otherwise fall back to the
         // palette sampled from the skin.
@@ -6026,15 +5987,16 @@ impl LinAmpApp {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                 artist_click = Some((Some(name.clone()), ctrl));
                                             }
-                                            if resp.secondary_clicked() && !sel {
-                                                artist_click = Some((Some(name.clone()), false));
+                                            if resp.secondary_clicked() {
+                                                self.popup = None;
+                                                if !sel {
+                                                    artist_click = Some((Some(name.clone()), false));
+                                                }
                                             }
                                             resp.context_menu(|ui| {
-                                                if suppress {
-                                                    ui.close_menu();
-                                                    return;
-                                                }
-                                                menu_live = true;
+                                                // Keep the menu from squishing to a
+                                                // sliver when opened near a screen edge.
+                                                ui.set_min_width(170.0);
                                                 if ui.button(format!("Play all by \u{201c}{name}\u{201d}")).clicked() {
                                                     lib_action = Some(LibAction::PlayArtist(name.clone()));
                                                     ui.close_menu();
@@ -6073,15 +6035,14 @@ impl LinAmpApp {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                 album_click = Some((Some(name.clone()), ctrl));
                                             }
-                                            if resp.secondary_clicked() && !sel {
-                                                album_click = Some((Some(name.clone()), false));
+                                            if resp.secondary_clicked() {
+                                                self.popup = None;
+                                                if !sel {
+                                                    album_click = Some((Some(name.clone()), false));
+                                                }
                                             }
                                             resp.context_menu(|ui| {
-                                                if suppress {
-                                                    ui.close_menu();
-                                                    return;
-                                                }
-                                                menu_live = true;
+                                                ui.set_min_width(170.0);
                                                 if ui.button(format!("Play all from \u{201c}{label}\u{201d}")).clicked() {
                                                     lib_action = Some(LibAction::PlayAlbum(name.clone()));
                                                     ui.close_menu();
@@ -6266,18 +6227,20 @@ impl LinAmpApp {
                                     // Right-click selects the row it targets (unless it's
                                     // already part of the selection) so the menu's target
                                     // is highlighted.
-                                    if resp.secondary_clicked() && !selected {
-                                        track_click = Some((i, false));
+                                    if resp.secondary_clicked() {
+                                        // A library right-click dismisses any open
+                                        // classic playlist/options popup so the two
+                                        // menu systems don't overlap.
+                                        self.popup = None;
+                                        if !selected {
+                                            track_click = Some((i, false));
+                                        }
                                     }
                                     if resp.double_clicked() {
                                         dbl_track = Some(i);
                                     }
                                     resp.context_menu(|ui| {
-                                        if suppress {
-                                            ui.close_menu();
-                                            return;
-                                        }
-                                        menu_live = true;
+                                        ui.set_min_width(180.0);
                                         // Act on the selection when the right-clicked
                                         // row is part of it; otherwise just this row.
                                         let rows: Vec<usize> = if selected && !self.lib_sel_tracks.is_empty() {
@@ -6524,14 +6487,6 @@ impl LinAmpApp {
                 self.play_index(idx);
             }
         }
-
-        // Stamp a newly opened library menu so the newest-wins resolution in
-        // `render_classic` can close an older classic popup (and vice versa).
-        if menu_live && !self.lib_menu_live {
-            self.menu_epoch += 1;
-            self.lib_menu_epoch = self.menu_epoch;
-        }
-        self.lib_menu_live = menu_live;
     }
 }
 
