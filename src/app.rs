@@ -2590,12 +2590,11 @@ impl LinAmpApp {
             screen.y = screen.y.min(vr.max.y - h).max(vr.min.y);
         }
         let mut close = false;
-        // A visible 1px border so the menu reads as a distinct surface over a
-        // similarly-coloured background (matching the Media Library's menu).
-        let border = egui::Stroke::new(
-            1.0_f32,
-            skin::blend(self.theme.bg, skin::contrast_text(self.theme.bg), 0.45),
-        );
+        // Border that matches the Media Library menu: the same themed window
+        // stroke colour (set in apply_theme). Painted below at double width because
+        // the rounded region clips its outer half at the window edge, leaving a
+        // full-looking line (a plain 1px stroke reads a pixel thin there).
+        let border = egui::Stroke::new(2.0_f32, ctx.style().visuals.window_stroke.color);
         let sort = |app: &mut Self, k: SortKey| {
             app.sort_key = k;
             app.sort_playlist();
@@ -2883,15 +2882,15 @@ impl LinAmpApp {
                         }
                     }
                 });
-            // Outline, painted just inside the window edge so the rounded region
-            // (which clips exactly at the edge) doesn't cut it off — this gives the
-            // menu the same distinct border the Media Library's menu has.
+            // Outline at the window edge; the rounded region clips the stroke's
+            // outer half, leaving a clean ~1px line following the rounded corners —
+            // the same distinct border the Media Library's menu has.
             let vr = ctx.screen_rect();
             ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
                 egui::Id::new("linamp_menu_border"),
             ))
-            .rect_stroke(vr.shrink(0.5), egui::Rounding::same(6.0), border);
+            .rect_stroke(vr, egui::Rounding::same(6.0), border);
             self.apply_base_cursor(ctx, "LinAmp Menu");
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
@@ -6982,6 +6981,9 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
     // (used by the tag editor's tabs, buttons and field frames).
     let outline = egui::Stroke::new(1.0_f32, skin::blend(t.bg, skin::contrast_text(t.bg), 0.35));
     visuals.widgets.noninteractive.bg_stroke = outline;
+    // Menu/popup outline, so the Media Library menu and the classic popups share
+    // one theme-derived border colour.
+    visuals.window_stroke = outline;
     visuals.override_text_color = Some(skin::contrast_text(t.bg));
     ctx.set_visuals(visuals);
 
