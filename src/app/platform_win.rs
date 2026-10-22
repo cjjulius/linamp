@@ -817,7 +817,8 @@ pub(crate) fn unset_window_cursor(title: &str) {
     }
 }
 
-#[cfg(test)]
+// `wide` is a Win32-only helper, so its test only builds on Windows.
+#[cfg(all(test, windows))]
 mod tests {
     #[test]
     fn wide_is_nul_terminated_utf16() {
