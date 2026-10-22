@@ -90,16 +90,118 @@ fn idx_win(i: usize) -> ClWin {
 
 /// Window size (points) for a popup menu, from its item/separator count.
 fn popup_dims(kind: Popup) -> (f32, f32) {
-    let (buttons, seps) = match kind {
-        Popup::Options => (9, 3),
-        Popup::PlAdd => (2, 0),
-        Popup::PlRem => (3, 0),
-        Popup::PlSel => (3, 0),
-        Popup::PlMisc => (4, 0),
-        Popup::PlList => (3, 0),
-        Popup::EqPresets => (crate::eq::PRESETS.len() as i32, 0),
+    let (buttons, seps, width) = match kind {
+        Popup::Options => (9, 3, 182.0),
+        Popup::PlAdd => (2, 0, 182.0),
+        Popup::PlRem => (3, 0, 182.0),
+        Popup::PlSel => (3, 0, 182.0),
+        Popup::PlMisc => (4, 0, 182.0),
+        Popup::PlList => (3, 0, 182.0),
+        // Right-click context menus: wider to fit the shortcut column.
+        Popup::PlTrack => (6, 2, 210.0),
+        Popup::PlVoid => (12, 4, 210.0),
+        Popup::EqPresets => (crate::eq::PRESETS.len() as i32, 0, 182.0),
     };
-    (182.0, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
+    (width, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
+}
+
+/// A context-menu row: `label` on the left, dimmed `shortcut` on the right, full
+/// width so shortcuts align to the menu's right edge. Returns true when clicked.
+/// Colours match an egui `Button` (and so the Media Library's context menus) —
+/// the themed override text colour and the standard hover highlight — so every
+/// menu shares one look across skins.
+fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
+    let w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 18.0), egui::Sense::click());
+    let vis = ui.visuals().widgets.style(&resp).clone();
+    // egui buttons colour their text with `override_text_color` when the skin
+    // sets one (apply_theme does); fall back to the widget's own colour.
+    let text_color = ui
+        .visuals()
+        .override_text_color
+        .unwrap_or_else(|| vis.text_color());
+    let weak = ui.visuals().weak_text_color();
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let p = ui.painter();
+    if resp.hovered() {
+        p.rect_filled(rect, vis.rounding, vis.weak_bg_fill);
+    }
+    p.text(
+        rect.left_center() + egui::vec2(8.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font.clone(),
+        text_color,
+    );
+    if !shortcut.is_empty() {
+        p.text(
+            rect.right_center() - egui::vec2(8.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            shortcut,
+            font,
+            weak,
+        );
+    }
+    resp.clicked()
+}
+
+/// Core of "Play Next": move the rows in `sel` to sit just after `current` (or to
+/// the front when nothing is playing), preserving their ascending order. Mutates
+/// `tracks` and returns the current track's new index, the index where the moved
+/// block starts, and how many rows actually moved (duplicates/out-of-range
+/// ignored) so the caller can re-select the block. Pure, single-pass, and
+/// index-based so it can be unit-tested.
+fn reorder_play_next<T>(
+    tracks: &mut Vec<T>,
+    current: Option<usize>,
+    sel: &[usize],
+) -> (Option<usize>, usize, usize) {
+    let n = tracks.len();
+    let mut want = vec![false; n];
+    let mut n_sel = 0usize;
+    for &i in sel {
+        if i < n && !std::mem::replace(&mut want[i], true) {
+            n_sel += 1;
+        }
+    }
+    if n_sel == 0 {
+        return (current, 0, 0);
+    }
+    let cur_selected = current.map(|c| want[c]).unwrap_or(false);
+    // One pass: split into the moved block (selected rows, in order) and the kept
+    // rows, tracking where the surviving current track lands among the kept.
+    let mut moved = Vec::with_capacity(n_sel);
+    let mut kept: Vec<T> = Vec::with_capacity(n - n_sel);
+    let mut cur_in_kept = None;
+    for (i, t) in std::mem::take(tracks).into_iter().enumerate() {
+        if want[i] {
+            moved.push(t);
+        } else {
+            if Some(i) == current {
+                cur_in_kept = Some(kept.len());
+            }
+            kept.push(t);
+        }
+    }
+    // Insert after the current track, or at the front when it's gone/absent.
+    let insert_at = if cur_selected {
+        0
+    } else {
+        cur_in_kept.map(|c| c + 1).unwrap_or(0)
+    };
+    let tail = kept.split_off(insert_at);
+    kept.extend(moved);
+    kept.extend(tail);
+    *tracks = kept;
+    let final_cur = if cur_selected {
+        // The current track moved to the front block; its offset there is its rank
+        // among the selected rows.
+        Some(want[..current.unwrap()].iter().filter(|&&x| x).count())
+    } else {
+        // Inserting right after the kept current track leaves its index unchanged.
+        cur_in_kept
+    };
+    (final_cur, insert_at, n_sel)
 }
 
 /// If `r` overlaps `keep` (the main window), the position `r` should move to so it
@@ -778,6 +880,87 @@ fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visible: bool) {
     }
 }
 
+/// Hide the borderless context-menu popup window immediately, so a modal file
+/// dialog opened from a menu item (which blocks the egui loop before egui can
+/// close the viewport) appears above it rather than under the always-on-top menu.
+/// The window is torn down by egui on the next frame once `self.popup` is cleared.
+fn hide_popup_window() {
+    #[cfg(windows)]
+    {
+        #[allow(non_snake_case)]
+        extern "system" {
+            fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
+        }
+        const SW_HIDE: i32 = 0;
+        let h = find_menu_window();
+        if h != 0 {
+            unsafe {
+                ShowWindow(h, SW_HIDE);
+            }
+        }
+    }
+}
+
+/// Find the borderless context-menu window ("LinAmp Menu") by title, or 0 when it
+/// isn't currently shown. Windows only; the single place that locates the popup.
+#[cfg(windows)]
+fn find_menu_window() -> isize {
+    #[allow(non_snake_case)]
+    extern "system" {
+        fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+    }
+    let wide: Vec<u16> = "LinAmp Menu"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe { FindWindowW(std::ptr::null(), wide.as_ptr()) }
+}
+
+/// Clip the borderless context-menu window to a rounded rectangle (corner radius
+/// `radius` physical px) so its corners are cut away at the OS level — otherwise
+/// the square opaque window shows its (dark) clear colour outside the frame's
+/// rounded fill. Returns true once the region is applied, so the caller stops
+/// retrying. Windows only; a no-op (and `true`) elsewhere.
+fn round_popup_window(radius: i32) -> bool {
+    #[cfg(windows)]
+    {
+        #[allow(non_snake_case)]
+        extern "system" {
+            fn GetClientRect(hwnd: isize, rect: *mut [i32; 4]) -> i32;
+            fn CreateRoundRectRgn(x1: i32, y1: i32, x2: i32, y2: i32, w: i32, h: i32) -> isize;
+            fn SetWindowRgn(hwnd: isize, rgn: isize, redraw: i32) -> i32;
+            fn DeleteObject(obj: isize) -> i32;
+        }
+        unsafe {
+            let h = find_menu_window();
+            if h == 0 {
+                return false;
+            }
+            let mut r = [0i32; 4]; // left, top, right, bottom (client is 0,0..w,h)
+            if GetClientRect(h, &mut r) == 0 {
+                return false;
+            }
+            let (w, ht) = (r[2] - r[0], r[3] - r[1]);
+            if w <= 0 || ht <= 0 {
+                return false;
+            }
+            let rgn = CreateRoundRectRgn(0, 0, w + 1, ht + 1, radius * 2, radius * 2);
+            // On success the window takes ownership of `rgn`; on failure it does
+            // not, so we must free it or leak a GDI region on every retry.
+            if SetWindowRgn(h, rgn, 1) == 0 {
+                DeleteObject(rgn);
+                return false;
+            }
+            true
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = radius;
+        true
+    }
+}
+
 /// Apply (or clear) a window-shape mask to a classic window by title. X11 (Shape
 /// extension) and Windows (`SetWindowRgn`); a no-op elsewhere.
 fn set_window_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
@@ -887,6 +1070,10 @@ enum Popup {
     PlSel,
     PlMisc,
     PlList,
+    /// Right-click on a playlist track.
+    PlTrack,
+    /// Right-click on empty playlist space.
+    PlVoid,
     EqPresets,
 }
 
@@ -1060,8 +1247,15 @@ pub struct LinAmpApp {
     pl_first: usize,
     pl_selection: HashSet<usize>,
     pl_last_click: Option<(usize, Instant)>,
+    /// The row a playlist right-click targeted, so the track menu's Play / Edit
+    /// act on exactly that row rather than the selection's min / current track.
+    pl_ctx_row: Option<usize>,
     popup: Option<(Popup, ClWin, egui::Pos2)>,
     popup_fresh: bool,
+    /// Whether the popup window's rounded region has been applied for the current
+    /// popup, so we apply it once (retrying only until it succeeds) instead of
+    /// rebuilding the GDI region every frame the menu is open.
+    popup_rounded: bool,
     main_shade: bool,
     eq_shade: bool,
     pl_shade: bool,
@@ -1086,6 +1280,16 @@ pub struct LinAmpApp {
     foc_eq: bool,
     foc_pl: bool,
     foc_lib: bool,
+    /// Whether a Media Library context menu is open. Tracked by us because the
+    /// library is its own OS window and egui's menu never sees clicks in the
+    /// other windows. Set on a library right-click, cleared when a classic window
+    /// is *primary*-pressed (mirroring the classic popups' click-away) or when a
+    /// classic popup opens — never on a secondary click, which is the library's
+    /// own open gesture.
+    lib_menu_open: bool,
+    /// One-shot: a classic window was primary-pressed (or a classic popup opened)
+    /// this frame, so an open library menu should dismiss. Consumed in `ui_library`.
+    classic_clicked: bool,
     /// Hash of the last-persisted session, so we only write on actual changes.
     session_sig: Option<u64>,
     /// Frames remaining in a graceful shutdown (set when the WM asks to close),
@@ -1274,8 +1478,10 @@ impl LinAmpApp {
             pl_first: 0,
             pl_selection: HashSet::new(),
             pl_last_click: None,
+            pl_ctx_row: None,
             popup: None,
             popup_fresh: false,
+            popup_rounded: false,
             main_shade: false,
             eq_shade: false,
             pl_shade: false,
@@ -1291,6 +1497,8 @@ impl LinAmpApp {
             foc_eq: false,
             foc_pl: false,
             foc_lib: false,
+            lib_menu_open: false,
+            classic_clicked: false,
             session_sig: None,
             quit_countdown: None,
             drag: None,
@@ -1567,6 +1775,7 @@ impl LinAmpApp {
     // ---- file dialogs ------------------------------------------------------
 
     fn open_files(&mut self) {
+        hide_popup_window();
         if let Some(paths) = rfd::FileDialog::new()
             .add_filter(
                 "Audio",
@@ -1622,6 +1831,7 @@ impl LinAmpApp {
     }
 
     fn open_folder(&mut self) {
+        hide_popup_window();
         if let Some(dir) = rfd::FileDialog::new().pick_folder() {
             let was_empty = self.playlist.is_empty();
             self.playlist.add_folder(&dir);
@@ -1638,6 +1848,7 @@ impl LinAmpApp {
             self.status = "Playlist is empty.".to_string();
             return;
         }
+        hide_popup_window();
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("M3U playlist", &["m3u"])
             .add_filter("PLS playlist", &["pls"])
@@ -1652,6 +1863,7 @@ impl LinAmpApp {
     }
 
     fn load_playlist_dialog(&mut self) {
+        hide_popup_window();
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Playlists", &["m3u", "m3u8", "pls"])
             .pick_file()
@@ -2293,6 +2505,24 @@ impl LinAmpApp {
             .collect();
     }
 
+    /// "Play Next": move the selected track(s) to play right after the current
+    /// one (or to the front when nothing is playing), keeping their order. The
+    /// moved block becomes the new selection.
+    fn play_next_selected(&mut self) {
+        if self.pl_selection.is_empty() {
+            return;
+        }
+        let sel: Vec<usize> = self.pl_selection.iter().copied().collect();
+        let (cur, start, count) =
+            reorder_play_next(&mut self.playlist.tracks, self.playlist.current, &sel);
+        if count == 0 {
+            return;
+        }
+        self.playlist.current = cur;
+        self.pl_selection = (start..start + count).collect();
+        self.sort_key = SortKey::Custom;
+    }
+
     /// Remove tracks: when `keep` is true keep only selected (crop), else remove
     /// the selected ones. Preserves the current track by path where possible.
     fn pl_remove(&mut self, keep: bool) {
@@ -2374,9 +2604,25 @@ impl LinAmpApp {
         let Some((kind, owner, pos)) = self.popup else {
             return;
         };
-        let screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
         let (w, h) = popup_dims(kind);
+        let mut screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
+        // Keep the menu fully on the desktop: a tall menu (e.g. the empty-area
+        // menu) opened near the bottom/right edge would otherwise spill off-screen
+        // with its lower entries unreachable.
+        if let Some(vr) = virtual_desktop_rect(ctx) {
+            screen.x = screen.x.min(vr.max.x - w).max(vr.min.x);
+            screen.y = screen.y.min(vr.max.y - h).max(vr.min.y);
+        }
         let mut close = false;
+        // Corner radius (logical px) for the fill, border and window region. A hair
+        // larger than egui's default 6 because the window's corners are cut by a
+        // hard-edged (non-antialiased) GDI region, which reads tighter than the
+        // Media Library menu's smooth 6px round — 8 makes them match visually.
+        let corner = 8.0_f32;
+        // Border that matches the Media Library menu: the same themed window
+        // stroke colour (set in apply_theme), a crisp 1px line painted just inside
+        // the window edge (see below).
+        let border = egui::Stroke::new(1.0_f32, ctx.style().visuals.window_stroke.color);
         let sort = |app: &mut Self, k: SortKey| {
             app.sort_key = k;
             app.sort_playlist();
@@ -2388,14 +2634,32 @@ impl LinAmpApp {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
-            .with_window_level(self.window_level());
+            // Always on top: the EQ/playlist/library windows are *owned* by the main
+            // window (group_child_windows), which keeps them above sibling windows,
+            // and clicking one re-raises it — so only a system-topmost popup stays
+            // reliably above them. A modal dialog opened from a menu item would then
+            // sit under the menu, so dialog actions hide the menu first (see
+            // `hide_popup_window`).
+            .with_window_level(egui::WindowLevel::AlwaysOnTop);
         let id = egui::ViewportId::from_hash_of("linamp_popup");
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
             egui::CentralPanel::default()
-                .frame(egui::Frame::popup(&style))
+                .frame(
+                    // Rounded fill lining up with the window's rounded region (see
+                    // `round_popup_window`). No stroke here — a frame stroke sits on
+                    // the window edge and gets clipped by the region, so the border
+                    // is painted just inside the edge below instead.
+                    egui::Frame::popup(&style)
+                        .stroke(egui::Stroke::NONE)
+                        .rounding(corner)
+                        .shadow(egui::epaint::Shadow::NONE),
+                )
                 .show(ctx, |ui| {
-                    let item = |ui: &mut egui::Ui, label: &str| ui.button(label).clicked();
+                    // Route every classic menu through the shared `menu_item` look
+                    // (frameless, themed) so the options/fly-out menus match the
+                    // playlist and library context menus.
+                    let item = |ui: &mut egui::Ui, label: &str| menu_item(ui, label, "");
                     match kind {
                         Popup::Options => {
                             if item(ui, "Open file(s)…") {
@@ -2539,6 +2803,103 @@ impl LinAmpApp {
                                 close = true;
                             }
                         }
+                        Popup::PlTrack => {
+                            // Target the right-clicked row (falling back to the
+                            // selection's first) so Play / Edit act on what the user
+                            // actually clicked, even within a multi-selection.
+                            let target = self
+                                .pl_ctx_row
+                                .or_else(|| self.pl_selection.iter().min().copied());
+                            if menu_item(ui, "Play", "Enter") {
+                                if let Some(i) = target {
+                                    self.play_index(i);
+                                }
+                                close = true;
+                            }
+                            if menu_item(ui, "Play Next", "") {
+                                self.play_next_selected();
+                                close = true;
+                            }
+                            ui.separator();
+                            if menu_item(ui, "Edit file tags…", "Alt+3") {
+                                match target {
+                                    Some(i) => self.open_tag_editor_at(i),
+                                    None => self.open_tag_editor(),
+                                }
+                                close = true;
+                            }
+                            if menu_item(ui, "Explore folder", "") {
+                                if let Some(t) = target.and_then(|i| self.playlist.tracks.get(i)) {
+                                    open_in_file_manager(&t.path);
+                                }
+                                close = true;
+                            }
+                            ui.separator();
+                            if menu_item(ui, "Remove", "Del") {
+                                self.pl_remove(false);
+                                close = true;
+                            }
+                            if menu_item(ui, "Crop (keep selected)", "") {
+                                self.pl_remove(true);
+                                close = true;
+                            }
+                        }
+                        Popup::PlVoid => {
+                            if menu_item(ui, "Add file(s)…", "Ins") {
+                                self.open_files();
+                                close = true;
+                            }
+                            if menu_item(ui, "Add folder…", "Shift+L") {
+                                self.open_folder();
+                                close = true;
+                            }
+                            ui.separator();
+                            if menu_item(ui, "Select all", "Ctrl+A") {
+                                self.pl_select_all();
+                                close = true;
+                            }
+                            if menu_item(ui, "Select none", "") {
+                                self.pl_selection.clear();
+                                close = true;
+                            }
+                            if menu_item(ui, "Invert selection", "") {
+                                self.pl_invert_selection();
+                                close = true;
+                            }
+                            ui.separator();
+                            if menu_item(ui, "Sort by title", "") {
+                                sort(self, SortKey::Title);
+                                close = true;
+                            }
+                            if menu_item(ui, "Sort by artist", "") {
+                                sort(self, SortKey::Artist);
+                                close = true;
+                            }
+                            if menu_item(ui, "Sort by album", "") {
+                                sort(self, SortKey::Album);
+                                close = true;
+                            }
+                            if menu_item(ui, "Sort by duration", "") {
+                                sort(self, SortKey::Duration);
+                                close = true;
+                            }
+                            ui.separator();
+                            if menu_item(ui, "Remove all", "") {
+                                self.playlist.clear();
+                                self.pl_selection.clear();
+                                self.player.stop();
+                                close = true;
+                            }
+                            ui.separator();
+                            if menu_item(ui, "Save list…", "") {
+                                self.save_playlist_dialog();
+                                close = true;
+                            }
+                            if menu_item(ui, "Load list…", "") {
+                                self.load_playlist_dialog();
+                                close = true;
+                            }
+                        }
                         Popup::EqPresets => {
                             for (i, (name, _, _)) in crate::eq::PRESETS.iter().enumerate() {
                                 if item(ui, name) {
@@ -2549,11 +2910,35 @@ impl LinAmpApp {
                         }
                     }
                 });
+            // Outline just inside the window edge — a stroke centred on the edge
+            // has its inner half render invisibly on low-contrast skins once the
+            // rounded region clips the outer half, so inset the whole 1px line one
+            // point in (rounding one less than the region's) where it can't be
+            // clipped, giving the same distinct border the Media Library's menu has.
+            let vr = ctx.screen_rect().shrink(1.0);
+            ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("linamp_menu_border"),
+            ))
+            .rect_stroke(vr, egui::Rounding::same(corner - 1.0), border);
             self.apply_base_cursor(ctx, "LinAmp Menu");
+            // Escape closes the menu. The popup is a separate always-on-top OS
+            // window that can hold focus, in which case `handle_window_input`
+            // (which only runs for the classic windows) never sees the key — so
+            // the popup viewport must handle Escape itself.
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }
         });
+
+        // Round the window's corners to match the frame's rounding (scaled to
+        // physical pixels for the current DPI). Applied once per popup — retried
+        // each frame only until it succeeds — rather than rebuilt every frame.
+        if !self.popup_rounded
+            && round_popup_window((corner * ctx.pixels_per_point()).round() as i32)
+        {
+            self.popup_rounded = true;
+        }
 
         self.popup_fresh = false;
         if close {
@@ -2564,6 +2949,12 @@ impl LinAmpApp {
     fn open_popup_in(&mut self, kind: Popup, win: ClWin, local: egui::Pos2) {
         self.popup = Some((kind, win, local));
         self.popup_fresh = true;
+        // New popup window (or a resize to a different menu): re-apply the rounded
+        // region on the next frame.
+        self.popup_rounded = false;
+        // Opening a classic popup dismisses an open Media Library menu, so the two
+        // menu systems are never up at once.
+        self.classic_clicked = true;
     }
 
     /// Per-window input in local (viewport) coordinates.
@@ -2590,14 +2981,56 @@ impl LinAmpApp {
             ClWin::Pl => self.pl_shade,
         };
 
+        // A primary press on any classic window also dismisses an open Media
+        // Library menu (its own OS window never sees the click). Keyed on the
+        // primary press only — the same gesture that dismisses a classic popup —
+        // so the library's own right-click (secondary) doesn't trip it.
+        if pressed {
+            self.classic_clicked = true;
+        }
+
         // Clicking any main window dismisses an open menu (click-away).
         if pressed && self.popup.is_some() && !self.popup_fresh {
+            self.popup = None;
+        }
+        // Escape closes an open menu. The popup no longer steals focus, so its own
+        // viewport won't see the key — the focused window catches it here instead.
+        if self.popup.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.popup = None;
         }
 
         if secondary && win == ClWin::Main {
             if let Some(l) = local {
                 self.open_popup_in(Popup::Options, win, l);
+            }
+        }
+
+        // Right-click on the playlist list area: a track menu when a row is under
+        // the cursor, otherwise the playlist-management menu for empty space.
+        if secondary && win == ClWin::Pl && !shaded {
+            if let Some(l) = local {
+                let nx = l.x / self.scale;
+                let ny = l.y / self.scale;
+                if let Some(classic::PlRegion::List) =
+                    classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h)
+                {
+                    let row = classic::pl_row_at(ny, self.pl_first);
+                    if row < self.playlist.len() {
+                        // Winamp rule: right-clicking a row outside the current
+                        // selection selects just it; a row already in the
+                        // selection keeps the whole multi-selection.
+                        if !self.pl_selection.contains(&row) {
+                            self.pl_selection.clear();
+                            self.pl_selection.insert(row);
+                        }
+                        // Remember the exact row so Play / Edit target it even when
+                        // it's one of several selected.
+                        self.pl_ctx_row = Some(row);
+                        self.open_popup_in(Popup::PlTrack, win, l);
+                    } else {
+                        self.open_popup_in(Popup::PlVoid, win, l);
+                    }
+                }
             }
         }
 
@@ -3516,6 +3949,12 @@ impl LinAmpApp {
             self.status = "No track to edit.".into();
             return;
         };
+        self.open_tag_editor_at(index);
+    }
+
+    /// Open the tag editor for a specific playlist row, so saving writes back to
+    /// that row (and refreshes its cached metadata).
+    fn open_tag_editor_at(&mut self, index: usize) {
         let Some(track) = self.playlist.tracks.get(index) else {
             return;
         };
@@ -4376,7 +4815,14 @@ impl LinAmpApp {
         if !self.lib_visible {
             self.foc_lib = false;
         }
-        self.app_focused = self.foc_root || self.foc_eq || self.foc_pl || self.foc_lib;
+        // A classic popup menu is part of our app: keep the app considered focused
+        // while one is open so the windows stay on their active title bars instead
+        // of dimming (the popup is a separate OS window that may take focus).
+        self.app_focused = self.foc_root
+            || self.foc_eq
+            || self.foc_pl
+            || self.foc_lib
+            || self.popup.is_some();
 
         // Root viewport = main window.
         self.render_window(ctx, ClWin::Main);
@@ -4783,6 +5229,7 @@ impl LinAmpApp {
     // ---- skins / theming ---------------------------------------------------
 
     fn load_skin_dialog(&mut self, ctx: &egui::Context) {
+        hide_popup_window();
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Winamp skin", &["wsz", "zip"])
             .pick_file()
@@ -5348,6 +5795,9 @@ impl LinAmpApp {
         let current = self.playlist.current;
 
         let mut to_play: Option<usize> = None;
+        let mut to_play_next: Option<usize> = None;
+        let mut to_tag: Option<usize> = None;
+        let mut to_explore: Option<std::path::PathBuf> = None;
         let mut to_remove: Option<usize> = None;
         let mut reorder: Option<(usize, usize)> = None;
 
@@ -5387,10 +5837,25 @@ impl LinAmpApp {
                                 to_play = Some(i);
                             }
                             resp.context_menu(|ui| {
+                                ui.set_min_width(150.0);
                                 if ui.button("Play").clicked() {
                                     to_play = Some(i);
                                     ui.close_menu();
                                 }
+                                if ui.button("Play Next").clicked() {
+                                    to_play_next = Some(i);
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                if ui.button("Edit file tags…").clicked() {
+                                    to_tag = Some(i);
+                                    ui.close_menu();
+                                }
+                                if ui.button("Explore folder").clicked() {
+                                    to_explore = Some(track.path.clone());
+                                    ui.close_menu();
+                                }
+                                ui.separator();
                                 if ui.button("Remove").clicked() {
                                     to_remove = Some(i);
                                     ui.close_menu();
@@ -5443,6 +5908,19 @@ impl LinAmpApp {
         if let Some(i) = to_play {
             self.play_index(i);
         }
+        if let Some(i) = to_play_next {
+            let (cur, _, _) =
+                reorder_play_next(&mut self.playlist.tracks, self.playlist.current, &[i]);
+            self.playlist.current = cur;
+            self.sort_key = SortKey::Custom;
+        }
+        if let Some(i) = to_tag {
+            // Edit by row index (not path) so saving refreshes the playlist entry.
+            self.open_tag_editor_at(i);
+        }
+        if let Some(p) = to_explore {
+            open_in_file_manager(&p);
+        }
         if let Some(i) = to_remove {
             self.playlist.remove(i);
         }
@@ -5456,6 +5934,22 @@ impl LinAmpApp {
     /// the docked window and the modern `View::Library` tab.
     fn ui_library(&mut self, ui: &mut egui::Ui) {
         use crate::library::LibView;
+        // Mirror the classic popups' click-away for the library's egui menus: a
+        // primary press on another window (or a classic popup opening) clears the
+        // open flag, so the gate below stops attaching the menu and it closes. The
+        // menu never gates on focus, so a right-click always opens it. Modern mode
+        // is a single viewport whose menus close on their own.
+        if self.classic_clicked {
+            self.lib_menu_open = false;
+        }
+        self.classic_clicked = false;
+        // Clicking anywhere in the Library window also dismisses an open classic
+        // popup (playlist/options menu) — the classic click-away only runs for the
+        // classic windows, so it never sees clicks landing here.
+        if ui.ctx().input(|i| i.pointer.any_pressed()) {
+            self.popup = None;
+        }
+        let lib_menu_base = self.ui_mode != UiMode::Classic || self.lib_menu_open;
         // When the skin ships general-purpose window art (GEN.BMP/GENEX.BMP), use
         // its defined Media Library colour scheme; otherwise fall back to the
         // palette sampled from the skin.
@@ -5685,10 +6179,18 @@ impl LinAmpApp {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                 artist_click = Some((Some(name.clone()), ctrl));
                                             }
-                                            if resp.secondary_clicked() && !sel {
-                                                artist_click = Some((Some(name.clone()), false));
+                                            if resp.secondary_clicked() {
+                                                self.popup = None;
+                                                self.lib_menu_open = true;
+                                                if !sel {
+                                                    artist_click = Some((Some(name.clone()), false));
+                                                }
                                             }
+                                            if lib_menu_base || resp.secondary_clicked() {
                                             resp.context_menu(|ui| {
+                                                // Keep the menu from squishing to a
+                                                // sliver when opened near a screen edge.
+                                                ui.set_min_width(170.0);
                                                 if ui.button(format!("Play all by \u{201c}{name}\u{201d}")).clicked() {
                                                     lib_action = Some(LibAction::PlayArtist(name.clone()));
                                                     ui.close_menu();
@@ -5698,6 +6200,7 @@ impl LinAmpApp {
                                                     ui.close_menu();
                                                 }
                                             });
+                                            }
                                         }
                                     });
                                 // Album column.
@@ -5727,10 +6230,16 @@ impl LinAmpApp {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                 album_click = Some((Some(name.clone()), ctrl));
                                             }
-                                            if resp.secondary_clicked() && !sel {
-                                                album_click = Some((Some(name.clone()), false));
+                                            if resp.secondary_clicked() {
+                                                self.popup = None;
+                                                self.lib_menu_open = true;
+                                                if !sel {
+                                                    album_click = Some((Some(name.clone()), false));
+                                                }
                                             }
+                                            if lib_menu_base || resp.secondary_clicked() {
                                             resp.context_menu(|ui| {
+                                                ui.set_min_width(170.0);
                                                 if ui.button(format!("Play all from \u{201c}{label}\u{201d}")).clicked() {
                                                     lib_action = Some(LibAction::PlayAlbum(name.clone()));
                                                     ui.close_menu();
@@ -5740,6 +6249,7 @@ impl LinAmpApp {
                                                     ui.close_menu();
                                                 }
                                             });
+                                            }
                                         }
                                     });
                             });
@@ -5915,13 +6425,22 @@ impl LinAmpApp {
                                     // Right-click selects the row it targets (unless it's
                                     // already part of the selection) so the menu's target
                                     // is highlighted.
-                                    if resp.secondary_clicked() && !selected {
-                                        track_click = Some((i, false));
+                                    if resp.secondary_clicked() {
+                                        // A library right-click dismisses any open
+                                        // classic playlist/options popup, and marks
+                                        // the library menu open for the gate.
+                                        self.popup = None;
+                                        self.lib_menu_open = true;
+                                        if !selected {
+                                            track_click = Some((i, false));
+                                        }
                                     }
                                     if resp.double_clicked() {
                                         dbl_track = Some(i);
                                     }
+                                    if lib_menu_base || resp.secondary_clicked() {
                                     resp.context_menu(|ui| {
+                                        ui.set_min_width(180.0);
                                         // Act on the selection when the right-clicked
                                         // row is part of it; otherwise just this row.
                                         let rows: Vec<usize> = if selected && !self.lib_sel_tracks.is_empty() {
@@ -5981,6 +6500,7 @@ impl LinAmpApp {
                                             ui.close_menu();
                                         }
                                     });
+                                    }
                                 }
                             });
                     });
@@ -6503,6 +7023,13 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
     // (used by the tag editor's tabs, buttons and field frames).
     let outline = egui::Stroke::new(1.0_f32, skin::blend(t.bg, skin::contrast_text(t.bg), 0.35));
     visuals.widgets.noninteractive.bg_stroke = outline;
+    // Menu/popup outline, so the Media Library menu and the classic popups share
+    // one theme-derived border colour.
+    visuals.window_stroke = outline;
+    // Drop the drop shadow from egui popups/menus (Media Library, dropdowns) so
+    // they match the classic context menus, which — being separate borderless OS
+    // windows — can't render one (see issue #108).
+    visuals.popup_shadow = egui::epaint::Shadow::NONE;
     visuals.override_text_color = Some(skin::contrast_text(t.bg));
     ctx.set_visuals(visuals);
 
@@ -6514,7 +7041,63 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_time;
+    use super::{parse_time, reorder_play_next};
+
+    #[test]
+    fn play_next_moves_selection_after_current() {
+        let mut v = vec![0, 1, 2, 3, 4];
+        // current = 0 (unselected), move rows 3 & 4 to sit right after it.
+        let (cur, start, n) = reorder_play_next(&mut v, Some(0), &[3, 4]);
+        assert_eq!(v, vec![0, 3, 4, 1, 2]);
+        assert_eq!(cur, Some(0));
+        assert_eq!(start, 1);
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn play_next_no_current_goes_to_front() {
+        let mut v = vec![10, 11, 12];
+        let (cur, start, n) = reorder_play_next(&mut v, None, &[2]);
+        assert_eq!(v, vec![12, 10, 11]);
+        assert_eq!(cur, None);
+        assert_eq!(start, 0);
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn play_next_ignores_duplicate_and_out_of_range() {
+        let mut v = vec![0, 1, 2, 3];
+        // Duplicate 3 and an out-of-range index collapse to a single moved row.
+        let (cur, start, n) = reorder_play_next(&mut v, Some(0), &[3, 3, 99]);
+        assert_eq!(v, vec![0, 3, 1, 2]);
+        assert_eq!(cur, Some(0));
+        assert_eq!(start, 1);
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn play_next_current_in_selection_goes_to_front() {
+        let mut v = vec![0, 1, 2, 3];
+        // current = 2 is itself selected: block [1,2] moves to the front, and
+        // current follows to its offset within the block.
+        let (cur, start, n) = reorder_play_next(&mut v, Some(2), &[1, 2]);
+        assert_eq!(v, vec![1, 2, 0, 3]);
+        assert_eq!(start, 0);
+        assert_eq!(cur, Some(1));
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn play_next_preserves_order_and_shifts_current() {
+        let mut v = vec![0, 1, 2, 3, 4];
+        // current = 4, move rows 0 & 2: after removal current shifts to 2, the
+        // block is inserted after it in ascending order.
+        let (cur, start, n) = reorder_play_next(&mut v, Some(4), &[0, 2]);
+        assert_eq!(v, vec![1, 3, 4, 0, 2]);
+        assert_eq!(cur, Some(2));
+        assert_eq!(start, 3);
+        assert_eq!(n, 2);
+    }
 
     #[test]
     fn parse_time_formats() {
