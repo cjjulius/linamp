@@ -2619,11 +2619,12 @@ impl LinAmpApp {
             let style = ctx.style();
             egui::CentralPanel::default()
                 .frame(
+                    // Rounded fill lining up with the window's rounded region (see
+                    // `round_popup_window`). No stroke here — a frame stroke sits on
+                    // the window edge and gets clipped by the region, so the border
+                    // is painted just inside the edge below instead.
                     egui::Frame::popup(&style)
-                        .stroke(border)
-                        // Rounded fill + stroke that line up with the window's
-                        // rounded region (see `round_popup_window`); the region
-                        // clips the square window's corners so they aren't opaque.
+                        .stroke(egui::Stroke::NONE)
                         .rounding(6.0)
                         .shadow(egui::epaint::Shadow::NONE),
                 )
@@ -2882,6 +2883,15 @@ impl LinAmpApp {
                         }
                     }
                 });
+            // Outline, painted just inside the window edge so the rounded region
+            // (which clips exactly at the edge) doesn't cut it off — this gives the
+            // menu the same distinct border the Media Library's menu has.
+            let vr = ctx.screen_rect();
+            ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("linamp_menu_border"),
+            ))
+            .rect_stroke(vr.shrink(0.5), egui::Rounding::same(6.0), border);
             self.apply_base_cursor(ctx, "LinAmp Menu");
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
