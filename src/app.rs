@@ -6984,6 +6984,10 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
     // Menu/popup outline, so the Media Library menu and the classic popups share
     // one theme-derived border colour.
     visuals.window_stroke = outline;
+    // Drop the drop shadow from egui popups/menus (Media Library, dropdowns) so
+    // they match the classic context menus, which — being separate borderless OS
+    // windows — can't render one (see issue #108).
+    visuals.popup_shadow = egui::epaint::Shadow::NONE;
     visuals.override_text_color = Some(skin::contrast_text(t.bg));
     ctx.set_visuals(visuals);
 
