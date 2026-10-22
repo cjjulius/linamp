@@ -521,14 +521,10 @@ impl ClassicSkin {
 /// its general-purpose windows (the Media Library). Colours are single pixels on
 /// the top row of GENEX.BMP; see the GENEX colour map (x=48,50,… at y=0).
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)] // several colours are consumed by the live library integration
 pub struct GenColors {
     pub item_bg: [u8; 3],
     pub item_fg: [u8; 3],
     pub window_bg: [u8; 3],
-    pub button_text: [u8; 3],
-    pub window_text: [u8; 3],
-    pub divider: [u8; 3],
     pub selection: [u8; 3],
     pub header_bg: [u8; 3],
     pub header_text: [u8; 3],
@@ -659,9 +655,6 @@ impl ClassicSkin {
             item_bg: px(48),
             item_fg: px(50),
             window_bg: px(52),
-            button_text: px(54),
-            window_text: px(56),
-            divider: px(58),
             selection: px(60),
             header_bg: px(62),
             header_text: px(64),
@@ -670,7 +663,6 @@ impl ClassicSkin {
 
     /// Inset (top, right, bottom, left) in native px that the gen frame occupies,
     /// i.e. where the window content area begins.
-    #[allow(dead_code)] // used by the live library integration
     pub fn gen_insets() -> (u32, u32, u32, u32) {
         (GEN_TB_H, GEN_BORDER_R, GEN_BORDER_B, GEN_BORDER_L)
     }

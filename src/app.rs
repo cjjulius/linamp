@@ -855,19 +855,17 @@ fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visible: bool) {
         let _ = (eq_visible, pl_visible, lib_visible);
         #[allow(non_snake_case)]
         extern "system" {
-            fn FindWindowW(class: *const u16, title: *const u16) -> isize;
             fn SetWindowLongPtrW(hwnd: isize, index: i32, new: isize) -> isize;
             fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
         }
         const GWLP_HWNDPARENT: i32 = -8;
-        let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+        let main = find_window("LinAmp");
+        if main == 0 {
+            return;
+        }
         unsafe {
-            let main = FindWindowW(std::ptr::null(), wide("LinAmp").as_ptr());
-            if main == 0 {
-                return;
-            }
             for title in ["LinAmp Equalizer", "LinAmp Playlist", "LinAmp Library"] {
-                let child = FindWindowW(std::ptr::null(), wide(title).as_ptr());
+                let child = find_window(title);
                 if child != 0 && GetWindowLongPtrW(child, GWLP_HWNDPARENT) != main {
                     SetWindowLongPtrW(child, GWLP_HWNDPARENT, main);
                 }
@@ -892,7 +890,7 @@ fn hide_popup_window() {
             fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
         }
         const SW_HIDE: i32 = 0;
-        let h = find_menu_window();
+        let h = find_window("LinAmp Menu");
         if h != 0 {
             unsafe {
                 ShowWindow(h, SW_HIDE);
@@ -901,19 +899,21 @@ fn hide_popup_window() {
     }
 }
 
-/// Find the borderless context-menu window ("LinAmp Menu") by title, or 0 when it
-/// isn't currently shown. Windows only; the single place that locates the popup.
+/// A NUL-terminated UTF-16 string for the Win32 `*W` APIs.
 #[cfg(windows)]
-fn find_menu_window() -> isize {
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Find a top-level window by exact title, or 0 when it isn't present. The single
+/// place that declares `FindWindowW`. Windows only.
+#[cfg(windows)]
+fn find_window(title: &str) -> isize {
     #[allow(non_snake_case)]
     extern "system" {
         fn FindWindowW(class: *const u16, title: *const u16) -> isize;
     }
-    let wide: Vec<u16> = "LinAmp Menu"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    unsafe { FindWindowW(std::ptr::null(), wide.as_ptr()) }
+    unsafe { FindWindowW(std::ptr::null(), wide(title).as_ptr()) }
 }
 
 /// Clip the borderless context-menu window to a rounded rectangle (corner radius
@@ -932,7 +932,7 @@ fn round_popup_window(radius: i32) -> bool {
             fn DeleteObject(obj: isize) -> i32;
         }
         unsafe {
-            let h = find_menu_window();
+            let h = find_window("LinAmp Menu");
             if h == 0 {
                 return false;
             }
@@ -986,16 +986,14 @@ fn set_window_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
 fn win_set_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
     #[allow(non_snake_case)]
     extern "system" {
-        fn FindWindowW(class: *const u16, title: *const u16) -> isize;
         fn CreateRectRgn(x1: i32, y1: i32, x2: i32, y2: i32) -> isize;
         fn CombineRgn(dst: isize, src1: isize, src2: isize, mode: i32) -> i32;
         fn SetWindowRgn(hwnd: isize, hrgn: isize, redraw: i32) -> i32;
         fn DeleteObject(o: isize) -> i32;
     }
     const RGN_OR: i32 = 2;
-    let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    let hwnd = find_window(title);
     unsafe {
-        let hwnd = FindWindowW(std::ptr::null(), wide.as_ptr());
         if hwnd == 0 {
             return;
         }
@@ -5000,7 +4998,10 @@ impl LinAmpApp {
                 self.marquee_offset.to_bits().hash(&mut h);
                 self.playlist.current.hash(&mut h);
                 if let Some(t) = self.playlist.current_track() {
-                    t.display_name().hash(&mut h);
+                    // Hash the title fields directly; display_name() would allocate
+                    // a String every frame on this animating path.
+                    t.artist.hash(&mut h);
+                    t.title.hash(&mut h);
                     t.bitrate.hash(&mut h);
                     t.sample_rate.hash(&mut h);
                     t.channels.hash(&mut h);
@@ -5046,13 +5047,15 @@ impl LinAmpApp {
                     (Some(i) == self.playlist.current).hash(&mut h);
                     self.pl_selection.contains(&i).hash(&mut h);
                     if let Some(t) = self.playlist.tracks.get(i) {
-                        t.display_name().hash(&mut h);
+                        t.artist.hash(&mut h);
+                        t.title.hash(&mut h);
                         t.duration.hash(&mut h);
                     }
                 }
                 if self.pl_shade {
                     if let Some(t) = self.playlist.current_track() {
-                        t.display_name().hash(&mut h);
+                        t.artist.hash(&mut h);
+                        t.title.hash(&mut h);
                         t.duration.hash(&mut h);
                     }
                 }
