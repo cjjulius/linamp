@@ -2568,6 +2568,10 @@ impl LinAmpApp {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
+            // Transparent so the frame's rounded corners reveal what's behind,
+            // instead of a square opaque window hiding them (the Media Library's
+            // menu is rounded because it draws over its own window's content).
+            .with_transparent(true)
             // Always on top: the EQ/playlist/library windows are *owned* by the main
             // window (group_child_windows), which keeps them above sibling windows,
             // and clicking one re-raises it — so only a system-topmost popup stays
