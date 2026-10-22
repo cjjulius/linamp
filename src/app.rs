@@ -2515,7 +2515,11 @@ impl LinAmpApp {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
-            .with_window_level(self.window_level());
+            // Always on top: the EQ/playlist/library windows are *owned* by the
+            // main window (see `group_child_windows`), which keeps them above
+            // ordinary sibling windows. A Normal-level popup would open *under*
+            // the window it was clicked on, so the menu must sit above them all.
+            .with_window_level(egui::WindowLevel::AlwaysOnTop);
         let id = egui::ViewportId::from_hash_of("linamp_popup");
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
