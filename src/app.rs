@@ -866,7 +866,15 @@ fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visible: bool) {
             if main == 0 {
                 return;
             }
-            for title in ["LinAmp Equalizer", "LinAmp Playlist", "LinAmp Library"] {
+            // "LinAmp Menu" is the borderless context-menu popup: owning it by the
+            // main window floats it above the classic windows but still below a
+            // modal dialog opened from a menu item.
+            for title in [
+                "LinAmp Equalizer",
+                "LinAmp Playlist",
+                "LinAmp Library",
+                "LinAmp Menu",
+            ] {
                 let child = FindWindowW(std::ptr::null(), wide(title).as_ptr());
                 if child != 0 && GetWindowLongPtrW(child, GWLP_HWNDPARENT) != main {
                     SetWindowLongPtrW(child, GWLP_HWNDPARENT, main);
@@ -2524,6 +2532,12 @@ impl LinAmpApp {
             screen.y = screen.y.min(vr.max.y - h).max(vr.min.y);
         }
         let mut close = false;
+        // A visible 1px border so the menu reads as a distinct surface over a
+        // similarly-coloured background (matching the Media Library's menu).
+        let border = egui::Stroke::new(
+            1.0_f32,
+            skin::blend(self.theme.bg, skin::contrast_text(self.theme.bg), 0.45),
+        );
         let sort = |app: &mut Self, k: SortKey| {
             app.sort_key = k;
             app.sort_playlist();
@@ -2535,16 +2549,23 @@ impl LinAmpApp {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
-            // Always on top: the EQ/playlist/library windows are *owned* by the
-            // main window (see `group_child_windows`), which keeps them above
-            // ordinary sibling windows. A Normal-level popup would open *under*
-            // the window it was clicked on, so the menu must sit above them all.
-            .with_window_level(egui::WindowLevel::AlwaysOnTop);
+            // Follow the app's window level, and make the menu *owned* by the main
+            // window (see `group_child_windows`) so it floats above the classic
+            // windows — which are also owned by main — without being system-topmost.
+            // Being merely owned (not AlwaysOnTop) lets a modal dialog opened from a
+            // menu item still appear above it.
+            .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_popup");
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
             egui::CentralPanel::default()
-                .frame(egui::Frame::popup(&style))
+                // Inset by 1px so the border stroke lands fully inside the
+                // borderless window instead of being clipped at its edge.
+                .frame(
+                    egui::Frame::popup(&style)
+                        .stroke(border)
+                        .outer_margin(1.0),
+                )
                 .show(ctx, |ui| {
                     // Route every classic menu through the shared `menu_item` look
                     // (frameless, themed) so the options/fly-out menus match the
@@ -5805,6 +5826,12 @@ impl LinAmpApp {
             self.lib_menu_open = false;
         }
         self.classic_clicked = false;
+        // Clicking anywhere in the Library window also dismisses an open classic
+        // popup (playlist/options menu) — the classic click-away only runs for the
+        // classic windows, so it never sees clicks landing here.
+        if ui.ctx().input(|i| i.pointer.any_pressed()) {
+            self.popup = None;
+        }
         let lib_menu_base = self.ui_mode != UiMode::Classic || self.lib_menu_open;
         // When the skin ships general-purpose window art (GEN.BMP/GENEX.BMP), use
         // its defined Media Library colour scheme; otherwise fall back to the
