@@ -146,5 +146,6 @@ Big-ticket items; the full, current backlog is in
 - 🔜 True "modern" (Winamp 3/5 `.wal` freeform) skin engine
 
 ## Keyboard shortcuts
-See the [README](README.md#keyboard-shortcuts) for the implemented set, and
-[SHORTCUTS.md](SHORTCUTS.md) for the full map including planned keys.
+See the [README](README.md#keyboard-shortcuts) for the full list. Planned keys
+(e.g. `Ctrl+L` for streams) are tracked in the feature list above and the issue
+backlog.

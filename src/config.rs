@@ -78,6 +78,10 @@ impl Prefs {
 pub struct Session {
     pub tracks: Vec<String>,
     pub current: Option<usize>,
+    /// Output volume [0,1] and stereo balance [-1,1]. `None` keeps the player's
+    /// default, so a session.json predating these fields isn't forced to silence.
+    pub volume: Option<f32>,
+    pub balance: Option<f32>,
     pub pl_width: Option<f32>,
     pub pl_height: Option<f32>,
     /// Equalizer state, remembered across runs.
@@ -188,6 +192,8 @@ mod tests {
         let s = Session {
             tracks: vec!["a.mp3".into(), "b.flac".into()],
             current: Some(1),
+            volume: Some(0.7),
+            balance: Some(-0.25),
             pl_width: Some(350.0),
             pl_height: Some(232.0),
             eq_enabled: true,
@@ -210,6 +216,8 @@ mod tests {
         let q: Session = serde_json::from_str(&j).unwrap();
         assert_eq!(q.tracks.len(), 2);
         assert_eq!(q.current, Some(1));
+        assert_eq!(q.volume, Some(0.7));
+        assert_eq!(q.balance, Some(-0.25));
         assert_eq!(q.pl_width, Some(350.0));
         assert!(q.eq_enabled && q.eq_auto);
         assert_eq!(q.eq_bands.len(), 10);
