@@ -1891,6 +1891,10 @@ impl LinAmpApp {
         self.classic_tex = None;
         self.eq_tex = None;
         self.pl_tex = None;
+        // Reset cursors so a skin without custom cursors doesn't keep showing the
+        // previous skin's; the per-frame cursor update re-applies for the new skin
+        // if it ships any.
+        self.clear_skin_cursors();
         // Remember this skin for next launch.
         self.skin_path = Some(path.to_path_buf());
         self.prefs.last_skin = Some(path.display().to_string());
@@ -4346,6 +4350,7 @@ impl LinAmpApp {
             "LinAmp — File Info",
             "LinAmp — Jump to file",
             "LinAmp — Jump to time",
+            "LinAmp Menu",
         ] {
             unset_window_cursor(title);
         }

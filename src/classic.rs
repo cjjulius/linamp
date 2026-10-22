@@ -2001,6 +2001,17 @@ mod tests {
     }
 
     #[test]
+    fn skins_load_cursors_including_animated() {
+        // Standard .cur (base) and animated .ani-in-.cur (Nucleo) both decode,
+        // including the "normal" base cursor used on the auxiliary windows.
+        for name in ["linamp_base_skin.wsz", "Nucleo_NLog.wsz"] {
+            let skin = load_skin(name);
+            assert!(skin.has_cursors(), "{name} should load custom cursors");
+            assert!(skin.cursor("normal").is_some(), "{name} missing a normal cursor");
+        }
+    }
+
+    #[test]
     fn base_skin_has_full_slider_bank() {
         // The reference skin ships all 28 gradient sprites.
         assert_eq!(valid_count("linamp_base_skin.wsz"), 28);
