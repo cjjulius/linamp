@@ -105,13 +105,21 @@ fn popup_dims(kind: Popup) -> (f32, f32) {
     (width, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
 }
 
-/// A context-menu row: `label` on the left, dimmed `shortcut` on the right, with
-/// a hover highlight. Returns true when clicked. Kept shorter than the 24pt
-/// per-button budget in [`popup_dims`] so a tall menu never clips its last row.
+/// A context-menu row: `label` on the left, dimmed `shortcut` on the right, full
+/// width so shortcuts align to the menu's right edge. Returns true when clicked.
+/// Colours match an egui `Button` (and so the Media Library's context menus) —
+/// the themed override text colour and the standard hover highlight — so every
+/// menu shares one look across skins.
 fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 18.0), egui::Sense::click());
     let vis = ui.visuals().widgets.style(&resp).clone();
+    // egui buttons colour their text with `override_text_color` when the skin
+    // sets one (apply_theme does); fall back to the widget's own colour.
+    let text_color = ui
+        .visuals()
+        .override_text_color
+        .unwrap_or_else(|| vis.text_color());
     let weak = ui.visuals().weak_text_color();
     let font = egui::TextStyle::Button.resolve(ui.style());
     let p = ui.painter();
@@ -123,7 +131,7 @@ fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
         egui::Align2::LEFT_CENTER,
         label,
         font.clone(),
-        vis.text_color(),
+        text_color,
     );
     if !shortcut.is_empty() {
         p.text(
@@ -5762,6 +5770,12 @@ impl LinAmpApp {
     /// the docked window and the modern `View::Library` tab.
     fn ui_library(&mut self, ui: &mut egui::Ui) {
         use crate::library::LibView;
+        // In classic mode the library is its own OS window, so its egui context
+        // menus don't see clicks in the other windows and would stay open. Gate
+        // them on the library window being focused: clicking any other window
+        // unfocuses it and the menu closes. Modern mode is a single viewport, so
+        // its menus close on their own.
+        let lib_menu_ok = self.ui_mode != UiMode::Classic || self.foc_lib;
         // When the skin ships general-purpose window art (GEN.BMP/GENEX.BMP), use
         // its defined Media Library colour scheme; otherwise fall back to the
         // palette sampled from the skin.
@@ -5997,6 +6011,7 @@ impl LinAmpApp {
                                                     artist_click = Some((Some(name.clone()), false));
                                                 }
                                             }
+                                            if lib_menu_ok {
                                             resp.context_menu(|ui| {
                                                 // Keep the menu from squishing to a
                                                 // sliver when opened near a screen edge.
@@ -6010,6 +6025,7 @@ impl LinAmpApp {
                                                     ui.close_menu();
                                                 }
                                             });
+                                            }
                                         }
                                     });
                                 // Album column.
@@ -6045,6 +6061,7 @@ impl LinAmpApp {
                                                     album_click = Some((Some(name.clone()), false));
                                                 }
                                             }
+                                            if lib_menu_ok {
                                             resp.context_menu(|ui| {
                                                 ui.set_min_width(170.0);
                                                 if ui.button(format!("Play all from \u{201c}{label}\u{201d}")).clicked() {
@@ -6056,6 +6073,7 @@ impl LinAmpApp {
                                                     ui.close_menu();
                                                 }
                                             });
+                                            }
                                         }
                                     });
                             });
@@ -6243,6 +6261,7 @@ impl LinAmpApp {
                                     if resp.double_clicked() {
                                         dbl_track = Some(i);
                                     }
+                                    if lib_menu_ok {
                                     resp.context_menu(|ui| {
                                         ui.set_min_width(180.0);
                                         // Act on the selection when the right-clicked
@@ -6304,6 +6323,7 @@ impl LinAmpApp {
                                             ui.close_menu();
                                         }
                                     });
+                                    }
                                 }
                             });
                     });
