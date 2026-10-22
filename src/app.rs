@@ -889,56 +889,75 @@ fn hide_popup_window() {
     {
         #[allow(non_snake_case)]
         extern "system" {
-            fn FindWindowW(class: *const u16, title: *const u16) -> isize;
             fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
         }
         const SW_HIDE: i32 = 0;
-        let wide: Vec<u16> = "LinAmp Menu".encode_utf16().chain(std::iter::once(0)).collect();
-        unsafe {
-            let h = FindWindowW(std::ptr::null(), wide.as_ptr());
-            if h != 0 {
+        let h = find_menu_window();
+        if h != 0 {
+            unsafe {
                 ShowWindow(h, SW_HIDE);
             }
         }
     }
 }
 
+/// Find the borderless context-menu window ("LinAmp Menu") by title, or 0 when it
+/// isn't currently shown. Windows only; the single place that locates the popup.
+#[cfg(windows)]
+fn find_menu_window() -> isize {
+    #[allow(non_snake_case)]
+    extern "system" {
+        fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+    }
+    let wide: Vec<u16> = "LinAmp Menu"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe { FindWindowW(std::ptr::null(), wide.as_ptr()) }
+}
+
 /// Clip the borderless context-menu window to a rounded rectangle (corner radius
 /// `radius` physical px) so its corners are cut away at the OS level — otherwise
 /// the square opaque window shows its (dark) clear colour outside the frame's
-/// rounded fill. Windows only; a no-op elsewhere.
-fn round_popup_window(radius: i32) {
+/// rounded fill. Returns true once the region is applied, so the caller stops
+/// retrying. Windows only; a no-op (and `true`) elsewhere.
+fn round_popup_window(radius: i32) -> bool {
     #[cfg(windows)]
     {
         #[allow(non_snake_case)]
         extern "system" {
-            fn FindWindowW(class: *const u16, title: *const u16) -> isize;
             fn GetClientRect(hwnd: isize, rect: *mut [i32; 4]) -> i32;
             fn CreateRoundRectRgn(x1: i32, y1: i32, x2: i32, y2: i32, w: i32, h: i32) -> isize;
             fn SetWindowRgn(hwnd: isize, rgn: isize, redraw: i32) -> i32;
+            fn DeleteObject(obj: isize) -> i32;
         }
-        let wide: Vec<u16> = "LinAmp Menu".encode_utf16().chain(std::iter::once(0)).collect();
         unsafe {
-            let h = FindWindowW(std::ptr::null(), wide.as_ptr());
+            let h = find_menu_window();
             if h == 0 {
-                return;
+                return false;
             }
             let mut r = [0i32; 4]; // left, top, right, bottom (client is 0,0..w,h)
             if GetClientRect(h, &mut r) == 0 {
-                return;
+                return false;
             }
             let (w, ht) = (r[2] - r[0], r[3] - r[1]);
             if w <= 0 || ht <= 0 {
-                return;
+                return false;
             }
-            // Region owned by the window after SetWindowRgn; don't delete it.
             let rgn = CreateRoundRectRgn(0, 0, w + 1, ht + 1, radius * 2, radius * 2);
-            SetWindowRgn(h, rgn, 1);
+            // On success the window takes ownership of `rgn`; on failure it does
+            // not, so we must free it or leak a GDI region on every retry.
+            if SetWindowRgn(h, rgn, 1) == 0 {
+                DeleteObject(rgn);
+                return false;
+            }
+            true
         }
     }
     #[cfg(not(windows))]
     {
         let _ = radius;
+        true
     }
 }
 
@@ -1233,6 +1252,10 @@ pub struct LinAmpApp {
     pl_ctx_row: Option<usize>,
     popup: Option<(Popup, ClWin, egui::Pos2)>,
     popup_fresh: bool,
+    /// Whether the popup window's rounded region has been applied for the current
+    /// popup, so we apply it once (retrying only until it succeeds) instead of
+    /// rebuilding the GDI region every frame the menu is open.
+    popup_rounded: bool,
     main_shade: bool,
     eq_shade: bool,
     pl_shade: bool,
@@ -1458,6 +1481,7 @@ impl LinAmpApp {
             pl_ctx_row: None,
             popup: None,
             popup_fresh: false,
+            popup_rounded: false,
             main_shade: false,
             eq_shade: false,
             pl_shade: false,
@@ -2591,10 +2615,9 @@ impl LinAmpApp {
         }
         let mut close = false;
         // Border that matches the Media Library menu: the same themed window
-        // stroke colour (set in apply_theme). Painted below at double width because
-        // the rounded region clips its outer half at the window edge, leaving a
-        // full-looking line (a plain 1px stroke reads a pixel thin there).
-        let border = egui::Stroke::new(2.0_f32, ctx.style().visuals.window_stroke.color);
+        // stroke colour (set in apply_theme), a crisp 1px line painted just inside
+        // the window edge (see below).
+        let border = egui::Stroke::new(1.0_f32, ctx.style().visuals.window_stroke.color);
         let sort = |app: &mut Self, k: SortKey| {
             app.sort_key = k;
             app.sort_playlist();
@@ -2882,24 +2905,35 @@ impl LinAmpApp {
                         }
                     }
                 });
-            // Outline at the window edge; the rounded region clips the stroke's
-            // outer half, leaving a clean ~1px line following the rounded corners —
-            // the same distinct border the Media Library's menu has.
-            let vr = ctx.screen_rect();
+            // Outline just inside the window edge — a stroke centred on the edge
+            // has its inner half render invisibly on low-contrast skins once the
+            // rounded region clips the outer half, so inset the whole 1px line one
+            // point in (rounding one less than the region's) where it can't be
+            // clipped, giving the same distinct border the Media Library's menu has.
+            let vr = ctx.screen_rect().shrink(1.0);
             ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
                 egui::Id::new("linamp_menu_border"),
             ))
-            .rect_stroke(vr, egui::Rounding::same(6.0), border);
+            .rect_stroke(vr, egui::Rounding::same(5.0), border);
             self.apply_base_cursor(ctx, "LinAmp Menu");
+            // Escape closes the menu. The popup is a separate always-on-top OS
+            // window that can hold focus, in which case `handle_window_input`
+            // (which only runs for the classic windows) never sees the key — so
+            // the popup viewport must handle Escape itself.
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }
         });
 
         // Round the window's corners to match the frame's 6px rounding (scaled to
-        // physical pixels for the current DPI).
-        round_popup_window((6.0 * ctx.pixels_per_point()).round() as i32);
+        // physical pixels for the current DPI). Applied once per popup — retried
+        // each frame only until it succeeds — rather than rebuilt every frame.
+        if !self.popup_rounded
+            && round_popup_window((6.0 * ctx.pixels_per_point()).round() as i32)
+        {
+            self.popup_rounded = true;
+        }
 
         self.popup_fresh = false;
         if close {
@@ -2910,6 +2944,9 @@ impl LinAmpApp {
     fn open_popup_in(&mut self, kind: Popup, win: ClWin, local: egui::Pos2) {
         self.popup = Some((kind, win, local));
         self.popup_fresh = true;
+        // New popup window (or a resize to a different menu): re-apply the rounded
+        // region on the next frame.
+        self.popup_rounded = false;
         // Opening a classic popup dismisses an open Media Library menu, so the two
         // menu systems are never up at once.
         self.classic_clicked = true;
