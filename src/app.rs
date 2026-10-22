@@ -778,16 +778,61 @@ fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visible: bool) {
     }
 }
 
-/// Apply (or clear) a window-shape mask to a classic window by title. X11 only
-/// (via the Shape extension); a no-op elsewhere, where windows stay rectangular.
+/// Apply (or clear) a window-shape mask to a classic window by title. X11 (Shape
+/// extension) and Windows (`SetWindowRgn`); a no-op elsewhere.
 fn set_window_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         x11util::set_shape(title, rects);
     }
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    #[cfg(windows)]
+    {
+        win_set_shape(title, rects);
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = (title, rects);
+    }
+}
+
+/// Windows: clip a borderless classic window to the union of `rects` via
+/// `SetWindowRgn`, giving the skin's non-rectangular shape. Coordinates are in
+/// window pixels from the top-left (no border on these windows). The region is
+/// handed to the OS (don't free it); an empty `rects` clears the shape.
+#[cfg(windows)]
+fn win_set_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
+    #[allow(non_snake_case)]
+    extern "system" {
+        fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+        fn CreateRectRgn(x1: i32, y1: i32, x2: i32, y2: i32) -> isize;
+        fn CombineRgn(dst: isize, src1: isize, src2: isize, mode: i32) -> i32;
+        fn SetWindowRgn(hwnd: isize, hrgn: isize, redraw: i32) -> i32;
+        fn DeleteObject(o: isize) -> i32;
+    }
+    const RGN_OR: i32 = 2;
+    let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let hwnd = FindWindowW(std::ptr::null(), wide.as_ptr());
+        if hwnd == 0 {
+            return;
+        }
+        if rects.is_empty() {
+            SetWindowRgn(hwnd, 0, 1); // clear -> rectangular
+            return;
+        }
+        let rgn = CreateRectRgn(0, 0, 0, 0);
+        for &(x, y, w, h) in rects {
+            let r = CreateRectRgn(
+                x as i32,
+                y as i32,
+                x as i32 + w as i32,
+                y as i32 + h as i32,
+            );
+            CombineRgn(rgn, rgn, r, RGN_OR);
+            DeleteObject(r);
+        }
+        // SetWindowRgn takes ownership of `rgn` — do not delete it afterwards.
+        SetWindowRgn(hwnd, rgn, 1);
     }
 }
 
@@ -806,7 +851,11 @@ fn set_window_cursor(title: &str, cache_key: &str, cur: &crate::cursor::CursorIm
             &cur.argb,
         );
     }
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    #[cfg(windows)]
+    {
+        crate::wincursor::apply(title, cache_key, cur);
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = (title, cache_key, cur);
     }
@@ -819,7 +868,11 @@ fn unset_window_cursor(title: &str) {
     {
         x11util::unset_cursor(title);
     }
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    #[cfg(windows)]
+    {
+        crate::wincursor::clear(title);
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = title;
     }
@@ -1838,6 +1891,10 @@ impl LinAmpApp {
         self.classic_tex = None;
         self.eq_tex = None;
         self.pl_tex = None;
+        // Reset cursors so a skin without custom cursors doesn't keep showing the
+        // previous skin's; the per-frame cursor update re-applies for the new skin
+        // if it ships any.
+        self.clear_skin_cursors();
         // Remember this skin for next launch.
         self.skin_path = Some(path.to_path_buf());
         self.prefs.last_skin = Some(path.display().to_string());
@@ -2325,6 +2382,7 @@ impl LinAmpApp {
             app.sort_playlist();
         };
         let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp Menu")
             .with_position(screen)
             .with_inner_size(egui::vec2(w, h))
             .with_decorations(false)
@@ -2491,6 +2549,7 @@ impl LinAmpApp {
                         }
                     }
                 });
+            self.apply_base_cursor(ctx, "LinAmp Menu");
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }
@@ -4268,8 +4327,11 @@ impl LinAmpApp {
         if !cs.has_cursors() || ctx.pointer_hover_pos().is_none() {
             return;
         }
-        // Keep egui from re-applying its own cursor (which would overwrite ours):
-        // a constant icon means egui-winit only sets it once.
+        // X11 only: pin egui's cursor so egui-winit doesn't overwrite the one we
+        // set via XDefineCursor. On Windows the WM_SETCURSOR subclass intercepts
+        // before winit, so no pin is needed (and pinning would wrongly suppress
+        // the normal per-widget cursors when skin cursors are off).
+        #[cfg(all(unix, not(target_os = "macos")))]
         ctx.set_cursor_icon(egui::CursorIcon::Default);
         if let Some(ci) = cs.cursor("normal") {
             set_window_cursor(title, &format!("{}:normal", self.theme.name), ci);
@@ -4288,6 +4350,7 @@ impl LinAmpApp {
             "LinAmp — File Info",
             "LinAmp — Jump to file",
             "LinAmp — Jump to time",
+            "LinAmp Menu",
         ] {
             unset_window_cursor(title);
         }

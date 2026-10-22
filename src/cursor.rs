@@ -7,6 +7,9 @@
 //! premultiplied ARGB ready for `XcursorImage`.
 
 /// A decoded cursor: premultiplied ARGB pixels (row-major) plus the hotspot.
+// Fields are consumed only by the X11 cursor path; on other platforms the data
+// is decoded but not applied (custom cursors are X11-only for now).
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
 #[derive(Clone)]
 pub struct CursorImage {
     pub width: u32,
@@ -52,8 +55,44 @@ fn pack(r: u8, g: u8, b: u8, a: u8) -> u32 {
     ((a as u32) << 24) | (pm(r) << 16) | (pm(g) << 8) | pm(b)
 }
 
+/// Extract the first `icon` frame (a standard `.cur`/`.ico`) from a RIFF/ACON
+/// animated cursor. Walks top-level RIFF chunks to the `fram` LIST, then returns
+/// its first `icon` subchunk's bytes. Chunk bodies are word-aligned.
+fn first_ani_frame(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut off = 12; // past "RIFF" <size> "ACON"
+    while off + 8 <= bytes.len() {
+        let id = &bytes[off..off + 4];
+        let size = u32le(bytes, off + 4)? as usize;
+        let body = off + 8;
+        let end = body.checked_add(size)?;
+        if end > bytes.len() {
+            break;
+        }
+        if id == b"LIST" && size >= 4 && &bytes[body..body + 4] == b"fram" {
+            let mut s = body + 4;
+            while s + 8 <= end {
+                let sid = &bytes[s..s + 4];
+                let ssize = u32le(bytes, s + 4)? as usize;
+                let sbody = s + 8;
+                let send = sbody.checked_add(ssize)?.min(end);
+                if sid == b"icon" {
+                    return Some(bytes.get(sbody..send)?.to_vec());
+                }
+                s = sbody + ssize + (ssize & 1);
+            }
+        }
+        off = body + size + (size & 1);
+    }
+    None
+}
+
 /// Parse a `.cur` file. Returns `None` if the bytes aren't a usable cursor.
+/// Animated cursors (`.ani`, a RIFF/ACON container) are handled by decoding their
+/// first frame, which is itself a standard `.cur`/`.ico`.
 pub fn parse(bytes: &[u8]) -> Option<CursorImage> {
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"ACON" {
+        return parse(&first_ani_frame(bytes)?);
+    }
     let (xhot, yhot) = hotspot(bytes)?;
     // ICONDIR: reserved(0), type(2=cursor), count. Use the first entry.
     let count = u16le(bytes, 4)?;
