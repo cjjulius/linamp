@@ -17,6 +17,8 @@ pub struct Prefs {
     pub fade_on_stop: bool,
     /// true = keep the LinAmp windows above other applications.
     pub always_on_top: bool,
+    /// true = ignore a skin's custom cursors and use the system cursor instead.
+    pub disable_skin_cursors: bool,
 }
 
 impl Default for Prefs {
@@ -29,6 +31,7 @@ impl Default for Prefs {
             last_skin: None,
             fade_on_stop: false,
             always_on_top: false,
+            disable_skin_cursors: false,
         }
     }
 }
