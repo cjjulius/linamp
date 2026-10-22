@@ -2534,7 +2534,10 @@ impl LinAmpApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::popup(&style))
                 .show(ctx, |ui| {
-                    let item = |ui: &mut egui::Ui, label: &str| ui.button(label).clicked();
+                    // Route every classic menu through the shared `menu_item` look
+                    // (frameless, themed) so the options/fly-out menus match the
+                    // playlist and library context menus.
+                    let item = |ui: &mut egui::Ui, label: &str| menu_item(ui, label, "");
                     match kind {
                         Popup::Options => {
                             if item(ui, "Open file(s)…") {
@@ -5770,12 +5773,6 @@ impl LinAmpApp {
     /// the docked window and the modern `View::Library` tab.
     fn ui_library(&mut self, ui: &mut egui::Ui) {
         use crate::library::LibView;
-        // In classic mode the library is its own OS window, so its egui context
-        // menus don't see clicks in the other windows and would stay open. Gate
-        // them on the library window being focused: clicking any other window
-        // unfocuses it and the menu closes. Modern mode is a single viewport, so
-        // its menus close on their own.
-        let lib_menu_ok = self.ui_mode != UiMode::Classic || self.foc_lib;
         // When the skin ships general-purpose window art (GEN.BMP/GENEX.BMP), use
         // its defined Media Library colour scheme; otherwise fall back to the
         // palette sampled from the skin.
@@ -6011,7 +6008,6 @@ impl LinAmpApp {
                                                     artist_click = Some((Some(name.clone()), false));
                                                 }
                                             }
-                                            if lib_menu_ok {
                                             resp.context_menu(|ui| {
                                                 // Keep the menu from squishing to a
                                                 // sliver when opened near a screen edge.
@@ -6025,7 +6021,6 @@ impl LinAmpApp {
                                                     ui.close_menu();
                                                 }
                                             });
-                                            }
                                         }
                                     });
                                 // Album column.
@@ -6061,7 +6056,6 @@ impl LinAmpApp {
                                                     album_click = Some((Some(name.clone()), false));
                                                 }
                                             }
-                                            if lib_menu_ok {
                                             resp.context_menu(|ui| {
                                                 ui.set_min_width(170.0);
                                                 if ui.button(format!("Play all from \u{201c}{label}\u{201d}")).clicked() {
@@ -6073,7 +6067,6 @@ impl LinAmpApp {
                                                     ui.close_menu();
                                                 }
                                             });
-                                            }
                                         }
                                     });
                             });
@@ -6261,7 +6254,6 @@ impl LinAmpApp {
                                     if resp.double_clicked() {
                                         dbl_track = Some(i);
                                     }
-                                    if lib_menu_ok {
                                     resp.context_menu(|ui| {
                                         ui.set_min_width(180.0);
                                         // Act on the selection when the right-clicked
@@ -6323,7 +6315,6 @@ impl LinAmpApp {
                                             ui.close_menu();
                                         }
                                     });
-                                    }
                                 }
                             });
                     });
