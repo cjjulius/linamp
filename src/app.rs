@@ -98,7 +98,7 @@ fn popup_dims(kind: Popup) -> (f32, f32) {
         Popup::PlMisc => (4, 0, 182.0),
         Popup::PlList => (3, 0, 182.0),
         // Right-click context menus: wider to fit the shortcut column.
-        Popup::PlTrack => (5, 2, 210.0),
+        Popup::PlTrack => (6, 2, 210.0),
         Popup::PlVoid => (12, 4, 210.0),
         Popup::EqPresets => (crate::eq::PRESETS.len() as i32, 0, 182.0),
     };
@@ -1164,6 +1164,9 @@ pub struct LinAmpApp {
     foc_eq: bool,
     foc_pl: bool,
     foc_lib: bool,
+    /// Focus held by an open context-menu popup viewport, folded into
+    /// `app_focused` so the menu counts as part of the app.
+    foc_popup: bool,
     /// Hash of the last-persisted session, so we only write on actual changes.
     session_sig: Option<u64>,
     /// Frames remaining in a graceful shutdown (set when the WM asks to close),
@@ -1369,6 +1372,7 @@ impl LinAmpApp {
             foc_eq: false,
             foc_pl: false,
             foc_lib: false,
+            foc_popup: false,
             session_sig: None,
             quit_countdown: None,
             drag: None,
@@ -2487,9 +2491,17 @@ impl LinAmpApp {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
+            // Don't steal OS focus when the menu opens: the owning window keeps
+            // focus, so the classic windows don't flip to their unfocused skin
+            // (the menu is part of our app) and a follow-up click on a window
+            // isn't swallowed to re-focus it.
+            .with_active(false)
             .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_popup");
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            // If the menu does end up focused (e.g. a click landed on it), keep
+            // the app considered focused so the windows stay on their active skin.
+            self.foc_popup = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_popup);
             let style = ctx.style();
             egui::CentralPanel::default()
                 .frame(egui::Frame::popup(&style))
@@ -2654,6 +2666,14 @@ impl LinAmpApp {
                                 self.open_tag_editor();
                                 close = true;
                             }
+                            if menu_item(ui, "Explore folder", "") {
+                                if let Some(&i) = self.pl_selection.iter().min() {
+                                    if let Some(t) = self.playlist.tracks.get(i) {
+                                        open_in_file_manager(&t.path);
+                                    }
+                                }
+                                close = true;
+                            }
                             ui.separator();
                             if menu_item(ui, "Remove", "Del") {
                                 self.pl_remove(false);
@@ -2773,6 +2793,11 @@ impl LinAmpApp {
 
         // Clicking any main window dismisses an open menu (click-away).
         if pressed && self.popup.is_some() && !self.popup_fresh {
+            self.popup = None;
+        }
+        // Escape closes an open menu. The popup no longer steals focus, so its own
+        // viewport won't see the key — the focused window catches it here instead.
+        if self.popup.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.popup = None;
         }
 
@@ -4583,7 +4608,20 @@ impl LinAmpApp {
         if !self.lib_visible {
             self.foc_lib = false;
         }
-        self.app_focused = self.foc_root || self.foc_eq || self.foc_pl || self.foc_lib;
+        if self.popup.is_none() {
+            self.foc_popup = false;
+        }
+        self.app_focused =
+            self.foc_root || self.foc_eq || self.foc_pl || self.foc_lib || self.foc_popup;
+
+        // An egui-native menu/combo (Media Library, modern playlist, a dropdown)
+        // and a classic popup should never be open at once: close the classic one
+        // when an egui popup takes over. Checked before the windows handle input
+        // this frame so a right-click that opens a classic menu (and closes the
+        // egui one) isn't itself cancelled.
+        if self.popup.is_some() && ctx.memory(|m| m.any_popup_open()) {
+            self.popup = None;
+        }
 
         // Root viewport = main window.
         self.render_window(ctx, ClWin::Main);
@@ -5557,6 +5595,7 @@ impl LinAmpApp {
         let mut to_play: Option<usize> = None;
         let mut to_play_next: Option<usize> = None;
         let mut to_tag: Option<std::path::PathBuf> = None;
+        let mut to_explore: Option<std::path::PathBuf> = None;
         let mut to_remove: Option<usize> = None;
         let mut reorder: Option<(usize, usize)> = None;
 
@@ -5607,6 +5646,10 @@ impl LinAmpApp {
                                 ui.separator();
                                 if ui.button("Edit file tags…").clicked() {
                                     to_tag = Some(track.path.clone());
+                                    ui.close_menu();
+                                }
+                                if ui.button("Explore folder").clicked() {
+                                    to_explore = Some(track.path.clone());
                                     ui.close_menu();
                                 }
                                 ui.separator();
@@ -5670,6 +5713,9 @@ impl LinAmpApp {
         }
         if let Some(p) = to_tag {
             self.open_tag_editor_path(p);
+        }
+        if let Some(p) = to_explore {
+            open_in_file_manager(&p);
         }
         if let Some(i) = to_remove {
             self.playlist.remove(i);
