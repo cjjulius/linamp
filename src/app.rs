@@ -138,42 +138,62 @@ fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
 }
 
 /// Core of "Play Next": move the rows in `sel` to sit just after `current` (or to
-/// the front when nothing is playing), preserving `sel`'s order. Mutates `tracks`
-/// and returns the current track's new index and the index where the moved block
-/// starts (for re-selecting it). Pure/index-based so it can be unit-tested.
+/// the front when nothing is playing), preserving their ascending order. Mutates
+/// `tracks` and returns the current track's new index, the index where the moved
+/// block starts, and how many rows actually moved (duplicates/out-of-range
+/// ignored) so the caller can re-select the block. Pure, single-pass, and
+/// index-based so it can be unit-tested.
 fn reorder_play_next<T>(
     tracks: &mut Vec<T>,
     current: Option<usize>,
     sel: &[usize],
-) -> (Option<usize>, usize) {
-    let mut sel: Vec<usize> = sel.iter().copied().filter(|&i| i < tracks.len()).collect();
-    sel.sort_unstable();
-    sel.dedup();
-    if sel.is_empty() {
-        return (current, 0);
-    }
-    // Pull the selected rows out back-to-front, then restore ascending order.
-    let mut moved = Vec::with_capacity(sel.len());
-    for &i in sel.iter().rev() {
-        moved.push(tracks.remove(i));
-    }
-    moved.reverse();
-    let cur_selected = current.map(|c| sel.contains(&c)).unwrap_or(false);
-    let (insert_at, final_cur) = match current {
-        // Current track is itself moving: the block (with it) goes to the front.
-        Some(c) if cur_selected => (0usize, Some(sel.iter().position(|&i| i == c).unwrap())),
-        // Current survives: it shifts left by the selected rows removed before it,
-        // and the block is inserted right after it (so its index is unchanged).
-        Some(c) => {
-            let shifted = c - sel.iter().filter(|&&i| i < c).count();
-            ((shifted + 1).min(tracks.len()), Some(shifted))
+) -> (Option<usize>, usize, usize) {
+    let n = tracks.len();
+    let mut want = vec![false; n];
+    let mut n_sel = 0usize;
+    for &i in sel {
+        if i < n && !std::mem::replace(&mut want[i], true) {
+            n_sel += 1;
         }
-        None => (0, None),
-    };
-    for (k, t) in moved.into_iter().enumerate() {
-        tracks.insert(insert_at + k, t);
     }
-    (final_cur, insert_at)
+    if n_sel == 0 {
+        return (current, 0, 0);
+    }
+    let cur_selected = current.map(|c| want[c]).unwrap_or(false);
+    // One pass: split into the moved block (selected rows, in order) and the kept
+    // rows, tracking where the surviving current track lands among the kept.
+    let mut moved = Vec::with_capacity(n_sel);
+    let mut kept: Vec<T> = Vec::with_capacity(n - n_sel);
+    let mut cur_in_kept = None;
+    for (i, t) in std::mem::take(tracks).into_iter().enumerate() {
+        if want[i] {
+            moved.push(t);
+        } else {
+            if Some(i) == current {
+                cur_in_kept = Some(kept.len());
+            }
+            kept.push(t);
+        }
+    }
+    // Insert after the current track, or at the front when it's gone/absent.
+    let insert_at = if cur_selected {
+        0
+    } else {
+        cur_in_kept.map(|c| c + 1).unwrap_or(0)
+    };
+    let tail = kept.split_off(insert_at);
+    kept.extend(moved);
+    kept.extend(tail);
+    *tracks = kept;
+    let final_cur = if cur_selected {
+        // The current track moved to the front block; its offset there is its rank
+        // among the selected rows.
+        Some(want[..current.unwrap()].iter().filter(|&&x| x).count())
+    } else {
+        // Inserting right after the kept current track leaves its index unchanged.
+        cur_in_kept
+    };
+    (final_cur, insert_at, n_sel)
 }
 
 /// If `r` overlaps `keep` (the main window), the position `r` should move to so it
@@ -1138,6 +1158,9 @@ pub struct LinAmpApp {
     pl_first: usize,
     pl_selection: HashSet<usize>,
     pl_last_click: Option<(usize, Instant)>,
+    /// The row a playlist right-click targeted, so the track menu's Play / Edit
+    /// act on exactly that row rather than the selection's min / current track.
+    pl_ctx_row: Option<usize>,
     popup: Option<(Popup, ClWin, egui::Pos2)>,
     popup_fresh: bool,
     main_shade: bool,
@@ -1361,6 +1384,7 @@ impl LinAmpApp {
             pl_first: 0,
             pl_selection: HashSet::new(),
             pl_last_click: None,
+            pl_ctx_row: None,
             popup: None,
             popup_fresh: false,
             main_shade: false,
@@ -2392,15 +2416,12 @@ impl LinAmpApp {
         if self.pl_selection.is_empty() {
             return;
         }
-        let len = self.playlist.tracks.len();
-        let mut sel: Vec<usize> = self.pl_selection.iter().copied().filter(|&i| i < len).collect();
-        sel.sort_unstable();
-        sel.dedup();
-        let count = sel.len();
+        let sel: Vec<usize> = self.pl_selection.iter().copied().collect();
+        let (cur, start, count) =
+            reorder_play_next(&mut self.playlist.tracks, self.playlist.current, &sel);
         if count == 0 {
             return;
         }
-        let (cur, start) = reorder_play_next(&mut self.playlist.tracks, self.playlist.current, &sel);
         self.playlist.current = cur;
         self.pl_selection = (start..start + count).collect();
         self.sort_key = SortKey::Custom;
@@ -2487,8 +2508,15 @@ impl LinAmpApp {
         let Some((kind, owner, pos)) = self.popup else {
             return;
         };
-        let screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
         let (w, h) = popup_dims(kind);
+        let mut screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
+        // Keep the menu fully on the desktop: a tall menu (e.g. the empty-area
+        // menu) opened near the bottom/right edge would otherwise spill off-screen
+        // with its lower entries unreachable.
+        if let Some(vr) = virtual_desktop_rect(ctx) {
+            screen.x = screen.x.min(vr.max.x - w).max(vr.min.x);
+            screen.y = screen.y.min(vr.max.y - h).max(vr.min.y);
+        }
         let mut close = false;
         let sort = |app: &mut Self, k: SortKey| {
             app.sort_key = k;
@@ -2653,8 +2681,14 @@ impl LinAmpApp {
                             }
                         }
                         Popup::PlTrack => {
+                            // Target the right-clicked row (falling back to the
+                            // selection's first) so Play / Edit act on what the user
+                            // actually clicked, even within a multi-selection.
+                            let target = self
+                                .pl_ctx_row
+                                .or_else(|| self.pl_selection.iter().min().copied());
                             if menu_item(ui, "Play", "Enter") {
-                                if let Some(&i) = self.pl_selection.iter().min() {
+                                if let Some(i) = target {
                                     self.play_index(i);
                                 }
                                 close = true;
@@ -2665,14 +2699,15 @@ impl LinAmpApp {
                             }
                             ui.separator();
                             if menu_item(ui, "Edit file tags…", "Alt+3") {
-                                self.open_tag_editor();
+                                match target {
+                                    Some(i) => self.open_tag_editor_at(i),
+                                    None => self.open_tag_editor(),
+                                }
                                 close = true;
                             }
                             if menu_item(ui, "Explore folder", "") {
-                                if let Some(&i) = self.pl_selection.iter().min() {
-                                    if let Some(t) = self.playlist.tracks.get(i) {
-                                        open_in_file_manager(&t.path);
-                                    }
+                                if let Some(t) = target.and_then(|i| self.playlist.tracks.get(i)) {
+                                    open_in_file_manager(&t.path);
                                 }
                                 close = true;
                             }
@@ -2831,6 +2866,9 @@ impl LinAmpApp {
                             self.pl_selection.clear();
                             self.pl_selection.insert(row);
                         }
+                        // Remember the exact row so Play / Edit target it even when
+                        // it's one of several selected.
+                        self.pl_ctx_row = Some(row);
                         self.open_popup_in(Popup::PlTrack, win, l);
                     } else {
                         self.open_popup_in(Popup::PlVoid, win, l);
@@ -3754,6 +3792,12 @@ impl LinAmpApp {
             self.status = "No track to edit.".into();
             return;
         };
+        self.open_tag_editor_at(index);
+    }
+
+    /// Open the tag editor for a specific playlist row, so saving writes back to
+    /// that row (and refreshes its cached metadata).
+    fn open_tag_editor_at(&mut self, index: usize) {
         let Some(track) = self.playlist.tracks.get(index) else {
             return;
         };
@@ -5611,7 +5655,7 @@ impl LinAmpApp {
 
         let mut to_play: Option<usize> = None;
         let mut to_play_next: Option<usize> = None;
-        let mut to_tag: Option<std::path::PathBuf> = None;
+        let mut to_tag: Option<usize> = None;
         let mut to_explore: Option<std::path::PathBuf> = None;
         let mut to_remove: Option<usize> = None;
         let mut reorder: Option<(usize, usize)> = None;
@@ -5662,7 +5706,7 @@ impl LinAmpApp {
                                 }
                                 ui.separator();
                                 if ui.button("Edit file tags…").clicked() {
-                                    to_tag = Some(track.path.clone());
+                                    to_tag = Some(i);
                                     ui.close_menu();
                                 }
                                 if ui.button("Explore folder").clicked() {
@@ -5723,13 +5767,14 @@ impl LinAmpApp {
             self.play_index(i);
         }
         if let Some(i) = to_play_next {
-            let (cur, _) =
+            let (cur, _, _) =
                 reorder_play_next(&mut self.playlist.tracks, self.playlist.current, &[i]);
             self.playlist.current = cur;
             self.sort_key = SortKey::Custom;
         }
-        if let Some(p) = to_tag {
-            self.open_tag_editor_path(p);
+        if let Some(i) = to_tag {
+            // Edit by row index (not path) so saving refreshes the playlist entry.
+            self.open_tag_editor_at(i);
         }
         if let Some(p) = to_explore {
             open_in_file_manager(&p);
@@ -6839,19 +6884,32 @@ mod tests {
     fn play_next_moves_selection_after_current() {
         let mut v = vec![0, 1, 2, 3, 4];
         // current = 0 (unselected), move rows 3 & 4 to sit right after it.
-        let (cur, start) = reorder_play_next(&mut v, Some(0), &[3, 4]);
+        let (cur, start, n) = reorder_play_next(&mut v, Some(0), &[3, 4]);
         assert_eq!(v, vec![0, 3, 4, 1, 2]);
         assert_eq!(cur, Some(0));
         assert_eq!(start, 1);
+        assert_eq!(n, 2);
     }
 
     #[test]
     fn play_next_no_current_goes_to_front() {
         let mut v = vec![10, 11, 12];
-        let (cur, start) = reorder_play_next(&mut v, None, &[2]);
+        let (cur, start, n) = reorder_play_next(&mut v, None, &[2]);
         assert_eq!(v, vec![12, 10, 11]);
         assert_eq!(cur, None);
         assert_eq!(start, 0);
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn play_next_ignores_duplicate_and_out_of_range() {
+        let mut v = vec![0, 1, 2, 3];
+        // Duplicate 3 and an out-of-range index collapse to a single moved row.
+        let (cur, start, n) = reorder_play_next(&mut v, Some(0), &[3, 3, 99]);
+        assert_eq!(v, vec![0, 3, 1, 2]);
+        assert_eq!(cur, Some(0));
+        assert_eq!(start, 1);
+        assert_eq!(n, 1);
     }
 
     #[test]
@@ -6859,10 +6917,11 @@ mod tests {
         let mut v = vec![0, 1, 2, 3];
         // current = 2 is itself selected: block [1,2] moves to the front, and
         // current follows to its offset within the block.
-        let (cur, start) = reorder_play_next(&mut v, Some(2), &[1, 2]);
+        let (cur, start, n) = reorder_play_next(&mut v, Some(2), &[1, 2]);
         assert_eq!(v, vec![1, 2, 0, 3]);
         assert_eq!(start, 0);
         assert_eq!(cur, Some(1));
+        assert_eq!(n, 2);
     }
 
     #[test]
@@ -6870,10 +6929,11 @@ mod tests {
         let mut v = vec![0, 1, 2, 3, 4];
         // current = 4, move rows 0 & 2: after removal current shifts to 2, the
         // block is inserted after it in ascending order.
-        let (cur, start) = reorder_play_next(&mut v, Some(4), &[0, 2]);
+        let (cur, start, n) = reorder_play_next(&mut v, Some(4), &[0, 2]);
         assert_eq!(v, vec![1, 3, 4, 0, 2]);
         assert_eq!(cur, Some(2));
         assert_eq!(start, 3);
+        assert_eq!(n, 2);
     }
 
     #[test]
