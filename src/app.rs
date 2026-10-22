@@ -90,16 +90,90 @@ fn idx_win(i: usize) -> ClWin {
 
 /// Window size (points) for a popup menu, from its item/separator count.
 fn popup_dims(kind: Popup) -> (f32, f32) {
-    let (buttons, seps) = match kind {
-        Popup::Options => (9, 3),
-        Popup::PlAdd => (2, 0),
-        Popup::PlRem => (3, 0),
-        Popup::PlSel => (3, 0),
-        Popup::PlMisc => (4, 0),
-        Popup::PlList => (3, 0),
-        Popup::EqPresets => (crate::eq::PRESETS.len() as i32, 0),
+    let (buttons, seps, width) = match kind {
+        Popup::Options => (9, 3, 182.0),
+        Popup::PlAdd => (2, 0, 182.0),
+        Popup::PlRem => (3, 0, 182.0),
+        Popup::PlSel => (3, 0, 182.0),
+        Popup::PlMisc => (4, 0, 182.0),
+        Popup::PlList => (3, 0, 182.0),
+        // Right-click context menus: wider to fit the shortcut column.
+        Popup::PlTrack => (5, 2, 210.0),
+        Popup::PlVoid => (12, 4, 210.0),
+        Popup::EqPresets => (crate::eq::PRESETS.len() as i32, 0, 182.0),
     };
-    (182.0, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
+    (width, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
+}
+
+/// A context-menu row: `label` on the left, dimmed `shortcut` on the right, with
+/// a hover highlight. Returns true when clicked. Kept shorter than the 24pt
+/// per-button budget in [`popup_dims`] so a tall menu never clips its last row.
+fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
+    let w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 18.0), egui::Sense::click());
+    let vis = ui.visuals().widgets.style(&resp).clone();
+    let weak = ui.visuals().weak_text_color();
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let p = ui.painter();
+    if resp.hovered() {
+        p.rect_filled(rect, vis.rounding, vis.weak_bg_fill);
+    }
+    p.text(
+        rect.left_center() + egui::vec2(8.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font.clone(),
+        vis.text_color(),
+    );
+    if !shortcut.is_empty() {
+        p.text(
+            rect.right_center() - egui::vec2(8.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            shortcut,
+            font,
+            weak,
+        );
+    }
+    resp.clicked()
+}
+
+/// Core of "Play Next": move the rows in `sel` to sit just after `current` (or to
+/// the front when nothing is playing), preserving `sel`'s order. Mutates `tracks`
+/// and returns the current track's new index and the index where the moved block
+/// starts (for re-selecting it). Pure/index-based so it can be unit-tested.
+fn reorder_play_next<T>(
+    tracks: &mut Vec<T>,
+    current: Option<usize>,
+    sel: &[usize],
+) -> (Option<usize>, usize) {
+    let mut sel: Vec<usize> = sel.iter().copied().filter(|&i| i < tracks.len()).collect();
+    sel.sort_unstable();
+    sel.dedup();
+    if sel.is_empty() {
+        return (current, 0);
+    }
+    // Pull the selected rows out back-to-front, then restore ascending order.
+    let mut moved = Vec::with_capacity(sel.len());
+    for &i in sel.iter().rev() {
+        moved.push(tracks.remove(i));
+    }
+    moved.reverse();
+    let cur_selected = current.map(|c| sel.contains(&c)).unwrap_or(false);
+    let (insert_at, final_cur) = match current {
+        // Current track is itself moving: the block (with it) goes to the front.
+        Some(c) if cur_selected => (0usize, Some(sel.iter().position(|&i| i == c).unwrap())),
+        // Current survives: it shifts left by the selected rows removed before it,
+        // and the block is inserted right after it (so its index is unchanged).
+        Some(c) => {
+            let shifted = c - sel.iter().filter(|&&i| i < c).count();
+            ((shifted + 1).min(tracks.len()), Some(shifted))
+        }
+        None => (0, None),
+    };
+    for (k, t) in moved.into_iter().enumerate() {
+        tracks.insert(insert_at + k, t);
+    }
+    (final_cur, insert_at)
 }
 
 /// If `r` overlaps `keep` (the main window), the position `r` should move to so it
@@ -887,6 +961,10 @@ enum Popup {
     PlSel,
     PlMisc,
     PlList,
+    /// Right-click on a playlist track.
+    PlTrack,
+    /// Right-click on empty playlist space.
+    PlVoid,
     EqPresets,
 }
 
@@ -2293,6 +2371,27 @@ impl LinAmpApp {
             .collect();
     }
 
+    /// "Play Next": move the selected track(s) to play right after the current
+    /// one (or to the front when nothing is playing), keeping their order. The
+    /// moved block becomes the new selection.
+    fn play_next_selected(&mut self) {
+        if self.pl_selection.is_empty() {
+            return;
+        }
+        let len = self.playlist.tracks.len();
+        let mut sel: Vec<usize> = self.pl_selection.iter().copied().filter(|&i| i < len).collect();
+        sel.sort_unstable();
+        sel.dedup();
+        let count = sel.len();
+        if count == 0 {
+            return;
+        }
+        let (cur, start) = reorder_play_next(&mut self.playlist.tracks, self.playlist.current, &sel);
+        self.playlist.current = cur;
+        self.pl_selection = (start..start + count).collect();
+        self.sort_key = SortKey::Custom;
+    }
+
     /// Remove tracks: when `keep` is true keep only selected (crop), else remove
     /// the selected ones. Preserves the current track by path where possible.
     fn pl_remove(&mut self, keep: bool) {
@@ -2539,6 +2638,88 @@ impl LinAmpApp {
                                 close = true;
                             }
                         }
+                        Popup::PlTrack => {
+                            if menu_item(ui, "Play", "Enter") {
+                                if let Some(&i) = self.pl_selection.iter().min() {
+                                    self.play_index(i);
+                                }
+                                close = true;
+                            }
+                            if menu_item(ui, "Play Next", "") {
+                                self.play_next_selected();
+                                close = true;
+                            }
+                            ui.separator();
+                            if menu_item(ui, "Edit file tags…", "Alt+3") {
+                                self.open_tag_editor();
+                                close = true;
+                            }
+                            ui.separator();
+                            if menu_item(ui, "Remove", "Del") {
+                                self.pl_remove(false);
+                                close = true;
+                            }
+                            if menu_item(ui, "Crop (keep selected)", "") {
+                                self.pl_remove(true);
+                                close = true;
+                            }
+                        }
+                        Popup::PlVoid => {
+                            if menu_item(ui, "Add file(s)…", "Ins") {
+                                self.open_files();
+                                close = true;
+                            }
+                            if menu_item(ui, "Add folder…", "Shift+L") {
+                                self.open_folder();
+                                close = true;
+                            }
+                            ui.separator();
+                            if menu_item(ui, "Select all", "Ctrl+A") {
+                                self.pl_select_all();
+                                close = true;
+                            }
+                            if menu_item(ui, "Select none", "") {
+                                self.pl_selection.clear();
+                                close = true;
+                            }
+                            if menu_item(ui, "Invert selection", "") {
+                                self.pl_invert_selection();
+                                close = true;
+                            }
+                            ui.separator();
+                            if menu_item(ui, "Sort by title", "") {
+                                sort(self, SortKey::Title);
+                                close = true;
+                            }
+                            if menu_item(ui, "Sort by artist", "") {
+                                sort(self, SortKey::Artist);
+                                close = true;
+                            }
+                            if menu_item(ui, "Sort by album", "") {
+                                sort(self, SortKey::Album);
+                                close = true;
+                            }
+                            if menu_item(ui, "Sort by duration", "") {
+                                sort(self, SortKey::Duration);
+                                close = true;
+                            }
+                            ui.separator();
+                            if menu_item(ui, "Remove all", "") {
+                                self.playlist.clear();
+                                self.pl_selection.clear();
+                                self.player.stop();
+                                close = true;
+                            }
+                            ui.separator();
+                            if menu_item(ui, "Save list…", "") {
+                                self.save_playlist_dialog();
+                                close = true;
+                            }
+                            if menu_item(ui, "Load list…", "") {
+                                self.load_playlist_dialog();
+                                close = true;
+                            }
+                        }
                         Popup::EqPresets => {
                             for (i, (name, _, _)) in crate::eq::PRESETS.iter().enumerate() {
                                 if item(ui, name) {
@@ -2598,6 +2779,32 @@ impl LinAmpApp {
         if secondary && win == ClWin::Main {
             if let Some(l) = local {
                 self.open_popup_in(Popup::Options, win, l);
+            }
+        }
+
+        // Right-click on the playlist list area: a track menu when a row is under
+        // the cursor, otherwise the playlist-management menu for empty space.
+        if secondary && win == ClWin::Pl && !shaded {
+            if let Some(l) = local {
+                let nx = l.x / self.scale;
+                let ny = l.y / self.scale;
+                if let Some(classic::PlRegion::List) =
+                    classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h)
+                {
+                    let row = classic::pl_row_at(ny, self.pl_first);
+                    if row < self.playlist.len() {
+                        // Winamp rule: right-clicking a row outside the current
+                        // selection selects just it; a row already in the
+                        // selection keeps the whole multi-selection.
+                        if !self.pl_selection.contains(&row) {
+                            self.pl_selection.clear();
+                            self.pl_selection.insert(row);
+                        }
+                        self.open_popup_in(Popup::PlTrack, win, l);
+                    } else {
+                        self.open_popup_in(Popup::PlVoid, win, l);
+                    }
+                }
             }
         }
 
@@ -5348,6 +5555,8 @@ impl LinAmpApp {
         let current = self.playlist.current;
 
         let mut to_play: Option<usize> = None;
+        let mut to_play_next: Option<usize> = None;
+        let mut to_tag: Option<std::path::PathBuf> = None;
         let mut to_remove: Option<usize> = None;
         let mut reorder: Option<(usize, usize)> = None;
 
@@ -5391,6 +5600,16 @@ impl LinAmpApp {
                                     to_play = Some(i);
                                     ui.close_menu();
                                 }
+                                if ui.button("Play Next").clicked() {
+                                    to_play_next = Some(i);
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                if ui.button("Edit file tags…").clicked() {
+                                    to_tag = Some(track.path.clone());
+                                    ui.close_menu();
+                                }
+                                ui.separator();
                                 if ui.button("Remove").clicked() {
                                     to_remove = Some(i);
                                     ui.close_menu();
@@ -5442,6 +5661,15 @@ impl LinAmpApp {
 
         if let Some(i) = to_play {
             self.play_index(i);
+        }
+        if let Some(i) = to_play_next {
+            let (cur, _) =
+                reorder_play_next(&mut self.playlist.tracks, self.playlist.current, &[i]);
+            self.playlist.current = cur;
+            self.sort_key = SortKey::Custom;
+        }
+        if let Some(p) = to_tag {
+            self.open_tag_editor_path(p);
         }
         if let Some(i) = to_remove {
             self.playlist.remove(i);
@@ -6514,7 +6742,48 @@ fn apply_theme(ctx: &egui::Context, t: &Theme) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_time;
+    use super::{parse_time, reorder_play_next};
+
+    #[test]
+    fn play_next_moves_selection_after_current() {
+        let mut v = vec![0, 1, 2, 3, 4];
+        // current = 0 (unselected), move rows 3 & 4 to sit right after it.
+        let (cur, start) = reorder_play_next(&mut v, Some(0), &[3, 4]);
+        assert_eq!(v, vec![0, 3, 4, 1, 2]);
+        assert_eq!(cur, Some(0));
+        assert_eq!(start, 1);
+    }
+
+    #[test]
+    fn play_next_no_current_goes_to_front() {
+        let mut v = vec![10, 11, 12];
+        let (cur, start) = reorder_play_next(&mut v, None, &[2]);
+        assert_eq!(v, vec![12, 10, 11]);
+        assert_eq!(cur, None);
+        assert_eq!(start, 0);
+    }
+
+    #[test]
+    fn play_next_current_in_selection_goes_to_front() {
+        let mut v = vec![0, 1, 2, 3];
+        // current = 2 is itself selected: block [1,2] moves to the front, and
+        // current follows to its offset within the block.
+        let (cur, start) = reorder_play_next(&mut v, Some(2), &[1, 2]);
+        assert_eq!(v, vec![1, 2, 0, 3]);
+        assert_eq!(start, 0);
+        assert_eq!(cur, Some(1));
+    }
+
+    #[test]
+    fn play_next_preserves_order_and_shifts_current() {
+        let mut v = vec![0, 1, 2, 3, 4];
+        // current = 4, move rows 0 & 2: after removal current shifts to 2, the
+        // block is inserted after it in ascending order.
+        let (cur, start) = reorder_play_next(&mut v, Some(4), &[0, 2]);
+        assert_eq!(v, vec![1, 3, 4, 0, 2]);
+        assert_eq!(cur, Some(2));
+        assert_eq!(start, 3);
+    }
 
     #[test]
     fn parse_time_formats() {
