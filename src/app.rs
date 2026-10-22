@@ -1195,6 +1195,16 @@ pub struct LinAmpApp {
     foc_eq: bool,
     foc_pl: bool,
     foc_lib: bool,
+    /// Whether a Media Library context menu is open. Tracked by us because the
+    /// library is its own OS window and egui's menu never sees clicks in the
+    /// other windows. Set on a library right-click, cleared when a classic window
+    /// is *primary*-pressed (mirroring the classic popups' click-away) or when a
+    /// classic popup opens — never on a secondary click, which is the library's
+    /// own open gesture.
+    lib_menu_open: bool,
+    /// One-shot: a classic window was primary-pressed (or a classic popup opened)
+    /// this frame, so an open library menu should dismiss. Consumed in `ui_library`.
+    classic_clicked: bool,
     /// Hash of the last-persisted session, so we only write on actual changes.
     session_sig: Option<u64>,
     /// Frames remaining in a graceful shutdown (set when the WM asks to close),
@@ -1401,6 +1411,8 @@ impl LinAmpApp {
             foc_eq: false,
             foc_pl: false,
             foc_lib: false,
+            lib_menu_open: false,
+            classic_clicked: false,
             session_sig: None,
             quit_countdown: None,
             drag: None,
@@ -2803,6 +2815,9 @@ impl LinAmpApp {
     fn open_popup_in(&mut self, kind: Popup, win: ClWin, local: egui::Pos2) {
         self.popup = Some((kind, win, local));
         self.popup_fresh = true;
+        // Opening a classic popup dismisses an open Media Library menu, so the two
+        // menu systems are never up at once.
+        self.classic_clicked = true;
     }
 
     /// Per-window input in local (viewport) coordinates.
@@ -2828,6 +2843,14 @@ impl LinAmpApp {
             ClWin::Eq => self.eq_shade,
             ClWin::Pl => self.pl_shade,
         };
+
+        // A primary press on any classic window also dismisses an open Media
+        // Library menu (its own OS window never sees the click). Keyed on the
+        // primary press only — the same gesture that dismisses a classic popup —
+        // so the library's own right-click (secondary) doesn't trip it.
+        if pressed {
+            self.classic_clicked = true;
+        }
 
         // Clicking any main window dismisses an open menu (click-away).
         if pressed && self.popup.is_some() && !self.popup_fresh {
@@ -5773,6 +5796,16 @@ impl LinAmpApp {
     /// the docked window and the modern `View::Library` tab.
     fn ui_library(&mut self, ui: &mut egui::Ui) {
         use crate::library::LibView;
+        // Mirror the classic popups' click-away for the library's egui menus: a
+        // primary press on another window (or a classic popup opening) clears the
+        // open flag, so the gate below stops attaching the menu and it closes. The
+        // menu never gates on focus, so a right-click always opens it. Modern mode
+        // is a single viewport whose menus close on their own.
+        if self.classic_clicked {
+            self.lib_menu_open = false;
+        }
+        self.classic_clicked = false;
+        let lib_menu_base = self.ui_mode != UiMode::Classic || self.lib_menu_open;
         // When the skin ships general-purpose window art (GEN.BMP/GENEX.BMP), use
         // its defined Media Library colour scheme; otherwise fall back to the
         // palette sampled from the skin.
@@ -6004,10 +6037,12 @@ impl LinAmpApp {
                                             }
                                             if resp.secondary_clicked() {
                                                 self.popup = None;
+                                                self.lib_menu_open = true;
                                                 if !sel {
                                                     artist_click = Some((Some(name.clone()), false));
                                                 }
                                             }
+                                            if lib_menu_base || resp.secondary_clicked() {
                                             resp.context_menu(|ui| {
                                                 // Keep the menu from squishing to a
                                                 // sliver when opened near a screen edge.
@@ -6021,6 +6056,7 @@ impl LinAmpApp {
                                                     ui.close_menu();
                                                 }
                                             });
+                                            }
                                         }
                                     });
                                 // Album column.
@@ -6052,10 +6088,12 @@ impl LinAmpApp {
                                             }
                                             if resp.secondary_clicked() {
                                                 self.popup = None;
+                                                self.lib_menu_open = true;
                                                 if !sel {
                                                     album_click = Some((Some(name.clone()), false));
                                                 }
                                             }
+                                            if lib_menu_base || resp.secondary_clicked() {
                                             resp.context_menu(|ui| {
                                                 ui.set_min_width(170.0);
                                                 if ui.button(format!("Play all from \u{201c}{label}\u{201d}")).clicked() {
@@ -6067,6 +6105,7 @@ impl LinAmpApp {
                                                     ui.close_menu();
                                                 }
                                             });
+                                            }
                                         }
                                     });
                             });
@@ -6244,9 +6283,10 @@ impl LinAmpApp {
                                     // is highlighted.
                                     if resp.secondary_clicked() {
                                         // A library right-click dismisses any open
-                                        // classic playlist/options popup so the two
-                                        // menu systems don't overlap.
+                                        // classic playlist/options popup, and marks
+                                        // the library menu open for the gate.
                                         self.popup = None;
+                                        self.lib_menu_open = true;
                                         if !selected {
                                             track_click = Some((i, false));
                                         }
@@ -6254,6 +6294,7 @@ impl LinAmpApp {
                                     if resp.double_clicked() {
                                         dbl_track = Some(i);
                                     }
+                                    if lib_menu_base || resp.secondary_clicked() {
                                     resp.context_menu(|ui| {
                                         ui.set_min_width(180.0);
                                         // Act on the selection when the right-clicked
@@ -6315,6 +6356,7 @@ impl LinAmpApp {
                                             ui.close_menu();
                                         }
                                     });
+                                    }
                                 }
                             });
                     });
