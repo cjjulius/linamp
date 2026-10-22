@@ -778,16 +778,61 @@ fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visible: bool) {
     }
 }
 
-/// Apply (or clear) a window-shape mask to a classic window by title. X11 only
-/// (via the Shape extension); a no-op elsewhere, where windows stay rectangular.
+/// Apply (or clear) a window-shape mask to a classic window by title. X11 (Shape
+/// extension) and Windows (`SetWindowRgn`); a no-op elsewhere.
 fn set_window_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         x11util::set_shape(title, rects);
     }
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    #[cfg(windows)]
+    {
+        win_set_shape(title, rects);
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = (title, rects);
+    }
+}
+
+/// Windows: clip a borderless classic window to the union of `rects` via
+/// `SetWindowRgn`, giving the skin's non-rectangular shape. Coordinates are in
+/// window pixels from the top-left (no border on these windows). The region is
+/// handed to the OS (don't free it); an empty `rects` clears the shape.
+#[cfg(windows)]
+fn win_set_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
+    #[allow(non_snake_case)]
+    extern "system" {
+        fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+        fn CreateRectRgn(x1: i32, y1: i32, x2: i32, y2: i32) -> isize;
+        fn CombineRgn(dst: isize, src1: isize, src2: isize, mode: i32) -> i32;
+        fn SetWindowRgn(hwnd: isize, hrgn: isize, redraw: i32) -> i32;
+        fn DeleteObject(o: isize) -> i32;
+    }
+    const RGN_OR: i32 = 2;
+    let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let hwnd = FindWindowW(std::ptr::null(), wide.as_ptr());
+        if hwnd == 0 {
+            return;
+        }
+        if rects.is_empty() {
+            SetWindowRgn(hwnd, 0, 1); // clear -> rectangular
+            return;
+        }
+        let rgn = CreateRectRgn(0, 0, 0, 0);
+        for &(x, y, w, h) in rects {
+            let r = CreateRectRgn(
+                x as i32,
+                y as i32,
+                x as i32 + w as i32,
+                y as i32 + h as i32,
+            );
+            CombineRgn(rgn, rgn, r, RGN_OR);
+            DeleteObject(r);
+        }
+        // SetWindowRgn takes ownership of `rgn` — do not delete it afterwards.
+        SetWindowRgn(hwnd, rgn, 1);
     }
 }
 
@@ -4259,20 +4304,31 @@ impl LinAmpApp {
     /// frame the pointer is inside. Call at the end of the window's viewport
     /// closure, with that viewport's `ctx`.
     fn apply_base_cursor(&self, ctx: &egui::Context, title: &str) {
-        if self.prefs.disable_skin_cursors {
-            return;
+        // Custom skin cursors are X11-only. On other platforms we must NOT pin
+        // egui's cursor to Default (that would suppress the normal per-widget
+        // cursors — I-beam over text, resize handles, etc.) since there is no
+        // custom cursor to replace it with.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            if self.prefs.disable_skin_cursors {
+                return;
+            }
+            let Some(cs) = self.classic.as_ref() else {
+                return;
+            };
+            if !cs.has_cursors() || ctx.pointer_hover_pos().is_none() {
+                return;
+            }
+            // Keep egui from re-applying its own cursor (which would overwrite
+            // ours): a constant icon means egui-winit only sets it once.
+            ctx.set_cursor_icon(egui::CursorIcon::Default);
+            if let Some(ci) = cs.cursor("normal") {
+                set_window_cursor(title, &format!("{}:normal", self.theme.name), ci);
+            }
         }
-        let Some(cs) = self.classic.as_ref() else {
-            return;
-        };
-        if !cs.has_cursors() || ctx.pointer_hover_pos().is_none() {
-            return;
-        }
-        // Keep egui from re-applying its own cursor (which would overwrite ours):
-        // a constant icon means egui-winit only sets it once.
-        ctx.set_cursor_icon(egui::CursorIcon::Default);
-        if let Some(ci) = cs.cursor("normal") {
-            set_window_cursor(title, &format!("{}:normal", self.theme.name), ci);
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        {
+            let _ = (ctx, title);
         }
     }
 
