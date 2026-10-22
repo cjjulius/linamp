@@ -4654,4 +4654,39 @@ mod tests {
         assert!("\u{2605}\u{2605}\u{2605}\u{2606}\u{2606}" > "\u{2605}\u{2605}\u{2605}\u{2605}\u{2605}");
         assert!(5i64 > 3); // numeric order a descending sort gets right
     }
+
+    #[test]
+    fn win_index_roundtrips() {
+        use super::{idx_win, win_idx};
+        for i in 0..3 {
+            assert_eq!(win_idx(idx_win(i)), i);
+        }
+        assert_eq!(win_idx(idx_win(99)), 2); // out-of-range clamps to the playlist
+    }
+
+    #[test]
+    fn apply_sel_replace_toggle_clear() {
+        use super::apply_sel;
+        let mut s: Vec<String> = vec![];
+        apply_sel(&mut s, Some("a".into()), false); // plain click replaces
+        assert_eq!(s, vec!["a"]);
+        apply_sel(&mut s, Some("b".into()), false);
+        assert_eq!(s, vec!["b"]);
+        apply_sel(&mut s, Some("c".into()), true); // ctrl adds to the selection
+        assert_eq!(s, vec!["b", "c"]);
+        apply_sel(&mut s, Some("b".into()), true); // ctrl again toggles it off
+        assert_eq!(s, vec!["c"]);
+        apply_sel(&mut s, None, false); // clicking empty space clears
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn hms_formats() {
+        use super::hms;
+        assert_eq!(hms(0), "0:00");
+        assert_eq!(hms(5), "0:05");
+        assert_eq!(hms(65), "1:05");
+        assert_eq!(hms(3600), "1:00:00");
+        assert_eq!(hms(3661), "1:01:01");
+    }
 }
