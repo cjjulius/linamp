@@ -665,8 +665,9 @@ fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool)
         .saturating_sub(1);
     let dw = dst.width();
     let mut x = (dw / 2).saturating_sub((total + 1) / 2);
-    // Nudged up 1px from the geometric centre: the title band sits a touch high.
-    let ty = GEN_TB_H.saturating_sub(GEN_FONT_H) / 2 - 1;
+    // Nudged up 2px from the geometric centre so the caption lines up with the
+    // classic windows' own title text (which sits a little above centre).
+    let ty = GEN_TB_H.saturating_sub(GEN_FONT_H) / 2 - 2;
     for c in up.chars() {
         if c == ' ' {
             x += 4;
