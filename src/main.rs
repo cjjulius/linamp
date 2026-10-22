@@ -16,6 +16,8 @@ mod skin;
 mod tags;
 mod text;
 mod viz;
+#[cfg(windows)]
+mod wincursor;
 
 use app::LinAmpApp;
 

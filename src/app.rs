@@ -851,7 +851,11 @@ fn set_window_cursor(title: &str, cache_key: &str, cur: &crate::cursor::CursorIm
             &cur.argb,
         );
     }
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    #[cfg(windows)]
+    {
+        crate::wincursor::apply(title, cache_key, cur);
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = (title, cache_key, cur);
     }
@@ -864,7 +868,11 @@ fn unset_window_cursor(title: &str) {
     {
         x11util::unset_cursor(title);
     }
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    #[cfg(windows)]
+    {
+        crate::wincursor::clear(title);
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = title;
     }
@@ -4304,31 +4312,23 @@ impl LinAmpApp {
     /// frame the pointer is inside. Call at the end of the window's viewport
     /// closure, with that viewport's `ctx`.
     fn apply_base_cursor(&self, ctx: &egui::Context, title: &str) {
-        // Custom skin cursors are X11-only. On other platforms we must NOT pin
-        // egui's cursor to Default (that would suppress the normal per-widget
-        // cursors — I-beam over text, resize handles, etc.) since there is no
-        // custom cursor to replace it with.
-        #[cfg(all(unix, not(target_os = "macos")))]
-        {
-            if self.prefs.disable_skin_cursors {
-                return;
-            }
-            let Some(cs) = self.classic.as_ref() else {
-                return;
-            };
-            if !cs.has_cursors() || ctx.pointer_hover_pos().is_none() {
-                return;
-            }
-            // Keep egui from re-applying its own cursor (which would overwrite
-            // ours): a constant icon means egui-winit only sets it once.
-            ctx.set_cursor_icon(egui::CursorIcon::Default);
-            if let Some(ci) = cs.cursor("normal") {
-                set_window_cursor(title, &format!("{}:normal", self.theme.name), ci);
-            }
+        if self.prefs.disable_skin_cursors {
+            return;
         }
-        #[cfg(not(all(unix, not(target_os = "macos"))))]
-        {
-            let _ = (ctx, title);
+        let Some(cs) = self.classic.as_ref() else {
+            return;
+        };
+        if !cs.has_cursors() || ctx.pointer_hover_pos().is_none() {
+            return;
+        }
+        // X11 only: pin egui's cursor so egui-winit doesn't overwrite the one we
+        // set via XDefineCursor. On Windows the WM_SETCURSOR subclass intercepts
+        // before winit, so no pin is needed (and pinning would wrongly suppress
+        // the normal per-widget cursors when skin cursors are off).
+        #[cfg(all(unix, not(target_os = "macos")))]
+        ctx.set_cursor_icon(egui::CursorIcon::Default);
+        if let Some(ci) = cs.cursor("normal") {
+            set_window_cursor(title, &format!("{}:normal", self.theme.name), ci);
         }
     }
 
