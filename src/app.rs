@@ -866,15 +866,7 @@ fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visible: bool) {
             if main == 0 {
                 return;
             }
-            // "LinAmp Menu" is the borderless context-menu popup: owning it by the
-            // main window floats it above the classic windows but still below a
-            // modal dialog opened from a menu item.
-            for title in [
-                "LinAmp Equalizer",
-                "LinAmp Playlist",
-                "LinAmp Library",
-                "LinAmp Menu",
-            ] {
+            for title in ["LinAmp Equalizer", "LinAmp Playlist", "LinAmp Library"] {
                 let child = FindWindowW(std::ptr::null(), wide(title).as_ptr());
                 if child != 0 && GetWindowLongPtrW(child, GWLP_HWNDPARENT) != main {
                     SetWindowLongPtrW(child, GWLP_HWNDPARENT, main);
@@ -885,6 +877,29 @@ fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visible: bool) {
     #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = (eq_visible, pl_visible);
+    }
+}
+
+/// Hide the borderless context-menu popup window immediately, so a modal file
+/// dialog opened from a menu item (which blocks the egui loop before egui can
+/// close the viewport) appears above it rather than under the always-on-top menu.
+/// The window is torn down by egui on the next frame once `self.popup` is cleared.
+fn hide_popup_window() {
+    #[cfg(windows)]
+    {
+        #[allow(non_snake_case)]
+        extern "system" {
+            fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+            fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
+        }
+        const SW_HIDE: i32 = 0;
+        let wide: Vec<u16> = "LinAmp Menu".encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            let h = FindWindowW(std::ptr::null(), wide.as_ptr());
+            if h != 0 {
+                ShowWindow(h, SW_HIDE);
+            }
+        }
     }
 }
 
@@ -1697,6 +1712,7 @@ impl LinAmpApp {
     // ---- file dialogs ------------------------------------------------------
 
     fn open_files(&mut self) {
+        hide_popup_window();
         if let Some(paths) = rfd::FileDialog::new()
             .add_filter(
                 "Audio",
@@ -1752,6 +1768,7 @@ impl LinAmpApp {
     }
 
     fn open_folder(&mut self) {
+        hide_popup_window();
         if let Some(dir) = rfd::FileDialog::new().pick_folder() {
             let was_empty = self.playlist.is_empty();
             self.playlist.add_folder(&dir);
@@ -1768,6 +1785,7 @@ impl LinAmpApp {
             self.status = "Playlist is empty.".to_string();
             return;
         }
+        hide_popup_window();
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("M3U playlist", &["m3u"])
             .add_filter("PLS playlist", &["pls"])
@@ -1782,6 +1800,7 @@ impl LinAmpApp {
     }
 
     fn load_playlist_dialog(&mut self) {
+        hide_popup_window();
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Playlists", &["m3u", "m3u8", "pls"])
             .pick_file()
@@ -2549,12 +2568,13 @@ impl LinAmpApp {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
-            // Follow the app's window level, and make the menu *owned* by the main
-            // window (see `group_child_windows`) so it floats above the classic
-            // windows — which are also owned by main — without being system-topmost.
-            // Being merely owned (not AlwaysOnTop) lets a modal dialog opened from a
-            // menu item still appear above it.
-            .with_window_level(self.window_level());
+            // Always on top: the EQ/playlist/library windows are *owned* by the main
+            // window (group_child_windows), which keeps them above sibling windows,
+            // and clicking one re-raises it — so only a system-topmost popup stays
+            // reliably above them. A modal dialog opened from a menu item would then
+            // sit under the menu, so dialog actions hide the menu first (see
+            // `hide_popup_window`).
+            .with_window_level(egui::WindowLevel::AlwaysOnTop);
         let id = egui::ViewportId::from_hash_of("linamp_popup");
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
@@ -5113,6 +5133,7 @@ impl LinAmpApp {
     // ---- skins / theming ---------------------------------------------------
 
     fn load_skin_dialog(&mut self, ctx: &egui::Context) {
+        hide_popup_window();
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Winamp skin", &["wsz", "zip"])
             .pick_file()
