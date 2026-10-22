@@ -564,6 +564,140 @@ mod x11util {
         })
         .unwrap_or(false)
     }
+
+    #[repr(C)]
+    struct XcursorImage {
+        version: u32,
+        size: u32,
+        width: u32,
+        height: u32,
+        xhot: u32,
+        yhot: u32,
+        delay: u32,
+        pixels: *mut u32,
+    }
+
+    struct CursorFns {
+        create: unsafe extern "C" fn(c_int, c_int) -> *mut XcursorImage,
+        load: unsafe extern "C" fn(*mut xlib::Display, *const XcursorImage) -> xlib::Cursor,
+        destroy: unsafe extern "C" fn(*mut XcursorImage),
+    }
+
+    /// Resolve the three libXcursor entry points we need (cached). `None` when
+    /// libXcursor is unavailable.
+    fn cursor_fns() -> Option<&'static CursorFns> {
+        thread_local! {
+            static FNS: RefCell<Option<Option<&'static CursorFns>>> = const { RefCell::new(None) };
+        }
+        FNS.with(|c| {
+            if c.borrow().is_none() {
+                let resolved = unsafe {
+                    extern "C" {
+                        fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
+                        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+                    }
+                    let mut h = ptr::null_mut();
+                    for name in [b"libXcursor.so.1\0".as_slice(), b"libXcursor.so\0".as_slice()] {
+                        h = dlopen(name.as_ptr() as *const c_char, 2);
+                        if !h.is_null() {
+                            break;
+                        }
+                    }
+                    let sym = |n: &[u8]| dlsym(h, n.as_ptr() as *const c_char);
+                    if h.is_null() {
+                        None
+                    } else {
+                        let create = sym(b"XcursorImageCreate\0");
+                        let load = sym(b"XcursorImageLoadCursor\0");
+                        let destroy = sym(b"XcursorImageDestroy\0");
+                        if create.is_null() || load.is_null() || destroy.is_null() {
+                            None
+                        } else {
+                            // Leak a 'static so the pointers stay valid for the process.
+                            Some(&*Box::leak(Box::new(CursorFns {
+                                create: std::mem::transmute(create),
+                                load: std::mem::transmute(load),
+                                destroy: std::mem::transmute(destroy),
+                            })))
+                        }
+                    }
+                };
+                *c.borrow_mut() = Some(resolved);
+            }
+            c.borrow().unwrap()
+        })
+    }
+
+    /// Set the cursor of the window titled `title` to a custom ARGB cursor.
+    /// `cache_key` dedupes the created X cursor (e.g. "skin:posbar"). Premultiplied
+    /// ARGB pixels, row-major. Returns false when unavailable (caller no-ops).
+    pub fn set_cursor(
+        title: &str,
+        cache_key: &str,
+        w: u32,
+        h: u32,
+        xhot: u16,
+        yhot: u16,
+        argb: &[u32],
+    ) -> bool {
+        let Some(fns) = cursor_fns() else {
+            return false;
+        };
+        thread_local! {
+            static CACHE: RefCell<std::collections::HashMap<String, xlib::Cursor>> =
+                RefCell::new(std::collections::HashMap::new());
+        }
+        with_conn(|xlib, d| unsafe {
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            let clients = client_list(xlib, d);
+            let mut win: xlib::Window = 0;
+            for &c in &clients {
+                if wm_name(xlib, d, c) == title {
+                    win = c;
+                    break;
+                }
+            }
+            let ok = if win != 0 {
+                let cursor = CACHE.with(|cache| {
+                    if let Some(&cur) = cache.borrow().get(cache_key) {
+                        return cur;
+                    }
+                    let img = (fns.create)(w as c_int, h as c_int);
+                    let cur = if img.is_null() {
+                        0
+                    } else {
+                        (*img).xhot = xhot as u32;
+                        (*img).yhot = yhot as u32;
+                        let dst = std::slice::from_raw_parts_mut(
+                            (*img).pixels,
+                            (w * h) as usize,
+                        );
+                        let n = dst.len().min(argb.len());
+                        dst[..n].copy_from_slice(&argb[..n]);
+                        let c = (fns.load)(d, img);
+                        (fns.destroy)(img);
+                        c
+                    };
+                    if cur != 0 {
+                        cache.borrow_mut().insert(cache_key.to_string(), cur);
+                    }
+                    cur
+                });
+                if cursor != 0 {
+                    (xlib.XDefineCursor)(d, win, cursor);
+                    (xlib.XFlush)(d);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            (xlib.XSetErrorHandler)(prev);
+            ok
+        })
+        .unwrap_or(false)
+    }
 }
 
 /// Make EQ/playlist *owned* by the main window so they ride its z-order (rise
@@ -615,6 +749,27 @@ fn set_window_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
     #[cfg(not(all(unix, not(target_os = "macos"))))]
     {
         let _ = (title, rects);
+    }
+}
+
+/// Set a classic window's custom (skin-defined) cursor. X11 only; a no-op
+/// elsewhere, where the standard cursor is kept.
+fn set_window_cursor(title: &str, cache_key: &str, cur: &crate::cursor::CursorImage) {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::set_cursor(
+            title,
+            cache_key,
+            cur.width,
+            cur.height,
+            cur.xhot,
+            cur.yhot,
+            &cur.argb,
+        );
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = (title, cache_key, cur);
     }
 }
 
@@ -777,6 +932,9 @@ pub struct LinAmpApp {
     /// reset windows to rectangular when switching to a skin without regions).
     shape_sig: [Option<u64>; 3],
     shaped_any: bool,
+    /// Last custom cursor name applied per window (main/eq/pl), to switch the X
+    /// cursor only when the hovered region changes.
+    cur_cursor: [Option<&'static str>; 3],
     /// Last composed fingerprint per window (main/eq/pl), to skip re-compositing
     /// and re-uploading an unchanged frame.
     tex_fp: [u64; 3],
@@ -969,6 +1127,7 @@ impl LinAmpApp {
             lib_tex_sig: None,
             shape_sig: [None; 3],
             shaped_any: false,
+            cur_cursor: [None; 3],
             lib_nav: crate::library::LibView::Audio,
             lib_artists: Vec::new(),
             lib_albums: Vec::new(),
@@ -3940,6 +4099,80 @@ impl LinAmpApp {
         self.shape_sig[idx] = Some(sig);
     }
 
+    /// The skin cursor name for the region under native coords (nx, ny) of `win`.
+    fn cursor_name(&self, win: ClWin, nx: f32, ny: f32) -> &'static str {
+        use classic::{Btn, EqRegion, PlRegion};
+        match win {
+            ClWin::Main => {
+                if self.main_shade {
+                    return "titlebar";
+                }
+                match classic::region_at(nx, ny) {
+                    Some(Btn::Seek) => "posbar",
+                    Some(Btn::Volume) | Some(Btn::Balance) => "volbal",
+                    Some(Btn::TitleBar) => "titlebar",
+                    Some(Btn::Close) => "close",
+                    _ => "normal",
+                }
+            }
+            ClWin::Eq => {
+                if self.eq_shade {
+                    return "eqtitle";
+                }
+                match classic::eq_region_at(nx, ny) {
+                    Some(EqRegion::Preamp) | Some(EqRegion::Band(_)) => "eqslid",
+                    Some(EqRegion::TitleBar) => "eqtitle",
+                    Some(EqRegion::Close) => "close",
+                    _ => "normal",
+                }
+            }
+            ClWin::Pl => {
+                if self.pl_shade {
+                    return "ptbar";
+                }
+                match classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h) {
+                    Some(PlRegion::TitleBar) => "ptbar",
+                    Some(PlRegion::Resize) => "psize",
+                    _ => "pnormal",
+                }
+            }
+        }
+    }
+
+    /// Update `win`'s X cursor from the skin's `.cur` set based on the hovered
+    /// region, only when it changes. No-op for skins without custom cursors.
+    fn update_cursor(&mut self, ctx: &egui::Context, win: ClWin, rect: egui::Rect) {
+        if !self.classic.as_ref().map(|c| c.has_cursors()).unwrap_or(false) {
+            return;
+        }
+        let Some(hp) = ctx.pointer_hover_pos() else {
+            return;
+        };
+        if !rect.contains(hp) {
+            return;
+        }
+        let idx = win_idx(win);
+        let nx = (hp.x - rect.left()) / self.scale;
+        let ny = (hp.y - rect.top()) / self.scale;
+        let name = self.cursor_name(win, nx, ny);
+        if self.cur_cursor[idx] == Some(name) {
+            return;
+        }
+        let title = match win {
+            ClWin::Main => "LinAmp",
+            ClWin::Eq => "LinAmp Equalizer",
+            ClWin::Pl => "LinAmp Playlist",
+        };
+        let fallback = if matches!(win, ClWin::Pl) { "pnormal" } else { "normal" };
+        let skin = self.theme.name.clone();
+        if let Some(cs) = self.classic.as_ref() {
+            if let Some(ci) = cs.cursor(name).or_else(|| cs.cursor(fallback)) {
+                set_window_cursor(title, &format!("{skin}:{name}"), ci);
+            }
+        }
+        self.cur_cursor[idx] = Some(name);
+    }
+
     fn render_classic(&mut self, ctx: &egui::Context) {
         if self.classic.is_none() {
             return;
@@ -4256,6 +4489,8 @@ impl LinAmpApp {
                             .on_hover_text(label);
                     }
                 }
+                // Skin-defined mouse cursor for the region under the pointer.
+                self.update_cursor(ctx, win, rect);
             });
     }
 

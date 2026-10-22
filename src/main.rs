@@ -5,6 +5,7 @@ mod app;
 mod balance;
 mod classic;
 mod config;
+mod cursor;
 mod dock;
 mod eq;
 mod library;
@@ -20,6 +21,26 @@ use app::LinAmpApp;
 
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+
+    // Headless cursor-parse check: `linamp --check-cur a.wsz b.wsz ...`
+    // Loads each skin (which parses its embedded .cur files) and reports how
+    // many cursors came back plus how long the load took, to catch a decoder
+    // that hangs or takes an absurd amount of time on a malformed cursor.
+    if args.iter().any(|a| a == "--check-cur") {
+        for p in args.iter().skip_while(|a| *a != "--check-cur").skip(1) {
+            let t = std::time::Instant::now();
+            match classic::ClassicSkin::load(std::path::Path::new(p)) {
+                Ok(s) => println!(
+                    "{p}: {} cursors, has_cursors={} in {:?}",
+                    s.cursor_count(),
+                    s.has_cursors(),
+                    t.elapsed()
+                ),
+                Err(e) => println!("{p}: load error: {e}"),
+            }
+        }
+        return Ok(());
+    }
 
     // Headless skin colour verifier: `linamp --check-skin a.wsz b.wsz ...`
     if args.iter().any(|a| a == "--check-skin") {
