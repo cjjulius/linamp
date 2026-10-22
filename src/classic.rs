@@ -267,6 +267,9 @@ pub struct ClassicSkin {
     text_bg: [u8; 3],
     /// Window-shape masks from REGION.TXT (empty = rectangular windows).
     pub regions: crate::region::SkinRegions,
+    /// Custom cursors from the skin's `.cur` files, keyed by lowercased basename
+    /// without extension (e.g. "normal", "posbar").
+    cursors: HashMap<String, crate::cursor::CursorImage>,
 }
 
 impl ClassicSkin {
@@ -274,6 +277,7 @@ impl ClassicSkin {
         let file = File::open(path)?;
         let mut zip = ZipArchive::new(file)?;
         let mut bitmaps = HashMap::new();
+        let mut cursors = HashMap::new();
         let mut region_txt = String::new();
         for i in 0..zip.len() {
             let mut f = zip.by_index(i)?;
@@ -295,6 +299,14 @@ impl ClassicSkin {
                 if f.read_to_end(&mut buf).is_ok() {
                     region_txt = String::from_utf8_lossy(&buf).into_owned();
                 }
+            } else if base.ends_with(".cur") {
+                let mut buf = Vec::new();
+                if f.read_to_end(&mut buf).is_ok() {
+                    if let Some(cur) = crate::cursor::parse(&buf) {
+                        let key = base.trim_end_matches(".cur").to_string();
+                        cursors.insert(key, cur);
+                    }
+                }
             }
         }
         if !bitmaps.contains_key("main.bmp") {
@@ -314,7 +326,23 @@ impl ClassicSkin {
             eq_sprites,
             text_bg,
             regions,
+            cursors,
         })
+    }
+
+    /// A custom cursor by lowercased basename (no extension), if the skin ships it.
+    pub fn cursor(&self, name: &str) -> Option<&crate::cursor::CursorImage> {
+        self.cursors.get(name)
+    }
+
+    /// Whether the skin ships any custom cursors.
+    pub fn has_cursors(&self) -> bool {
+        !self.cursors.is_empty()
+    }
+
+    /// Number of custom cursors parsed from the skin (diagnostics).
+    pub fn cursor_count(&self) -> usize {
+        self.cursors.len()
     }
 
     fn bmp(&self, name: &str) -> Option<&RgbaImage> {
