@@ -903,6 +903,45 @@ fn hide_popup_window() {
     }
 }
 
+/// Clip the borderless context-menu window to a rounded rectangle (corner radius
+/// `radius` physical px) so its corners are cut away at the OS level — otherwise
+/// the square opaque window shows its (dark) clear colour outside the frame's
+/// rounded fill. Windows only; a no-op elsewhere.
+fn round_popup_window(radius: i32) {
+    #[cfg(windows)]
+    {
+        #[allow(non_snake_case)]
+        extern "system" {
+            fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+            fn GetClientRect(hwnd: isize, rect: *mut [i32; 4]) -> i32;
+            fn CreateRoundRectRgn(x1: i32, y1: i32, x2: i32, y2: i32, w: i32, h: i32) -> isize;
+            fn SetWindowRgn(hwnd: isize, rgn: isize, redraw: i32) -> i32;
+        }
+        let wide: Vec<u16> = "LinAmp Menu".encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            let h = FindWindowW(std::ptr::null(), wide.as_ptr());
+            if h == 0 {
+                return;
+            }
+            let mut r = [0i32; 4]; // left, top, right, bottom (client is 0,0..w,h)
+            if GetClientRect(h, &mut r) == 0 {
+                return;
+            }
+            let (w, ht) = (r[2] - r[0], r[3] - r[1]);
+            if w <= 0 || ht <= 0 {
+                return;
+            }
+            // Region owned by the window after SetWindowRgn; don't delete it.
+            let rgn = CreateRoundRectRgn(0, 0, w + 1, ht + 1, radius * 2, radius * 2);
+            SetWindowRgn(h, rgn, 1);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = radius;
+    }
+}
+
 /// Apply (or clear) a window-shape mask to a classic window by title. X11 (Shape
 /// extension) and Windows (`SetWindowRgn`); a no-op elsewhere.
 fn set_window_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
@@ -2568,10 +2607,6 @@ impl LinAmpApp {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
-            // Transparent so the frame's rounded corners reveal what's behind,
-            // instead of a square opaque window hiding them (the Media Library's
-            // menu is rounded because it draws over its own window's content).
-            .with_transparent(true)
             // Always on top: the EQ/playlist/library windows are *owned* by the main
             // window (group_child_windows), which keeps them above sibling windows,
             // and clicking one re-raises it — so only a system-topmost popup stays
@@ -2583,12 +2618,14 @@ impl LinAmpApp {
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
             egui::CentralPanel::default()
-                // Inset by 1px so the border stroke lands fully inside the
-                // borderless window instead of being clipped at its edge.
                 .frame(
                     egui::Frame::popup(&style)
                         .stroke(border)
-                        .outer_margin(1.0),
+                        // Rounded fill + stroke that line up with the window's
+                        // rounded region (see `round_popup_window`); the region
+                        // clips the square window's corners so they aren't opaque.
+                        .rounding(6.0)
+                        .shadow(egui::epaint::Shadow::NONE),
                 )
                 .show(ctx, |ui| {
                     // Route every classic menu through the shared `menu_item` look
@@ -2850,6 +2887,10 @@ impl LinAmpApp {
                 close = true;
             }
         });
+
+        // Round the window's corners to match the frame's 6px rounding (scaled to
+        // physical pixels for the current DPI).
+        round_popup_window((6.0 * ctx.pixels_per_point()).round() as i32);
 
         self.popup_fresh = false;
         if close {
