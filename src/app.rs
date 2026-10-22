@@ -2614,6 +2614,11 @@ impl LinAmpApp {
             screen.y = screen.y.min(vr.max.y - h).max(vr.min.y);
         }
         let mut close = false;
+        // Corner radius (logical px) for the fill, border and window region. A hair
+        // larger than egui's default 6 because the window's corners are cut by a
+        // hard-edged (non-antialiased) GDI region, which reads tighter than the
+        // Media Library menu's smooth 6px round — 8 makes them match visually.
+        let corner = 8.0_f32;
         // Border that matches the Media Library menu: the same themed window
         // stroke colour (set in apply_theme), a crisp 1px line painted just inside
         // the window edge (see below).
@@ -2647,7 +2652,7 @@ impl LinAmpApp {
                     // is painted just inside the edge below instead.
                     egui::Frame::popup(&style)
                         .stroke(egui::Stroke::NONE)
-                        .rounding(6.0)
+                        .rounding(corner)
                         .shadow(egui::epaint::Shadow::NONE),
                 )
                 .show(ctx, |ui| {
@@ -2915,7 +2920,7 @@ impl LinAmpApp {
                 egui::Order::Foreground,
                 egui::Id::new("linamp_menu_border"),
             ))
-            .rect_stroke(vr, egui::Rounding::same(5.0), border);
+            .rect_stroke(vr, egui::Rounding::same(corner - 1.0), border);
             self.apply_base_cursor(ctx, "LinAmp Menu");
             // Escape closes the menu. The popup is a separate always-on-top OS
             // window that can hold focus, in which case `handle_window_input`
@@ -2926,11 +2931,11 @@ impl LinAmpApp {
             }
         });
 
-        // Round the window's corners to match the frame's 6px rounding (scaled to
+        // Round the window's corners to match the frame's rounding (scaled to
         // physical pixels for the current DPI). Applied once per popup — retried
         // each frame only until it succeeds — rather than rebuilt every frame.
         if !self.popup_rounded
-            && round_popup_window((6.0 * ctx.pixels_per_point()).round() as i32)
+            && round_popup_window((corner * ctx.pixels_per_point()).round() as i32)
         {
             self.popup_rounded = true;
         }
