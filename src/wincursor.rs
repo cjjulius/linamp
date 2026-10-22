@@ -20,6 +20,7 @@ type Hwnd = isize;
 type Handle = isize;
 
 const WM_SETCURSOR: u32 = 0x0020;
+const WM_MOUSEMOVE: u32 = 0x0200;
 const HTCLIENT: isize = 1;
 const BI_RGB: u32 = 0;
 const DIB_RGB_COLORS: u32 = 0;
@@ -197,6 +198,13 @@ pub fn clear(title: &str) {
     });
 }
 
+fn desired_for(hwnd: Hwnd) -> Option<Handle> {
+    DESIRED
+        .try_with(|d| d.try_borrow().ok().and_then(|m| m.get(&hwnd).copied()))
+        .ok()
+        .flatten()
+}
+
 extern "system" fn subclass_proc(
     hwnd: Hwnd,
     msg: u32,
@@ -206,16 +214,22 @@ extern "system" fn subclass_proc(
     _refdata: usize,
 ) -> isize {
     if msg == WM_SETCURSOR && (l & 0xFFFF) == HTCLIENT {
-        let cur = DESIRED
-            .try_with(|d| d.try_borrow().ok().and_then(|m| m.get(&hwnd).copied()))
-            .ok()
-            .flatten();
-        if let Some(cur) = cur {
+        if let Some(cur) = desired_for(hwnd) {
             unsafe {
                 SetCursor(cur);
             }
             return 1; // TRUE: handled, stop further processing
         }
     }
-    unsafe { DefSubclassProc(hwnd, msg, w, l) }
+    let r = unsafe { DefSubclassProc(hwnd, msg, w, l) };
+    // Decorated windows: winit/egui re-set the cursor while processing mouse
+    // movement, overriding WM_SETCURSOR. Re-assert ours after winit has run.
+    if msg == WM_MOUSEMOVE {
+        if let Some(cur) = desired_for(hwnd) {
+            unsafe {
+                SetCursor(cur);
+            }
+        }
+    }
+    r
 }

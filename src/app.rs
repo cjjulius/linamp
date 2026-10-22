@@ -2378,6 +2378,7 @@ impl LinAmpApp {
             app.sort_playlist();
         };
         let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp Menu")
             .with_position(screen)
             .with_inner_size(egui::vec2(w, h))
             .with_decorations(false)
@@ -2544,6 +2545,7 @@ impl LinAmpApp {
                         }
                     }
                 });
+            self.apply_base_cursor(ctx, "LinAmp Menu");
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }
