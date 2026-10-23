@@ -230,6 +230,34 @@ impl SortKey {
     }
 }
 
+/// Categories in the Preferences window's left sidebar. Classic Winamp groups
+/// its many options in a tree; LinAmp uses a flat category list that the
+/// buildout can extend (Title display, Audio, Skins, File types, Library…).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PrefTab {
+    Display,
+    Playback,
+    Playlist,
+    About,
+}
+
+impl PrefTab {
+    const ALL: [PrefTab; 4] = [
+        PrefTab::Display,
+        PrefTab::Playback,
+        PrefTab::Playlist,
+        PrefTab::About,
+    ];
+    fn label(self) -> &'static str {
+        match self {
+            PrefTab::Display => "Display",
+            PrefTab::Playback => "Playback",
+            PrefTab::Playlist => "Playlist",
+            PrefTab::About => "About",
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum VizMode {
     Spectrum,
@@ -420,6 +448,12 @@ pub struct LinAmpApp {
     skin_path: Option<PathBuf>,
     scale: f32,
     prefs_open: bool,
+    /// Which Preferences category is selected in the sidebar.
+    prefs_tab: PrefTab,
+    /// Preferences window position (None when closed, so it re-anchors to the
+    /// main window on open) and the grab offset while its title bar is dragged.
+    prefs_pos: Option<egui::Pos2>,
+    prefs_drag: Option<egui::Vec2>,
     lib_visible: bool,
     tag_editor: Option<tag_ui::TagEditor>,
     /// Jump-to-file search state (Some while the dialog is open).
@@ -572,6 +606,9 @@ impl LinAmpApp {
             skin_path: None,
             scale,
             prefs_open: false,
+            prefs_tab: PrefTab::Display,
+            prefs_pos: None,
+            prefs_drag: None,
             lib_visible: false,
             tag_editor: None,
             jump_file: None,
@@ -1635,91 +1672,197 @@ impl LinAmpApp {
 
     fn ui_prefs(&mut self, ctx: &egui::Context) {
         if !self.prefs_open {
+            // Re-anchor to the main window the next time it opens.
+            self.prefs_pos = None;
             return;
         }
         // Render in its own real window so it is never clipped by the (small)
-        // borderless main window.
-        let screen = self.win_pos[0] + egui::vec2(24.0, 24.0);
+        // borderless main window. Borderless with a skin-drawn title bar (like the
+        // classic windows and the Library) so the skin cursor covers the whole
+        // window — including the title bar — with no OS chrome to break it.
+        let default_pos = self.win_pos[0] + egui::vec2(24.0, 24.0);
+        let pos = *self.prefs_pos.get_or_insert(default_pos);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
-            .with_position(screen)
-            .with_inner_size(egui::vec2(340.0, 372.0))
+            .with_position(pos)
+            .with_inner_size(egui::vec2(440.0, 300.0))
+            .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
             .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_prefs");
         let mut close = false;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.strong("Display size");
-                let mut dbl = self.prefs.double_size;
-                ui.radio_value(&mut dbl, false, "1x — pixel-for-pixel");
-                ui.radio_value(&mut dbl, true, "2x — scaled for modern screens (Ctrl+D)");
-                if dbl != self.prefs.double_size {
-                    self.set_double_size(ctx, dbl);
-                }
-                ui.add_space(8.0);
-                ui.strong("ID3 tag loading");
-                let mut onload = self.prefs.tag_on_load;
-                ui.radio_value(&mut onload, true, "On load — scan when files are added");
-                ui.radio_value(&mut onload, false, "On view — lazily as rows scroll in");
-                if onload != self.prefs.tag_on_load {
-                    self.prefs.tag_on_load = onload;
-                    self.prefs.save();
-                    if onload {
-                        self.playlist.load_all();
+            // Top: skin-accented title bar (the window is borderless). Drag it to
+            // move the window; the × closes it. Mirrors the Library's title bar.
+            egui::TopBottomPanel::top("prefs_titlebar")
+                .exact_height(20.0)
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    let (bar, bar_resp) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 20.0),
+                        egui::Sense::click_and_drag(),
+                    );
+                    let accent = self.theme.accent;
+                    let txt = crate::skin::contrast_text(accent);
+                    ui.painter().rect_filled(bar, 0.0, accent);
+                    ui.painter().text(
+                        bar.left_center() + egui::vec2(6.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        "LinAmp Preferences",
+                        egui::FontId::proportional(13.0),
+                        txt,
+                    );
+                    // Close box on the right.
+                    let x_rect = egui::Rect::from_min_size(
+                        egui::pos2(bar.right() - 18.0, bar.center().y - 7.0),
+                        egui::vec2(14.0, 14.0),
+                    );
+                    let x_resp =
+                        ui.interact(x_rect, ui.id().with("prefs_close"), egui::Sense::click());
+                    ui.painter()
+                        .rect_stroke(x_rect, 2.0, egui::Stroke::new(1.0_f32, txt));
+                    ui.painter().text(
+                        x_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "×",
+                        egui::FontId::proportional(13.0),
+                        txt,
+                    );
+                    if x_resp.clicked() {
+                        close = true;
+                    }
+                    // Drag the title bar to move the window (skip when over the ×).
+                    if bar_resp.drag_started() && !x_resp.hovered() {
+                        if let Some(g) = global_cursor_points(ctx) {
+                            self.prefs_drag = Some(g - pos);
+                        }
+                    }
+                    if bar_resp.dragged() {
+                        if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.prefs_drag) {
+                            let np = g - grab;
+                            self.prefs_pos = Some(np);
+                            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(np));
+                        }
+                    }
+                    if bar_resp.drag_stopped() {
+                        self.prefs_drag = None;
+                    }
+                });
+            // Left: the category list (classic Winamp's Preferences tree, flattened
+            // to a list that the buildout can extend).
+            egui::SidePanel::left("prefs_cats")
+                .resizable(false)
+                .exact_width(104.0)
+                .show(ctx, |ui| {
+                    ui.add_space(6.0);
+                    for tab in PrefTab::ALL {
+                        if ui
+                            .selectable_label(self.prefs_tab == tab, tab.label())
+                            .clicked()
+                        {
+                            self.prefs_tab = tab;
+                        }
+                    }
+                });
+            // Bottom: Close on the left, a compact version on the right (always
+            // visible, whichever category is open).
+            egui::TopBottomPanel::bottom("prefs_footer").show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("LinAmp {}", env!("CARGO_PKG_VERSION")))
+                                .small()
+                                .color(Color32::GRAY),
+                        );
+                    });
+                });
+                ui.add_space(4.0);
+            });
+            // Right: the selected category's options.
+            egui::CentralPanel::default().show(ctx, |ui| match self.prefs_tab {
+                PrefTab::Display => {
+                    ui.strong("Display size");
+                    let mut dbl = self.prefs.double_size;
+                    ui.radio_value(&mut dbl, false, "1x — pixel-for-pixel");
+                    ui.radio_value(&mut dbl, true, "2x — scaled for modern screens (Ctrl+D)");
+                    if dbl != self.prefs.double_size {
+                        self.set_double_size(ctx, dbl);
+                    }
+                    ui.add_space(8.0);
+                    ui.strong("Window");
+                    let mut aot = self.prefs.always_on_top;
+                    if ui.checkbox(&mut aot, "Always on top").changed() {
+                        self.prefs.always_on_top = aot;
+                        self.prefs.save();
+                    }
+                    let mut disable_cur = self.prefs.disable_skin_cursors;
+                    if ui
+                        .checkbox(&mut disable_cur, "Disable skin cursors")
+                        .changed()
+                    {
+                        self.prefs.disable_skin_cursors = disable_cur;
+                        self.prefs.save();
+                        // Drop the custom cursors immediately when turning the
+                        // option off; re-enabling reapplies them as windows hover.
+                        if disable_cur {
+                            self.clear_skin_cursors();
+                        } else {
+                            self.cur_cursor = [None; 3];
+                        }
                     }
                 }
-
-                ui.add_space(8.0);
-                ui.strong("Playback");
-                // Behaviours that otherwise only have keyboard shortcuts, so they
-                // can be clicked instead of memorised. Shuffle/repeat are omitted
-                // here as they already have buttons on the classic main window.
-                ui.checkbox(&mut self.stop_after_current, "Stop after current track (Ctrl+V)");
-                ui.checkbox(&mut self.time_remaining, "Show time remaining (Ctrl+T)");
-                let mut fade = self.prefs.fade_on_stop;
-                if ui
-                    .checkbox(&mut fade, "Fade out when stopping (Shift+V)")
-                    .changed()
-                {
-                    self.prefs.fade_on_stop = fade;
-                    self.prefs.save();
-                }
-
-                ui.add_space(8.0);
-                ui.strong("Appearance");
-                let mut disable_cur = self.prefs.disable_skin_cursors;
-                if ui
-                    .checkbox(&mut disable_cur, "Disable Skin Cursors")
-                    .changed()
-                {
-                    self.prefs.disable_skin_cursors = disable_cur;
-                    self.prefs.save();
-                    // Drop the custom cursors immediately when turning the option
-                    // off; re-enabling reapplies them as windows are hovered.
-                    if disable_cur {
-                        self.clear_skin_cursors();
-                    } else {
-                        self.cur_cursor = [None; 3];
+                PrefTab::Playback => {
+                    ui.strong("Playback");
+                    // Behaviours that otherwise only have keyboard shortcuts, so
+                    // they can be clicked instead of memorised. Shuffle/repeat are
+                    // omitted — they already have buttons on the classic window.
+                    ui.checkbox(&mut self.stop_after_current, "Stop after current track (Ctrl+V)");
+                    ui.checkbox(&mut self.time_remaining, "Show time remaining (Ctrl+T)");
+                    let mut fade = self.prefs.fade_on_stop;
+                    if ui
+                        .checkbox(&mut fade, "Fade out when stopping (Shift+V)")
+                        .changed()
+                    {
+                        self.prefs.fade_on_stop = fade;
+                        self.prefs.save();
                     }
                 }
-
-                ui.add_space(10.0);
-                if ui.button("Close").clicked() {
-                    close = true;
+                PrefTab::Playlist => {
+                    ui.strong("ID3 tag loading");
+                    let mut onload = self.prefs.tag_on_load;
+                    ui.radio_value(&mut onload, true, "On load — scan when files are added");
+                    ui.radio_value(&mut onload, false, "On view — lazily as rows scroll in");
+                    if onload != self.prefs.tag_on_load {
+                        self.prefs.tag_on_load = onload;
+                        self.prefs.save();
+                        if onload {
+                            self.playlist.load_all();
+                        }
+                    }
                 }
-                ui.separator();
-                ui.label(
-                    egui::RichText::new(format!(
-                        "LinAmp {} ({} · {})",
-                        env!("CARGO_PKG_VERSION"),
-                        env!("GIT_HASH"),
-                        env!("COMMIT_DATE"),
-                    ))
-                    .small()
-                    .color(Color32::GRAY),
-                );
+                PrefTab::About => {
+                    ui.strong("LinAmp");
+                    ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "build {} · {}",
+                            env!("GIT_HASH"),
+                            env!("COMMIT_DATE"),
+                        ))
+                        .small()
+                        .color(Color32::GRAY),
+                    );
+                    ui.add_space(6.0);
+                    ui.hyperlink_to(
+                        "github.com/cjjulius/linamp",
+                        "https://github.com/cjjulius/linamp",
+                    );
+                }
             });
             self.apply_base_cursor(ctx, "LinAmp Preferences");
             if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
@@ -2098,11 +2241,14 @@ impl LinAmpApp {
         if !cs.has_cursors() || ctx.pointer_hover_pos().is_none() {
             return;
         }
-        // X11 only: pin egui's cursor so egui-winit doesn't overwrite the one we
-        // set via XDefineCursor. On Windows the WM_SETCURSOR subclass intercepts
-        // before winit, so no pin is needed (and pinning would wrongly suppress
-        // the normal per-widget cursors when skin cursors are off).
-        #[cfg(all(unix, not(target_os = "macos")))]
+        // Pin egui's cursor to Default so its per-widget cursors (the pointing
+        // hand over buttons/links, the text caret in fields) don't show through on
+        // these widget-heavy windows — we want the skin cursor everywhere inside
+        // them. This runs only when skin cursors are on and the skin has them (the
+        // early returns above), so the normal per-widget cursors are untouched
+        // when skin cursors are off. On X11 it also stops egui-winit from
+        // overwriting the XDefineCursor we set; on Windows the WM_SETCURSOR
+        // subclass paints the skin cursor over the Default that winit applies.
         ctx.set_cursor_icon(egui::CursorIcon::Default);
         if let Some(ci) = cs.cursor("normal") {
             set_window_cursor(title, &format!("{}:normal", self.theme.name), ci);
