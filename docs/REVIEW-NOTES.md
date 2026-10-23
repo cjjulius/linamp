@@ -32,3 +32,9 @@ code plus a working/not-working binary): visual and behavior changes.
   place) by skipping the unchanged artists() query on artist/album selection
   changes. Perf-only, no user-visible change. Optional sanity check: clicking
   artists and albums still filters the album pane and track list correctly.
+
+- #46 playlist editor extras: added "Remove missing files" (Rem menu) and
+  "Randomize list" / "Reverse list" (Misc menu). The operations are unit-tested;
+  the menu wiring and popup sizing (Rem now 4 rows, Misc now 6) need a visual
+  check — open the playlist bottom-bar Rem/Misc menus and confirm the new items
+  show and behave.

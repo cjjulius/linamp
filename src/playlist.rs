@@ -188,6 +188,58 @@ impl Playlist {
         }
     }
 
+    /// Remove tracks whose file no longer exists. Returns how many were removed.
+    /// The currently-playing track stays selected if it survives (else `current`
+    /// clears). Classic Winamp's "remove missing files".
+    pub fn remove_missing(&mut self) -> usize {
+        let before = self.tracks.len();
+        let cur = self.current_path();
+        self.tracks.retain(|t| t.path.exists());
+        self.reselect(cur);
+        before - self.tracks.len()
+    }
+
+    /// Reverse the playlist order, keeping the current track selected.
+    pub fn reverse(&mut self) {
+        let cur = self.current_path();
+        self.tracks.reverse();
+        self.reselect(cur);
+    }
+
+    /// Shuffle the playlist into a random order, keeping the current track
+    /// selected. The order is not reproducible (seeded from the clock).
+    pub fn randomize(&mut self) {
+        let cur = self.current_path();
+        // xorshift64 — a playlist shuffle needs no cryptographic quality.
+        let mut s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9E37_79B9_7F4A_7C15)
+            | 1;
+        let mut next = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        // Fisher-Yates.
+        for i in (1..self.tracks.len()).rev() {
+            let j = (next() % (i as u64 + 1)) as usize;
+            self.tracks.swap(i, j);
+        }
+        self.reselect(cur);
+    }
+
+    /// Path of the currently-playing track, if any.
+    fn current_path(&self) -> Option<PathBuf> {
+        self.current.and_then(|i| self.tracks.get(i)).map(|t| t.path.clone())
+    }
+
+    /// Point `current` at the track with `path` after a reorder/removal.
+    fn reselect(&mut self, path: Option<PathBuf>) {
+        self.current = path.and_then(|p| self.tracks.iter().position(|t| t.path == p));
+    }
+
     /// Index after `current`, honoring shuffle/repeat-all.
     pub fn next_index(&self, shuffle: bool, repeat_all: bool) -> Option<usize> {
         if self.tracks.is_empty() {
@@ -384,6 +436,55 @@ mod tests {
         assert!(!t.loaded);
         assert_eq!(t.title, "Song");
         assert_eq!(t.display_name(), "Song");
+    }
+
+    fn pl_of(paths: &[&str], current: Option<usize>) -> Playlist {
+        Playlist {
+            tracks: paths.iter().map(|p| Track::new(PathBuf::from(p))).collect(),
+            current,
+        }
+    }
+
+    #[test]
+    fn reverse_keeps_current_track() {
+        let mut pl = pl_of(&["/a.mp3", "/b.mp3", "/c.mp3"], Some(0));
+        pl.reverse();
+        assert_eq!(pl.tracks[0].path, PathBuf::from("/c.mp3"));
+        assert_eq!(pl.tracks[2].path, PathBuf::from("/a.mp3"));
+        assert_eq!(pl.current, Some(2)); // the once-first track is now last
+    }
+
+    #[test]
+    fn randomize_is_a_permutation_keeping_current() {
+        let paths: Vec<String> = (0..20).map(|i| format!("/{i}.mp3")).collect();
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let mut pl = pl_of(&refs, Some(5));
+        pl.randomize();
+        assert_eq!(pl.tracks.len(), 20);
+        let mut got: Vec<_> = pl.tracks.iter().map(|t| t.path.clone()).collect();
+        got.sort();
+        let mut want: Vec<_> = paths.iter().map(PathBuf::from).collect();
+        want.sort();
+        assert_eq!(got, want, "same set of tracks");
+        assert_eq!(pl.tracks[pl.current.unwrap()].path, PathBuf::from("/5.mp3"));
+    }
+
+    #[test]
+    fn remove_missing_drops_nonexistent_files() {
+        let dir = std::env::temp_dir();
+        let real = dir.join(format!("linamp_rm_{}.mp3", std::process::id()));
+        std::fs::write(&real, b"x").unwrap();
+        let gone = dir.join("linamp_rm_zzz_does_not_exist.mp3");
+        let _ = std::fs::remove_file(&gone);
+        let mut pl = Playlist {
+            tracks: vec![Track::new(gone), Track::new(real.clone())],
+            current: Some(1),
+        };
+        assert_eq!(pl.remove_missing(), 1);
+        assert_eq!(pl.tracks.len(), 1);
+        assert_eq!(pl.tracks[0].path, real);
+        assert_eq!(pl.current, Some(0)); // current followed its surviving track
+        let _ = std::fs::remove_file(&real);
     }
 
     #[test]

@@ -24,9 +24,9 @@ pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
     let (buttons, seps, width) = match kind {
         Popup::Options => (9, 3, 182.0),
         Popup::PlAdd => (2, 0, 182.0),
-        Popup::PlRem => (3, 0, 182.0),
+        Popup::PlRem => (4, 0, 182.0),
         Popup::PlSel => (3, 0, 182.0),
-        Popup::PlMisc => (4, 0, 182.0),
+        Popup::PlMisc => (6, 0, 182.0),
         Popup::PlList => (3, 0, 182.0),
         // Right-click context menus: wider to fit the shortcut column.
         Popup::PlTrack => (6, 2, 210.0),
@@ -227,6 +227,12 @@ impl super::LinAmpApp {
                                 self.pl_remove(true);
                                 close = true;
                             }
+                            if item(ui, "Remove missing files") {
+                                let n = self.playlist.remove_missing();
+                                self.pl_selection.clear();
+                                self.status = format!("Removed {n} missing file(s).");
+                                close = true;
+                            }
                             if item(ui, "Remove all") {
                                 self.playlist.clear();
                                 self.pl_selection.clear();
@@ -263,6 +269,16 @@ impl super::LinAmpApp {
                             }
                             if item(ui, "Sort by duration") {
                                 sort(self, SortKey::Duration);
+                                close = true;
+                            }
+                            if item(ui, "Randomize list") {
+                                self.playlist.randomize();
+                                self.pl_selection.clear();
+                                close = true;
+                            }
+                            if item(ui, "Reverse list") {
+                                self.playlist.reverse();
+                                self.pl_selection.clear();
                                 close = true;
                             }
                         }
