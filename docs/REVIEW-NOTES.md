@@ -63,3 +63,8 @@ code plus a working/not-working binary): visual and behavior changes.
   now call one MainState::lcd_mmss helper. Behavior is unchanged and covered by a
   new unit test plus the existing byte-identical render tests, so no human/visual
   check is required for this one.
+
+- Playlist file decoding robustness (bug-fix): .m3u/.pls parsing used
+  read_to_string, so a single non-UTF-8 byte or a leading UTF-8 BOM made the
+  whole file load as zero tracks. It now reads bytes, decodes leniently, and
+  strips a BOM. Fully covered by a unit test; no manual check required.

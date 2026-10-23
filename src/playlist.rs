@@ -330,7 +330,12 @@ pub fn save_playlist_file(path: &Path, tracks: &[Track]) -> std::io::Result<()> 
 /// Return the file paths referenced by an .m3u/.m3u8/.pls file, resolving
 /// relative paths against the playlist file's own directory.
 pub fn parse_playlist_file(path: &Path) -> Vec<PathBuf> {
-    let content = std::fs::read_to_string(path).unwrap_or_default();
+    // Decode leniently: a single non-UTF-8 byte (or a Latin-1 playlist) must not
+    // make the whole file load as empty the way read_to_string would. Strip a
+    // leading UTF-8 BOM so the first line still parses.
+    let bytes = std::fs::read(path).unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes);
+    let content = text.strip_prefix('\u{feff}').unwrap_or(text.as_ref());
     let base = path.parent();
     let ext = path
         .extension()
@@ -502,6 +507,30 @@ mod tests {
         assert_eq!(pl.tracks[0].path, real);
         assert_eq!(pl.current, Some(0)); // current followed its surviving track
         let _ = std::fs::remove_file(&real);
+    }
+
+    #[test]
+    fn parse_playlist_tolerates_bom_and_bad_bytes() {
+        // A leading UTF-8 BOM plus a stray non-UTF-8 byte must not discard the
+        // whole file; the valid entries still parse.
+        let dir = std::env::temp_dir();
+        let m3u = dir.join(format!("linamp_bom_{}.m3u", std::process::id()));
+        let mut data = vec![0xEF, 0xBB, 0xBF]; // UTF-8 BOM
+        data.extend_from_slice(b"#EXTM3U\n/music/a.mp3\n");
+        data.push(0xFF); // invalid UTF-8 byte on its own line
+        data.extend_from_slice(b"\n/music/b.mp3\n");
+        std::fs::write(&m3u, &data).unwrap();
+
+        let got = parse_playlist_file(&m3u);
+        assert!(got.contains(&PathBuf::from("/music/a.mp3")), "got {got:?}");
+        assert!(got.contains(&PathBuf::from("/music/b.mp3")), "got {got:?}");
+        // The BOM must be stripped so the header is still treated as a comment,
+        // not pushed as a bogus path.
+        assert!(
+            !got.iter().any(|p| p.to_string_lossy().contains("EXTM3U")),
+            "header leaked as a path: {got:?}"
+        );
+        let _ = std::fs::remove_file(&m3u);
     }
 
     #[test]
