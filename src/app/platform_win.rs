@@ -430,16 +430,25 @@ mod x11util {
     /// of Windows' `SetWindowRgn`, so the popup's square corners don't show
     /// through the rounded fill. Returns true once applied; false while the window
     /// isn't mapped/sized yet, so the caller retries next frame.
-    pub fn round_window(title: &str, radius: i32) -> bool {
+    pub fn round_window(title: &str, radius: i32, force: bool) -> bool {
         let Some(shape) = shape_fn() else {
             return false;
         };
-        // Last (w, h, radius) the shape was built for, per window title. The popup
-        // window is reused and resized between menus, so re-shape only when the
-        // live geometry actually changes — cheap enough to call every frame.
+        // Last (window id, w, h, radius) the shape was built for, per window title.
+        // The popup window is reused and resized between menus — and sometimes
+        // destroyed and recreated with a new id at the *same* size — so key on the
+        // id too: a new window must be re-shaped even when its size is unchanged.
         thread_local! {
-            static LAST: RefCell<std::collections::HashMap<String, (u32, u32, i32)>> =
+            static LAST: RefCell<std::collections::HashMap<String, (xlib::Window, u32, u32, i32)>> =
                 RefCell::new(std::collections::HashMap::new());
+        }
+        // Forcing (a popup just opened) invalidates the cache up front, so the next
+        // successful reshape fires even if the (recreated) window isn't findable in
+        // the client list until a later, non-forcing frame.
+        if force {
+            LAST.with(|c| {
+                c.borrow_mut().remove(title);
+            });
         }
         with_conn(|xlib, d| unsafe {
             let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
@@ -451,13 +460,15 @@ mod x11util {
                     d, win, &mut root, &mut x, &mut y, &mut w, &mut h, &mut bw, &mut depth,
                 );
                 if got != 0 && w > 0 && h > 0 {
-                    if LAST.with(|c| c.borrow().get(title).copied()) == Some((w, h, radius)) {
-                        // Already shaped for this exact size — nothing to do.
+                    if LAST.with(|c| c.borrow().get(title).copied()) == Some((win, w, h, radius)) {
+                        // Already shaped for this exact window + size — nothing to do.
+                        // (`force` cleared this entry above, so a just-opened popup
+                        // always falls through to reshape.)
                         (xlib.XSetErrorHandler)(prev);
                         return true;
                     }
                     LAST.with(|c| {
-                        c.borrow_mut().insert(title.to_string(), (w, h, radius));
+                        c.borrow_mut().insert(title.to_string(), (win, w, h, radius));
                     });
                     let rects = rounded_rect_rects(w as i32, h as i32, radius);
                     const SHAPE_BOUNDING: c_int = 0;
@@ -791,10 +802,12 @@ pub(crate) fn find_window(title: &str) -> isize {
 /// `radius` physical px) so its corners are cut away at the OS level — otherwise
 /// the square opaque window shows its (dark) clear colour outside the frame's
 /// rounded fill. Returns true once the region is applied, so the caller stops
-/// retrying. Windows only; a no-op (and `true`) elsewhere.
-pub(crate) fn round_popup_window(radius: i32) -> bool {
+/// retrying. `force` re-applies even if nothing seems to have changed (X11 only;
+/// used on the frame a popup first opens). Windows and X11; a no-op elsewhere.
+pub(crate) fn round_popup_window(radius: i32, force: bool) -> bool {
     #[cfg(windows)]
     {
+        let _ = force;
         #[allow(non_snake_case)]
         extern "system" {
             fn GetClientRect(hwnd: isize, rect: *mut [i32; 4]) -> i32;
@@ -827,11 +840,11 @@ pub(crate) fn round_popup_window(radius: i32) -> bool {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        x11util::round_window("LinAmp Menu", radius)
+        x11util::round_window("LinAmp Menu", radius, force)
     }
     #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
-        let _ = radius;
+        let _ = (radius, force);
         true
     }
 }
