@@ -246,7 +246,7 @@ impl Playlist {
             return None;
         }
         if shuffle {
-            return Some(pseudo_random(self.tracks.len()));
+            return Some(random_other(self.tracks.len(), self.current));
         }
         match self.current {
             Some(c) if c + 1 < self.tracks.len() => Some(c + 1),
@@ -267,7 +267,7 @@ impl Playlist {
             return None;
         }
         if shuffle {
-            return Some(pseudo_random(self.tracks.len()));
+            return Some(random_other(self.tracks.len(), self.current));
         }
         match self.current {
             Some(c) if c > 0 => Some(c - 1),
@@ -398,6 +398,23 @@ fn pseudo_random(len: usize) -> usize {
     nanos % len.max(1)
 }
 
+/// A random index in `0..len` that isn't `current`, so shuffle never replays the
+/// current track back-to-back (classic Winamp behaviour). Falls back to any index
+/// when there's no current track or only one track.
+fn random_other(len: usize, current: Option<usize>) -> usize {
+    match current {
+        Some(c) if len > 1 && c < len => {
+            let r = pseudo_random(len - 1); // 0..len-1, then skip over c
+            if r >= c {
+                r + 1
+            } else {
+                r
+            }
+        }
+        _ => pseudo_random(len),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,6 +502,33 @@ mod tests {
         assert_eq!(pl.tracks[0].path, real);
         assert_eq!(pl.current, Some(0)); // current followed its surviving track
         let _ = std::fs::remove_file(&real);
+    }
+
+    #[test]
+    fn shuffle_never_repeats_current_track() {
+        let pl = pl_of(&["/0.mp3", "/1.mp3", "/2.mp3", "/3.mp3"], Some(2));
+        for _ in 0..64 {
+            assert_ne!(pl.next_index(true, false), Some(2));
+            assert_ne!(pl.prev_index(true, false), Some(2));
+            assert!(pl.next_index(true, false).unwrap() < 4);
+        }
+        // A single-track list can only return that track.
+        let one = pl_of(&["/only.mp3"], Some(0));
+        assert_eq!(one.next_index(true, false), Some(0));
+    }
+
+    #[test]
+    fn next_prev_index_navigation() {
+        let pl = |cur| pl_of(&["/0.mp3", "/1.mp3", "/2.mp3"], cur);
+        assert_eq!(pl(Some(0)).next_index(false, false), Some(1));
+        assert_eq!(pl(Some(2)).next_index(false, false), None); // last, no repeat
+        assert_eq!(pl(Some(2)).next_index(false, true), Some(0)); // last, repeat wraps
+        assert_eq!(pl(None).next_index(false, false), Some(0)); // nothing playing
+        assert_eq!(pl(Some(1)).prev_index(false, false), Some(0));
+        assert_eq!(pl(Some(0)).prev_index(false, false), None); // first, no repeat
+        assert_eq!(pl(Some(0)).prev_index(false, true), Some(2)); // first, repeat wraps
+        let empty = Playlist { tracks: vec![], current: None };
+        assert_eq!(empty.next_index(false, false), None);
     }
 
     #[test]
