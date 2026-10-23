@@ -43,3 +43,9 @@ code plus a working/not-working binary): visual and behavior changes.
   (from CARGO_PKG_VERSION) at the bottom; prefs window height bumped to fit.
   Visual check: open Preferences (Ctrl+P) and confirm the version line shows and
   nothing is clipped. (Could not screenshot via synthetic input in the harness.)
+
+- #106 Media Library titlebar: the inactive (unfocused) title now measures glyph
+  widths from the clean SELECTED font row, so the stray pixel on 'Y' is excluded
+  and kerning matches the active title. The active render is byte-for-byte
+  unchanged (verified). Visual check: unfocus the app and confirm the Media
+  Library title ("LINAMP LIBRARY") has no stray pixel on 'Y' and even spacing.

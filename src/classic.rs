@@ -683,14 +683,21 @@ fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool)
     // in Green Dimension, …). Sample it from the 1px margin left of the first
     // glyph (A starts at x=1) on this font row; fall back to the common cyan when
     // the skin's GEN.BMP is too short to hold the font rows.
-    let key = if fy < g.height() {
-        let p = g.get_pixel(0, fy);
-        [p[0], p[1], p[2]]
-    } else {
-        GEN_KEY
+    let key_at = |row: u32| {
+        if row < g.height() {
+            let p = g.get_pixel(0, row);
+            [p[0], p[1], p[2]]
+        } else {
+            GEN_KEY
+        }
     };
-    // Prefer the skin's measured glyph metrics; fall back to the fixed table.
-    let table = gen_font_table(g, fy, key);
+    let key = key_at(fy);
+    // Measure glyph widths from the SELECTED row for both variants. The glyph
+    // columns are identical in the selected and normal rows, but the normal
+    // (inactive) row has a stray pixel on some glyphs (e.g. Y) that would widen
+    // the measured run; using the clean selected widths excludes it and keeps
+    // kerning identical between the two variants (#106).
+    let table = gen_font_table(g, GEN_FONT_Y_SELECTED, key_at(GEN_FONT_Y_SELECTED));
     let glyph = |c: char| -> Option<(u32, u32)> {
         c.is_ascii_uppercase().then(|| {
             let i = (c as u8 - b'A') as usize;
