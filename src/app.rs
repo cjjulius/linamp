@@ -1649,9 +1649,8 @@ impl LinAmpApp {
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
             .with_position(screen)
-            .with_inner_size(egui::vec2(400.0, 300.0))
-            .with_min_inner_size(egui::vec2(340.0, 220.0))
-            .with_resizable(true)
+            .with_inner_size(egui::vec2(440.0, 300.0))
+            .with_resizable(false)
             .with_taskbar(false)
             .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_prefs");
