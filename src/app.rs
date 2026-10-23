@@ -1858,11 +1858,11 @@ impl LinAmpApp {
     }
 
     fn prefs_page_playback(&mut self, ui: &mut egui::Ui) {
-        Self::pref_section(ui, "On stop / end", |ui| {
-            // Behaviours that otherwise only have keyboard shortcuts, so they can
-            // be clicked instead of memorised. Shuffle/repeat are omitted — they
-            // already have buttons on the classic main window.
-            ui.checkbox(&mut self.stop_after_current, "Stop after current track (Ctrl+V)");
+        Self::pref_section(ui, "On stop", |ui| {
+            // Only genuine, persistent settings belong in Preferences. One-shot
+            // actions ("Stop after current", Ctrl+V) and view toggles ("time
+            // remaining", Ctrl+T) keep their shortcuts but are deliberately not
+            // shown here — a settings checkbox implies it sticks, and they don't.
             let mut fade = self.prefs.fade_on_stop;
             if ui
                 .checkbox(&mut fade, "Fade out when stopping (Shift+V)")
@@ -1871,9 +1871,6 @@ impl LinAmpApp {
                 self.prefs.fade_on_stop = fade;
                 self.prefs.save();
             }
-        });
-        Self::pref_section(ui, "Time display", |ui| {
-            ui.checkbox(&mut self.time_remaining, "Show time remaining (Ctrl+T)");
         });
     }
 
