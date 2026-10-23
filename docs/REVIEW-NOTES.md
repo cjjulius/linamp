@@ -137,3 +137,11 @@ code plus a working/not-working binary): visual and behavior changes.
   check: load a minimal skin missing those bitmaps, collapse the EQ, and confirm
   the shade bar is visible with a working close button. (The bundled skins all
   ship EQMAIN, so this fallback only shows on sparse third-party skins.)
+
+- #18 (partial, cont.): the main window's volume and balance sliders now draw a
+  synthesized groove + thumb when the skin omits VOLUME.BMP / BALANCE.BMP, so the
+  level and pan stay visible instead of sitting in a dead recess. The thumb
+  position is unit-tested; the appearance is a plain grey groove with a lighter
+  thumb. Optional visual check: on a skin missing those bitmaps, confirm the
+  volume/balance levels read clearly and track the controls. (All bundled skins
+  ship both bitmaps, so this only shows on sparse third-party skins.)
