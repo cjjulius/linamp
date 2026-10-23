@@ -57,3 +57,9 @@ code plus a working/not-working binary): visual and behavior changes.
   Interaction check: single-click the time counter and confirm it flips to the
   remaining (negative) time and back; the Ctrl+T shortcut and the Preferences
   checkbox should still work too.
+
+- LCD time formatting dedup (refactor): the elapsed/remaining + mm:ss + 99-minute
+  cap logic was duplicated between the full and window-shade time displays; both
+  now call one MainState::lcd_mmss helper. Behavior is unchanged and covered by a
+  new unit test plus the existing byte-identical render tests, so no human/visual
+  check is required for this one.

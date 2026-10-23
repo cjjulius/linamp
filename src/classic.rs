@@ -212,6 +212,22 @@ pub struct MainState {
     pub viz_peak: [u8; 3],
 }
 
+impl MainState {
+    /// The LCD time reading as `(minutes, seconds, is_remaining)`, honoring the
+    /// elapsed/remaining toggle. Remaining is only reported when the duration is
+    /// known; minutes are capped at 99 to fit the two-digit LCD, matching the
+    /// classic skin. Shared by the full and window-shade time displays.
+    fn lcd_mmss(&self) -> (u32, u32, bool) {
+        let remaining = self.time_remaining && self.duration > 0.0;
+        let secs = if remaining {
+            (self.duration - self.pos).max(0.0) as u32
+        } else {
+            self.pos.max(0.0) as u32
+        };
+        ((secs / 60).min(99), secs % 60, remaining)
+    }
+}
+
 /// Hit target on a 14px window-shade bar.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ShadeHit {
@@ -442,14 +458,7 @@ impl ClassicSkin {
 
         // Time digits (elapsed, or remaining with a leading minus).
         if let Some(nb) = self.bmp("numbers.bmp").or_else(|| self.bmp("nums_ex.bmp")) {
-            let remaining = st.time_remaining && st.duration > 0.0;
-            let secs = if remaining {
-                (st.duration - st.pos).max(0.0) as u32
-            } else {
-                st.pos.max(0.0) as u32
-            };
-            let mm = (secs / 60).min(99);
-            let ss = secs % 60;
+            let (mm, ss, remaining) = st.lcd_mmss();
             let digits = [mm / 10, mm % 10, ss / 10, ss % 10];
             let xs = [48, 60, 78, 90];
             for (i, &d) in digits.iter().enumerate() {
@@ -523,14 +532,9 @@ impl ClassicSkin {
         // fill in the time: the digits sit either side of the sprite's baked ":"
         // separator (~x143). Shows remaining (with a leading minus) when the
         // elapsed/remaining toggle is on, matching the expanded LCD.
-        let remaining = st.time_remaining && st.duration > 0.0;
-        let secs = if remaining {
-            (st.duration - st.pos).max(0.0) as u32
-        } else {
-            st.pos.max(0.0) as u32
-        };
-        let mm = format!("{:02}", (secs / 60).min(99));
-        let ss = format!("{:02}", secs % 60);
+        let (mm, ss, remaining) = st.lcd_mmss();
+        let mm = format!("{:02}", mm);
+        let ss = format!("{:02}", ss);
         self.draw_text_tinted(&mut c, &mm, 132, 4, 10, st.fg);
         self.draw_text_tinted(&mut c, &ss, 146, 4, 10, st.fg);
         if remaining {
@@ -2020,6 +2024,44 @@ mod tests {
         let a = skin.compose_main_shade(&mk("")).into_raw();
         let b = skin.compose_main_shade(&mk("A VERY LONG SONG TITLE 1234567890")).into_raw();
         assert_eq!(a, b, "the collapsed main bar must not draw the song title");
+    }
+
+    #[test]
+    fn lcd_mmss_honors_elapsed_remaining_and_caps_minutes() {
+        let st = |pos: f32, duration: f32, time_remaining: bool| MainState {
+            focused: true,
+            play: PlayUi::Playing,
+            pressed: None,
+            shuffle: false,
+            repeat: false,
+            eq_on: false,
+            pl_on: false,
+            always_on_top: false,
+            double_size: false,
+            pos,
+            duration,
+            time_remaining,
+            volume: 0.5,
+            balance: 0.0,
+            stereo: true,
+            title: String::new(),
+            kbps: "128".to_string(),
+            khz: "44".to_string(),
+            fg: [0, 255, 0],
+            viz: None,
+            viz_spectrum: Vec::new(),
+            viz_peak: [0, 0, 0],
+        };
+        // Elapsed: 71s -> 1:11, not flagged remaining.
+        assert_eq!(st(71.0, 200.0, false).lcd_mmss(), (1, 11, false));
+        // Remaining: 200 - 71 = 129s -> 2:09, flagged remaining.
+        assert_eq!(st(71.0, 200.0, true).lcd_mmss(), (2, 9, true));
+        // Remaining is suppressed when the duration is unknown.
+        assert_eq!(st(71.0, 0.0, true).lcd_mmss(), (1, 11, false));
+        // Past the end never shows a negative; it clamps to 0:00.
+        assert_eq!(st(250.0, 200.0, true).lcd_mmss(), (0, 0, true));
+        // Minutes are capped at 99 for the two-digit LCD (100:40 -> 99:40).
+        assert_eq!(st(6040.0, 0.0, false).lcd_mmss(), (99, 40, false));
     }
 
     #[test]
