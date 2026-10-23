@@ -20,3 +20,10 @@ code plus a working/not-working binary): visual and behavior changes.
   regression test. Optional interactive sanity check: open the tag editor on a
   file with long/non-Latin tags, copy ID3v2 to ID3v1, save, and confirm the file
   still plays.
+
+- #97 non-ASCII text readability (partial): the classic bitmap-font path now
+  ASCII-folds accented and Vietnamese characters to their base letter (e.g.
+  "Trường Sơn" renders as "Truong Son") instead of blank gaps. Visual change —
+  confirm accented/Vietnamese track titles read sensibly in the classic
+  main/EQ/playlist windows. Full non-Latin glyph rendering still needs the font
+  atlas approach from the issue; #97 left open for that.

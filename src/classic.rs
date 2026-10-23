@@ -851,9 +851,53 @@ fn blit(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, sy: u32
     }
 }
 
+/// Approximate an accented Latin character with its base ASCII letter, so the
+/// ASCII-only bitmap font renders it readably instead of as a blank (#97, e.g.
+/// Vietnamese "Trường" -> "Truong"). Returns the char unchanged when unmapped.
+/// This is a readability fallback; full non-Latin glyphs would need a font atlas.
+fn ascii_fold(ch: char) -> char {
+    match ch as u32 {
+        // Latin-1 Supplement
+        0xC0..=0xC6 | 0xE0..=0xE6 => 'a',
+        0xC7 | 0xE7 => 'c',
+        0xC8..=0xCB | 0xE8..=0xEB => 'e',
+        0xCC..=0xCF | 0xEC..=0xEF => 'i',
+        0xD0 | 0xF0 => 'd',
+        0xD1 | 0xF1 => 'n',
+        0xD2..=0xD6 | 0xD8 | 0xF2..=0xF6 | 0xF8 => 'o',
+        0xD9..=0xDC | 0xF9..=0xFC => 'u',
+        0xDD | 0xFD | 0xFF => 'y',
+        0xDF => 's',
+        // Latin Extended-A/B: common accented letters and Vietnamese ơ/ư/đ/ă
+        0x100..=0x105 => 'a',
+        0x106..=0x10D => 'c',
+        0x110 | 0x111 => 'd',
+        0x112..=0x11B => 'e',
+        0x128..=0x131 => 'i',
+        0x139..=0x142 => 'l',
+        0x143..=0x148 => 'n',
+        0x14C..=0x151 | 0x1A0 | 0x1A1 => 'o',
+        0x154..=0x159 => 'r',
+        0x15A..=0x161 => 's',
+        0x162..=0x165 => 't',
+        0x168..=0x16F | 0x1AF | 0x1B0 => 'u',
+        0x174 | 0x175 => 'w',
+        0x176..=0x178 => 'y',
+        0x179..=0x17E => 'z',
+        // Vietnamese tone marks (Latin Extended Additional)
+        0x1EA0..=0x1EB7 => 'a',
+        0x1EB8..=0x1EC7 => 'e',
+        0x1EC8..=0x1ECB => 'i',
+        0x1ECC..=0x1EE3 => 'o',
+        0x1EE4..=0x1EF1 => 'u',
+        0x1EF2..=0x1EF9 => 'y',
+        _ => ch,
+    }
+}
+
 /// Map a character to its (column, row) cell in TEXT.BMP (5x6 cells).
 fn char_cell(ch: char) -> (u32, u32) {
-    let c = ch.to_ascii_lowercase();
+    let c = ascii_fold(ch).to_ascii_lowercase();
     match c {
         'a'..='z' => (c as u32 - 'a' as u32, 0),
         '0'..='9' => (c as u32 - '0' as u32, 1),
@@ -1731,6 +1775,21 @@ pub fn render_gen_png(skin_path: &Path, out: &Path) -> Result<()> {
 mod tests {
     use super::char_cell;
     use super::*;
+
+    #[test]
+    fn ascii_folds_accented_text_to_base_letters() {
+        // Accented and Vietnamese characters render via their base ASCII cell,
+        // not as blanks (#97).
+        for (accented, base) in [
+            ('é', 'e'), ('ñ', 'n'), ('ü', 'u'), ('ç', 'c'), ('ø', 'o'),
+            ('Đ', 'd'), ('ư', 'u'), ('ờ', 'o'), ('ế', 'e'), ('ạ', 'a'), ('ý', 'y'),
+        ] {
+            assert_eq!(char_cell(accented), char_cell(base), "{accented} -> {base}");
+            assert_ne!(char_cell(accented), char_cell(' '), "{accented} folded to blank");
+        }
+        // ASCII is unchanged.
+        assert_eq!(char_cell('A'), char_cell('a'));
+    }
 
     #[test]
     fn clutterbar_regions_map_to_buttons() {
