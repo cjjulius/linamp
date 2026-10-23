@@ -1326,6 +1326,11 @@ impl LinAmpApp {
         for b in &self.eq_bands {
             b.to_bits().hash(&mut h);
         }
+        // Volume and balance are persisted by build_session but were missing from
+        // the change signature, so adjusting only the volume never marked the
+        // session dirty and the level was lost on the next launch (#105).
+        self.player.volume().to_bits().hash(&mut h);
+        self.balance.to_bits().hash(&mut h);
         for t in &self.playlist.tracks {
             t.path.hash(&mut h);
         }
