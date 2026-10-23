@@ -21,6 +21,12 @@ impl super::LinAmpApp {
         match win {
             ClWin::Main => {
                 self.main_shade.hash(&mut h);
+                // Clutterbar lit indicators: A = always-on-top, D = double-size.
+                // Without these the cached texture wouldn't refresh when the toggle
+                // changes (from Preferences or the clutterbar), so the on-screen
+                // indicator lagged until some other input happened to change.
+                self.prefs.always_on_top.hash(&mut h);
+                self.prefs.double_size.hash(&mut h);
                 self.pressed_btn.hash(&mut h);
                 self.shuffle.hash(&mut h);
                 self.repeat_all.hash(&mut h);

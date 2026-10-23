@@ -59,12 +59,16 @@ pub enum Btn {
 /// (button, x, y, w, h) hit-rects in main-window space, most-specific first.
 pub const REGIONS: &[(Btn, i32, i32, i32, i32)] = &[
     (Btn::Options, 6, 3, 9, 9),
-    // Clutterbar column (left edge, below the title bar): O/A/I/D/V, 8px wide.
-    (Btn::ClutterO, 10, 22, 8, 8),
-    (Btn::ClutterA, 10, 30, 8, 7),
-    (Btn::ClutterI, 10, 37, 8, 7),
-    (Btn::ClutterD, 10, 44, 8, 8),
-    (Btn::ClutterV, 10, 52, 8, 7),
+    // Clutterbar column (left edge, below the title bar): O/A/I/D/V, 8px wide,
+    // 8px tall on a uniform step. The strip is drawn at dest y22 from TITLEBAR.BMP
+    // (304,0); its dim glyphs land at y 24/32/40/48/56, so the hit-rects must too
+    // (they used to drift 2–4px up the column, so a click low on one letter fell
+    // into the next button's rect).
+    (Btn::ClutterO, 10, 24, 8, 8),
+    (Btn::ClutterA, 10, 32, 8, 8),
+    (Btn::ClutterI, 10, 40, 8, 8),
+    (Btn::ClutterD, 10, 48, 8, 8),
+    (Btn::ClutterV, 10, 56, 8, 8),
     (Btn::Close, 264, 3, 9, 9),
     (Btn::Minimize, 244, 3, 9, 9),
     (Btn::Prev, 16, 88, 23, 18),
@@ -405,18 +409,22 @@ impl ClassicSkin {
             // for the active toggles and whichever button is being pressed.
             // Source rects from TITLEBAR.BMP (canonical Winamp sprite table).
             blit(&mut c, tb, 10, 22, 304, 0, 8, 43); // background strip
+            // Lit/pressed overlays replace a dim glyph with its bright version at
+            // the same spot: dest y 24/32/40/48/56 (matching the strip) from the
+            // active-sprite diagonal at src y 46/54/62/70/78, all 8×8 on a uniform
+            // step so the bright glyph lands exactly on the dim one.
             if st.always_on_top {
-                blit(&mut c, tb, 10, 30, 312, 55, 8, 7); // A lit
+                blit(&mut c, tb, 10, 32, 312, 54, 8, 8); // A lit
             }
             if st.double_size {
-                blit(&mut c, tb, 10, 44, 328, 69, 8, 8); // D lit
+                blit(&mut c, tb, 10, 48, 328, 70, 8, 8); // D lit
             }
             match st.pressed {
-                Some(Btn::ClutterO) => blit(&mut c, tb, 10, 22, 304, 47, 8, 8),
-                Some(Btn::ClutterA) => blit(&mut c, tb, 10, 30, 312, 55, 8, 7),
-                Some(Btn::ClutterI) => blit(&mut c, tb, 10, 37, 320, 62, 8, 7),
-                Some(Btn::ClutterD) => blit(&mut c, tb, 10, 44, 328, 69, 8, 8),
-                Some(Btn::ClutterV) => blit(&mut c, tb, 10, 52, 336, 77, 8, 7),
+                Some(Btn::ClutterO) => blit(&mut c, tb, 10, 24, 304, 46, 8, 8),
+                Some(Btn::ClutterA) => blit(&mut c, tb, 10, 32, 312, 54, 8, 8),
+                Some(Btn::ClutterI) => blit(&mut c, tb, 10, 40, 320, 62, 8, 8),
+                Some(Btn::ClutterD) => blit(&mut c, tb, 10, 48, 328, 70, 8, 8),
+                Some(Btn::ClutterV) => blit(&mut c, tb, 10, 56, 336, 78, 8, 8),
                 _ => {}
             }
         }
@@ -1804,11 +1812,12 @@ mod tests {
 
     #[test]
     fn clutterbar_regions_map_to_buttons() {
-        assert_eq!(region_at(13.0, 24.0), Some(Btn::ClutterO));
-        assert_eq!(region_at(13.0, 32.0), Some(Btn::ClutterA));
-        assert_eq!(region_at(13.0, 39.0), Some(Btn::ClutterI));
-        assert_eq!(region_at(13.0, 46.0), Some(Btn::ClutterD));
-        assert_eq!(region_at(13.0, 55.0), Some(Btn::ClutterV));
+        // A point inside each 8px-tall button (rows 24/32/40/48/56) maps to it.
+        assert_eq!(region_at(13.0, 27.0), Some(Btn::ClutterO));
+        assert_eq!(region_at(13.0, 35.0), Some(Btn::ClutterA));
+        assert_eq!(region_at(13.0, 43.0), Some(Btn::ClutterI));
+        assert_eq!(region_at(13.0, 51.0), Some(Btn::ClutterD));
+        assert_eq!(region_at(13.0, 59.0), Some(Btn::ClutterV));
     }
 
     #[test]
