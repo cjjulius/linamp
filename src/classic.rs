@@ -1315,23 +1315,17 @@ impl ClassicSkin {
                 // box at x63..96 / y22..29 (colon baked at x83).
                 let sx0 = w - 150;
                 let cur = fmt_pl_time_signed(st.elapsed_secs, st.cur_duration, st.time_remaining);
-                // On the paused-blink "off" half, blank just the current time
-                // (keep the "/" and the running total in place so nothing jumps).
-                let cur_disp = if st.time_hidden {
-                    " ".repeat(cur.chars().count())
-                } else {
-                    cur.clone()
-                };
                 let summary = format!(
                     "{}/{}{}",
-                    cur_disp,
+                    cur,
                     fmt_pl_time(st.total_secs),
                     if st.total_partial { "+" } else { "" },
                 );
-                // Left-aligned and vertically centred in the top bar.
+                // Left-aligned and vertically centred in the top bar. The summary
+                // line does NOT blink — only the standalone current-time box below.
                 self.draw_text_tinted(&mut c, &summary, sx0 + 7, by + 10, 89, st.colors.normal);
                 // Current time in the small box, its colon aligned onto the one
-                // baked into the sprite so they don't double up.
+                // baked into the sprite. Blanked on the paused-blink "off" half.
                 if !st.time_hidden {
                     let el = cur.clone();
                     if let Some(ci) = el.rfind(':') {
