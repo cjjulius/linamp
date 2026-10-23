@@ -366,7 +366,16 @@ pub fn parse_playlist_file(path: &Path) -> Vec<PathBuf> {
 }
 
 fn resolve(base: Option<&Path>, value: &str) -> PathBuf {
+    // A native-absolute entry is used as-is (a Windows "C:\..." path has no
+    // meaning here anyway and is left untouched).
     let p = PathBuf::from(value);
+    if p.is_absolute() {
+        return p;
+    }
+    // Classic playlists are overwhelmingly Windows-authored, where relative
+    // entries use backslash separators (e.g. "Music\Song.mp3"). Treat those as
+    // path separators so the playlist resolves on Linux too.
+    let p = PathBuf::from(value.replace('\\', "/"));
     if p.is_absolute() {
         p
     } else if let Some(b) = base {
@@ -531,6 +540,30 @@ mod tests {
             "header leaked as a path: {got:?}"
         );
         let _ = std::fs::remove_file(&m3u);
+    }
+
+    #[test]
+    fn resolve_handles_windows_relative_separators() {
+        let base = PathBuf::from("/pl");
+        // Windows-style relative entries resolve against the playlist directory.
+        assert_eq!(
+            resolve(Some(&base), "Music\\Song.mp3"),
+            PathBuf::from("/pl/Music/Song.mp3")
+        );
+        assert_eq!(
+            resolve(Some(&base), "sub\\dir\\x.mp3"),
+            PathBuf::from("/pl/sub/dir/x.mp3")
+        );
+        // Forward-slash relative entries are unaffected.
+        assert_eq!(
+            resolve(Some(&base), "a/b.mp3"),
+            PathBuf::from("/pl/a/b.mp3")
+        );
+        // Native-absolute entries are passed through untouched.
+        assert_eq!(
+            resolve(Some(&base), "/abs/x.mp3"),
+            PathBuf::from("/abs/x.mp3")
+        );
     }
 
     #[test]

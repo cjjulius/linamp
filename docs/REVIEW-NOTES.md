@@ -68,3 +68,11 @@ code plus a working/not-working binary): visual and behavior changes.
   read_to_string, so a single non-UTF-8 byte or a leading UTF-8 BOM made the
   whole file load as zero tracks. It now reads bytes, decodes leniently, and
   strips a BOM. Fully covered by a unit test; no manual check required.
+
+- Windows-authored playlist paths (bug-fix): relative .m3u/.pls entries that use
+  backslash separators (e.g. "Music\Song.mp3", as nearly all Winamp-era
+  playlists do) were treated as literal filenames and never resolved on Linux.
+  resolve() now converts backslashes to separators for relative entries. The
+  path logic is unit-tested; a good end-to-end human check is to load an actual
+  Windows-authored .m3u with relative backslash paths and confirm the tracks
+  appear.
