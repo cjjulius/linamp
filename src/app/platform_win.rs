@@ -425,6 +425,84 @@ mod x11util {
         .unwrap_or(false)
     }
 
+    /// Clip the window titled `title` to a rounded rectangle of its current size
+    /// (corner radius `radius` px) via the Shape extension — the X11 counterpart
+    /// of Windows' `SetWindowRgn`, so the popup's square corners don't show
+    /// through the rounded fill. Returns true once applied; false while the window
+    /// isn't mapped/sized yet, so the caller retries next frame.
+    pub fn round_window(title: &str, radius: i32) -> bool {
+        let Some(shape) = shape_fn() else {
+            return false;
+        };
+        with_conn(|xlib, d| unsafe {
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            let win = window_by_title(xlib, d, title);
+            let ok = if win != 0 {
+                let (mut root, mut x, mut y, mut w, mut h, mut bw, mut depth) =
+                    (0u64, 0i32, 0i32, 0u32, 0u32, 0u32, 0u32);
+                let got = (xlib.XGetGeometry)(
+                    d, win, &mut root, &mut x, &mut y, &mut w, &mut h, &mut bw, &mut depth,
+                );
+                if got != 0 && w > 0 && h > 0 {
+                    let rects = rounded_rect_rects(w as i32, h as i32, radius);
+                    const SHAPE_BOUNDING: c_int = 0;
+                    const SHAPE_SET: c_int = 0;
+                    const UNSORTED: c_int = 0;
+                    let xr: Vec<XRectangle> = rects
+                        .iter()
+                        .map(|&(rx, ry, rw, rh)| XRectangle {
+                            x: rx,
+                            y: ry,
+                            width: rw,
+                            height: rh,
+                        })
+                        .collect();
+                    shape(
+                        d, win, SHAPE_BOUNDING, 0, 0, xr.as_ptr(), xr.len() as c_int, SHAPE_SET,
+                        UNSORTED,
+                    );
+                    (xlib.XFlush)(d);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            (xlib.XSetErrorHandler)(prev);
+            ok
+        })
+        .unwrap_or(false)
+    }
+
+    /// Horizontal run rectangles filling a `w`×`h` rounded rectangle with corner
+    /// radius `r`, one per scanline — the shape the Shape extension clips to.
+    fn rounded_rect_rects(w: i32, h: i32, r: i32) -> Vec<(i16, i16, u16, u16)> {
+        let r = r.clamp(0, w.min(h) / 2);
+        if r == 0 {
+            return vec![(0, 0, w as u16, h as u16)];
+        }
+        let mut rects = Vec::with_capacity(h as usize);
+        for yy in 0..h {
+            // Inset from each side: 0 in the straight middle rows, growing to `r`
+            // at the very top/bottom following the corner arc.
+            let inset = if yy < r {
+                let dy = (r - yy) as f64;
+                (r as f64 - ((r * r) as f64 - dy * dy).max(0.0).sqrt()).ceil() as i32
+            } else if yy >= h - r {
+                let dy = (yy - (h - 1 - r)) as f64;
+                (r as f64 - ((r * r) as f64 - dy * dy).max(0.0).sqrt()).ceil() as i32
+            } else {
+                0
+            };
+            let ww = w - 2 * inset;
+            if ww > 0 {
+                rects.push((inset as i16, yy as i16, ww as u16, 1));
+            }
+        }
+        rects
+    }
+
     #[repr(C)]
     struct XcursorImage {
         version: u32,
@@ -732,7 +810,11 @@ pub(crate) fn round_popup_window(radius: i32) -> bool {
             true
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::round_window("LinAmp Menu", radius)
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = radius;
         true
