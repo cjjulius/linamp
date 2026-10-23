@@ -111,25 +111,44 @@ impl super::LinAmpApp {
                 let ny = l.y / self.scale;
                 if shaded {
                     use classic::ShadeHit as H;
-                    // The main shade bar carries extra controls; EQ/PL shades only
-                    // have close + title bar.
-                    let hit = if win == ClWin::Main {
-                        classic::main_shade_region_at(nx, ny)
+                    // The collapsed EQ bar also carries the volume/balance sliders;
+                    // handle those first (a press adjusts the value and sets
+                    // eq_active so the drag follows) so they aren't swallowed by the
+                    // bar's window-drag. Otherwise the generic shade controls apply.
+                    let eq_slider = if win == ClWin::Eq {
+                        match classic::eq_shade_region_at(nx, ny) {
+                            Some(
+                                er @ (classic::EqRegion::ShadeVolume
+                                | classic::EqRegion::ShadeBalance),
+                            ) => {
+                                self.eq_active = Some(er);
+                                self.apply_eq_shade_slider(er, nx);
+                                true
+                            }
+                            _ => false,
+                        }
                     } else {
-                        classic::shade_region_at(nx, ny)
+                        false
                     };
-                    match hit {
-                        Some(H::Close) => self.close_window(ctx, win),
-                        Some(H::Restore) => self.toggle_shade(win),
-                        Some(H::TitleBar) => self.start_drag(ctx, win, screen_cursor),
-                        Some(H::Options) => self.open_popup_in(Popup::Options, win, l),
-                        Some(H::Prev) => self.trigger_classic(ctx, Btn::Prev),
-                        Some(H::Play) => self.trigger_classic(ctx, Btn::Play),
-                        Some(H::Pause) => self.trigger_classic(ctx, Btn::Pause),
-                        Some(H::Stop) => self.trigger_classic(ctx, Btn::Stop),
-                        Some(H::Next) => self.trigger_classic(ctx, Btn::Next),
-                        Some(H::Eject) => self.trigger_classic(ctx, Btn::Eject),
-                        None => {}
+                    if !eq_slider {
+                        let hit = if win == ClWin::Main {
+                            classic::main_shade_region_at(nx, ny)
+                        } else {
+                            classic::shade_region_at(nx, ny)
+                        };
+                        match hit {
+                            Some(H::Close) => self.close_window(ctx, win),
+                            Some(H::Restore) => self.toggle_shade(win),
+                            Some(H::TitleBar) => self.start_drag(ctx, win, screen_cursor),
+                            Some(H::Options) => self.open_popup_in(Popup::Options, win, l),
+                            Some(H::Prev) => self.trigger_classic(ctx, Btn::Prev),
+                            Some(H::Play) => self.trigger_classic(ctx, Btn::Play),
+                            Some(H::Pause) => self.trigger_classic(ctx, Btn::Pause),
+                            Some(H::Stop) => self.trigger_classic(ctx, Btn::Stop),
+                            Some(H::Next) => self.trigger_classic(ctx, Btn::Next),
+                            Some(H::Eject) => self.trigger_classic(ctx, Btn::Eject),
+                            None => {}
+                        }
                     }
                 } else {
                     match win {
