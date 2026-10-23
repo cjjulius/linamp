@@ -967,6 +967,37 @@ pub enum EqRegion {
     TitleBar,
     Preamp,
     Band(usize),
+    /// Window-shade volume / balance sliders (collapsed EQ bar; eq_ex.bmp).
+    ShadeVolume,
+    ShadeBalance,
+}
+
+// EQ windowshade volume/balance grooves on the 275px bar (eq_ex.bmp shade
+// background). The handle sprite is 9px wide; it travels the groove minus itself.
+pub const EQ_SHADE_VOL_X: f32 = 7.0;
+pub const EQ_SHADE_VOL_W: f32 = 50.0; // groove x7..57
+pub const EQ_SHADE_BAL_X: f32 = 210.0;
+pub const EQ_SHADE_BAL_W: f32 = 42.0; // groove x210..252
+pub const EQ_SHADE_HANDLE_W: f32 = 9.0;
+
+/// Hit-test for the collapsed EQ bar: close box, the volume/balance grooves, then
+/// the title bar (drag). Separate from `eq_region_at` because the full-window EQ
+/// controls aren't present when shaded.
+pub fn eq_shade_region_at(x: f32, y: f32) -> Option<EqRegion> {
+    let hit = |rx: f32, ry: f32, rw: f32, rh: f32| x >= rx && x < rx + rw && y >= ry && y < ry + rh;
+    if hit(264.0, 3.0, 9.0, 9.0) {
+        return Some(EqRegion::Close);
+    }
+    if hit(EQ_SHADE_VOL_X, 0.0, EQ_SHADE_VOL_W, 14.0) {
+        return Some(EqRegion::ShadeVolume);
+    }
+    if hit(EQ_SHADE_BAL_X, 0.0, EQ_SHADE_BAL_W, 14.0) {
+        return Some(EqRegion::ShadeBalance);
+    }
+    if hit(0.0, 0.0, 275.0, 14.0) {
+        return Some(EqRegion::TitleBar);
+    }
+    None
 }
 
 pub struct EqState {
@@ -1360,9 +1391,33 @@ impl ClassicSkin {
         c
     }
 
-    pub fn compose_eq_shade(&self, focused: bool) -> RgbaImage {
+    pub fn compose_eq_shade(&self, focused: bool, volume: f32, balance: f32) -> RgbaImage {
         let mut c = RgbaImage::new(275, 14);
-        if let Some(e) = self.bmp("eqmain.bmp") {
+        // Prefer the dedicated EQ-shade sheet (eq_ex.bmp): it carries the volume
+        // and balance mini-sliders, which mirror the main window's. Skins without
+        // it fall back to the plain EQMAIN shade bar (no sliders).
+        if let Some(e) = self.bmp("eq_ex.bmp") {
+            let sy = if focused { 0 } else { 15 };
+            blit(&mut c, e, 0, 0, 0, sy, 275, 14);
+            // A 3×7 thumb slides along its groove; its sprite (left/centre/right at
+            // eq_ex y30) is chosen by which third the value falls in. Groove bounds
+            // measured from eq_ex: volume x7..57, balance x210..251.
+            let slider = |c: &mut RgbaImage, frac: f32, lo: i32, hi: i32, sx: [u32; 3]| {
+                let frac = frac.clamp(0.0, 1.0);
+                let tx = lo + (frac * (hi - lo - 3).max(0) as f32).round() as i32;
+                let s = if frac < 1.0 / 3.0 {
+                    sx[0]
+                } else if frac < 2.0 / 3.0 {
+                    sx[1]
+                } else {
+                    sx[2]
+                };
+                blit(c, e, tx, 4, s, 30, 3, 7);
+            };
+            slider(&mut c, volume.clamp(0.0, 1.0), 7, 57, [1, 4, 7]);
+            slider(&mut c, balance.clamp(-1.0, 1.0) * 0.5 + 0.5, 210, 251, [11, 14, 17]);
+            blit(&mut c, e, 264, 3, 11, 38, 9, 9); // close
+        } else if let Some(e) = self.bmp("eqmain.bmp") {
             let sy = if focused { 134 } else { 149 };
             blit(&mut c, e, 0, 0, 0, sy, 275, 14);
             blit(&mut c, e, 264, 3, 0, 116, 9, 9); // close
