@@ -12,3 +12,11 @@ code plus a working/not-working binary): visual and behavior changes.
   relaunch, and confirm the level is restored. End-to-end persistence was
   confirmed by code inspection only — the automated test harness could not move
   the volume control via synthetic mouse or keyboard input.
+
+- #115 ID3v2 to ID3v1 copy corruption: reproduced (writing a multibyte ID3v1
+  field panicked inside lofty when truncating mid-character, aborting the save
+  and corrupting the file) and fixed by capping each v1 field to its byte limit
+  on a char boundary (comment to 28 for the v1.1 track byte). Covered by a
+  regression test. Optional interactive sanity check: open the tag editor on a
+  file with long/non-Latin tags, copy ID3v2 to ID3v1, save, and confirm the file
+  still plays.
