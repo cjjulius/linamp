@@ -1647,9 +1647,14 @@ impl LinAmpApp {
                 }
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(concat!("LinAmp ", env!("CARGO_PKG_VERSION")))
-                        .small()
-                        .color(Color32::GRAY),
+                    egui::RichText::new(format!(
+                        "LinAmp {} ({} · {})",
+                        env!("CARGO_PKG_VERSION"),
+                        env!("GIT_HASH"),
+                        env!("COMMIT_DATE"),
+                    ))
+                    .small()
+                    .color(Color32::GRAY),
                 );
             });
             self.apply_base_cursor(ctx, "LinAmp Preferences");
