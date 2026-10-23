@@ -113,11 +113,17 @@ impl Library {
 
     /// Case-insensitive search across title/artist/album, up to `limit`.
     pub fn search(&self, query: &str, limit: usize) -> Vec<Track> {
-        let like = format!("%{}%", query);
+        // Escape LIKE wildcards so a literal '%' or '_' in the search text matches
+        // itself instead of acting as a pattern (backslash is the escape char).
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let like = format!("%{escaped}%");
         self.query(
             &format!(
                 "SELECT {COLS} FROM tracks
-                 WHERE title LIKE ?1 OR artist LIKE ?1 OR album LIKE ?1
+                 WHERE title LIKE ?1 ESCAPE '\\' OR artist LIKE ?1 ESCAPE '\\' OR album LIKE ?1 ESCAPE '\\'
                  ORDER BY artist, album, title LIMIT ?2"
             ),
             params![like, limit as i64],
@@ -371,6 +377,25 @@ mod tests {
         lib.upsert(&track("/m/a2.mp3", "Alice", "First", "Two")).unwrap();
         lib.upsert(&track("/m/a3.mp3", "Alice", "Second", "Three")).unwrap();
         lib.upsert(&track("/m/b1.mp3", "Bob", "Blue", "Four")).unwrap();
+    }
+
+    #[test]
+    fn search_treats_like_wildcards_literally() {
+        let lib = Library::open_in_memory();
+        lib.upsert(&track("/m/u1.mp3", "A", "B", "track_01")).unwrap();
+        lib.upsert(&track("/m/u2.mp3", "A", "B", "trackX01")).unwrap();
+        lib.upsert(&track("/m/p1.mp3", "A", "B", "50% off")).unwrap();
+        lib.upsert(&track("/m/p2.mp3", "A", "B", "50 cents")).unwrap();
+
+        // '_' must match a literal underscore, not any character.
+        let got = lib.search("track_01", 50);
+        let titles: Vec<&str> = got.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, vec!["track_01"], "underscore matched as a wildcard");
+
+        // '%' must match a literal percent sign, not any sequence.
+        let got = lib.search("50%", 50);
+        let titles: Vec<&str> = got.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, vec!["50% off"], "percent matched as a wildcard");
     }
 
     #[test]

@@ -81,3 +81,8 @@ code plus a working/not-working binary): visual and behavior changes.
   key starting with "File" (e.g. a stray "FileFoo="). It now orders entries by
   the N in "File<N>=" per the PLS spec and ignores non-File<N> keys. Fully
   covered by a unit test; no manual check required.
+
+- Library search wildcard escaping (bug-fix): the search built a LIKE pattern
+  without escaping, so a literal '_' or '%' in the typed text acted as a SQL
+  wildcard (e.g. "track_01" also matched "trackX01"). Wildcards are now escaped
+  with an ESCAPE clause. Fully covered by a unit test; no manual check required.
