@@ -373,6 +373,9 @@ pub struct LinAmpApp {
     classic_seek_preview: Option<f32>,
     balance: f32,
     time_remaining: bool,
+    /// True on the "off" half of the paused-time blink (classic Winamp flashes
+    /// the time while paused). Recomputed each frame in `update`.
+    time_blink_hidden: bool,
     /// Stop when the current track ends instead of advancing (Ctrl+V).
     stop_after_current: bool,
     /// Remaining fade-out time in seconds while stopping with fade (Shift+V).
@@ -564,6 +567,7 @@ impl LinAmpApp {
             classic_seek_preview: None,
             balance: 0.0,
             time_remaining: false,
+            time_blink_hidden: false,
             stop_after_current: false,
             fade: None,
             mode_init: true,
@@ -1161,6 +1165,7 @@ impl LinAmpApp {
             pos,
             duration: dur,
             time_remaining: self.time_remaining,
+            time_hidden: self.time_blink_hidden,
             volume: self.player.volume(),
             balance: self.balance,
             stereo,
@@ -1248,6 +1253,8 @@ impl LinAmpApp {
     /// player with its spectrum bars still falling counts as animating.
     fn is_animating(&self) -> bool {
         self.player.state() == PlayState::Playing
+            // Paused flashes the time (see `time_blink_hidden`), so keep repainting.
+            || self.player.state() == PlayState::Paused
             || self.fade.is_some()
             || self.drag.is_some()
             || self.classic_seek_preview.is_some()
@@ -2677,6 +2684,12 @@ impl eframe::App for LinAmpApp {
         if self.player.state() == PlayState::Playing {
             self.marquee_offset = (self.marquee_offset + dt * 4.0) % 100000.0;
         }
+        // Classic Winamp flashes the time display while paused (~1 Hz). Toggle the
+        // hidden half off the frame clock; is_animating() keeps repaints coming so
+        // it blinks, and the per-window fingerprint includes it so the texture
+        // actually refreshes on each toggle.
+        self.time_blink_hidden = self.player.state() == PlayState::Paused
+            && (ctx.input(|i| i.time) / 0.5) as i64 % 2 == 1;
 
         // Follow the system default output device if it changes mid-session.
         if now.duration_since(self.last_device_check).as_secs_f32() > 1.5 {

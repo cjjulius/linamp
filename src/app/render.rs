@@ -33,6 +33,7 @@ impl super::LinAmpApp {
                 self.eq_visible.hash(&mut h);
                 self.pl_visible.hash(&mut h);
                 self.time_remaining.hash(&mut h);
+                self.time_blink_hidden.hash(&mut h);
                 (self.viz_mode as u8).hash(&mut h);
                 self.player.volume().to_bits().hash(&mut h);
                 self.balance.to_bits().hash(&mut h);
@@ -75,6 +76,7 @@ impl super::LinAmpApp {
                 self.pl_first.hash(&mut h);
                 self.pl_pressed_button().hash(&mut h);
                 self.time_remaining.hash(&mut h);
+                self.time_blink_hidden.hash(&mut h);
                 self.playlist.len().hash(&mut h);
                 self.playlist.current.hash(&mut h);
                 // The bottom-bar / shade time advances once a second while playing.
@@ -270,6 +272,7 @@ impl super::LinAmpApp {
                         time_remaining: self.time_remaining,
                         total_secs,
                         total_partial,
+                        time_hidden: self.time_blink_hidden,
                     };
                     cs.compose_playlist(&st, self.pl_px_w as u32, self.pl_px_h as u32)
                 }

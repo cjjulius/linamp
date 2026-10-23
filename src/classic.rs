@@ -199,6 +199,9 @@ pub struct MainState {
     pub duration: f32,
     /// Show time as remaining (−mm:ss) instead of elapsed.
     pub time_remaining: bool,
+    /// Blank the time readout this frame — the "off" half of the paused blink
+    /// (classic Winamp flashes the time while paused).
+    pub time_hidden: bool,
     pub volume: f32,
     pub balance: f32,
     pub stereo: bool,
@@ -464,17 +467,20 @@ impl ClassicSkin {
             blit(&mut c, pp, 26, 28, x, 0, 9, 9);
         }
 
-        // Time digits (elapsed, or remaining with a leading minus).
-        if let Some(nb) = self.bmp("numbers.bmp").or_else(|| self.bmp("nums_ex.bmp")) {
-            let (mm, ss, remaining) = st.lcd_mmss();
-            let digits = [mm / 10, mm % 10, ss / 10, ss % 10];
-            let xs = [48, 60, 78, 90];
-            for (i, &d) in digits.iter().enumerate() {
-                blit(&mut c, nb, xs[i], 26, d * 9, 0, 9, 13);
-            }
-            if remaining {
-                // Minus sign in the LCD colour, just left of the minutes.
-                fill_rect(&mut c, 40, 32, 5, 2, st.fg);
+        // Time digits (elapsed, or remaining with a leading minus). Blanked on the
+        // "off" half of the paused blink.
+        if !st.time_hidden {
+            if let Some(nb) = self.bmp("numbers.bmp").or_else(|| self.bmp("nums_ex.bmp")) {
+                let (mm, ss, remaining) = st.lcd_mmss();
+                let digits = [mm / 10, mm % 10, ss / 10, ss % 10];
+                let xs = [48, 60, 78, 90];
+                for (i, &d) in digits.iter().enumerate() {
+                    blit(&mut c, nb, xs[i], 26, d * 9, 0, 9, 13);
+                }
+                if remaining {
+                    // Minus sign in the LCD colour, just left of the minutes.
+                    fill_rect(&mut c, 40, 32, 5, 2, st.fg);
+                }
             }
         }
 
@@ -540,13 +546,15 @@ impl ClassicSkin {
         // fill in the time: the digits sit either side of the sprite's baked ":"
         // separator (~x143). Shows remaining (with a leading minus) when the
         // elapsed/remaining toggle is on, matching the expanded LCD.
-        let (mm, ss, remaining) = st.lcd_mmss();
-        let mm = format!("{:02}", mm);
-        let ss = format!("{:02}", ss);
-        self.draw_text_tinted(&mut c, &mm, 132, 4, 10, st.fg);
-        self.draw_text_tinted(&mut c, &ss, 146, 4, 10, st.fg);
-        if remaining {
-            fill_rect(&mut c, 126, 7, 4, 2, st.fg); // minus sign before the minutes
+        if !st.time_hidden {
+            let (mm, ss, remaining) = st.lcd_mmss();
+            let mm = format!("{:02}", mm);
+            let ss = format!("{:02}", ss);
+            self.draw_text_tinted(&mut c, &mm, 132, 4, 10, st.fg);
+            self.draw_text_tinted(&mut c, &ss, 146, 4, 10, st.fg);
+            if remaining {
+                fill_rect(&mut c, 126, 7, 4, 2, st.fg); // minus sign before the minutes
+            }
         }
         c
     }
@@ -1058,6 +1066,9 @@ pub struct PlState<'a> {
     /// True when at least one track's length is unknown, so `total_secs` is a
     /// lower bound and the readout gets a trailing `+` (as in Winamp).
     pub total_partial: bool,
+    /// Blank the current-track time this frame — the "off" half of the paused
+    /// blink (the running total stays put; only the current time flashes).
+    pub time_hidden: bool,
 }
 
 /// Left-anchored bottom-bar menu buttons: (region, x, width). y is
@@ -1304,9 +1315,16 @@ impl ClassicSkin {
                 // box at x63..96 / y22..29 (colon baked at x83).
                 let sx0 = w - 150;
                 let cur = fmt_pl_time_signed(st.elapsed_secs, st.cur_duration, st.time_remaining);
+                // On the paused-blink "off" half, blank just the current time
+                // (keep the "/" and the running total in place so nothing jumps).
+                let cur_disp = if st.time_hidden {
+                    " ".repeat(cur.chars().count())
+                } else {
+                    cur.clone()
+                };
                 let summary = format!(
                     "{}/{}{}",
-                    cur,
+                    cur_disp,
                     fmt_pl_time(st.total_secs),
                     if st.total_partial { "+" } else { "" },
                 );
@@ -1314,10 +1332,12 @@ impl ClassicSkin {
                 self.draw_text_tinted(&mut c, &summary, sx0 + 7, by + 10, 89, st.colors.normal);
                 // Current time in the small box, its colon aligned onto the one
                 // baked into the sprite so they don't double up.
-                let el = cur.clone();
-                if let Some(ci) = el.rfind(':') {
-                    let tx = sx0 + 83 - el[..ci].chars().count() as i32 * 5;
-                    self.draw_text_tinted(&mut c, &el, tx, by + 22, sx0 + 98 - tx, st.colors.normal);
+                if !st.time_hidden {
+                    let el = cur.clone();
+                    if let Some(ci) = el.rfind(':') {
+                        let tx = sx0 + 83 - el[..ci].chars().count() as i32 * 5;
+                        self.draw_text_tinted(&mut c, &el, tx, by + 22, sx0 + 98 - tx, st.colors.normal);
+                    }
                 }
             }
         }
@@ -1686,6 +1706,7 @@ pub fn render_main_png(skin_path: &Path, out: &Path) -> Result<()> {
         pos: 125.0,
         duration: 254.0,
         time_remaining: false,
+        time_hidden: false,
         volume: 0.78,
         balance: 0.0,
         stereo: true,
@@ -1717,6 +1738,7 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
         pos: 73.0, // 1:13
         duration: 325.0,
         time_remaining: false,
+        time_hidden: false,
         volume: 0.8,
         balance: 0.0,
         stereo: true,
@@ -1762,6 +1784,7 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
             time_remaining: false,
             total_secs: 1304.0, // 21:44 across the five tracks
             total_partial: false,
+            time_hidden: false,
         },
         MAIN_W,
         PL_H,
@@ -2019,6 +2042,7 @@ mod tests {
             pos: 71.0,
             duration: 200.0,
             time_remaining: false,
+            time_hidden: false,
             volume: 0.5,
             balance: 0.0,
             stereo: true,
@@ -2050,6 +2074,7 @@ mod tests {
             pos,
             duration,
             time_remaining,
+            time_hidden: false,
             volume: 0.5,
             balance: 0.0,
             stereo: true,
@@ -2124,6 +2149,7 @@ mod tests {
             time_remaining: false,
             total_secs: 0.0,
             total_partial: false,
+            time_hidden: false,
         };
         let w = MAIN_W;
         let img = skin.compose_playlist(&st, w, PL_H);
