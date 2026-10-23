@@ -49,3 +49,11 @@ code plus a working/not-working binary): visual and behavior changes.
   and kerning matches the active title. The active render is byte-for-byte
   unchanged (verified). Visual check: unfocus the app and confirm the Media
   Library title ("LINAMP LIBRARY") has no stray pixel on 'Y' and even spacing.
+
+- Time display toggle parity: the main-window time counter now toggles between
+  elapsed and remaining on a single click, matching classic Winamp. It
+  previously required a double-click. The double-click detection state
+  (time_last_click) was removed. No unit test applies (egui click handler).
+  Interaction check: single-click the time counter and confirm it flips to the
+  remaining (negative) time and back; the Ctrl+T shortcut and the Preferences
+  checkbox should still work too.

@@ -369,8 +369,6 @@ pub struct LinAmpApp {
     eq_shade: bool,
     pl_shade: bool,
     tb_last_click: Option<(ClWin, Instant)>,
-    /// Last click on the main time display, for double-click elapsed/remaining.
-    time_last_click: Option<Instant>,
     // multi-window geometry (points)
     win_pos: [egui::Pos2; 3],
     pl_px_h: f32,
@@ -544,7 +542,6 @@ impl LinAmpApp {
             eq_shade: false,
             pl_shade: false,
             tb_last_click: None,
-            time_last_click: None,
             win_pos: [egui::pos2(100.0, 100.0); 3],
             pl_px_h: classic::PL_H as f32,
             pl_px_w: classic::MAIN_W as f32,
