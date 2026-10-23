@@ -5,6 +5,16 @@ use super::*;
 
 impl super::LinAmpApp {
     /// Per-window input in local (viewport) coordinates.
+    /// The EQ hit-test region at base coords, shade-aware: the collapsed bar has
+    /// its own volume/balance/close regions; the full window uses `eq_region_at`.
+    fn eq_region(&self, x: f32, y: f32) -> Option<classic::EqRegion> {
+        if self.eq_shade {
+            classic::eq_shade_region_at(x, y)
+        } else {
+            classic::eq_region_at(x, y)
+        }
+    }
+
     pub(super) fn handle_window_input(&mut self, ctx: &egui::Context, win: ClWin) {
         let outer = ctx.input(|i| i.viewport().outer_rect);
         let monitor = ctx.input(|i| i.viewport().monitor_size);
@@ -138,7 +148,7 @@ impl super::LinAmpApp {
                             }
                         }
                         ClWin::Eq => {
-                            let r = classic::eq_region_at(nx, ny);
+                            let r = self.eq_region(nx, ny);
                             self.eq_active = r;
                             match r {
                                 Some(classic::EqRegion::TitleBar) => {
@@ -148,6 +158,10 @@ impl super::LinAmpApp {
                                 Some(er @ (classic::EqRegion::Preamp | classic::EqRegion::Band(_))) => {
                                     self.apply_eq_slider(er, ny)
                                 }
+                                Some(
+                                    er @ (classic::EqRegion::ShadeVolume
+                                    | classic::EqRegion::ShadeBalance),
+                                ) => self.apply_eq_shade_slider(er, nx),
                                 _ => {}
                             }
                         }
@@ -282,7 +296,12 @@ impl super::LinAmpApp {
                     }
                 }
                 if let Some(er) = self.eq_active {
-                    self.apply_eq_slider(er, ny);
+                    match er {
+                        classic::EqRegion::ShadeVolume | classic::EqRegion::ShadeBalance => {
+                            self.apply_eq_shade_slider(er, nx)
+                        }
+                        _ => self.apply_eq_slider(er, ny),
+                    }
                 }
                 if let Some(grab) = self.resize_pl {
                     // Resize smoothly during the drag; the 25/29px grid is applied
@@ -342,7 +361,7 @@ impl super::LinAmpApp {
                 }
                 if win == ClWin::Eq {
                     if let Some(er) = self.eq_active {
-                        if classic::eq_region_at(nx, ny) == Some(er) {
+                        if self.eq_region(nx, ny) == Some(er) {
                             if er == classic::EqRegion::Presets {
                                 self.open_popup_in(Popup::EqPresets, ClWin::Eq, l);
                             } else {

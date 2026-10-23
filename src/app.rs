@@ -1310,6 +1310,31 @@ impl LinAmpApp {
         }
     }
 
+    /// Set the shared volume/balance from the collapsed-EQ shade sliders (`lx` in
+    /// base EQ-window coords), mirroring `apply_classic_slider` so the main window
+    /// and the shaded EQ move in tandem.
+    fn apply_eq_shade_slider(&mut self, region: classic::EqRegion, lx: f32) {
+        use classic::{
+            EqRegion, EQ_SHADE_BAL_W, EQ_SHADE_BAL_X, EQ_SHADE_THUMB_W, EQ_SHADE_VOL_W,
+            EQ_SHADE_VOL_X,
+        };
+        match region {
+            EqRegion::ShadeVolume => {
+                let frac =
+                    ((lx - EQ_SHADE_VOL_X) / (EQ_SHADE_VOL_W - EQ_SHADE_THUMB_W)).clamp(0.0, 1.0);
+                self.player.set_volume(frac);
+            }
+            EqRegion::ShadeBalance => {
+                let t =
+                    ((lx - EQ_SHADE_BAL_X) / (EQ_SHADE_BAL_W - EQ_SHADE_THUMB_W)).clamp(0.0, 1.0);
+                let b = t * 2.0 - 1.0;
+                self.balance = if b.abs() < 0.06 { 0.0 } else { b };
+                self.player.set_balance(self.balance);
+            }
+            _ => {}
+        }
+    }
+
     /// Stop playback — fading out first when the "fade out when stopping" pref is
     /// on (otherwise an immediate cut). Shift+V always forces a fade regardless.
     fn stop_playback(&mut self) {
@@ -1602,7 +1627,13 @@ impl LinAmpApp {
             R::Close => {
                 self.eq_visible = false;
             }
-            R::Presets | R::TitleBar | R::Preamp | R::Band(_) => {}
+            // Applied on press/drag, nothing to do on release.
+            R::Presets
+            | R::TitleBar
+            | R::Preamp
+            | R::Band(_)
+            | R::ShadeVolume
+            | R::ShadeBalance => {}
         }
     }
 

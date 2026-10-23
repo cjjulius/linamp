@@ -973,12 +973,13 @@ pub enum EqRegion {
 }
 
 // EQ windowshade volume/balance grooves on the 275px bar (eq_ex.bmp shade
-// background). The handle sprite is 9px wide; it travels the groove minus itself.
+// background), each with a 3px thumb that slides along it. Shared by the
+// renderer (compose_eq_shade) and the hit-test/drag.
 pub const EQ_SHADE_VOL_X: f32 = 7.0;
 pub const EQ_SHADE_VOL_W: f32 = 50.0; // groove x7..57
 pub const EQ_SHADE_BAL_X: f32 = 210.0;
-pub const EQ_SHADE_BAL_W: f32 = 42.0; // groove x210..252
-pub const EQ_SHADE_HANDLE_W: f32 = 9.0;
+pub const EQ_SHADE_BAL_W: f32 = 41.0; // groove x210..251
+pub const EQ_SHADE_THUMB_W: f32 = 3.0;
 
 /// Hit-test for the collapsed EQ bar: close box, the volume/balance grooves, then
 /// the title bar (drag). Separate from `eq_region_at` because the full-window EQ
