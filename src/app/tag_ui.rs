@@ -133,13 +133,20 @@ impl super::LinAmpApp {
             }
             // Reflect the new tags in the library DB, but only for a track it
             // already knows (a no-op otherwise).
-            if let Some(lib) = &self.library {
+            let lib_changed = if let Some(lib) = &self.library {
                 let track = refreshed.unwrap_or_else(|| {
                     let mut f = crate::playlist::Track::new(path.clone());
                     f.load();
                     f
                 });
-                lib.update_tags(&track);
+                lib.update_tags(&track)
+            } else {
+                false
+            };
+            // Re-query the visible library so the edited row shows its new tags
+            // right away instead of staying stale until the next re-navigation.
+            if lib_changed {
+                self.refresh_library();
             }
         }
         // On success the caller closes the window, so only an error needs a

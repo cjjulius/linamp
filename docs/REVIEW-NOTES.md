@@ -94,3 +94,10 @@ code plus a working/not-working binary): visual and behavior changes.
   play count and rating) and is a no-op for tracks not in the library. The DB
   method is unit-tested. Human check: edit a track's tags from the Media Library
   and confirm the row's title/artist/album update immediately without a rescan.
+
+- Library view refresh after tag edit (bug-fix, follow-up): last run updated the
+  library DB on a tag edit, but the on-screen library list is cached and stayed
+  stale until re-navigation. save_tag_editor now calls refresh_library when a
+  library row actually changed, so the edited title/artist/album appear
+  immediately. UI glue (no unit test); the earlier human check (edit a Media
+  Library row, confirm it updates without a rescan) now covers this end to end.
