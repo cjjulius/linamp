@@ -101,3 +101,19 @@ code plus a working/not-working binary): visual and behavior changes.
   library row actually changed, so the edited title/artist/album appear
   immediately. UI glue (no unit test); the earlier human check (edit a Media
   Library row, confirm it updates without a rescan) now covers this end to end.
+
+- Playlist multi-selection (feature): added Winamp-style selection to the classic
+  playlist so Invert/Crop make sense. Semantics implemented:
+  * Plain click / Up / Down: select only that row (sets the anchor).
+  * Ctrl+click: toggle that row in/out of the selection.
+  * Ctrl+Up/Down: move the focus and add that row (keyboard individual select; it
+    never deselects, so arrowing can't silently drop a row).
+  * Shift+click and Shift+Up/Down: select the contiguous range from the anchor.
+  * Home / End: jump the selection to the first / last track (Shift extends,
+    Ctrl adds).
+  * The highlight reflects the whole selection; the focus/lead row is scrolled in.
+  The pure selection logic (src/selection.rs) is unit-tested, but the mouse/
+  keyboard wiring and highlight need a human interaction check: verify ctrl-click
+  toggling, shift-range (mouse and keyboard), Home/End, that a double-click still
+  plays, and that Invert/Crop operate on the new multi-selection. If any specific
+  key should behave differently (esp. Ctrl+Up/Down), it's easy to adjust.

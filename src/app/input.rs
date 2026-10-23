@@ -32,6 +32,8 @@ struct KeyState {
     del: bool,
     insert: bool,
     enter: bool,
+    home: bool,
+    end: bool,
 }
 
 impl super::LinAmpApp {
@@ -68,6 +70,8 @@ impl super::LinAmpApp {
             k.del = i.key_pressed(Key::Delete);
             k.insert = i.key_pressed(Key::Insert);
             k.enter = i.key_pressed(Key::Enter);
+            k.home = i.key_pressed(Key::Home);
+            k.end = i.key_pressed(Key::End);
         });
 
         if k.play {
@@ -118,18 +122,24 @@ impl super::LinAmpApp {
         }
         if k.vol_up {
             // Up/Down move the selection in the playlist window, else volume.
+            // Ctrl adds individual rows; Shift extends the range from the anchor.
             if win == ClWin::Pl {
-                self.pl_move_selection(-1);
+                self.pl_navigate(-1, k.ctrl, k.shift);
             } else {
                 self.adjust_volume(0.05);
             }
         }
         if k.vol_down {
             if win == ClWin::Pl {
-                self.pl_move_selection(1);
+                self.pl_navigate(1, k.ctrl, k.shift);
             } else {
                 self.adjust_volume(-0.05);
             }
+        }
+        // Home / End jump the playlist selection to the first / last track.
+        if win == ClWin::Pl && (k.home || k.end) && !self.playlist.is_empty() {
+            let target = if k.home { 0 } else { self.playlist.len() - 1 };
+            self.pl_navigate_to(target, k.ctrl, k.shift);
         }
         if k.seek_fwd {
             self.seek_relative(5.0);

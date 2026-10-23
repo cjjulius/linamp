@@ -12,6 +12,7 @@ mod library;
 mod player;
 mod playlist;
 mod region;
+mod selection;
 mod skin;
 mod tags;
 mod text;

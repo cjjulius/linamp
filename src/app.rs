@@ -355,6 +355,11 @@ pub struct LinAmpApp {
     eq_auto: bool,
     pl_first: usize,
     pl_selection: HashSet<usize>,
+    /// Fixed end for shift-range selection; set by a plain/ctrl click or nav.
+    pl_anchor: Option<usize>,
+    /// The focus ("lead") row keyboard navigation moves from; the highlight
+    /// follows it along with the rest of the selection.
+    pl_lead: Option<usize>,
     pl_last_click: Option<(usize, Instant)>,
     /// The row a playlist right-click targeted, so the track menu's Play / Edit
     /// act on exactly that row rather than the selection's min / current track.
@@ -533,6 +538,8 @@ impl LinAmpApp {
             eq_auto: false,
             pl_first: 0,
             pl_selection: HashSet::new(),
+            pl_anchor: None,
+            pl_lead: None,
             pl_last_click: None,
             pl_ctx_row: None,
             popup: None,
@@ -1384,30 +1391,60 @@ impl LinAmpApp {
 
     fn pl_select_all(&mut self) {
         self.pl_selection = (0..self.playlist.len()).collect();
+        self.pl_anchor = Some(0);
+        self.pl_lead = self.playlist.len().checked_sub(1);
     }
 
-    /// Move the single-row selection by `delta` (keyboard navigation), clamped,
-    /// and scroll it into view.
-    fn pl_move_selection(&mut self, delta: i32) {
+    /// Apply a selection gesture landing on `target`, honoring Ctrl and Shift.
+    /// `ctrl_mode` differs by input source: mouse ctrl-click toggles a row,
+    /// keyboard ctrl-nav adds it. The lead row is recorded and scrolled in.
+    fn pl_select_with(
+        &mut self,
+        target: usize,
+        ctrl: bool,
+        shift: bool,
+        ctrl_mode: crate::selection::CtrlMode,
+    ) {
+        if self.playlist.is_empty() {
+            return;
+        }
+        let max = self.playlist.len() - 1;
+        let target = target.min(max);
+        // Clamp a stale anchor (the list may have shrunk since it was set) so a
+        // shift-range can't run past the end.
+        let anchor = self.pl_anchor.map(|a| a.min(max));
+        self.pl_anchor = Some(crate::selection::apply(
+            &mut self.pl_selection,
+            anchor,
+            target,
+            ctrl,
+            shift,
+            ctrl_mode,
+        ));
+        self.pl_lead = Some(target);
+        self.pl_scroll_to(target);
+    }
+
+    /// Keyboard navigation by `delta` rows from the lead, with Ctrl/Shift
+    /// semantics (Shift extends the range, Ctrl adds the new row).
+    fn pl_navigate(&mut self, delta: i32, ctrl: bool, shift: bool) {
         if self.playlist.is_empty() {
             return;
         }
         let len = self.playlist.len() as i32;
-        let anchor = if delta < 0 {
-            self.pl_selection.iter().min().copied()
-        } else {
-            self.pl_selection.iter().max().copied()
-        };
-        let next = match anchor {
-            Some(a) => (a as i32 + delta).clamp(0, len - 1),
-            // Nothing selected yet: enter from the near end.
-            None if delta < 0 => len - 1,
-            None => 0,
-        } as usize;
-        self.pl_selection.clear();
-        self.pl_selection.insert(next);
-        self.pl_last_click = Some((next, Instant::now()));
-        self.pl_scroll_to(next);
+        let from = self
+            .pl_lead
+            .or(self.pl_anchor)
+            .map(|b| b as i32)
+            // Nothing focused yet: enter from the near end.
+            .unwrap_or(if delta < 0 { len } else { -1 });
+        let target = (from + delta).clamp(0, len - 1) as usize;
+        self.pl_select_with(target, ctrl, shift, crate::selection::CtrlMode::Add);
+    }
+
+    /// Jump the selection to an absolute row (Home / End), with Ctrl/Shift.
+    fn pl_navigate_to(&mut self, target: usize, ctrl: bool, shift: bool) {
+        self.pl_select_with(target, ctrl, shift, crate::selection::CtrlMode::Add);
     }
 
     /// Adjust the playlist scroll offset so row `idx` is visible.
@@ -1463,6 +1500,8 @@ impl LinAmpApp {
             }
         });
         self.pl_selection.clear();
+        self.pl_anchor = None;
+        self.pl_lead = None;
         self.playlist.current =
             cur_path.and_then(|p| self.playlist.tracks.iter().position(|t| t.path == p));
         self.pl_first = self.pl_first.min(self.playlist.len().saturating_sub(1));
