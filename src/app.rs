@@ -450,6 +450,10 @@ pub struct LinAmpApp {
     prefs_open: bool,
     /// Which Preferences category is selected in the sidebar.
     prefs_tab: PrefTab,
+    /// Preferences window position (None when closed, so it re-anchors to the
+    /// main window on open) and the grab offset while its title bar is dragged.
+    prefs_pos: Option<egui::Pos2>,
+    prefs_drag: Option<egui::Vec2>,
     lib_visible: bool,
     tag_editor: Option<tag_ui::TagEditor>,
     /// Jump-to-file search state (Some while the dialog is open).
@@ -603,6 +607,8 @@ impl LinAmpApp {
             scale,
             prefs_open: false,
             prefs_tab: PrefTab::Display,
+            prefs_pos: None,
+            prefs_drag: None,
             lib_visible: false,
             tag_editor: None,
             jump_file: None,
@@ -1641,21 +1647,83 @@ impl LinAmpApp {
 
     fn ui_prefs(&mut self, ctx: &egui::Context) {
         if !self.prefs_open {
+            // Re-anchor to the main window the next time it opens.
+            self.prefs_pos = None;
             return;
         }
         // Render in its own real window so it is never clipped by the (small)
-        // borderless main window.
-        let screen = self.win_pos[0] + egui::vec2(24.0, 24.0);
+        // borderless main window. Borderless with a skin-drawn title bar (like the
+        // classic windows and the Library) so the skin cursor covers the whole
+        // window — including the title bar — with no OS chrome to break it.
+        let default_pos = self.win_pos[0] + egui::vec2(24.0, 24.0);
+        let pos = *self.prefs_pos.get_or_insert(default_pos);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
-            .with_position(screen)
+            .with_position(pos)
             .with_inner_size(egui::vec2(440.0, 300.0))
+            .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
             .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_prefs");
         let mut close = false;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            // Top: skin-accented title bar (the window is borderless). Drag it to
+            // move the window; the × closes it. Mirrors the Library's title bar.
+            egui::TopBottomPanel::top("prefs_titlebar")
+                .exact_height(20.0)
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    let (bar, bar_resp) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 20.0),
+                        egui::Sense::click_and_drag(),
+                    );
+                    let accent = self.theme.accent;
+                    let txt = crate::skin::contrast_text(accent);
+                    ui.painter().rect_filled(bar, 0.0, accent);
+                    ui.painter().text(
+                        bar.left_center() + egui::vec2(6.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        "LinAmp Preferences",
+                        egui::FontId::proportional(13.0),
+                        txt,
+                    );
+                    // Close box on the right.
+                    let x_rect = egui::Rect::from_min_size(
+                        egui::pos2(bar.right() - 18.0, bar.center().y - 7.0),
+                        egui::vec2(14.0, 14.0),
+                    );
+                    let x_resp =
+                        ui.interact(x_rect, ui.id().with("prefs_close"), egui::Sense::click());
+                    ui.painter()
+                        .rect_stroke(x_rect, 2.0, egui::Stroke::new(1.0_f32, txt));
+                    ui.painter().text(
+                        x_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "×",
+                        egui::FontId::proportional(13.0),
+                        txt,
+                    );
+                    if x_resp.clicked() {
+                        close = true;
+                    }
+                    // Drag the title bar to move the window (skip when over the ×).
+                    if bar_resp.drag_started() && !x_resp.hovered() {
+                        if let Some(g) = global_cursor_points(ctx) {
+                            self.prefs_drag = Some(g - pos);
+                        }
+                    }
+                    if bar_resp.dragged() {
+                        if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.prefs_drag) {
+                            let np = g - grab;
+                            self.prefs_pos = Some(np);
+                            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(np));
+                        }
+                    }
+                    if bar_resp.drag_stopped() {
+                        self.prefs_drag = None;
+                    }
+                });
             // Left: the category list (classic Winamp's Preferences tree, flattened
             // to a list that the buildout can extend).
             egui::SidePanel::left("prefs_cats")
