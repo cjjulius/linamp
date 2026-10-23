@@ -13,15 +13,19 @@ impl super::LinAmpApp {
             (Some(o), Some(l)) => Some(o.min + l.to_vec2()),
             _ => None,
         };
-        let (pressed, released, down, secondary, scroll) = ctx.input(|i| {
+        let (pressed, released, down, secondary, scroll, mods) = ctx.input(|i| {
             (
                 i.pointer.primary_pressed(),
                 i.pointer.primary_released(),
                 i.pointer.primary_down(),
                 i.pointer.secondary_clicked(),
                 i.raw_scroll_delta.y,
+                i.modifiers,
             )
         });
+        // Platform-aware Ctrl (Command on macOS) for selection gestures.
+        let sel_ctrl = mods.ctrl || mods.command;
+        let sel_shift = mods.shift;
         let shaded = match win {
             ClWin::Main => self.main_shade,
             ClWin::Eq => self.eq_shade,
@@ -69,6 +73,8 @@ impl super::LinAmpApp {
                         if !self.pl_selection.contains(&row) {
                             self.pl_selection.clear();
                             self.pl_selection.insert(row);
+                            self.pl_anchor = Some(row);
+                            self.pl_lead = Some(row);
                         }
                         // Remember the exact row so Play / Edit target it even when
                         // it's one of several selected.
@@ -158,15 +164,27 @@ impl super::LinAmpApp {
                                     let row = classic::pl_row_at(ny, self.pl_first);
                                     if row < self.playlist.len() {
                                         let now = Instant::now();
-                                        let dbl = self
-                                            .pl_last_click
-                                            .map(|(r, t)| r == row && now.duration_since(t).as_millis() < 350)
-                                            .unwrap_or(false);
+                                        // A plain repeat-click on the same row plays
+                                        // it; a ctrl/shift click is a selection
+                                        // gesture, never a play.
+                                        let dbl = !sel_ctrl
+                                            && !sel_shift
+                                            && self
+                                                .pl_last_click
+                                                .map(|(r, t)| {
+                                                    r == row
+                                                        && now.duration_since(t).as_millis() < 350
+                                                })
+                                                .unwrap_or(false);
                                         if dbl {
                                             self.play_index(row);
                                         } else {
-                                            self.pl_selection.clear();
-                                            self.pl_selection.insert(row);
+                                            self.pl_select_with(
+                                                row,
+                                                sel_ctrl,
+                                                sel_shift,
+                                                crate::selection::CtrlMode::Toggle,
+                                            );
                                         }
                                         self.pl_last_click = Some((row, now));
                                     }
@@ -308,21 +326,10 @@ impl super::LinAmpApp {
                         if classic::region_at(nx, ny) == Some(r) {
                             if r == Btn::Options || r == Btn::ClutterO {
                                 self.open_popup_in(Popup::Options, win, l);
-                            } else if r == Btn::Time {
-                                // Double-click the time display toggles elapsed vs
-                                // remaining (shown as a negative) everywhere it's shown.
-                                let now = Instant::now();
-                                let dbl = self
-                                    .time_last_click
-                                    .map(|t| now.duration_since(t).as_millis() < 350)
-                                    .unwrap_or(false);
-                                if dbl {
-                                    self.time_remaining = !self.time_remaining;
-                                    self.time_last_click = None;
-                                } else {
-                                    self.time_last_click = Some(now);
-                                }
                             } else {
+                                // Btn::Time toggles elapsed/remaining on a single
+                                // click via trigger_classic, matching classic
+                                // Winamp's time display behaviour.
                                 self.trigger_classic(ctx, r);
                             }
                         }

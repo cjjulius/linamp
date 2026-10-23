@@ -212,6 +212,22 @@ pub struct MainState {
     pub viz_peak: [u8; 3],
 }
 
+impl MainState {
+    /// The LCD time reading as `(minutes, seconds, is_remaining)`, honoring the
+    /// elapsed/remaining toggle. Remaining is only reported when the duration is
+    /// known; minutes are capped at 99 to fit the two-digit LCD, matching the
+    /// classic skin. Shared by the full and window-shade time displays.
+    fn lcd_mmss(&self) -> (u32, u32, bool) {
+        let remaining = self.time_remaining && self.duration > 0.0;
+        let secs = if remaining {
+            (self.duration - self.pos).max(0.0) as u32
+        } else {
+            self.pos.max(0.0) as u32
+        };
+        ((secs / 60).min(99), secs % 60, remaining)
+    }
+}
+
 /// Hit target on a 14px window-shade bar.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ShadeHit {
@@ -442,14 +458,7 @@ impl ClassicSkin {
 
         // Time digits (elapsed, or remaining with a leading minus).
         if let Some(nb) = self.bmp("numbers.bmp").or_else(|| self.bmp("nums_ex.bmp")) {
-            let remaining = st.time_remaining && st.duration > 0.0;
-            let secs = if remaining {
-                (st.duration - st.pos).max(0.0) as u32
-            } else {
-                st.pos.max(0.0) as u32
-            };
-            let mm = (secs / 60).min(99);
-            let ss = secs % 60;
+            let (mm, ss, remaining) = st.lcd_mmss();
             let digits = [mm / 10, mm % 10, ss / 10, ss % 10];
             let xs = [48, 60, 78, 90];
             for (i, &d) in digits.iter().enumerate() {
@@ -523,14 +532,9 @@ impl ClassicSkin {
         // fill in the time: the digits sit either side of the sprite's baked ":"
         // separator (~x143). Shows remaining (with a leading minus) when the
         // elapsed/remaining toggle is on, matching the expanded LCD.
-        let remaining = st.time_remaining && st.duration > 0.0;
-        let secs = if remaining {
-            (st.duration - st.pos).max(0.0) as u32
-        } else {
-            st.pos.max(0.0) as u32
-        };
-        let mm = format!("{:02}", (secs / 60).min(99));
-        let ss = format!("{:02}", secs % 60);
+        let (mm, ss, remaining) = st.lcd_mmss();
+        let mm = format!("{:02}", mm);
+        let ss = format!("{:02}", ss);
         self.draw_text_tinted(&mut c, &mm, 132, 4, 10, st.fg);
         self.draw_text_tinted(&mut c, &ss, 146, 4, 10, st.fg);
         if remaining {
@@ -683,14 +687,21 @@ fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool)
     // in Green Dimension, …). Sample it from the 1px margin left of the first
     // glyph (A starts at x=1) on this font row; fall back to the common cyan when
     // the skin's GEN.BMP is too short to hold the font rows.
-    let key = if fy < g.height() {
-        let p = g.get_pixel(0, fy);
-        [p[0], p[1], p[2]]
-    } else {
-        GEN_KEY
+    let key_at = |row: u32| {
+        if row < g.height() {
+            let p = g.get_pixel(0, row);
+            [p[0], p[1], p[2]]
+        } else {
+            GEN_KEY
+        }
     };
-    // Prefer the skin's measured glyph metrics; fall back to the fixed table.
-    let table = gen_font_table(g, fy, key);
+    let key = key_at(fy);
+    // Measure glyph widths from the SELECTED row for both variants. The glyph
+    // columns are identical in the selected and normal rows, but the normal
+    // (inactive) row has a stray pixel on some glyphs (e.g. Y) that would widen
+    // the measured run; using the clean selected widths excludes it and keeps
+    // kerning identical between the two variants (#106).
+    let table = gen_font_table(g, GEN_FONT_Y_SELECTED, key_at(GEN_FONT_Y_SELECTED));
     let glyph = |c: char| -> Option<(u32, u32)> {
         c.is_ascii_uppercase().then(|| {
             let i = (c as u8 - b'A') as usize;
@@ -851,9 +862,53 @@ fn blit(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, sy: u32
     }
 }
 
+/// Approximate an accented Latin character with its base ASCII letter, so the
+/// ASCII-only bitmap font renders it readably instead of as a blank (#97, e.g.
+/// Vietnamese "Trường" -> "Truong"). Returns the char unchanged when unmapped.
+/// This is a readability fallback; full non-Latin glyphs would need a font atlas.
+fn ascii_fold(ch: char) -> char {
+    match ch as u32 {
+        // Latin-1 Supplement
+        0xC0..=0xC6 | 0xE0..=0xE6 => 'a',
+        0xC7 | 0xE7 => 'c',
+        0xC8..=0xCB | 0xE8..=0xEB => 'e',
+        0xCC..=0xCF | 0xEC..=0xEF => 'i',
+        0xD0 | 0xF0 => 'd',
+        0xD1 | 0xF1 => 'n',
+        0xD2..=0xD6 | 0xD8 | 0xF2..=0xF6 | 0xF8 => 'o',
+        0xD9..=0xDC | 0xF9..=0xFC => 'u',
+        0xDD | 0xFD | 0xFF => 'y',
+        0xDF => 's',
+        // Latin Extended-A/B: common accented letters and Vietnamese ơ/ư/đ/ă
+        0x100..=0x105 => 'a',
+        0x106..=0x10D => 'c',
+        0x110 | 0x111 => 'd',
+        0x112..=0x11B => 'e',
+        0x128..=0x131 => 'i',
+        0x139..=0x142 => 'l',
+        0x143..=0x148 => 'n',
+        0x14C..=0x151 | 0x1A0 | 0x1A1 => 'o',
+        0x154..=0x159 => 'r',
+        0x15A..=0x161 => 's',
+        0x162..=0x165 => 't',
+        0x168..=0x16F | 0x1AF | 0x1B0 => 'u',
+        0x174 | 0x175 => 'w',
+        0x176..=0x178 => 'y',
+        0x179..=0x17E => 'z',
+        // Vietnamese tone marks (Latin Extended Additional)
+        0x1EA0..=0x1EB7 => 'a',
+        0x1EB8..=0x1EC7 => 'e',
+        0x1EC8..=0x1ECB => 'i',
+        0x1ECC..=0x1EE3 => 'o',
+        0x1EE4..=0x1EF1 => 'u',
+        0x1EF2..=0x1EF9 => 'y',
+        _ => ch,
+    }
+}
+
 /// Map a character to its (column, row) cell in TEXT.BMP (5x6 cells).
 fn char_cell(ch: char) -> (u32, u32) {
-    let c = ch.to_ascii_lowercase();
+    let c = ascii_fold(ch).to_ascii_lowercase();
     match c {
         'a'..='z' => (c as u32 - 'a' as u32, 0),
         '0'..='9' => (c as u32 - '0' as u32, 1),
@@ -1733,6 +1788,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ascii_folds_accented_text_to_base_letters() {
+        // Accented and Vietnamese characters render via their base ASCII cell,
+        // not as blanks (#97).
+        for (accented, base) in [
+            ('é', 'e'), ('ñ', 'n'), ('ü', 'u'), ('ç', 'c'), ('ø', 'o'),
+            ('Đ', 'd'), ('ư', 'u'), ('ờ', 'o'), ('ế', 'e'), ('ạ', 'a'), ('ý', 'y'),
+        ] {
+            assert_eq!(char_cell(accented), char_cell(base), "{accented} -> {base}");
+            assert_ne!(char_cell(accented), char_cell(' '), "{accented} folded to blank");
+        }
+        // ASCII is unchanged.
+        assert_eq!(char_cell('A'), char_cell('a'));
+    }
+
+    #[test]
     fn clutterbar_regions_map_to_buttons() {
         assert_eq!(region_at(13.0, 24.0), Some(Btn::ClutterO));
         assert_eq!(region_at(13.0, 32.0), Some(Btn::ClutterA));
@@ -1954,6 +2024,44 @@ mod tests {
         let a = skin.compose_main_shade(&mk("")).into_raw();
         let b = skin.compose_main_shade(&mk("A VERY LONG SONG TITLE 1234567890")).into_raw();
         assert_eq!(a, b, "the collapsed main bar must not draw the song title");
+    }
+
+    #[test]
+    fn lcd_mmss_honors_elapsed_remaining_and_caps_minutes() {
+        let st = |pos: f32, duration: f32, time_remaining: bool| MainState {
+            focused: true,
+            play: PlayUi::Playing,
+            pressed: None,
+            shuffle: false,
+            repeat: false,
+            eq_on: false,
+            pl_on: false,
+            always_on_top: false,
+            double_size: false,
+            pos,
+            duration,
+            time_remaining,
+            volume: 0.5,
+            balance: 0.0,
+            stereo: true,
+            title: String::new(),
+            kbps: "128".to_string(),
+            khz: "44".to_string(),
+            fg: [0, 255, 0],
+            viz: None,
+            viz_spectrum: Vec::new(),
+            viz_peak: [0, 0, 0],
+        };
+        // Elapsed: 71s -> 1:11, not flagged remaining.
+        assert_eq!(st(71.0, 200.0, false).lcd_mmss(), (1, 11, false));
+        // Remaining: 200 - 71 = 129s -> 2:09, flagged remaining.
+        assert_eq!(st(71.0, 200.0, true).lcd_mmss(), (2, 9, true));
+        // Remaining is suppressed when the duration is unknown.
+        assert_eq!(st(71.0, 0.0, true).lcd_mmss(), (1, 11, false));
+        // Past the end never shows a negative; it clamps to 0:00.
+        assert_eq!(st(250.0, 200.0, true).lcd_mmss(), (0, 0, true));
+        // Minutes are capped at 99 for the two-digit LCD (100:40 -> 99:40).
+        assert_eq!(st(6040.0, 0.0, false).lcd_mmss(), (99, 40, false));
     }
 
     #[test]

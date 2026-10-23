@@ -36,8 +36,13 @@ if (-not $iscc) {
     throw "Inno Setup (ISCC.exe) not found. Install Inno Setup 6.3+ (choco install innosetup) and retry."
 }
 
-Write-Host "==> Compiling installer with $iscc" -ForegroundColor Cyan
-& $iscc (Join-Path $PSScriptRoot "linamp.iss")
+# Single source of truth for the version: Cargo.toml (passed to ISCC so the
+# installer name/version can never drift from the crate's).
+$ver = ([regex]::Match((Get-Content (Join-Path $root "Cargo.toml") -Raw), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value
+if (-not $ver) { throw "Could not read version from Cargo.toml" }
+
+Write-Host "==> Compiling installer v$ver with $iscc" -ForegroundColor Cyan
+& $iscc "/DMyAppVersion=$ver" (Join-Path $PSScriptRoot "linamp.iss")
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
 $setup = Get-ChildItem (Join-Path $root "dist\LinAmp-*-Setup.exe") | Sort-Object LastWriteTime | Select-Object -Last 1

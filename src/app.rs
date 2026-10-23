@@ -355,6 +355,11 @@ pub struct LinAmpApp {
     eq_auto: bool,
     pl_first: usize,
     pl_selection: HashSet<usize>,
+    /// Fixed end for shift-range selection; set by a plain/ctrl click or nav.
+    pl_anchor: Option<usize>,
+    /// The focus ("lead") row keyboard navigation moves from; the highlight
+    /// follows it along with the rest of the selection.
+    pl_lead: Option<usize>,
     pl_last_click: Option<(usize, Instant)>,
     /// The row a playlist right-click targeted, so the track menu's Play / Edit
     /// act on exactly that row rather than the selection's min / current track.
@@ -369,8 +374,6 @@ pub struct LinAmpApp {
     eq_shade: bool,
     pl_shade: bool,
     tb_last_click: Option<(ClWin, Instant)>,
-    /// Last click on the main time display, for double-click elapsed/remaining.
-    time_last_click: Option<Instant>,
     // multi-window geometry (points)
     win_pos: [egui::Pos2; 3],
     pl_px_h: f32,
@@ -535,6 +538,8 @@ impl LinAmpApp {
             eq_auto: false,
             pl_first: 0,
             pl_selection: HashSet::new(),
+            pl_anchor: None,
+            pl_lead: None,
             pl_last_click: None,
             pl_ctx_row: None,
             popup: None,
@@ -544,7 +549,6 @@ impl LinAmpApp {
             eq_shade: false,
             pl_shade: false,
             tb_last_click: None,
-            time_last_click: None,
             win_pos: [egui::pos2(100.0, 100.0); 3],
             pl_px_h: classic::PL_H as f32,
             pl_px_w: classic::MAIN_W as f32,
@@ -1303,36 +1307,14 @@ impl LinAmpApp {
             return;
         }
         self.last_session_check = now;
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.eq_visible.hash(&mut h);
-        self.pl_visible.hash(&mut h);
-        self.main_shade.hash(&mut h);
-        self.eq_shade.hash(&mut h);
-        self.pl_shade.hash(&mut h);
-        self.lib_visible.hash(&mut h);
-        self.pl_px_w.to_bits().hash(&mut h);
-        self.pl_px_h.to_bits().hash(&mut h);
-        for p in &self.win_pos {
-            p.x.to_bits().hash(&mut h);
-            p.y.to_bits().hash(&mut h);
-        }
-        self.lib_pos.x.to_bits().hash(&mut h);
-        self.lib_pos.y.to_bits().hash(&mut h);
-        self.playlist.current.hash(&mut h);
-        self.eq_enabled.hash(&mut h);
-        self.eq_auto.hash(&mut h);
-        self.eq_preamp_db.to_bits().hash(&mut h);
-        for b in &self.eq_bands {
-            b.to_bits().hash(&mut h);
-        }
-        for t in &self.playlist.tracks {
-            t.path.hash(&mut h);
-        }
-        let sig = h.finish();
+        // Hash the session we would save, so the change detection can never drift
+        // from what is actually persisted (the #105 bug: volume/balance were saved
+        // but absent from a hand-listed signature, so changes weren't written).
+        let session = self.build_session();
+        let sig = session.sig();
         if self.session_sig != Some(sig) {
             self.session_sig = Some(sig);
-            self.build_session().save();
+            session.save();
         }
     }
 
@@ -1409,30 +1391,60 @@ impl LinAmpApp {
 
     fn pl_select_all(&mut self) {
         self.pl_selection = (0..self.playlist.len()).collect();
+        self.pl_anchor = Some(0);
+        self.pl_lead = self.playlist.len().checked_sub(1);
     }
 
-    /// Move the single-row selection by `delta` (keyboard navigation), clamped,
-    /// and scroll it into view.
-    fn pl_move_selection(&mut self, delta: i32) {
+    /// Apply a selection gesture landing on `target`, honoring Ctrl and Shift.
+    /// `ctrl_mode` differs by input source: mouse ctrl-click toggles a row,
+    /// keyboard ctrl-nav adds it. The lead row is recorded and scrolled in.
+    fn pl_select_with(
+        &mut self,
+        target: usize,
+        ctrl: bool,
+        shift: bool,
+        ctrl_mode: crate::selection::CtrlMode,
+    ) {
+        if self.playlist.is_empty() {
+            return;
+        }
+        let max = self.playlist.len() - 1;
+        let target = target.min(max);
+        // Clamp a stale anchor (the list may have shrunk since it was set) so a
+        // shift-range can't run past the end.
+        let anchor = self.pl_anchor.map(|a| a.min(max));
+        self.pl_anchor = Some(crate::selection::apply(
+            &mut self.pl_selection,
+            anchor,
+            target,
+            ctrl,
+            shift,
+            ctrl_mode,
+        ));
+        self.pl_lead = Some(target);
+        self.pl_scroll_to(target);
+    }
+
+    /// Keyboard navigation by `delta` rows from the lead, with Ctrl/Shift
+    /// semantics (Shift extends the range, Ctrl adds the new row).
+    fn pl_navigate(&mut self, delta: i32, ctrl: bool, shift: bool) {
         if self.playlist.is_empty() {
             return;
         }
         let len = self.playlist.len() as i32;
-        let anchor = if delta < 0 {
-            self.pl_selection.iter().min().copied()
-        } else {
-            self.pl_selection.iter().max().copied()
-        };
-        let next = match anchor {
-            Some(a) => (a as i32 + delta).clamp(0, len - 1),
-            // Nothing selected yet: enter from the near end.
-            None if delta < 0 => len - 1,
-            None => 0,
-        } as usize;
-        self.pl_selection.clear();
-        self.pl_selection.insert(next);
-        self.pl_last_click = Some((next, Instant::now()));
-        self.pl_scroll_to(next);
+        let from = self
+            .pl_lead
+            .or(self.pl_anchor)
+            .map(|b| b as i32)
+            // Nothing focused yet: enter from the near end.
+            .unwrap_or(if delta < 0 { len } else { -1 });
+        let target = (from + delta).clamp(0, len - 1) as usize;
+        self.pl_select_with(target, ctrl, shift, crate::selection::CtrlMode::Add);
+    }
+
+    /// Jump the selection to an absolute row (Home / End), with Ctrl/Shift.
+    fn pl_navigate_to(&mut self, target: usize, ctrl: bool, shift: bool) {
+        self.pl_select_with(target, ctrl, shift, crate::selection::CtrlMode::Add);
     }
 
     /// Adjust the playlist scroll offset so row `idx` is visible.
@@ -1488,6 +1500,8 @@ impl LinAmpApp {
             }
         });
         self.pl_selection.clear();
+        self.pl_anchor = None;
+        self.pl_lead = None;
         self.playlist.current =
             cur_path.and_then(|p| self.playlist.tracks.iter().position(|t| t.path == p));
         self.pl_first = self.pl_first.min(self.playlist.len().saturating_sub(1));
@@ -1604,7 +1618,7 @@ impl LinAmpApp {
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
             .with_position(screen)
-            .with_inner_size(egui::vec2(340.0, 345.0))
+            .with_inner_size(egui::vec2(340.0, 372.0))
             .with_resizable(false)
             .with_taskbar(false)
             .with_window_level(self.window_level());
@@ -1670,6 +1684,17 @@ impl LinAmpApp {
                 if ui.button("Close").clicked() {
                     close = true;
                 }
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "LinAmp {} ({} · {})",
+                        env!("CARGO_PKG_VERSION"),
+                        env!("GIT_HASH"),
+                        env!("COMMIT_DATE"),
+                    ))
+                    .small()
+                    .color(Color32::GRAY),
+                );
             });
             self.apply_base_cursor(ctx, "LinAmp Preferences");
             if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {

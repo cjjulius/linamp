@@ -188,13 +188,65 @@ impl Playlist {
         }
     }
 
+    /// Remove tracks whose file no longer exists. Returns how many were removed.
+    /// The currently-playing track stays selected if it survives (else `current`
+    /// clears). Classic Winamp's "remove missing files".
+    pub fn remove_missing(&mut self) -> usize {
+        let before = self.tracks.len();
+        let cur = self.current_path();
+        self.tracks.retain(|t| t.path.exists());
+        self.reselect(cur);
+        before - self.tracks.len()
+    }
+
+    /// Reverse the playlist order, keeping the current track selected.
+    pub fn reverse(&mut self) {
+        let cur = self.current_path();
+        self.tracks.reverse();
+        self.reselect(cur);
+    }
+
+    /// Shuffle the playlist into a random order, keeping the current track
+    /// selected. The order is not reproducible (seeded from the clock).
+    pub fn randomize(&mut self) {
+        let cur = self.current_path();
+        // xorshift64 — a playlist shuffle needs no cryptographic quality.
+        let mut s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9E37_79B9_7F4A_7C15)
+            | 1;
+        let mut next = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        // Fisher-Yates.
+        for i in (1..self.tracks.len()).rev() {
+            let j = (next() % (i as u64 + 1)) as usize;
+            self.tracks.swap(i, j);
+        }
+        self.reselect(cur);
+    }
+
+    /// Path of the currently-playing track, if any.
+    fn current_path(&self) -> Option<PathBuf> {
+        self.current.and_then(|i| self.tracks.get(i)).map(|t| t.path.clone())
+    }
+
+    /// Point `current` at the track with `path` after a reorder/removal.
+    fn reselect(&mut self, path: Option<PathBuf>) {
+        self.current = path.and_then(|p| self.tracks.iter().position(|t| t.path == p));
+    }
+
     /// Index after `current`, honoring shuffle/repeat-all.
     pub fn next_index(&self, shuffle: bool, repeat_all: bool) -> Option<usize> {
         if self.tracks.is_empty() {
             return None;
         }
         if shuffle {
-            return Some(pseudo_random(self.tracks.len()));
+            return Some(random_other(self.tracks.len(), self.current));
         }
         match self.current {
             Some(c) if c + 1 < self.tracks.len() => Some(c + 1),
@@ -215,7 +267,7 @@ impl Playlist {
             return None;
         }
         if shuffle {
-            return Some(pseudo_random(self.tracks.len()));
+            return Some(random_other(self.tracks.len(), self.current));
         }
         match self.current {
             Some(c) if c > 0 => Some(c - 1),
@@ -278,7 +330,12 @@ pub fn save_playlist_file(path: &Path, tracks: &[Track]) -> std::io::Result<()> 
 /// Return the file paths referenced by an .m3u/.m3u8/.pls file, resolving
 /// relative paths against the playlist file's own directory.
 pub fn parse_playlist_file(path: &Path) -> Vec<PathBuf> {
-    let content = std::fs::read_to_string(path).unwrap_or_default();
+    // Decode leniently: a single non-UTF-8 byte (or a Latin-1 playlist) must not
+    // make the whole file load as empty the way read_to_string would. Strip a
+    // leading UTF-8 BOM so the first line still parses.
+    let bytes = std::fs::read(path).unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes);
+    let content = text.strip_prefix('\u{feff}').unwrap_or(text.as_ref());
     let base = path.parent();
     let ext = path
         .extension()
@@ -288,14 +345,22 @@ pub fn parse_playlist_file(path: &Path) -> Vec<PathBuf> {
 
     let mut out = Vec::new();
     if ext == "pls" {
+        // PLS entries are keyed "File<N>=path"; the number N defines the order,
+        // not the line position, and only keys that are actually File<N> count
+        // (so a stray "FileFoo=" is ignored rather than ingested as a track).
+        let mut entries: Vec<(u32, PathBuf)> = Vec::new();
         for line in content.lines() {
             let line = line.trim();
             if let Some(rest) = line.strip_prefix("File") {
                 if let Some(eq) = rest.find('=') {
-                    out.push(resolve(base, rest[eq + 1..].trim()));
+                    if let Ok(n) = rest[..eq].trim().parse::<u32>() {
+                        entries.push((n, resolve(base, rest[eq + 1..].trim())));
+                    }
                 }
             }
         }
+        entries.sort_by_key(|(n, _)| *n);
+        out.extend(entries.into_iter().map(|(_, p)| p));
     } else {
         for line in content.lines() {
             let line = line.trim();
@@ -309,7 +374,16 @@ pub fn parse_playlist_file(path: &Path) -> Vec<PathBuf> {
 }
 
 fn resolve(base: Option<&Path>, value: &str) -> PathBuf {
+    // A native-absolute entry is used as-is (a Windows "C:\..." path has no
+    // meaning here anyway and is left untouched).
     let p = PathBuf::from(value);
+    if p.is_absolute() {
+        return p;
+    }
+    // Classic playlists are overwhelmingly Windows-authored, where relative
+    // entries use backslash separators (e.g. "Music\Song.mp3"). Treat those as
+    // path separators so the playlist resolves on Linux too.
+    let p = PathBuf::from(value.replace('\\', "/"));
     if p.is_absolute() {
         p
     } else if let Some(b) = base {
@@ -344,6 +418,23 @@ fn pseudo_random(len: usize) -> usize {
         .map(|d| d.subsec_nanos() as usize)
         .unwrap_or(0);
     nanos % len.max(1)
+}
+
+/// A random index in `0..len` that isn't `current`, so shuffle never replays the
+/// current track back-to-back (classic Winamp behaviour). Falls back to any index
+/// when there's no current track or only one track.
+fn random_other(len: usize, current: Option<usize>) -> usize {
+    match current {
+        Some(c) if len > 1 && c < len => {
+            let r = pseudo_random(len - 1); // 0..len-1, then skip over c
+            if r >= c {
+                r + 1
+            } else {
+                r
+            }
+        }
+        _ => pseudo_random(len),
+    }
 }
 
 #[cfg(test)]
@@ -384,6 +475,165 @@ mod tests {
         assert!(!t.loaded);
         assert_eq!(t.title, "Song");
         assert_eq!(t.display_name(), "Song");
+    }
+
+    fn pl_of(paths: &[&str], current: Option<usize>) -> Playlist {
+        Playlist {
+            tracks: paths.iter().map(|p| Track::new(PathBuf::from(p))).collect(),
+            current,
+        }
+    }
+
+    #[test]
+    fn reverse_keeps_current_track() {
+        let mut pl = pl_of(&["/a.mp3", "/b.mp3", "/c.mp3"], Some(0));
+        pl.reverse();
+        assert_eq!(pl.tracks[0].path, PathBuf::from("/c.mp3"));
+        assert_eq!(pl.tracks[2].path, PathBuf::from("/a.mp3"));
+        assert_eq!(pl.current, Some(2)); // the once-first track is now last
+    }
+
+    #[test]
+    fn randomize_is_a_permutation_keeping_current() {
+        let paths: Vec<String> = (0..20).map(|i| format!("/{i}.mp3")).collect();
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let mut pl = pl_of(&refs, Some(5));
+        pl.randomize();
+        assert_eq!(pl.tracks.len(), 20);
+        let mut got: Vec<_> = pl.tracks.iter().map(|t| t.path.clone()).collect();
+        got.sort();
+        let mut want: Vec<_> = paths.iter().map(PathBuf::from).collect();
+        want.sort();
+        assert_eq!(got, want, "same set of tracks");
+        assert_eq!(pl.tracks[pl.current.unwrap()].path, PathBuf::from("/5.mp3"));
+    }
+
+    #[test]
+    fn remove_missing_drops_nonexistent_files() {
+        let dir = std::env::temp_dir();
+        let real = dir.join(format!("linamp_rm_{}.mp3", std::process::id()));
+        std::fs::write(&real, b"x").unwrap();
+        let gone = dir.join("linamp_rm_zzz_does_not_exist.mp3");
+        let _ = std::fs::remove_file(&gone);
+        let mut pl = Playlist {
+            tracks: vec![Track::new(gone), Track::new(real.clone())],
+            current: Some(1),
+        };
+        assert_eq!(pl.remove_missing(), 1);
+        assert_eq!(pl.tracks.len(), 1);
+        assert_eq!(pl.tracks[0].path, real);
+        assert_eq!(pl.current, Some(0)); // current followed its surviving track
+        let _ = std::fs::remove_file(&real);
+    }
+
+    #[test]
+    fn parse_playlist_tolerates_bom_and_bad_bytes() {
+        // A leading UTF-8 BOM plus a stray non-UTF-8 byte must not discard the
+        // whole file; the valid entries still parse.
+        let dir = std::env::temp_dir();
+        let m3u = dir.join(format!("linamp_bom_{}.m3u", std::process::id()));
+        let mut data = vec![0xEF, 0xBB, 0xBF]; // UTF-8 BOM
+        data.extend_from_slice(b"#EXTM3U\na.mp3\n");
+        data.push(0xFF); // invalid UTF-8 byte on its own line
+        data.extend_from_slice(b"\nb.mp3\n");
+        std::fs::write(&m3u, &data).unwrap();
+
+        // Assert on file names, not full paths: a bare "/music/a.mp3" is absolute
+        // on Unix but drive-relative on Windows, so it resolves differently per
+        // platform. Relative basenames resolve the same on both, keeping this a
+        // test of BOM/bad-byte tolerance rather than path syntax.
+        let got = parse_playlist_file(&m3u);
+        let names: Vec<String> = got
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        assert!(names.iter().any(|n| n == "a.mp3"), "got {got:?}");
+        assert!(names.iter().any(|n| n == "b.mp3"), "got {got:?}");
+        // The BOM must be stripped so the header is still treated as a comment,
+        // not pushed as a bogus path.
+        assert!(
+            !got.iter().any(|p| p.to_string_lossy().contains("EXTM3U")),
+            "header leaked as a path: {got:?}"
+        );
+        let _ = std::fs::remove_file(&m3u);
+    }
+
+    #[test]
+    fn parse_pls_orders_by_index_and_ignores_non_file_keys() {
+        let dir = std::env::temp_dir();
+        let pls = dir.join(format!("linamp_pls_{}.pls", std::process::id()));
+        // Entries out of line order, plus a decoy key that starts with "File".
+        let body = "[playlist]\n\
+                    NumberOfEntries=3\n\
+                    File2=b.mp3\n\
+                    FileFoo=decoy.mp3\n\
+                    File10=j.mp3\n\
+                    File1=a.mp3\n\
+                    Version=2\n";
+        std::fs::write(&pls, body).unwrap();
+
+        // Assert on file names, not full paths, so the expectation holds on both
+        // platforms (a bare "/music/x" is absolute on Unix, drive-relative on
+        // Windows). What's under test is the order (by N: 1, 2, 10) and that the
+        // non-File<N> "decoy" key is dropped.
+        let got = parse_playlist_file(&pls);
+        let names: Vec<String> = got
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        assert_eq!(names, vec!["a.mp3", "b.mp3", "j.mp3"]);
+        let _ = std::fs::remove_file(&pls);
+    }
+
+    #[test]
+    fn resolve_handles_windows_relative_separators() {
+        let base = PathBuf::from("/pl");
+        // Windows-style relative entries resolve against the playlist directory.
+        assert_eq!(
+            resolve(Some(&base), "Music\\Song.mp3"),
+            PathBuf::from("/pl/Music/Song.mp3")
+        );
+        assert_eq!(
+            resolve(Some(&base), "sub\\dir\\x.mp3"),
+            PathBuf::from("/pl/sub/dir/x.mp3")
+        );
+        // Forward-slash relative entries are unaffected.
+        assert_eq!(
+            resolve(Some(&base), "a/b.mp3"),
+            PathBuf::from("/pl/a/b.mp3")
+        );
+        // Native-absolute entries are passed through untouched.
+        assert_eq!(
+            resolve(Some(&base), "/abs/x.mp3"),
+            PathBuf::from("/abs/x.mp3")
+        );
+    }
+
+    #[test]
+    fn shuffle_never_repeats_current_track() {
+        let pl = pl_of(&["/0.mp3", "/1.mp3", "/2.mp3", "/3.mp3"], Some(2));
+        for _ in 0..64 {
+            assert_ne!(pl.next_index(true, false), Some(2));
+            assert_ne!(pl.prev_index(true, false), Some(2));
+            assert!(pl.next_index(true, false).unwrap() < 4);
+        }
+        // A single-track list can only return that track.
+        let one = pl_of(&["/only.mp3"], Some(0));
+        assert_eq!(one.next_index(true, false), Some(0));
+    }
+
+    #[test]
+    fn next_prev_index_navigation() {
+        let pl = |cur| pl_of(&["/0.mp3", "/1.mp3", "/2.mp3"], cur);
+        assert_eq!(pl(Some(0)).next_index(false, false), Some(1));
+        assert_eq!(pl(Some(2)).next_index(false, false), None); // last, no repeat
+        assert_eq!(pl(Some(2)).next_index(false, true), Some(0)); // last, repeat wraps
+        assert_eq!(pl(None).next_index(false, false), Some(0)); // nothing playing
+        assert_eq!(pl(Some(1)).prev_index(false, false), Some(0));
+        assert_eq!(pl(Some(0)).prev_index(false, false), None); // first, no repeat
+        assert_eq!(pl(Some(0)).prev_index(false, true), Some(2)); // first, repeat wraps
+        let empty = Playlist { tracks: vec![], current: None };
+        assert_eq!(empty.next_index(false, false), None);
     }
 
     #[test]
