@@ -34,7 +34,9 @@ Full feature list and roadmap: [FEATURES.md](FEATURES.md). The backlog lives in
 ## Keyboard shortcuts
 
 Matching classic Winamp. (Up/Down move the selection when the playlist window is
-focused, otherwise they change the volume.)
+focused, otherwise they change the volume.) In the playlist, selection is
+Winamp-style: click selects one row, **Ctrl+click** toggles a row, **Shift+click**
+or **Shift+↑/↓** selects a range, and **Home/End** jump to the first/last track.
 
 | Keys | Action | | Keys | Action |
 |------|--------|---|------|--------|
@@ -110,7 +112,7 @@ folder. Headless preview: `linamp --render-all skin.wsz out.png`.
 
 | File | Responsibility |
 |------|----------------|
-| `app.rs` | egui app, window management, input, menus, playlist/library UI |
+| `app.rs` + `app/` | app state and update loop, split into focused modules (`window`, `input`, `menu`, `render`, `library_ui`, `tag_ui`, `modern`, `theme`, `platform_win`) |
 | `classic.rs` | classic-skin compositor (main / EQ / playlist) |
 | `dock.rs` | window docking + magnetic-snap geometry |
 | `player.rs` | playback (rodio) + device following |

@@ -3,7 +3,11 @@
 ; Build with: packaging\windows\build-installer.ps1  (or ISCC linamp.iss)
 
 #define MyAppName "LinAmp"
-#define MyAppVersion "0.1.0"
+; Overridable from the build script (ISCC /DMyAppVersion=...); the default here
+; is the fallback and must track Cargo.toml's version.
+#ifndef MyAppVersion
+  #define MyAppVersion "0.2.0"
+#endif
 #define MyAppPublisher "LinAmp contributors"
 #define MyAppURL "https://github.com/cjjulius/linamp"
 #define MyAppExeName "linamp.exe"
@@ -54,7 +58,6 @@ Source: "{#RepoRoot}\skins\*"; DestDir: "{app}\skins"; Excludes: "backup\*"; Fla
 Source: "{#RepoRoot}\music\*"; DestDir: "{app}\music"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#RepoRoot}\FEATURES.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "{#RepoRoot}\SHORTCUTS.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 ; Noto Sans is embedded in the binary; carry its license.
 Source: "{#RepoRoot}\assets\fonts\LICENSE-NotoSans.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion skipifsourcedoesntexist

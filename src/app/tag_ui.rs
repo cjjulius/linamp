@@ -124,9 +124,29 @@ impl super::LinAmpApp {
             v2_on.then_some(&v2),
         );
         if result.is_ok() {
+            // Refresh the playlist row (when the edit came from the playlist).
+            let mut refreshed = None;
             if let Some(t) = self.playlist.tracks.get_mut(index) {
                 t.loaded = false;
                 t.load();
+                refreshed = Some(t.clone());
+            }
+            // Reflect the new tags in the library DB, but only for a track it
+            // already knows (a no-op otherwise).
+            let lib_changed = if let Some(lib) = &self.library {
+                let track = refreshed.unwrap_or_else(|| {
+                    let mut f = crate::playlist::Track::new(path.clone());
+                    f.load();
+                    f
+                });
+                lib.update_tags(&track)
+            } else {
+                false
+            };
+            // Re-query the visible library so the edited row shows its new tags
+            // right away instead of staying stale until the next re-navigation.
+            if lib_changed {
+                self.refresh_library();
             }
         }
         // On success the caller closes the window, so only an error needs a

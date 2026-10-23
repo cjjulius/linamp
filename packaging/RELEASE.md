@@ -43,7 +43,31 @@ intact by uninstalls.
    CI (`.github/workflows/ci.yml`) builds both installers and creates the GitHub
    Release with them attached. (A `workflow_dispatch` run builds the installers
    as artifacts only — a dry run with no Release.)
-6. **Merge.** Merge `release/vX.Y.Z` into `main`.
+6. **Merge back into `main` — required, same day as the tag.** This is the
+   final, non-optional step; a release is not finished until it is done:
+   ```sh
+   git switch main && git pull
+   git merge --no-ff release/vX.Y.Z && git push origin main
+   ```
+   **Do it before cutting any new branch.** The tag does *not* advance `main`:
+   if the merge-back is skipped, `main` stays behind the release, and every
+   branch cut from it afterward silently lacks the released fixes.
+
+   > ⚠️ This is exactly how 0.3.0 got tangled. 0.2.0 was tagged and published
+   > from `release/v0.2.0` but **never merged back**, so `main` stayed on 0.1.0.
+   > `feat/feature-set` then branched from that stale `main` and silently lacked
+   > v0.2.0's Linux popup + packaging fixes — they had to be re-integrated into
+   > 0.3.0 to avoid regressing them. No wrong branch, no merge conflict: just a
+   > skipped merge-back.
+
+## Simpler alternative: tag on `main`
+
+A `release/*` branch exists only to hold release-candidate fixes during QA
+without blocking other work on `main`. If a release needs no such isolation,
+skip the branch entirely: bump `version` on `main`, push, run the Windows/Linux
+candidates from `main`, then tag that `main` commit. With nothing to merge back,
+`main` can't drift. Use a `release/*` branch only when you genuinely need it —
+and when you do, **step 6 is mandatory.**
 
 ## Notes
 

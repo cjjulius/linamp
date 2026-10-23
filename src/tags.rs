@@ -170,6 +170,22 @@ pub fn read_info(path: &Path) -> FileInfo {
     info
 }
 
+/// Prepare an ID3v1 text field: trim, drop if empty, and cap to `max` bytes on a
+/// UTF-8 char boundary. ID3v1 fields are fixed-width; lofty truncates to the cap
+/// by byte index and panics if a multibyte character straddles it (#115), which
+/// aborts the save mid-write and corrupts the file. Capping here avoids that.
+fn v1_text(s: &str, max: usize) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let mut end = s.len().min(max);
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(s[..end].to_string())
+}
+
 /// Write the ID3 tags. For each of v1/v2: `Some` writes/updates it, `None`
 /// removes it. The ID3v2 tag is edited in place so other frames survive.
 pub fn write_id3(path: &Path, v1: Option<&Id3Fields>, v2: Option<&Id3Fields>) -> Result<()> {
@@ -203,16 +219,14 @@ pub fn write_id3(path: &Path, v1: Option<&Id3Fields>, v2: Option<&Id3Fields>) ->
     match v1 {
         Some(f) => {
             use lofty::id3::v1::Id3v1Tag;
-            let opt = |s: &str| {
-                let s = s.trim();
-                (!s.is_empty()).then(|| s.to_string())
-            };
             let t = Id3v1Tag {
-                title: opt(&f.title),
-                artist: opt(&f.artist),
-                album: opt(&f.album),
-                year: opt(&f.year),
-                comment: opt(&f.comment),
+                title: v1_text(&f.title, V1_MAX_TEXT),
+                artist: v1_text(&f.artist, V1_MAX_TEXT),
+                album: v1_text(&f.album, V1_MAX_TEXT),
+                year: v1_text(&f.year, 4),
+                // ID3v1.1 reserves the last 2 bytes of the 30-byte comment for the
+                // track number, so lofty caps comment at 28 — match it here.
+                comment: v1_text(&f.comment, V1_MAX_TEXT - 2),
                 track_number: f.track.trim().parse::<u8>().ok(),
                 genre: GENRES
                     .iter()
@@ -361,6 +375,45 @@ mod tests {
         assert!(gv1.is_none());
         assert_eq!(gv2.unwrap().title, "V2 Title");
 
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn id3v1_long_multibyte_fields_dont_corrupt() {
+        // #115: copying long/multibyte ID3v2 values into ID3v1 and saving must not
+        // corrupt the audio. ID3v1 fields are capped at 30 bytes; the value must be
+        // truncated on a char boundary (never mid-UTF-8) before writing.
+        let src = Path::new("music/Aria Nocturne - Crystal Harbor.mp3");
+        if !src.exists() {
+            return;
+        }
+        let tmp = std::env::temp_dir().join("linamp_id3_longfields.mp3");
+        std::fs::copy(src, &tmp).unwrap();
+        let before = read_info(&tmp).length_secs;
+
+        let long = "Trường Sơn Đông, Trường Sơn Tây — ".repeat(2); // >30 bytes, multibyte
+        let v1 = Id3Fields {
+            track: "5".into(),
+            title: long.clone(),
+            artist: long.clone(),
+            album: long.clone(),
+            year: "2024".into(),
+            genre: "Rock".into(),
+            comment: long.clone(),
+            ..Default::default()
+        };
+        write_id3(&tmp, Some(&v1), None).unwrap();
+
+        // Audio must survive: same (±1s) duration, still readable.
+        let after = read_info(&tmp).length_secs;
+        assert!(
+            (after as i64 - before as i64).abs() <= 1,
+            "duration changed after v1 write: {before} -> {after}"
+        );
+        let (gv1, _) = read_id3(&tmp);
+        let gv1 = gv1.expect("v1 tag present and readable");
+        // ID3v1 is a fixed 30-char (latin-1) field, so at most 30 characters survive.
+        assert!(gv1.title.chars().count() <= V1_MAX_TEXT, "title: {:?}", gv1.title);
         let _ = std::fs::remove_file(&tmp);
     }
 }

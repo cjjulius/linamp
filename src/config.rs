@@ -117,6 +117,17 @@ impl Session {
             .join("session.json")
     }
 
+    /// A content signature over everything the session persists, used to detect
+    /// changes worth re-saving. Hashing the serialized form (rather than a
+    /// hand-listed set of fields) means the dirty check can never drift from what
+    /// `save` actually writes — the root cause of volume not persisting (#105).
+    pub fn sig(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        serde_json::to_string(self).unwrap_or_default().hash(&mut h);
+        h.finish()
+    }
+
     /// Whether a saved session exists — false on a truly first launch.
     pub fn exists() -> bool {
         Self::path().exists()
@@ -185,6 +196,25 @@ mod tests {
         let q: Prefs = serde_json::from_str(&s).unwrap();
         assert!(!q.double_size && q.tag_on_load);
         assert_eq!(q.last_skin.as_deref(), Some("C:/skins/x.wsz"));
+    }
+
+    #[test]
+    fn session_sig_tracks_persisted_fields() {
+        // The dirty signature must change whenever a persisted field changes, so
+        // a save is never skipped (the #105 regression: volume was missing).
+        let base = Session::default();
+        let b = base.sig();
+        let mut v = base.clone();
+        v.volume = Some(0.3);
+        assert_ne!(v.sig(), b, "volume change not detected");
+        let mut bal = base.clone();
+        bal.balance = Some(-0.5);
+        assert_ne!(bal.sig(), b, "balance change not detected");
+        let mut eq = base.clone();
+        eq.eq_preamp = 3.0;
+        assert_ne!(eq.sig(), b, "eq change not detected");
+        // Identical sessions hash identically.
+        assert_eq!(base.sig(), Session::default().sig());
     }
 
     #[test]
