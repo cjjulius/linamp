@@ -3,7 +3,7 @@
 A Winamp-inspired audio player for Linux and Windows, written in Rust
 (`eframe`/`egui` for UI, `rodio`/`symphonia` for audio, `lofty` for tags).
 
-Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
+Legend: ✅ done · 🔜 planned · 🧪 partial
 
 > Planned work and known shortfalls are tracked as **GitHub issues** in
 > [cjjulius/linamp](https://github.com/cjjulius/linamp/issues) — that's the
@@ -14,8 +14,8 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - ✅ Play / Pause / Stop / Next / Previous
 - ✅ Seek bar (scrub) with position + total time
 - ✅ Time display toggles elapsed ↔ remaining (−mm:ss) — Ctrl+T or click the time
-- ✅ Volume control
-- ✅ Repeat-all / Repeat-one / Shuffle
+- ✅ Volume control — level and balance remembered across runs
+- ✅ Repeat-all / Repeat-one / Shuffle (shuffle never replays the current track)
 - ✅ Auto-advance on track end
 - ✅ Stereo balance (the balance slider pans the output, with centre snap)
 - ✅ Stop after current track (Ctrl+V) and stop with fade-out (Shift+V)
@@ -31,7 +31,14 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - ✅ Drag-and-drop reorder (grip handle)
 - ✅ Sort by title / artist / album / duration (+ manual order)
 - ✅ Search box to filter the playlist
-- 🔜 Jump-to-file, multi-select operations
+- ✅ **Multi-selection** (Winamp-style): click selects one, Ctrl+click toggles,
+  Shift+click / Shift+arrows select a range, Home/End jump; Invert/Crop and
+  Remove operate on the selection
+- ✅ Editor extras (Rem/Misc menus): remove missing files, randomize, reverse
+- ✅ Robust playlist loading — M3U/PLS decoded leniently (tolerates a BOM or a
+  stray non-UTF-8 byte), PLS ordered by `File<N>` index, and Windows-authored
+  relative paths (backslashes) resolve on Linux too
+- 🔜 Jump-to-file
 
 ## Metadata / Library
 - ✅ Read ID3v2 / Vorbis / FLAC tags (title/artist/album)
@@ -44,6 +51,8 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
   — stored at `%LOCALAPPDATA%/LinAmp/library.db` (Win) / `~/.local/share/LinAmp/` (Linux)
   — reachable in the classic UI via options menu → **Media Library…** (opens in
   its own window)
+  — tag edits made in the editor update the library row immediately (no rescan);
+  search treats `_` and `%` as literal text, not SQL wildcards
 - 🔜 Album art, smart views / playlists
 
 ## UI / UX (Winamp feel)
@@ -53,7 +62,10 @@ Legend: ✅ done in v0.1 · 🔜 planned · 🧪 partial
 - ✅ Main player + Equalizer + Playlist as separate windows that dock & snap
 - ✅ Window-shade mode (double-click a title bar to collapse)
 - ✅ Keyboard shortcuts matching Winamp — see the [README](README.md#keyboard-shortcuts)
-- ✅ Preferences window (Ctrl+P): tag-load mode and 1×/2× sizing, persisted
+- ✅ Preferences window (Ctrl+P): tag-load mode and 1×/2× sizing, persisted;
+  shows the running `LinAmp <version>` (with build hash + date)
+- ✅ Accented / Vietnamese track text is ASCII-folded in the classic bitmap font
+  (e.g. "Trường Sơn" → "Truong Son") instead of showing blank gaps 🧪
 - 🔜 Mini mode, always-on-top
 
 ## Theming / Skins
