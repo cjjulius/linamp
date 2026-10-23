@@ -434,6 +434,13 @@ mod x11util {
         let Some(shape) = shape_fn() else {
             return false;
         };
+        // Last (w, h, radius) the shape was built for, per window title. The popup
+        // window is reused and resized between menus, so re-shape only when the
+        // live geometry actually changes — cheap enough to call every frame.
+        thread_local! {
+            static LAST: RefCell<std::collections::HashMap<String, (u32, u32, i32)>> =
+                RefCell::new(std::collections::HashMap::new());
+        }
         with_conn(|xlib, d| unsafe {
             let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
             let win = window_by_title(xlib, d, title);
@@ -444,6 +451,14 @@ mod x11util {
                     d, win, &mut root, &mut x, &mut y, &mut w, &mut h, &mut bw, &mut depth,
                 );
                 if got != 0 && w > 0 && h > 0 {
+                    if LAST.with(|c| c.borrow().get(title).copied()) == Some((w, h, radius)) {
+                        // Already shaped for this exact size — nothing to do.
+                        (xlib.XSetErrorHandler)(prev);
+                        return true;
+                    }
+                    LAST.with(|c| {
+                        c.borrow_mut().insert(title.to_string(), (w, h, radius));
+                    });
                     let rects = rounded_rect_rects(w as i32, h as i32, radius);
                     const SHAPE_BOUNDING: c_int = 0;
                     const SHAPE_SET: c_int = 0;

@@ -418,6 +418,14 @@ impl super::LinAmpApp {
         {
             self.popup_rounded = true;
         }
+        // On X11 the popup window is reused and resized between menus, and
+        // XGetGeometry can briefly report the previous size — leaving a corner
+        // square once the latch above engages. Re-apply every frame (size-cached,
+        // so it's a no-op once stable) to correct a stale shape.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let _ = round_popup_window((corner * ctx.pixels_per_point()).round() as i32);
+        }
 
         self.popup_fresh = false;
         if close {
