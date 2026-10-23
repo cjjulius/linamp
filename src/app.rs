@@ -821,10 +821,10 @@ impl LinAmpApp {
                 }
             }
         }
-        // Nothing in the playlist could be played.
+        // Nothing in the playlist could be played — just stop, silently (#128);
+        // leave the prior status as-is rather than showing a message.
         self.player.stop();
         self.playlist.current = None;
-        self.status = "No playable tracks in the playlist.".into();
     }
 
     fn play_pause(&mut self) {
