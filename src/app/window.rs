@@ -5,6 +5,16 @@ use super::*;
 
 impl super::LinAmpApp {
     /// Per-window input in local (viewport) coordinates.
+    /// The EQ hit-test region at base coords, shade-aware: the collapsed bar has
+    /// its own volume/balance/close regions; the full window uses `eq_region_at`.
+    fn eq_region(&self, x: f32, y: f32) -> Option<classic::EqRegion> {
+        if self.eq_shade {
+            classic::eq_shade_region_at(x, y)
+        } else {
+            classic::eq_region_at(x, y)
+        }
+    }
+
     pub(super) fn handle_window_input(&mut self, ctx: &egui::Context, win: ClWin) {
         let outer = ctx.input(|i| i.viewport().outer_rect);
         let monitor = ctx.input(|i| i.viewport().monitor_size);
@@ -101,25 +111,44 @@ impl super::LinAmpApp {
                 let ny = l.y / self.scale;
                 if shaded {
                     use classic::ShadeHit as H;
-                    // The main shade bar carries extra controls; EQ/PL shades only
-                    // have close + title bar.
-                    let hit = if win == ClWin::Main {
-                        classic::main_shade_region_at(nx, ny)
+                    // The collapsed EQ bar also carries the volume/balance sliders;
+                    // handle those first (a press adjusts the value and sets
+                    // eq_active so the drag follows) so they aren't swallowed by the
+                    // bar's window-drag. Otherwise the generic shade controls apply.
+                    let eq_slider = if win == ClWin::Eq {
+                        match classic::eq_shade_region_at(nx, ny) {
+                            Some(
+                                er @ (classic::EqRegion::ShadeVolume
+                                | classic::EqRegion::ShadeBalance),
+                            ) => {
+                                self.eq_active = Some(er);
+                                self.apply_eq_shade_slider(er, nx);
+                                true
+                            }
+                            _ => false,
+                        }
                     } else {
-                        classic::shade_region_at(nx, ny)
+                        false
                     };
-                    match hit {
-                        Some(H::Close) => self.close_window(ctx, win),
-                        Some(H::Restore) => self.toggle_shade(win),
-                        Some(H::TitleBar) => self.start_drag(ctx, win, screen_cursor),
-                        Some(H::Options) => self.open_popup_in(Popup::Options, win, l),
-                        Some(H::Prev) => self.trigger_classic(ctx, Btn::Prev),
-                        Some(H::Play) => self.trigger_classic(ctx, Btn::Play),
-                        Some(H::Pause) => self.trigger_classic(ctx, Btn::Pause),
-                        Some(H::Stop) => self.trigger_classic(ctx, Btn::Stop),
-                        Some(H::Next) => self.trigger_classic(ctx, Btn::Next),
-                        Some(H::Eject) => self.trigger_classic(ctx, Btn::Eject),
-                        None => {}
+                    if !eq_slider {
+                        let hit = if win == ClWin::Main {
+                            classic::main_shade_region_at(nx, ny)
+                        } else {
+                            classic::shade_region_at(nx, ny)
+                        };
+                        match hit {
+                            Some(H::Close) => self.close_window(ctx, win),
+                            Some(H::Restore) => self.toggle_shade(win),
+                            Some(H::TitleBar) => self.start_drag(ctx, win, screen_cursor),
+                            Some(H::Options) => self.open_popup_in(Popup::Options, win, l),
+                            Some(H::Prev) => self.trigger_classic(ctx, Btn::Prev),
+                            Some(H::Play) => self.trigger_classic(ctx, Btn::Play),
+                            Some(H::Pause) => self.trigger_classic(ctx, Btn::Pause),
+                            Some(H::Stop) => self.trigger_classic(ctx, Btn::Stop),
+                            Some(H::Next) => self.trigger_classic(ctx, Btn::Next),
+                            Some(H::Eject) => self.trigger_classic(ctx, Btn::Eject),
+                            None => {}
+                        }
                     }
                 } else {
                     match win {
@@ -138,7 +167,7 @@ impl super::LinAmpApp {
                             }
                         }
                         ClWin::Eq => {
-                            let r = classic::eq_region_at(nx, ny);
+                            let r = self.eq_region(nx, ny);
                             self.eq_active = r;
                             match r {
                                 Some(classic::EqRegion::TitleBar) => {
@@ -148,6 +177,10 @@ impl super::LinAmpApp {
                                 Some(er @ (classic::EqRegion::Preamp | classic::EqRegion::Band(_))) => {
                                     self.apply_eq_slider(er, ny)
                                 }
+                                Some(
+                                    er @ (classic::EqRegion::ShadeVolume
+                                    | classic::EqRegion::ShadeBalance),
+                                ) => self.apply_eq_shade_slider(er, nx),
                                 _ => {}
                             }
                         }
@@ -282,7 +315,12 @@ impl super::LinAmpApp {
                     }
                 }
                 if let Some(er) = self.eq_active {
-                    self.apply_eq_slider(er, ny);
+                    match er {
+                        classic::EqRegion::ShadeVolume | classic::EqRegion::ShadeBalance => {
+                            self.apply_eq_shade_slider(er, nx)
+                        }
+                        _ => self.apply_eq_slider(er, ny),
+                    }
                 }
                 if let Some(grab) = self.resize_pl {
                     // Resize smoothly during the drag; the 25/29px grid is applied
@@ -342,7 +380,7 @@ impl super::LinAmpApp {
                 }
                 if win == ClWin::Eq {
                     if let Some(er) = self.eq_active {
-                        if classic::eq_region_at(nx, ny) == Some(er) {
+                        if self.eq_region(nx, ny) == Some(er) {
                             if er == classic::EqRegion::Presets {
                                 self.open_popup_in(Popup::EqPresets, ClWin::Eq, l);
                             } else {
