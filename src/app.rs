@@ -1303,41 +1303,14 @@ impl LinAmpApp {
             return;
         }
         self.last_session_check = now;
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.eq_visible.hash(&mut h);
-        self.pl_visible.hash(&mut h);
-        self.main_shade.hash(&mut h);
-        self.eq_shade.hash(&mut h);
-        self.pl_shade.hash(&mut h);
-        self.lib_visible.hash(&mut h);
-        self.pl_px_w.to_bits().hash(&mut h);
-        self.pl_px_h.to_bits().hash(&mut h);
-        for p in &self.win_pos {
-            p.x.to_bits().hash(&mut h);
-            p.y.to_bits().hash(&mut h);
-        }
-        self.lib_pos.x.to_bits().hash(&mut h);
-        self.lib_pos.y.to_bits().hash(&mut h);
-        self.playlist.current.hash(&mut h);
-        self.eq_enabled.hash(&mut h);
-        self.eq_auto.hash(&mut h);
-        self.eq_preamp_db.to_bits().hash(&mut h);
-        for b in &self.eq_bands {
-            b.to_bits().hash(&mut h);
-        }
-        // Volume and balance are persisted by build_session but were missing from
-        // the change signature, so adjusting only the volume never marked the
-        // session dirty and the level was lost on the next launch (#105).
-        self.player.volume().to_bits().hash(&mut h);
-        self.balance.to_bits().hash(&mut h);
-        for t in &self.playlist.tracks {
-            t.path.hash(&mut h);
-        }
-        let sig = h.finish();
+        // Hash the session we would save, so the change detection can never drift
+        // from what is actually persisted (the #105 bug: volume/balance were saved
+        // but absent from a hand-listed signature, so changes weren't written).
+        let session = self.build_session();
+        let sig = session.sig();
         if self.session_sig != Some(sig) {
             self.session_sig = Some(sig);
-            self.build_session().save();
+            session.save();
         }
     }
 
