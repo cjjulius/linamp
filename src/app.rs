@@ -775,27 +775,52 @@ impl LinAmpApp {
         self.status = format!("{} track(s) in playlist.", self.playlist.len());
     }
 
+    /// Play track `idx`, skipping forward over any that can't be opened/decoded
+    /// (missing files, unsupported/corrupt audio) until one plays. Bounded to one
+    /// pass over the playlist so an all-unplayable list can't loop forever.
     fn play_index(&mut self, idx: usize) {
-        self.playlist.ensure_loaded(idx);
-        if let Some(track) = self.playlist.tracks.get(idx).cloned() {
+        let len = self.playlist.len();
+        if len == 0 {
+            return;
+        }
+        let mut i = idx.min(len - 1);
+        let mut skipped = 0;
+        for _ in 0..len {
+            self.playlist.ensure_loaded(i);
+            let Some(track) = self.playlist.tracks.get(i).cloned() else {
+                break;
+            };
             match self.player.play_file(&track.path) {
                 Ok(()) => {
-                    self.playlist.current = Some(idx);
+                    self.playlist.current = Some(i);
                     self.seek_preview = 0.0;
                     self.marquee_offset = 0.0;
                     self.apply_eq();
                     self.art_bytes = crate::playlist::read_cover(&track.path);
                     self.art_dirty = true;
-                    self.status = format!("Playing: {}", track.display_name());
+                    self.status = if skipped == 0 {
+                        format!("Playing: {}", track.display_name())
+                    } else {
+                        format!("Playing: {} (skipped {skipped} unplayable)", track.display_name())
+                    };
                     // Record the play for the library's Most/Recently Played views
                     // (no-op when the track isn't in the library).
                     if let Some(lib) = &self.library {
                         lib.increment_play(&track.path);
                     }
+                    return;
                 }
-                Err(e) => self.status = format!("Error: {e}"),
+                // Can't open/decode this one — skip to the next (wrapping).
+                Err(_) => {
+                    skipped += 1;
+                    i = (i + 1) % len;
+                }
             }
         }
+        // Nothing in the playlist could be played.
+        self.player.stop();
+        self.playlist.current = None;
+        self.status = "No playable tracks in the playlist.".into();
     }
 
     fn play_pause(&mut self) {
