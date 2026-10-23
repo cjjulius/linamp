@@ -425,6 +425,110 @@ mod x11util {
         .unwrap_or(false)
     }
 
+    /// Clip the window titled `title` to a rounded rectangle of its current size
+    /// (corner radius `radius` px) via the Shape extension — the X11 counterpart
+    /// of Windows' `SetWindowRgn`, so the popup's square corners don't show
+    /// through the rounded fill. Returns true once applied; false while the window
+    /// isn't mapped/sized yet, so the caller retries next frame.
+    pub fn round_window(title: &str, radius: i32, force: bool) -> bool {
+        let Some(shape) = shape_fn() else {
+            return false;
+        };
+        // Last (window id, w, h, radius) the shape was built for, per window title.
+        // The popup window is reused and resized between menus — and sometimes
+        // destroyed and recreated with a new id at the *same* size — so key on the
+        // id too: a new window must be re-shaped even when its size is unchanged.
+        thread_local! {
+            static LAST: RefCell<std::collections::HashMap<String, (xlib::Window, u32, u32, i32)>> =
+                RefCell::new(std::collections::HashMap::new());
+        }
+        // Forcing (a popup just opened) invalidates the cache up front, so the next
+        // successful reshape fires even if the (recreated) window isn't findable in
+        // the client list until a later, non-forcing frame.
+        if force {
+            LAST.with(|c| {
+                c.borrow_mut().remove(title);
+            });
+        }
+        with_conn(|xlib, d| unsafe {
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            let win = window_by_title(xlib, d, title);
+            let ok = if win != 0 {
+                let (mut root, mut x, mut y, mut w, mut h, mut bw, mut depth) =
+                    (0u64, 0i32, 0i32, 0u32, 0u32, 0u32, 0u32);
+                let got = (xlib.XGetGeometry)(
+                    d, win, &mut root, &mut x, &mut y, &mut w, &mut h, &mut bw, &mut depth,
+                );
+                if got != 0 && w > 0 && h > 0 {
+                    if LAST.with(|c| c.borrow().get(title).copied()) == Some((win, w, h, radius)) {
+                        // Already shaped for this exact window + size — nothing to do.
+                        // (`force` cleared this entry above, so a just-opened popup
+                        // always falls through to reshape.)
+                        (xlib.XSetErrorHandler)(prev);
+                        return true;
+                    }
+                    LAST.with(|c| {
+                        c.borrow_mut().insert(title.to_string(), (win, w, h, radius));
+                    });
+                    let rects = rounded_rect_rects(w as i32, h as i32, radius);
+                    const SHAPE_BOUNDING: c_int = 0;
+                    const SHAPE_SET: c_int = 0;
+                    const UNSORTED: c_int = 0;
+                    let xr: Vec<XRectangle> = rects
+                        .iter()
+                        .map(|&(rx, ry, rw, rh)| XRectangle {
+                            x: rx,
+                            y: ry,
+                            width: rw,
+                            height: rh,
+                        })
+                        .collect();
+                    shape(
+                        d, win, SHAPE_BOUNDING, 0, 0, xr.as_ptr(), xr.len() as c_int, SHAPE_SET,
+                        UNSORTED,
+                    );
+                    (xlib.XFlush)(d);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            (xlib.XSetErrorHandler)(prev);
+            ok
+        })
+        .unwrap_or(false)
+    }
+
+    /// Horizontal run rectangles filling a `w`×`h` rounded rectangle with corner
+    /// radius `r`, one per scanline — the shape the Shape extension clips to.
+    fn rounded_rect_rects(w: i32, h: i32, r: i32) -> Vec<(i16, i16, u16, u16)> {
+        let r = r.clamp(0, w.min(h) / 2);
+        if r == 0 {
+            return vec![(0, 0, w as u16, h as u16)];
+        }
+        let mut rects = Vec::with_capacity(h as usize);
+        for yy in 0..h {
+            // Inset from each side: 0 in the straight middle rows, growing to `r`
+            // at the very top/bottom following the corner arc.
+            let inset = if yy < r {
+                let dy = (r - yy) as f64;
+                (r as f64 - ((r * r) as f64 - dy * dy).max(0.0).sqrt()).ceil() as i32
+            } else if yy >= h - r {
+                let dy = (yy - (h - 1 - r)) as f64;
+                (r as f64 - ((r * r) as f64 - dy * dy).max(0.0).sqrt()).ceil() as i32
+            } else {
+                0
+            };
+            let ww = w - 2 * inset;
+            if ww > 0 {
+                rects.push((inset as i16, yy as i16, ww as u16, 1));
+            }
+        }
+        rects
+    }
+
     #[repr(C)]
     struct XcursorImage {
         version: u32,
@@ -528,6 +632,22 @@ mod x11util {
             let win = window_by_title(xlib, d, title);
             if win != 0 {
                 (xlib.XUndefineCursor)(d, win);
+                (xlib.XFlush)(d);
+            }
+            (xlib.XSetErrorHandler)(prev);
+        });
+    }
+
+    /// Unmap (hide) the window titled `title` immediately. Used to drop the
+    /// always-on-top context-menu popup before a modal file dialog opens, since
+    /// the blocking dialog freezes the egui loop before it can close the viewport.
+    /// egui tears the window down on the next frame once `self.popup` is cleared.
+    pub fn unmap_window(title: &str) {
+        with_conn(|xlib, d| unsafe {
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            let win = window_by_title(xlib, d, title);
+            if win != 0 {
+                (xlib.XUnmapWindow)(d, win);
                 (xlib.XFlush)(d);
             }
             (xlib.XSetErrorHandler)(prev);
@@ -655,6 +775,10 @@ pub(crate) fn hide_popup_window() {
             }
         }
     }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::unmap_window("LinAmp Menu");
+    }
 }
 
 /// A NUL-terminated UTF-16 string for the Win32 `*W` APIs.
@@ -678,10 +802,12 @@ pub(crate) fn find_window(title: &str) -> isize {
 /// `radius` physical px) so its corners are cut away at the OS level — otherwise
 /// the square opaque window shows its (dark) clear colour outside the frame's
 /// rounded fill. Returns true once the region is applied, so the caller stops
-/// retrying. Windows only; a no-op (and `true`) elsewhere.
-pub(crate) fn round_popup_window(radius: i32) -> bool {
+/// retrying. `force` re-applies even if nothing seems to have changed (X11 only;
+/// used on the frame a popup first opens). Windows and X11; a no-op elsewhere.
+pub(crate) fn round_popup_window(radius: i32, force: bool) -> bool {
     #[cfg(windows)]
     {
+        let _ = force;
         #[allow(non_snake_case)]
         extern "system" {
             fn GetClientRect(hwnd: isize, rect: *mut [i32; 4]) -> i32;
@@ -712,9 +838,13 @@ pub(crate) fn round_popup_window(radius: i32) -> bool {
             true
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let _ = radius;
+        x11util::round_window("LinAmp Menu", radius, force)
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+    {
+        let _ = (radius, force);
         true
     }
 }
