@@ -66,7 +66,7 @@ Legend: ✅ done · 🔜 planned · 🧪 partial
   shows the running `LinAmp <version>` (with build hash + date)
 - ✅ Accented / Vietnamese track text is ASCII-folded in the classic bitmap font
   (e.g. "Trường Sơn" → "Truong Son") instead of showing blank gaps 🧪
-- 🔜 Mini mode, always-on-top
+- ✅ Always on top (options menu + Preferences)
 
 ## Theming / Skins
 - ✅ **Pixel-perfect classic skin renderer** — composites real `.wsz` sprite

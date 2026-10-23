@@ -83,7 +83,11 @@ jobs:
         shell: pwsh
         run: |
           cargo build --release
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging\windows\linamp.iss
+          # Derive the version from Cargo.toml and pass it to ISCC — without this
+          # the installer falls back to the version baked into linamp.iss, which
+          # is how v0.3.0 shipped a "LinAmp-0.2.0-Setup.exe".
+          $ver = ([regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" packaging\windows\linamp.iss
 
       - name: Upload Windows installer
         if: runner.os == 'Windows'

@@ -3,10 +3,12 @@
 ; Build with: packaging\windows\build-installer.ps1  (or ISCC linamp.iss)
 
 #define MyAppName "LinAmp"
-; Overridable from the build script (ISCC /DMyAppVersion=...); the default here
-; is the fallback and must track Cargo.toml's version.
+; The version MUST be passed in (ISCC /DMyAppVersion=...); build-installer.ps1
+; and CI derive it from Cargo.toml. Fail loudly rather than silently baking a
+; stale version into the installer name/metadata — v0.3.0 once shipped as a
+; "LinAmp-0.2.0-Setup.exe" because a hardcoded fallback was used here.
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.0"
+  #error Pass the version: ISCC /DMyAppVersion=<x.y.z>  (see packaging/windows/build-installer.ps1)
 #endif
 #define MyAppPublisher "LinAmp contributors"
 #define MyAppURL "https://github.com/cjjulius/linamp"
