@@ -1440,6 +1440,17 @@ impl ClassicSkin {
             let sy = if focused { 134 } else { 149 };
             blit(&mut c, e, 0, 0, 0, sy, 275, 14);
             blit(&mut c, e, 264, 3, 0, 116, 9, 9); // close
+        } else {
+            // Neither eq_ex.bmp nor EQMAIN.BMP is present, so the skin ships no
+            // shade-bar graphics at all. Leaving the bar empty would render a
+            // transparent void with an invisible (though still clickable) close
+            // box. Instead paint the bar in the skin's text background colour and
+            // borrow the titlebar close button, so a collapsed EQ on a minimal
+            // skin still reads as a real, restorable bar (#18).
+            fill_rect(&mut c, 0, 0, 275, 14, self.text_bg);
+            if let Some(tb) = self.bmp("titlebar.bmp") {
+                blit(&mut c, tb, 264, 3, 18, 0, 9, 9); // close button
+            }
         }
         c
     }
@@ -2363,6 +2374,54 @@ mod tests {
         for gx in [100u32, 140, 180] {
             assert_eq!(*img.get_pixel(gx, 35), grad_bot, "bottom-row curve at x={gx}");
         }
+    }
+
+    #[test]
+    fn eq_shade_falls_back_when_no_shade_bitmaps() {
+        // A skin missing BOTH eq_ex.bmp and EQMAIN.BMP must still render the
+        // collapsed-EQ bar as a solid, restorable strip rather than a transparent
+        // void (#18). Build a minimal skin with only a titlebar close sprite.
+        let mut bitmaps: HashMap<String, RgbaImage> = HashMap::new();
+        // A tiny titlebar.bmp whose close-button sprite (src 18,0, 9x9) is a
+        // distinct opaque colour, so we can confirm it gets blitted onto the bar.
+        let mut tb = RgbaImage::new(64, 32);
+        for y in 0..9 {
+            for x in 0..9 {
+                tb.put_pixel(18 + x, y, Rgba([10, 200, 60, 255]));
+            }
+        }
+        bitmaps.insert("titlebar.bmp".to_string(), tb);
+        let skin = ClassicSkin {
+            bitmaps,
+            eq_sprites: Vec::new(),
+            text_bg: [20, 20, 40],
+            regions: crate::region::parse(""),
+            cursors: HashMap::new(),
+        };
+
+        let img = skin.compose_eq_shade(true, 0.5, 0.0);
+        assert_eq!(img.dimensions(), (275, 14));
+        // No transparent void: every pixel is fully opaque.
+        assert!(img.pixels().all(|p| p[3] == 255), "shade bar must be opaque");
+        // The bar is filled with the skin's text background colour...
+        assert_eq!(*img.get_pixel(5, 7), Rgba([20, 20, 40, 255]));
+        // ...and the titlebar close button is composited at dest (264,3).
+        assert_eq!(*img.get_pixel(266, 5), Rgba([10, 200, 60, 255]));
+    }
+
+    #[test]
+    fn eq_shade_void_without_titlebar_is_still_opaque() {
+        // Even a skin with no titlebar.bmp at all must not leave the collapsed-EQ
+        // bar transparent; the text-bg fill alone keeps it readable (#18).
+        let skin = ClassicSkin {
+            bitmaps: HashMap::new(),
+            eq_sprites: Vec::new(),
+            text_bg: [0, 0, 0],
+            regions: crate::region::parse(""),
+            cursors: HashMap::new(),
+        };
+        let img = skin.compose_eq_shade(false, 0.0, 0.0);
+        assert!(img.pixels().all(|p| p[3] == 255), "shade bar must be opaque");
     }
 
     #[test]

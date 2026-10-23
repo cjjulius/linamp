@@ -125,3 +125,15 @@ code plus a working/not-working binary): visual and behavior changes.
   Esperanto ĝ/ĥ) and the tails of n/t/u (ŋ, ŧ, and Hungarian Ű/Ų/ű/ų). Covered by
   the ascii_fold unit test. Optional visual check: a track title containing Ğ or
   Ű shows as "G"/"U" in the classic marquee, not a blank or garbled cell.
+  (A QA song is prepared for this: qa-music/Aria Nocturne - Crystal Harbor.mp3
+  now has the title "Ğűitar Ĥűŋŧ", which should render as GUITAR HUNT.)
+
+- #18 (partial): a collapsed equalizer on a skin that ships neither eq_ex.bmp nor
+  EQMAIN.BMP used to render as a fully transparent bar — the close box was still
+  clickable but invisible, so the window looked broken. The EQ shade now falls
+  back to a solid bar painted in the skin's text-background colour plus the
+  titlebar close button, so it always reads as a real, restorable bar. Covered by
+  two unit tests (opaque output with and without a titlebar.bmp). Optional visual
+  check: load a minimal skin missing those bitmaps, collapse the EQ, and confirm
+  the shade bar is visible with a working close button. (The bundled skins all
+  ship EQMAIN, so this fallback only shows on sparse third-party skins.)
