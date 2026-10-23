@@ -345,14 +345,22 @@ pub fn parse_playlist_file(path: &Path) -> Vec<PathBuf> {
 
     let mut out = Vec::new();
     if ext == "pls" {
+        // PLS entries are keyed "File<N>=path"; the number N defines the order,
+        // not the line position, and only keys that are actually File<N> count
+        // (so a stray "FileFoo=" is ignored rather than ingested as a track).
+        let mut entries: Vec<(u32, PathBuf)> = Vec::new();
         for line in content.lines() {
             let line = line.trim();
             if let Some(rest) = line.strip_prefix("File") {
                 if let Some(eq) = rest.find('=') {
-                    out.push(resolve(base, rest[eq + 1..].trim()));
+                    if let Ok(n) = rest[..eq].trim().parse::<u32>() {
+                        entries.push((n, resolve(base, rest[eq + 1..].trim())));
+                    }
                 }
             }
         }
+        entries.sort_by_key(|(n, _)| *n);
+        out.extend(entries.into_iter().map(|(_, p)| p));
     } else {
         for line in content.lines() {
             let line = line.trim();
@@ -540,6 +548,33 @@ mod tests {
             "header leaked as a path: {got:?}"
         );
         let _ = std::fs::remove_file(&m3u);
+    }
+
+    #[test]
+    fn parse_pls_orders_by_index_and_ignores_non_file_keys() {
+        let dir = std::env::temp_dir();
+        let pls = dir.join(format!("linamp_pls_{}.pls", std::process::id()));
+        // Entries out of line order, plus a decoy key that starts with "File".
+        let body = "[playlist]\n\
+                    NumberOfEntries=3\n\
+                    File2=/music/b.mp3\n\
+                    FileFoo=/music/decoy.mp3\n\
+                    File10=/music/j.mp3\n\
+                    File1=/music/a.mp3\n\
+                    Version=2\n";
+        std::fs::write(&pls, body).unwrap();
+
+        let got = parse_playlist_file(&pls);
+        // Ordered by N (1, 2, 10), and the non-File<N> key is dropped.
+        assert_eq!(
+            got,
+            vec![
+                PathBuf::from("/music/a.mp3"),
+                PathBuf::from("/music/b.mp3"),
+                PathBuf::from("/music/j.mp3"),
+            ]
+        );
+        let _ = std::fs::remove_file(&pls);
     }
 
     #[test]

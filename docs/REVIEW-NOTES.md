@@ -76,3 +76,8 @@ code plus a working/not-working binary): visual and behavior changes.
   path logic is unit-tested; a good end-to-end human check is to load an actual
   Windows-authored .m3u with relative backslash paths and confirm the tracks
   appear.
+
+- PLS entry ordering (bug-fix): .pls parsing used line order and ingested any
+  key starting with "File" (e.g. a stray "FileFoo="). It now orders entries by
+  the N in "File<N>=" per the PLS spec and ignores non-File<N> keys. Fully
+  covered by a unit test; no manual check required.
