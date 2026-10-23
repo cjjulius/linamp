@@ -132,9 +132,8 @@ These are untested on Linux and the most likely sources of platform bugs:
   Prefer genuinely cross-platform fixes; when something must differ by OS, gate
   it with `#[cfg(...)]` rather than breaking Windows. Merge back to `main` only
   once a change is confirmed good on both platforms.
-- **Commits** are authored as `cjjulius`. Match the existing history: a plain
-  subject + body, **no AI/assistant attribution or `Co-Authored-By` lines.**
-- **GitHub Issues are the backlog** (repo `cjjulius/linamp`, private). File new
+- **Commits** match the existing history: a plain subject + body.
+- **GitHub Issues are the backlog** (repo `cjjulius/linamp`). File new
   Linux findings as issues; reference them from commits/PRs.
 - Don't commit build artifacts or local junk; `skins/` is bundled automatically.
 
