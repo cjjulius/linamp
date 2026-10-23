@@ -900,14 +900,16 @@ fn ascii_fold(ch: char) -> char {
         0x106..=0x10D => 'c',
         0x110 | 0x111 => 'd',
         0x112..=0x11B => 'e',
+        0x11C..=0x123 => 'g', // Ĝ ĝ Ğ ğ Ġ ġ Ģ ģ (Turkish ğ, Esperanto ĝ)
+        0x124..=0x127 => 'h', // Ĥ ĥ Ħ ħ
         0x128..=0x131 => 'i',
         0x139..=0x142 => 'l',
-        0x143..=0x148 => 'n',
+        0x143..=0x14B => 'n', // through ŉ Ŋ ŋ
         0x14C..=0x151 | 0x1A0 | 0x1A1 => 'o',
         0x154..=0x159 => 'r',
         0x15A..=0x161 => 's',
-        0x162..=0x165 => 't',
-        0x168..=0x16F | 0x1AF | 0x1B0 => 'u',
+        0x162..=0x167 => 't', // through Ŧ ŧ
+        0x168..=0x173 | 0x1AF | 0x1B0 => 'u', // through Ű ű Ų ų (Hungarian)
         0x174 | 0x175 => 'w',
         0x176..=0x178 => 'y',
         0x179..=0x17E => 'z',
@@ -1819,6 +1821,7 @@ mod tests {
         for (accented, base) in [
             ('é', 'e'), ('ñ', 'n'), ('ü', 'u'), ('ç', 'c'), ('ø', 'o'),
             ('Đ', 'd'), ('ư', 'u'), ('ờ', 'o'), ('ế', 'e'), ('ạ', 'a'), ('ý', 'y'),
+            ('ğ', 'g'), ('Ğ', 'g'), ('ĥ', 'h'), ('ŋ', 'n'), ('ŧ', 't'), ('ű', 'u'), ('ų', 'u'),
         ] {
             assert_eq!(char_cell(accented), char_cell(base), "{accented} -> {base}");
             assert_ne!(char_cell(accented), char_cell(' '), "{accented} folded to blank");
