@@ -61,6 +61,11 @@ impl super::LinAmpApp {
             }
             ClWin::Eq => {
                 self.eq_shade.hash(&mut h);
+                if self.eq_shade {
+                    // The collapsed EQ shows the (shared) volume + balance sliders.
+                    self.player.volume().to_bits().hash(&mut h);
+                    self.balance.to_bits().hash(&mut h);
+                }
                 self.eq_enabled.hash(&mut h);
                 self.eq_auto.hash(&mut h);
                 self.eq_active.hash(&mut h);
@@ -210,7 +215,7 @@ impl super::LinAmpApp {
             }
             ClWin::Eq => {
                 if self.eq_shade {
-                    cs.compose_eq_shade(self.app_focused)
+                    cs.compose_eq_shade(self.app_focused, self.player.volume(), self.balance)
                 } else {
                     cs.compose_eq(&self.make_eq_state())
                 }
