@@ -27,3 +27,8 @@ code plus a working/not-working binary): visual and behavior changes.
   confirm accented/Vietnamese track titles read sensibly in the classic
   main/EQ/playlist windows. Full non-Latin glyph rendering still needs the font
   atlas approach from the issue; #97 left open for that.
+
+- #96 Media Library search perf: completes the issue (debounce was already in
+  place) by skipping the unchanged artists() query on artist/album selection
+  changes. Perf-only, no user-visible change. Optional sanity check: clicking
+  artists and albums still filters the album pane and track list correctly.

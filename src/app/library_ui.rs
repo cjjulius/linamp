@@ -78,6 +78,23 @@ impl super::LinAmpApp {
         self.apply_lib_sort();
     }
 
+    /// Lighter refresh for an artist/album selection change: the full artist list
+    /// doesn't depend on the selection, so recompute only the album pane and the
+    /// track list, skipping the artists() query (#96). Falls back to the full
+    /// refresh outside the Audio nav view or during a search.
+    pub(super) fn refresh_library_selection(&mut self) {
+        let audio_no_search = self.lib_nav == crate::library::LibView::Audio
+            && self.lib_query.trim().is_empty();
+        let Some(lib) = self.library.as_ref().filter(|_| audio_no_search) else {
+            self.refresh_library();
+            return;
+        };
+        self.lib_albums = lib.albums(&self.lib_sel_artists);
+        self.lib_results = lib.tracks_for(&self.lib_sel_artists, &self.lib_sel_albums);
+        self.lib_sel_tracks.clear();
+        self.apply_lib_sort();
+    }
+
     /// Re-order `lib_results` (and the parallel `lib_ratings`) by the active column
     /// sort. The rating column sorts by the numeric star count, not the rendered
     /// "★★★☆☆" string (whose empty-star glyph would sort the wrong way).
@@ -993,11 +1010,11 @@ impl super::LinAmpApp {
         if let Some((name, ctrl)) = artist_click {
             apply_sel(&mut self.lib_sel_artists, name, ctrl);
             self.lib_sel_albums.clear();
-            self.refresh_library();
+            self.refresh_library_selection();
         }
         if let Some((name, ctrl)) = album_click {
             apply_sel(&mut self.lib_sel_albums, name, ctrl);
-            self.refresh_library();
+            self.refresh_library_selection();
         }
         if let Some((i, ctrl)) = track_click {
             if ctrl {
