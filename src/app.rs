@@ -2149,11 +2149,14 @@ impl LinAmpApp {
         if !cs.has_cursors() || ctx.pointer_hover_pos().is_none() {
             return;
         }
-        // X11 only: pin egui's cursor so egui-winit doesn't overwrite the one we
-        // set via XDefineCursor. On Windows the WM_SETCURSOR subclass intercepts
-        // before winit, so no pin is needed (and pinning would wrongly suppress
-        // the normal per-widget cursors when skin cursors are off).
-        #[cfg(all(unix, not(target_os = "macos")))]
+        // Pin egui's cursor to Default so its per-widget cursors (the pointing
+        // hand over buttons/links, the text caret in fields) don't show through on
+        // these widget-heavy windows — we want the skin cursor everywhere inside
+        // them. This runs only when skin cursors are on and the skin has them (the
+        // early returns above), so the normal per-widget cursors are untouched
+        // when skin cursors are off. On X11 it also stops egui-winit from
+        // overwriting the XDefineCursor we set; on Windows the WM_SETCURSOR
+        // subclass paints the skin cursor over the Default that winit applies.
         ctx.set_cursor_icon(egui::CursorIcon::Default);
         if let Some(ci) = cs.cursor("normal") {
             set_window_cursor(title, &format!("{}:normal", self.theme.name), ci);
