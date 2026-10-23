@@ -1784,85 +1784,19 @@ impl LinAmpApp {
                 ui.add_space(4.0);
             });
             // Right: the selected category's options.
-            egui::CentralPanel::default().show(ctx, |ui| match self.prefs_tab {
-                PrefTab::Display => {
-                    ui.strong("Display size");
-                    let mut dbl = self.prefs.double_size;
-                    ui.radio_value(&mut dbl, false, "1x — pixel-for-pixel");
-                    ui.radio_value(&mut dbl, true, "2x — scaled for modern screens (Ctrl+D)");
-                    if dbl != self.prefs.double_size {
-                        self.set_double_size(ctx, dbl);
-                    }
-                    ui.add_space(8.0);
-                    ui.strong("Window");
-                    let mut aot = self.prefs.always_on_top;
-                    if ui.checkbox(&mut aot, "Always on top").changed() {
-                        self.prefs.always_on_top = aot;
-                        self.prefs.save();
-                    }
-                    let mut disable_cur = self.prefs.disable_skin_cursors;
-                    if ui
-                        .checkbox(&mut disable_cur, "Disable skin cursors")
-                        .changed()
-                    {
-                        self.prefs.disable_skin_cursors = disable_cur;
-                        self.prefs.save();
-                        // Drop the custom cursors immediately when turning the
-                        // option off; re-enabling reapplies them as windows hover.
-                        if disable_cur {
-                            self.clear_skin_cursors();
-                        } else {
-                            self.cur_cursor = [None; 3];
-                        }
-                    }
-                }
-                PrefTab::Playback => {
-                    ui.strong("Playback");
-                    // Behaviours that otherwise only have keyboard shortcuts, so
-                    // they can be clicked instead of memorised. Shuffle/repeat are
-                    // omitted — they already have buttons on the classic window.
-                    ui.checkbox(&mut self.stop_after_current, "Stop after current track (Ctrl+V)");
-                    ui.checkbox(&mut self.time_remaining, "Show time remaining (Ctrl+T)");
-                    let mut fade = self.prefs.fade_on_stop;
-                    if ui
-                        .checkbox(&mut fade, "Fade out when stopping (Shift+V)")
-                        .changed()
-                    {
-                        self.prefs.fade_on_stop = fade;
-                        self.prefs.save();
-                    }
-                }
-                PrefTab::Playlist => {
-                    ui.strong("ID3 tag loading");
-                    let mut onload = self.prefs.tag_on_load;
-                    ui.radio_value(&mut onload, true, "On load — scan when files are added");
-                    ui.radio_value(&mut onload, false, "On view — lazily as rows scroll in");
-                    if onload != self.prefs.tag_on_load {
-                        self.prefs.tag_on_load = onload;
-                        self.prefs.save();
-                        if onload {
-                            self.playlist.load_all();
-                        }
-                    }
-                }
-                PrefTab::About => {
-                    ui.strong("LinAmp");
-                    ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "build {} · {}",
-                            env!("GIT_HASH"),
-                            env!("COMMIT_DATE"),
-                        ))
-                        .small()
-                        .color(Color32::GRAY),
-                    );
-                    ui.add_space(6.0);
-                    ui.hyperlink_to(
-                        "github.com/cjjulius/linamp",
-                        "https://github.com/cjjulius/linamp",
-                    );
-                }
+            // Right: the selected category's page, in a scroll area so a category
+            // can grow tall without the fixed window clipping it. Each arm just
+            // dispatches to a `prefs_page_*` method — see `pref_section` for the
+            // pattern that keeps every page consistent as options are added.
+            egui::CentralPanel::default().show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match self.prefs_tab {
+                        PrefTab::Display => self.prefs_page_display(ctx, ui),
+                        PrefTab::Playback => self.prefs_page_playback(ui),
+                        PrefTab::Playlist => self.prefs_page_playlist(ui),
+                        PrefTab::About => self.prefs_page_about(ui),
+                    });
             });
             self.apply_base_cursor(ctx, "LinAmp Preferences");
             if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
@@ -1872,6 +1806,106 @@ impl LinAmpApp {
         if close {
             self.prefs_open = false;
         }
+    }
+
+    /// One titled group of related settings, drawn with uniform spacing so every
+    /// Preferences page reads the same however many groups it grows.
+    ///
+    /// Extending the Preferences window:
+    /// * **add a setting**  → drop a widget into the relevant `pref_section` below;
+    /// * **add a group**    → another `pref_section(ui, "Title", |ui| { … })`;
+    /// * **add a category** → a [`PrefTab`] variant (wired into `ALL` + `label`)
+    ///   and a matching `prefs_page_*` method dispatched from `ui_prefs`.
+    fn pref_section(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new(title).strong());
+        ui.add_space(2.0);
+        add(ui);
+        ui.add_space(12.0);
+    }
+
+    fn prefs_page_display(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        Self::pref_section(ui, "Window size", |ui| {
+            let mut dbl = self.prefs.double_size;
+            ui.radio_value(&mut dbl, false, "1x — pixel-for-pixel");
+            ui.radio_value(&mut dbl, true, "2x — scaled for modern screens (Ctrl+D)");
+            if dbl != self.prefs.double_size {
+                self.set_double_size(ctx, dbl);
+            }
+        });
+        Self::pref_section(ui, "Window", |ui| {
+            let mut aot = self.prefs.always_on_top;
+            if ui.checkbox(&mut aot, "Always on top").changed() {
+                self.prefs.always_on_top = aot;
+                self.prefs.save();
+            }
+            let mut disable_cur = self.prefs.disable_skin_cursors;
+            if ui
+                .checkbox(&mut disable_cur, "Disable skin cursors")
+                .changed()
+            {
+                self.prefs.disable_skin_cursors = disable_cur;
+                self.prefs.save();
+                // Drop the custom cursors immediately when turning the option off;
+                // re-enabling reapplies them as windows are hovered.
+                if disable_cur {
+                    self.clear_skin_cursors();
+                } else {
+                    self.cur_cursor = [None; 3];
+                }
+            }
+        });
+    }
+
+    fn prefs_page_playback(&mut self, ui: &mut egui::Ui) {
+        Self::pref_section(ui, "On stop / end", |ui| {
+            // Behaviours that otherwise only have keyboard shortcuts, so they can
+            // be clicked instead of memorised. Shuffle/repeat are omitted — they
+            // already have buttons on the classic main window.
+            ui.checkbox(&mut self.stop_after_current, "Stop after current track (Ctrl+V)");
+            let mut fade = self.prefs.fade_on_stop;
+            if ui
+                .checkbox(&mut fade, "Fade out when stopping (Shift+V)")
+                .changed()
+            {
+                self.prefs.fade_on_stop = fade;
+                self.prefs.save();
+            }
+        });
+        Self::pref_section(ui, "Time display", |ui| {
+            ui.checkbox(&mut self.time_remaining, "Show time remaining (Ctrl+T)");
+        });
+    }
+
+    fn prefs_page_playlist(&mut self, ui: &mut egui::Ui) {
+        Self::pref_section(ui, "ID3 tag loading", |ui| {
+            let mut onload = self.prefs.tag_on_load;
+            ui.radio_value(&mut onload, true, "On load — scan when files are added");
+            ui.radio_value(&mut onload, false, "On view — lazily as rows scroll in");
+            if onload != self.prefs.tag_on_load {
+                self.prefs.tag_on_load = onload;
+                self.prefs.save();
+                if onload {
+                    self.playlist.load_all();
+                }
+            }
+        });
+    }
+
+    fn prefs_page_about(&mut self, ui: &mut egui::Ui) {
+        Self::pref_section(ui, "LinAmp", |ui| {
+            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            ui.label(
+                egui::RichText::new(format!("build {} · {}", env!("GIT_HASH"), env!("COMMIT_DATE")))
+                    .small()
+                    .color(Color32::GRAY),
+            );
+            ui.add_space(6.0);
+            ui.hyperlink_to(
+                "github.com/cjjulius/linamp",
+                "https://github.com/cjjulius/linamp",
+            );
+        });
     }
 
     /// Jump-to-file: type to filter the playlist, Enter/click to play a match.
