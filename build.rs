@@ -51,7 +51,12 @@ fn emit_build_info() {
         .unwrap_or_else(|| "unknown".into());
     println!("cargo:rustc-env=COMMIT_DATE={date}");
 
-    // Re-run when HEAD moves (new commit) or any source changes (dirty flag).
+    // Re-run when the commit changes or the working tree does, so the hash and
+    // the -dirty flag stay accurate. `.git/logs/HEAD` (the reflog) is appended on
+    // every commit/checkout/reset — unlike `.git/HEAD`, which only records the
+    // branch name and so doesn't change when you commit on a branch. `.git/index`
+    // covers staging and `src` covers uncommitted edits (the dirty flag).
+    println!("cargo:rerun-if-changed=.git/logs/HEAD");
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/index");
     println!("cargo:rerun-if-changed=src");
