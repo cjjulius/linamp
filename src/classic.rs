@@ -975,10 +975,13 @@ pub enum EqRegion {
 // EQ windowshade volume/balance grooves on the 275px bar (eq_ex.bmp shade
 // background), each with a 3px thumb that slides along it. Shared by the
 // renderer (compose_eq_shade) and the hit-test/drag.
-pub const EQ_SHADE_VOL_X: f32 = 7.0;
-pub const EQ_SHADE_VOL_W: f32 = 50.0; // groove x7..57
-pub const EQ_SHADE_BAL_X: f32 = 210.0;
-pub const EQ_SHADE_BAL_W: f32 = 41.0; // groove x210..251
+// Collapsed-EQ slider tracks in base EQ-window coords (the blank channel, not the
+// gold EQ-graph bars), from Webamp's shade CSS: volume left 61 width 97, balance
+// left 164 width 43. Shared by the compositor and the hit-test so they agree.
+pub const EQ_SHADE_VOL_X: f32 = 61.0;
+pub const EQ_SHADE_VOL_W: f32 = 97.0;
+pub const EQ_SHADE_BAL_X: f32 = 164.0;
+pub const EQ_SHADE_BAL_W: f32 = 43.0;
 pub const EQ_SHADE_THUMB_W: f32 = 3.0;
 
 /// Hit-test for the collapsed EQ bar: close box, the volume/balance grooves, then
@@ -1400,12 +1403,13 @@ impl ClassicSkin {
         if let Some(e) = self.bmp("eq_ex.bmp") {
             let sy = if focused { 0 } else { 15 };
             blit(&mut c, e, 0, 0, 0, sy, 275, 14);
-            // A 3×7 thumb slides along its groove; its sprite (left/centre/right at
-            // eq_ex y30) is chosen by which third the value falls in. Groove bounds
-            // measured from eq_ex: volume x7..57, balance x210..251.
-            let slider = |c: &mut RgbaImage, frac: f32, lo: i32, hi: i32, sx: [u32; 3]| {
+            // A 3×7 thumb slides along the slider track (the blank channel, not the
+            // gold EQ-graph bars); its sprite (left/centre/right at eq_ex y30) is
+            // chosen by which third the value falls in. Track bounds from Webamp's
+            // shade CSS: volume left 61 width 97, balance left 164 width 43, top 4.
+            let slider = |c: &mut RgbaImage, frac: f32, lo: i32, w: i32, sx: [u32; 3]| {
                 let frac = frac.clamp(0.0, 1.0);
-                let tx = lo + (frac * (hi - lo - 3).max(0) as f32).round() as i32;
+                let tx = lo + (frac * (w - 3).max(0) as f32).round() as i32;
                 let s = if frac < 1.0 / 3.0 {
                     sx[0]
                 } else if frac < 2.0 / 3.0 {
@@ -1415,8 +1419,20 @@ impl ClassicSkin {
                 };
                 blit(c, e, tx, 4, s, 30, 3, 7);
             };
-            slider(&mut c, volume.clamp(0.0, 1.0), 7, 57, [1, 4, 7]);
-            slider(&mut c, balance.clamp(-1.0, 1.0) * 0.5 + 0.5, 210, 251, [11, 14, 17]);
+            slider(
+                &mut c,
+                volume.clamp(0.0, 1.0),
+                EQ_SHADE_VOL_X as i32,
+                EQ_SHADE_VOL_W as i32,
+                [1, 4, 7],
+            );
+            slider(
+                &mut c,
+                balance.clamp(-1.0, 1.0) * 0.5 + 0.5,
+                EQ_SHADE_BAL_X as i32,
+                EQ_SHADE_BAL_W as i32,
+                [11, 14, 17],
+            );
             blit(&mut c, e, 264, 3, 11, 38, 9, 9); // close
         } else if let Some(e) = self.bmp("eqmain.bmp") {
             let sy = if focused { 134 } else { 149 };
