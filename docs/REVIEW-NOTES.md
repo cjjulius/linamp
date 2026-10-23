@@ -145,3 +145,9 @@ code plus a working/not-working binary): visual and behavior changes.
   thumb. Optional visual check: on a skin missing those bitmaps, confirm the
   volume/balance levels read clearly and track the controls. (All bundled skins
   ship both bitmaps, so this only shows on sparse third-party skins.)
+
+- #18 (follow-up): aligned the synthesized volume/balance thumb with the actual
+  click-to-value mapping — the fallback thumb is now 14px wide with a (track-14)
+  travel, matching the real VOLUME/BALANCE sprite and the drag handler, so the
+  drawn thumb sits exactly where a click on it lands. Unit-tested; no visual
+  review needed beyond the existing fallback check above.

@@ -1707,10 +1707,15 @@ fn fill_rect(dst: &mut RgbaImage, x: i32, y: i32, w: i32, h: i32, col: [u8; 3]) 
 fn draw_fallback_slider(c: &mut RgbaImage, x: i32, w: i32, frac: f32) {
     const GROOVE: [u8; 3] = [72, 72, 72];
     const THUMB: [u8; 3] = [200, 200, 200];
+    // The thumb is 14px wide with a (w - 14) travel, matching the real VOLUME.BMP
+    // / BALANCE.BMP thumb and, crucially, the click-to-value handler
+    // (apply at `Btn::Volume`/`Btn::Balance`), so the drawn thumb sits exactly
+    // where a click on it maps.
+    const THUMB_W: i32 = 14;
     fill_rect(c, x, 62, w, 2, GROOVE);
     let frac = frac.clamp(0.0, 1.0);
-    let tx = x + (frac * (w - 7).max(0) as f32).round() as i32;
-    fill_rect(c, tx, 58, 7, 11, THUMB);
+    let tx = x + (frac * (w - THUMB_W).max(0) as f32).round() as i32;
+    fill_rect(c, tx, 58, THUMB_W, 11, THUMB);
 }
 
 /// Blit a glyph, recolouring its lit pixels to `color` (transparent elsewhere).
@@ -2460,8 +2465,8 @@ mod tests {
 
         let mut hi = RgbaImage::new(275, 116);
         draw_fallback_slider(&mut hi, 107, 68, 1.0);
-        // thumb left edge = 107 + (68 - 7) = 168
-        assert_eq!(hi.get_pixel(168, 63)[0], thumb, "thumb at right for frac 1");
+        // thumb left edge = 107 + (68 - 14) = 161, matching the click-to-value map
+        assert_eq!(hi.get_pixel(161, 63)[0], thumb, "thumb at right for frac 1");
         assert_eq!(hi.get_pixel(107, 63)[0], groove, "groove at left for frac 1");
     }
 
