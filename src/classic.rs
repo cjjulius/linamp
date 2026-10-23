@@ -509,6 +509,10 @@ impl ClassicSkin {
             let tx = 107 + (v * (68.0 - 14.0)) as i32;
             let sx = if st.pressed == Some(Btn::Volume) { 0 } else { 15 };
             blit(&mut c, vb, tx, 58, sx, 422, 14, 11);
+        } else {
+            // Skin ships no VOLUME.BMP: show the level with a synthesized slider
+            // instead of an empty recess (#18).
+            draw_fallback_slider(&mut c, 107, 68, st.volume.clamp(0.0, 1.0));
         }
 
         // Balance.
@@ -518,6 +522,9 @@ impl ClassicSkin {
             let tx = 177 + ((st.balance * 0.5 + 0.5).clamp(0.0, 1.0) * (38.0 - 14.0)) as i32;
             let sx = if st.pressed == Some(Btn::Balance) { 0 } else { 15 };
             blit(&mut c, bb, tx, 58, sx, 422, 14, 11);
+        } else {
+            // Skin ships no BALANCE.BMP: synthesized pan indicator, centre = 0 (#18).
+            draw_fallback_slider(&mut c, 177, 38, st.balance * 0.5 + 0.5);
         }
 
         // Scrolling title, kbps, khz (bitmap font). The title sits centered in
@@ -1692,6 +1699,20 @@ fn fill_rect(dst: &mut RgbaImage, x: i32, y: i32, w: i32, h: i32, col: [u8; 3]) 
     }
 }
 
+/// Minimal volume / balance indicator for skins that omit VOLUME.BMP / BALANCE.BMP:
+/// a dim groove with a brighter thumb at `frac` (0..1), so the current level is
+/// still visible instead of a dead recess (#18). `x`/`w` are the slider track's
+/// destination bounds in the main window; the geometry matches the real sprites
+/// (thumb y=58, height 11; the 7px thumb reaches the right edge at frac 1).
+fn draw_fallback_slider(c: &mut RgbaImage, x: i32, w: i32, frac: f32) {
+    const GROOVE: [u8; 3] = [72, 72, 72];
+    const THUMB: [u8; 3] = [200, 200, 200];
+    fill_rect(c, x, 62, w, 2, GROOVE);
+    let frac = frac.clamp(0.0, 1.0);
+    let tx = x + (frac * (w - 7).max(0) as f32).round() as i32;
+    fill_rect(c, tx, 58, 7, 11, THUMB);
+}
+
 /// Blit a glyph, recolouring its lit pixels to `color` (transparent elsewhere).
 /// Most common colour in an image — used as the bitmap font's background.
 fn dominant_color(img: &RgbaImage) -> [u8; 3] {
@@ -2422,6 +2443,26 @@ mod tests {
         };
         let img = skin.compose_eq_shade(false, 0.0, 0.0);
         assert!(img.pixels().all(|p| p[3] == 255), "shade bar must be opaque");
+    }
+
+    #[test]
+    fn fallback_slider_tracks_value_without_a_sprite() {
+        // VOLUME.BMP / BALANCE.BMP absent: the synthesized slider still shows the
+        // level — the bright thumb sits at the left for 0 and the right for 1,
+        // with only the dim groove elsewhere (#18).
+        let thumb = 200u8;
+        let groove = 72u8;
+
+        let mut lo = RgbaImage::new(275, 116);
+        draw_fallback_slider(&mut lo, 107, 68, 0.0);
+        assert_eq!(lo.get_pixel(107, 63)[0], thumb, "thumb at left for frac 0");
+        assert_eq!(lo.get_pixel(107 + 67, 63)[0], groove, "groove at right for frac 0");
+
+        let mut hi = RgbaImage::new(275, 116);
+        draw_fallback_slider(&mut hi, 107, 68, 1.0);
+        // thumb left edge = 107 + (68 - 7) = 168
+        assert_eq!(hi.get_pixel(168, 63)[0], thumb, "thumb at right for frac 1");
+        assert_eq!(hi.get_pixel(107, 63)[0], groove, "groove at left for frac 1");
     }
 
     #[test]
