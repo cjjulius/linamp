@@ -533,14 +533,22 @@ mod tests {
         let dir = std::env::temp_dir();
         let m3u = dir.join(format!("linamp_bom_{}.m3u", std::process::id()));
         let mut data = vec![0xEF, 0xBB, 0xBF]; // UTF-8 BOM
-        data.extend_from_slice(b"#EXTM3U\n/music/a.mp3\n");
+        data.extend_from_slice(b"#EXTM3U\na.mp3\n");
         data.push(0xFF); // invalid UTF-8 byte on its own line
-        data.extend_from_slice(b"\n/music/b.mp3\n");
+        data.extend_from_slice(b"\nb.mp3\n");
         std::fs::write(&m3u, &data).unwrap();
 
+        // Assert on file names, not full paths: a bare "/music/a.mp3" is absolute
+        // on Unix but drive-relative on Windows, so it resolves differently per
+        // platform. Relative basenames resolve the same on both, keeping this a
+        // test of BOM/bad-byte tolerance rather than path syntax.
         let got = parse_playlist_file(&m3u);
-        assert!(got.contains(&PathBuf::from("/music/a.mp3")), "got {got:?}");
-        assert!(got.contains(&PathBuf::from("/music/b.mp3")), "got {got:?}");
+        let names: Vec<String> = got
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        assert!(names.iter().any(|n| n == "a.mp3"), "got {got:?}");
+        assert!(names.iter().any(|n| n == "b.mp3"), "got {got:?}");
         // The BOM must be stripped so the header is still treated as a comment,
         // not pushed as a bogus path.
         assert!(
@@ -557,23 +565,23 @@ mod tests {
         // Entries out of line order, plus a decoy key that starts with "File".
         let body = "[playlist]\n\
                     NumberOfEntries=3\n\
-                    File2=/music/b.mp3\n\
-                    FileFoo=/music/decoy.mp3\n\
-                    File10=/music/j.mp3\n\
-                    File1=/music/a.mp3\n\
+                    File2=b.mp3\n\
+                    FileFoo=decoy.mp3\n\
+                    File10=j.mp3\n\
+                    File1=a.mp3\n\
                     Version=2\n";
         std::fs::write(&pls, body).unwrap();
 
+        // Assert on file names, not full paths, so the expectation holds on both
+        // platforms (a bare "/music/x" is absolute on Unix, drive-relative on
+        // Windows). What's under test is the order (by N: 1, 2, 10) and that the
+        // non-File<N> "decoy" key is dropped.
         let got = parse_playlist_file(&pls);
-        // Ordered by N (1, 2, 10), and the non-File<N> key is dropped.
-        assert_eq!(
-            got,
-            vec![
-                PathBuf::from("/music/a.mp3"),
-                PathBuf::from("/music/b.mp3"),
-                PathBuf::from("/music/j.mp3"),
-            ]
-        );
+        let names: Vec<String> = got
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        assert_eq!(names, vec!["a.mp3", "b.mp3", "j.mp3"]);
         let _ = std::fs::remove_file(&pls);
     }
 
