@@ -1090,6 +1090,8 @@ impl LinAmpApp {
             repeat: self.repeat_all,
             eq_on: self.eq_visible,
             pl_on: self.pl_visible,
+            always_on_top: self.prefs.always_on_top,
+            double_size: self.prefs.double_size,
             pos,
             duration: dur,
             time_remaining: self.time_remaining,
@@ -1360,7 +1362,20 @@ impl LinAmpApp {
             Btn::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
             Btn::Time => self.time_remaining = !self.time_remaining,
             Btn::Viz => self.viz_mode = self.viz_mode.next(),
-            Btn::Seek | Btn::Volume | Btn::Balance | Btn::TitleBar | Btn::Options => {}
+            // Clutterbar: A=always-on-top, I=file info, D=doublesize, V=viz mode.
+            // O opens the Options menu (handled on release in window.rs).
+            Btn::ClutterA => {
+                self.prefs.always_on_top = !self.prefs.always_on_top;
+                self.prefs.save();
+            }
+            Btn::ClutterI => self.open_tag_editor(),
+            Btn::ClutterD => {
+                let dbl = !self.prefs.double_size;
+                self.set_double_size(ctx, dbl);
+            }
+            Btn::ClutterV => self.viz_mode = self.viz_mode.next(),
+            Btn::Seek | Btn::Volume | Btn::Balance | Btn::TitleBar | Btn::Options
+            | Btn::ClutterO => {}
         }
     }
 

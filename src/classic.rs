@@ -48,11 +48,23 @@ pub enum Btn {
     TitleBar,
     Time,
     Viz,
+    // Clutterbar (the O/A/I/D/V column on the left of the main window).
+    ClutterO,
+    ClutterA,
+    ClutterI,
+    ClutterD,
+    ClutterV,
 }
 
 /// (button, x, y, w, h) hit-rects in main-window space, most-specific first.
 pub const REGIONS: &[(Btn, i32, i32, i32, i32)] = &[
     (Btn::Options, 6, 3, 9, 9),
+    // Clutterbar column (left edge, below the title bar): O/A/I/D/V, 8px wide.
+    (Btn::ClutterO, 10, 22, 8, 8),
+    (Btn::ClutterA, 10, 30, 8, 7),
+    (Btn::ClutterI, 10, 37, 8, 7),
+    (Btn::ClutterD, 10, 44, 8, 8),
+    (Btn::ClutterV, 10, 52, 8, 7),
     (Btn::Close, 264, 3, 9, 9),
     (Btn::Minimize, 244, 3, 9, 9),
     (Btn::Prev, 16, 88, 23, 18),
@@ -103,6 +115,11 @@ fn btn_label(b: Btn) -> Option<&'static str> {
         Btn::Close => "Close",
         Btn::Minimize => "Minimize",
         Btn::Options => "Options",
+        Btn::ClutterO => "Options",
+        Btn::ClutterA => "Toggle always on top",
+        Btn::ClutterI => "View file info",
+        Btn::ClutterD => "Toggle doublesize",
+        Btn::ClutterV => "Visualization options",
         _ => return None,
     })
 }
@@ -171,6 +188,9 @@ pub struct MainState {
     pub repeat: bool,
     pub eq_on: bool,
     pub pl_on: bool,
+    /// Clutterbar toggles: lit when active.
+    pub always_on_top: bool,
+    pub double_size: bool,
     pub pos: f32,
     pub duration: f32,
     /// Show time as remaining (−mm:ss) instead of elapsed.
@@ -364,6 +384,25 @@ impl ClassicSkin {
             blit(&mut c, tb, 244, 3, 9, 0, 9, 9); // minimize
             blit(&mut c, tb, 254, 3, 0, 18, 9, 9); // shade
             blit(&mut c, tb, 264, 3, 18, 0, 9, 9); // close
+
+            // Clutterbar (O/A/I/D/V) column: the normal strip, then "lit" overlays
+            // for the active toggles and whichever button is being pressed.
+            // Source rects from TITLEBAR.BMP (canonical Winamp sprite table).
+            blit(&mut c, tb, 10, 22, 304, 0, 8, 43); // background strip
+            if st.always_on_top {
+                blit(&mut c, tb, 10, 30, 312, 55, 8, 7); // A lit
+            }
+            if st.double_size {
+                blit(&mut c, tb, 10, 44, 328, 69, 8, 8); // D lit
+            }
+            match st.pressed {
+                Some(Btn::ClutterO) => blit(&mut c, tb, 10, 22, 304, 47, 8, 8),
+                Some(Btn::ClutterA) => blit(&mut c, tb, 10, 30, 312, 55, 8, 7),
+                Some(Btn::ClutterI) => blit(&mut c, tb, 10, 37, 320, 62, 8, 7),
+                Some(Btn::ClutterD) => blit(&mut c, tb, 10, 44, 328, 69, 8, 8),
+                Some(Btn::ClutterV) => blit(&mut c, tb, 10, 52, 336, 77, 8, 7),
+                _ => {}
+            }
         }
 
         // Transport buttons.
@@ -1579,6 +1618,8 @@ pub fn render_main_png(skin_path: &Path, out: &Path) -> Result<()> {
         repeat: true,
         eq_on: false,
         pl_on: true,
+        always_on_top: false,
+        double_size: false,
         pos: 125.0,
         duration: 254.0,
         time_remaining: false,
@@ -1608,6 +1649,8 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
         repeat: true,
         eq_on: true,
         pl_on: true,
+        always_on_top: false,
+        double_size: false,
         pos: 73.0, // 1:13
         duration: 325.0,
         time_remaining: false,
@@ -1688,6 +1731,15 @@ pub fn render_gen_png(skin_path: &Path, out: &Path) -> Result<()> {
 mod tests {
     use super::char_cell;
     use super::*;
+
+    #[test]
+    fn clutterbar_regions_map_to_buttons() {
+        assert_eq!(region_at(13.0, 24.0), Some(Btn::ClutterO));
+        assert_eq!(region_at(13.0, 32.0), Some(Btn::ClutterA));
+        assert_eq!(region_at(13.0, 39.0), Some(Btn::ClutterI));
+        assert_eq!(region_at(13.0, 46.0), Some(Btn::ClutterD));
+        assert_eq!(region_at(13.0, 55.0), Some(Btn::ClutterV));
+    }
 
     #[test]
     fn eq_regions_cover_all_controls() {
@@ -1883,6 +1935,8 @@ mod tests {
             repeat: false,
             eq_on: false,
             pl_on: false,
+            always_on_top: false,
+            double_size: false,
             pos: 71.0,
             duration: 200.0,
             time_remaining: false,

@@ -306,7 +306,7 @@ impl super::LinAmpApp {
                 if win == ClWin::Main {
                     if let Some(r) = self.active_region {
                         if classic::region_at(nx, ny) == Some(r) {
-                            if r == Btn::Options {
+                            if r == Btn::Options || r == Btn::ClutterO {
                                 self.open_popup_in(Popup::Options, win, l);
                             } else if r == Btn::Time {
                                 // Double-click the time display toggles elapsed vs
