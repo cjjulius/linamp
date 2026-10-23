@@ -1582,7 +1582,7 @@ impl LinAmpApp {
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
             .with_position(screen)
-            .with_inner_size(egui::vec2(340.0, 345.0))
+            .with_inner_size(egui::vec2(340.0, 372.0))
             .with_resizable(false)
             .with_taskbar(false)
             .with_window_level(self.window_level());
@@ -1648,6 +1648,12 @@ impl LinAmpApp {
                 if ui.button("Close").clicked() {
                     close = true;
                 }
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(concat!("LinAmp ", env!("CARGO_PKG_VERSION")))
+                        .small()
+                        .color(Color32::GRAY),
+                );
             });
             self.apply_base_cursor(ctx, "LinAmp Preferences");
             if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {

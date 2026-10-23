@@ -38,3 +38,8 @@ code plus a working/not-working binary): visual and behavior changes.
   the menu wiring and popup sizing (Rem now 4 rows, Misc now 6) need a visual
   check — open the playlist bottom-bar Rem/Misc menus and confirm the new items
   show and behave.
+
+- #114 show app version: the Preferences window now shows "LinAmp <version>"
+  (from CARGO_PKG_VERSION) at the bottom; prefs window height bumped to fit.
+  Visual check: open Preferences (Ctrl+P) and confirm the version line shows and
+  nothing is clipped. (Could not screenshot via synthetic input in the harness.)
