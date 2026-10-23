@@ -117,3 +117,11 @@ code plus a working/not-working binary): visual and behavior changes.
   toggling, shift-range (mouse and keyboard), Home/End, that a double-click still
   plays, and that Invert/Crop operate on the new multi-selection. If any specific
   key should behave differently (esp. Ctrl+Up/Down), it's easy to adjust.
+
+## 2026-10-23 (parity cron)
+
+- #97 (partial): extended the classic bitmap-font ASCII-folding to cover Latin
+  letters that were still rendering garbled — the g/h block (incl. Turkish Ğ and
+  Esperanto ĝ/ĥ) and the tails of n/t/u (ŋ, ŧ, and Hungarian Ű/Ų/ű/ų). Covered by
+  the ascii_fold unit test. Optional visual check: a track title containing Ğ or
+  Ű shows as "G"/"U" in the classic marquee, not a blank or garbled cell.
