@@ -124,9 +124,22 @@ impl super::LinAmpApp {
             v2_on.then_some(&v2),
         );
         if result.is_ok() {
+            // Refresh the playlist row (when the edit came from the playlist).
+            let mut refreshed = None;
             if let Some(t) = self.playlist.tracks.get_mut(index) {
                 t.loaded = false;
                 t.load();
+                refreshed = Some(t.clone());
+            }
+            // Reflect the new tags in the library DB, but only for a track it
+            // already knows (a no-op otherwise).
+            if let Some(lib) = &self.library {
+                let track = refreshed.unwrap_or_else(|| {
+                    let mut f = crate::playlist::Track::new(path.clone());
+                    f.load();
+                    f
+                });
+                lib.update_tags(&track);
             }
         }
         // On success the caller closes the window, so only an error needs a

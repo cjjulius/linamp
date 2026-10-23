@@ -105,6 +105,31 @@ impl Library {
         Ok(())
     }
 
+    /// Update the stored tags/properties for a track already in the library.
+    /// Returns `false` (a no-op) when the path isn't present, so editing a
+    /// playlist-only file never silently adds it to the library. Play count,
+    /// rating, and date_added are left untouched.
+    pub fn update_tags(&self, t: &Track) -> bool {
+        self.conn
+            .execute(
+                "UPDATE tracks SET title=?2, artist=?3, album=?4,
+                    duration_secs=?5, sample_rate=?6, bitrate=?7, channels=?8
+                 WHERE path=?1",
+                params![
+                    t.path.to_string_lossy(),
+                    t.title,
+                    t.artist,
+                    t.album,
+                    t.duration.map(|d| d.as_secs() as i64),
+                    t.sample_rate.map(|v| v as i64),
+                    t.bitrate.map(|v| v as i64),
+                    t.channels.map(|v| v as i64),
+                ],
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false)
+    }
+
     pub fn count(&self) -> usize {
         self.conn
             .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get::<_, i64>(0))
@@ -377,6 +402,29 @@ mod tests {
         lib.upsert(&track("/m/a2.mp3", "Alice", "First", "Two")).unwrap();
         lib.upsert(&track("/m/a3.mp3", "Alice", "Second", "Three")).unwrap();
         lib.upsert(&track("/m/b1.mp3", "Bob", "Blue", "Four")).unwrap();
+    }
+
+    #[test]
+    fn update_tags_only_touches_known_tracks_and_keeps_stats() {
+        let lib = Library::open_in_memory();
+        lib.upsert(&track("/m/x.mp3", "Old Artist", "Old Album", "Old Title")).unwrap();
+        lib.increment_play(&PathBuf::from("/m/x.mp3"));
+        lib.set_rating(&PathBuf::from("/m/x.mp3"), 4);
+
+        // A known track is updated in place.
+        let edited = track("/m/x.mp3", "New Artist", "New Album", "New Title");
+        assert!(lib.update_tags(&edited));
+        let hits = lib.search("New Title", 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].artist, "New Artist");
+        // Play count and rating survive the tag edit.
+        assert_eq!(lib.rating(&PathBuf::from("/m/x.mp3")), 4);
+
+        // An unknown path is a no-op and is not inserted.
+        let before = lib.count();
+        let unknown = track("/m/missing.mp3", "A", "B", "C");
+        assert!(!lib.update_tags(&unknown));
+        assert_eq!(lib.count(), before);
     }
 
     #[test]

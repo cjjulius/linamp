@@ -86,3 +86,11 @@ code plus a working/not-working binary): visual and behavior changes.
   without escaping, so a literal '_' or '%' in the typed text acted as a SQL
   wildcard (e.g. "track_01" also matched "trackX01"). Wildcards are now escaped
   with an ESCAPE clause. Fully covered by a unit test; no manual check required.
+
+- Tag edit not reflected in library (bug-fix): saving edited tags wrote the file
+  and refreshed the playlist row but never updated the library DB, so the Media
+  Library kept showing stale tags until a rescan. A new membership-gated
+  Library::update_tags now updates a known track's tags in place (preserving
+  play count and rating) and is a no-op for tracks not in the library. The DB
+  method is unit-tested. Human check: edit a track's tags from the Media Library
+  and confirm the row's title/artist/album update immediately without a rescan.
