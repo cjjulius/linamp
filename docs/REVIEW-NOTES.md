@@ -332,3 +332,9 @@ code plus a working/not-working binary): visual and behavior changes.
   unit-tested. Manual check: open Preferences > Optional Features, confirm the note
   and both toggles; enabling the Minibrowser makes its Options entry appear, and
   enabling the keypad makes 0/1-9 drive transport; both settings survive a restart.
+
+- #15 polish: the main title now shows the stream location (scheme trimmed) while an
+  "Open location" URL is playing, instead of staying blank. The URL-display helper is
+  unit-tested. Manual check: play a stream and confirm the title shows the address
+  and scrolls. Parsing live ICY stream-title metadata (the actual song name) is a
+  follow-up.
