@@ -8,6 +8,7 @@ mod config;
 mod cursor;
 mod dock;
 mod eq;
+mod eqf;
 mod library;
 mod player;
 mod playlist;

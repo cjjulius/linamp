@@ -197,3 +197,12 @@ code plus a working/not-working binary): visual and behavior changes.
   through the whole list without early repeats, a new cycle reshuffles, and Previous
   steps back sensibly (prev-in-shuffle walks back through the bag, which is a
   reasonable approximation of Winamp's history-based prev, not an exact match).
+
+- #142 (partial, .EQF interop): the EQ Presets menu now has Import/Export preset
+  (.eqf), reading and writing Winamp's "Winamp EQ library file v1.1" format. The
+  byte<->dB mapping and round-trip are unit-tested, but the file-dialog path wants
+  a manual check: import a real Winamp .eqf (e.g. a winamp.q1 library) and confirm
+  the curve looks right, then export and re-import to confirm the shape survives.
+  Note Winamp's EQ range is wider than LinAmp's +/-12 dB, so imported presets are
+  scaled into LinAmp's range (shape preserved, extremes compressed). The custom
+  named-preset library (save/load presets within LinAmp) is still open under #142.

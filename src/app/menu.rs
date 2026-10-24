@@ -31,7 +31,7 @@ pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
         // Right-click context menus: wider to fit the shortcut column.
         Popup::PlTrack => (6, 2, 210.0),
         Popup::PlVoid => (12, 4, 210.0),
-        Popup::EqPresets => (crate::eq::PRESETS.len() as i32, 0, 182.0),
+        Popup::EqPresets => (crate::eq::PRESETS.len() as i32 + 2, 1, 182.0),
     };
     (width, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
 }
@@ -417,6 +417,15 @@ impl super::LinAmpApp {
                                     self.apply_eq_preset(i);
                                     close = true;
                                 }
+                            }
+                            ui.separator();
+                            if item(ui, "Import preset (.eqf)…") {
+                                self.import_eqf();
+                                close = true;
+                            }
+                            if item(ui, "Export preset (.eqf)…") {
+                                self.export_eqf();
+                                close = true;
                             }
                         }
                     }
