@@ -398,4 +398,16 @@ code plus a working/not-working binary): visual and behavior changes.
   themed simulation that opens the address in the system browser (the agreed option
   B — a nod to the original, no web view). A request to embed an actual browser view
   would need a native webview dependency (e.g. wry/WebView2) overlaid on the egui
-  window, a significant scope change. Awaiting a decision before any work.
+  window, a significant scope change. Left as-is for now per the user.
+
+- Media Library Bookmarks view (wired up): the left-nav "Bookmarks" entry was a dead
+  placeholder label; it's now a real, clickable view listing the same bookmarks as
+  Options > Bookmarks. Each row shows the track's full library metadata when it's
+  indexed, otherwise the bookmark's saved title (so bookmarks to un-scanned files
+  still list and play). Double-click plays; the row context menu's "Remove" says
+  "Remove bookmark" here and drops it from the store (not the library DB); the search
+  box filters the list. The DB lookup (track_for_path) is unit-tested; the view/menu
+  wiring is UI. Manual check: add a few bookmarks (Alt+I), open the Media Library,
+  click "Bookmarks", confirm they list, double-click plays, right-click > Remove
+  bookmark drops just that one, and the search box filters. The "Playlists" nav entry
+  is still an intentional placeholder (saved-playlist management is issue #150).
