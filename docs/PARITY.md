@@ -48,6 +48,9 @@ close:
   call); the keypad digits also fire for the top row, which is acceptable.
 - **#15** — Open location (Ctrl+L): stream an HTTP(S) URL (internet radio or a
   remote file). Decoded on a background thread; needs a live-stream test.
+- **#146** — Minibrowser: a themed window (Options > Show Minibrowser) that shows a
+  persisted, user-editable address (Preferences, default = the repo) and opens it in
+  the system browser — a nod to the original, not a real web view.
 
 ## Open — needs work or a direction
 
@@ -62,7 +65,6 @@ close:
 - **#144** (remaining) — Ctrl+A always-on-top (vs playlist select-all),
   Ctrl+E EasyMove, Alt+W toggle main window, Ctrl+keypad-0 open-location, and an
   optional platform raw-key path so keypad transport is keypad-only.
-- **#146** — Minibrowser / SHOUTcast directory. Likely out of scope for 2.666.
 
 ## Deferred — beyond 2.666
 

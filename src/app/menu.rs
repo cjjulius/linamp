@@ -28,7 +28,7 @@ pub(super) enum Popup {
 /// Window size (points) for a popup menu, from its item/separator count.
 pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
     let (buttons, seps, width) = match kind {
-        Popup::Options => (10, 3, 182.0),
+        Popup::Options => (11, 3, 182.0),
         Popup::PlAdd => (2, 0, 182.0),
         Popup::PlRem => (4, 0, 182.0),
         Popup::PlSel => (3, 0, 182.0),
@@ -226,6 +226,15 @@ impl super::LinAmpApp {
                                 // Classic popups aren't nested; open the list once
                                 // this menu closes.
                                 self.pending_popup = Some((Popup::Bookmarks, owner, pos));
+                                close = true;
+                            }
+                            let mbl = if self.mb_visible {
+                                "Hide Minibrowser"
+                            } else {
+                                "Show Minibrowser"
+                            };
+                            if item(ui, mbl) {
+                                self.mb_visible = !self.mb_visible;
                                 close = true;
                             }
                             if item(ui, "Preferences…") {

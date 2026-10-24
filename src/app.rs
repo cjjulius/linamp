@@ -478,6 +478,9 @@ pub struct LinAmpApp {
     prefs_pos: Option<egui::Pos2>,
     prefs_drag: Option<egui::Vec2>,
     lib_visible: bool,
+    /// Whether the Minibrowser window (a themed nod to Winamp's SHOUTcast pane)
+    /// is open. Transient — it opens from the Options menu each session.
+    mb_visible: bool,
     tag_editor: Option<tag_ui::TagEditor>,
     /// Jump-to-file search state (Some while the dialog is open).
     jump_file: Option<JumpFile>,
@@ -640,6 +643,7 @@ impl LinAmpApp {
             prefs_pos: None,
             prefs_drag: None,
             lib_visible: false,
+            mb_visible: false,
             tag_editor: None,
             jump_file: None,
             jump_time: None,
@@ -2092,6 +2096,17 @@ impl LinAmpApp {
                 }
             }
         });
+        Self::pref_section(ui, "Minibrowser", |ui| {
+            ui.label("Address (opens in your default browser):");
+            let mut url = self.prefs.minibrowser_url.clone();
+            if ui
+                .add(egui::TextEdit::singleline(&mut url).desired_width(260.0))
+                .changed()
+            {
+                self.prefs.minibrowser_url = url;
+                self.prefs.save();
+            }
+        });
     }
 
     fn prefs_page_playback(&mut self, ui: &mut egui::Ui) {
@@ -2444,6 +2459,108 @@ impl LinAmpApp {
         }
     }
 
+    /// Open the configured Minibrowser URL in the system default browser.
+    fn open_minibrowser_url(&mut self) {
+        let url = self.prefs.minibrowser_url.trim().to_string();
+        if url.is_empty() {
+            return;
+        }
+        match open::that(&url) {
+            Ok(()) => self.status = format!("Opened in browser: {url}"),
+            Err(e) => self.status = format!("Couldn't open browser: {e}"),
+        }
+    }
+
+    /// The Minibrowser window: a themed nod to Winamp's SHOUTcast pane. It shows
+    /// the configured address and opens it in the system browser (LinAmp has no
+    /// embedded web view), styled to match the active skin.
+    fn ui_minibrowser(&mut self, ctx: &egui::Context) {
+        if !self.mb_visible {
+            return;
+        }
+        let screen = self.win_pos[0] + egui::vec2(60.0, 60.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp — Minibrowser")
+            .with_position(screen)
+            .with_inner_size(egui::vec2(360.0, 220.0))
+            .with_resizable(false)
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
+        let id = egui::ViewportId::from_hash_of("linamp_minibrowser");
+        let mut close = false;
+        let mut open_url = false;
+        let url = self.prefs.minibrowser_url.clone();
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            let style = ctx.style();
+            let border = egui::Stroke::new(1.0_f32, style.visuals.window_stroke.color);
+            egui::TopBottomPanel::top("mb_bar").show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Address:").strong());
+                    // The address is read-only here; it's edited in Preferences.
+                    let mut addr = url.clone();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut addr)
+                            .desired_width(f32::INFINITY)
+                            .interactive(false),
+                    );
+                });
+                ui.add_space(4.0);
+            });
+            egui::TopBottomPanel::bottom("mb_actions").show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Open in browser").clicked() {
+                        open_url = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new("Set the address in Preferences")
+                                .small()
+                                .color(egui::Color32::GRAY),
+                        );
+                    });
+                });
+                ui.add_space(4.0);
+            });
+            egui::CentralPanel::default().show(ctx, |ui| {
+                // A simulated "page" — a nod to the original minibrowser rather
+                // than a real web view.
+                ui.vertical_centered(|ui| {
+                    ui.add_space(24.0);
+                    ui.heading("LinAmp Minibrowser");
+                    ui.add_space(6.0);
+                    ui.label(&url);
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new("Click \"Open in browser\" to visit this address.")
+                            .italics(),
+                    );
+                });
+            });
+            // On-theme border just inside the window edge, matching the menus.
+            let vr = ctx.screen_rect().shrink(1.0);
+            ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("linamp_mb_border"),
+            ))
+            .rect_stroke(vr, egui::Rounding::ZERO, border);
+            self.apply_base_cursor(ctx, "LinAmp — Minibrowser");
+            if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
+                close = true;
+            }
+        });
+        if open_url {
+            self.open_minibrowser_url();
+        }
+        if close {
+            self.mb_visible = false;
+        }
+    }
+
     fn apply_eq_slider(&mut self, region: classic::EqRegion, ey: f32) {
         let v = classic::eq_value_at_y(ey);
         match region {
@@ -2724,6 +2841,7 @@ impl LinAmpApp {
         self.ui_jump_time(ctx);
         self.ui_eq_save_name(ctx);
         self.ui_location(ctx);
+        self.ui_minibrowser(ctx);
 
         // Initialise window positions, once.
         if !self.positions_init {

@@ -28,6 +28,8 @@ ureq = "2"
 # Direct symphonia decode of a non-seekable network stream (rodio's Decoder
 # needs Read+Seek, which a live stream isn't). Versions track rodio's symphonia.
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "isomp4", "ogg", "vorbis", "flac", "pcm", "alac"] }
+# Open a URL in the user's default browser (the Minibrowser's "nod" action).
+open = "5"
 
 # Linux/X11 only: query the global cursor position (XQueryPointer) so classic
 # windows can be dragged and docked as a group, matching the Windows behaviour.

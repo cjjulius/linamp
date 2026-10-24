@@ -310,3 +310,15 @@ code plus a working/not-working binary): visual and behavior changes.
   Known limitations to note: the now-playing LCD/title stays blank while streaming
   (no playlist track backs it); seeking is a no-op on a live stream; and an output
   device change restarts the stream from live. New deps: ureq, symphonia.
+
+- #146 (Minibrowser): a themed "nod" to Winamp's SHOUTcast pane rather than a real
+  web view (LinAmp has none). A Minibrowser window (Options > Show Minibrowser) shows
+  the configured address and an "Open in browser" button that launches the system
+  default browser (via the `open` crate). The address is a persisted, user-editable
+  Preferences setting (Display tab) defaulting to the project repo. The default value
+  is unit-tested; the window itself is UI, so it needs a visual check. Manual checks:
+  Options > Show Minibrowser opens a themed window; "Open in browser" opens the URL
+  in your browser; set a different URL in Preferences and confirm it persists across
+  a restart and is what the button opens. Note: the window is themed via the skin's
+  egui colors with an on-theme border (like the menus), not a full gen.bmp classic
+  frame; open-state isn't persisted (it opens from the menu each session).
