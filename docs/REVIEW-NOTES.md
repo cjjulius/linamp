@@ -297,3 +297,16 @@ code plus a working/not-working binary): visual and behavior changes.
   by-name store method (clearing a dead-code warning) and broadened the ID3v2
   round-trip test to assert every editable frame, not just a sample. No manual
   review needed beyond confirming tests pass.
+
+- #15 (Open location / stream playback, Ctrl+L): added streaming of an HTTP(S) URL
+  (internet radio or a remote file). Ctrl+L (or the dialog) opens a URL; a background
+  thread fetches it with ureq and decodes with symphonia directly — rodio's Decoder
+  needs Read+Seek, which a live stream isn't, so the samples flow through a bounded
+  channel into a rodio Source that reuses the EQ / analyzer / balance pipeline. Only
+  the MIME→extension mapping is unit-tested; the streaming path CANNOT be verified
+  headlessly, so it needs a real live test. Manual checks: press Ctrl+L, enter a
+  direct audio URL (e.g. a .mp3) and an internet-radio stream URL (MP3/AAC) — confirm
+  each connects and plays with EQ/analyzer working, and that Stop ends it cleanly.
+  Known limitations to note: the now-playing LCD/title stays blank while streaming
+  (no playlist track backs it); seeking is a no-op on a live stream; and an output
+  device change restarts the stream from live. New deps: ureq, symphonia.

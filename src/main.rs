@@ -15,6 +15,7 @@ mod playlist;
 mod region;
 mod selection;
 mod skin;
+mod stream;
 mod tags;
 mod text;
 mod viz;

@@ -44,11 +44,13 @@ close:
   main bar (always-on-top and the mini transport were already done).
 - **#45** — bookmarks (Alt+I) with a recall list in the Options menu.
 - **#144** (partial) — numeric-keypad transport, Ctrl+Z (start of list) and
-  Ctrl+R (reverse). See "Open" for the rest.
+  Ctrl+R (reverse). The numpad-only platform path is dropped for now (per your
+  call); the keypad digits also fire for the top row, which is acceptable.
+- **#15** — Open location (Ctrl+L): stream an HTTP(S) URL (internet radio or a
+  remote file). Decoded on a background thread; needs a live-stream test.
 
 ## Open — needs work or a direction
 
-- **#15** — Open URL / stream playback (Ctrl+L). Needs a streaming approach.
 - **#40** — system integration: global media keys, tray icon, file
   associations. Platform-specific; needs a scope decision.
 - **#77** — surface all settings in Preferences. Largely a design call: the

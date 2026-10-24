@@ -46,6 +46,7 @@ The keypad mirrors Winamp's transport controls.
 | --- | --- |
 | L | Open file(s) |
 | Shift+L | Open folder |
+| Ctrl+L | Open location (stream a URL) |
 | J | Jump to file |
 | Ctrl+J | Jump to time |
 | Alt+I | Bookmark the current track |

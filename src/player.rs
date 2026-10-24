@@ -32,6 +32,8 @@ pub struct Player {
     /// Extra output gain multiplier for fades (1.0 = normal).
     fade: f32,
     current_path: Option<PathBuf>,
+    /// The streaming URL currently playing (classic "Open location"), if any.
+    current_url: Option<String>,
     viz: Arc<VizShared>,
     eq: Arc<EqShared>,
     balance: Arc<BalanceShared>,
@@ -49,6 +51,7 @@ impl Player {
             volume: 0.8,
             fade: 1.0,
             current_path: None,
+            current_url: None,
             viz: VizShared::new(),
             eq: EqShared::new(),
             balance: BalanceShared::new(),
@@ -71,6 +74,7 @@ impl Player {
             return;
         }
         let path = self.current_path.clone();
+        let url = self.current_url.clone();
         let pos = self.position();
         let was = self.state;
         if let Ok((stream, handle)) = OutputStream::try_default() {
@@ -79,13 +83,19 @@ impl Player {
             self.device_name = current;
             self.sink = None;
             self.state = PlayState::Stopped;
-            if let Some(p) = path {
-                if matches!(was, PlayState::Playing | PlayState::Paused) {
+            self.current_url = None;
+            if matches!(was, PlayState::Playing | PlayState::Paused) {
+                if let Some(p) = path {
                     if self.play_file(&p).is_ok() {
                         self.seek(pos);
                         if was == PlayState::Paused {
                             self.pause();
                         }
+                    }
+                } else if let Some(u) = url {
+                    // Streams can't be resumed at a position; restart from live.
+                    if self.play_url(&u).is_ok() && was == PlayState::Paused {
+                        self.pause();
                     }
                 }
             }
@@ -151,6 +161,29 @@ impl Player {
         sink.append(balanced);
         self.sink = Some(sink);
         self.current_path = Some(path.to_path_buf());
+        self.current_url = None;
+        self.state = PlayState::Playing;
+        self.apply_gain();
+        Ok(())
+    }
+
+    /// Start streaming an HTTP(S) location (internet radio / remote file). The
+    /// connection and decode run on a background thread; this returns once the
+    /// stream's format is known, or with an error if it couldn't be opened.
+    pub fn play_url(&mut self, url: &str) -> Result<()> {
+        let source = crate::stream::open(url)?;
+        self.viz.clear();
+        self.viz.set_rate(source.sample_rate());
+        // Same shaping as local playback, so EQ / analyzer / balance all apply.
+        let equalized = eq::eq(source, self.eq.clone());
+        let tapped = viz::tap(equalized, self.viz.clone());
+        let balanced = balance::balance(tapped, self.balance.clone());
+
+        let sink = Sink::try_new(&self.handle)?;
+        sink.append(balanced);
+        self.sink = Some(sink);
+        self.current_path = None;
+        self.current_url = Some(url.to_string());
         self.state = PlayState::Playing;
         self.apply_gain();
         Ok(())
@@ -187,6 +220,7 @@ impl Player {
             sink.stop();
         }
         self.state = PlayState::Stopped;
+        self.current_url = None;
         self.fade = 1.0; // reset so the next track isn't faded
         self.viz.clear(); // silence the analyzer so its bars fall to zero
     }
