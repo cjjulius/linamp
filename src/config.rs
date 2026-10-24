@@ -22,6 +22,11 @@ pub struct Prefs {
     /// The Minibrowser's address — a nod to Winamp's SHOUTcast pane. Persisted so
     /// the user can point it anywhere; defaults to the project repository.
     pub minibrowser_url: String,
+    /// "Optional Features" opt-ins (obsolete / incomplete parity extras, off by
+    /// default). `minibrowser_enabled` surfaces the Minibrowser; `numpad_transport`
+    /// binds the numeric keypad to transport controls.
+    pub minibrowser_enabled: bool,
+    pub numpad_transport: bool,
 }
 
 impl Default for Prefs {
@@ -36,6 +41,8 @@ impl Default for Prefs {
             always_on_top: false,
             disable_skin_cursors: false,
             minibrowser_url: "https://github.com/cjjulius/linamp".to_string(),
+            minibrowser_enabled: false,
+            numpad_transport: false,
         }
     }
 }
@@ -339,6 +346,8 @@ mod tests {
         assert!(p.last_skin.is_none());
         // The Minibrowser defaults to the project repository.
         assert!(p.minibrowser_url.contains("github.com/cjjulius/linamp"));
+        // Optional Features are opt-in (off by default).
+        assert!(!p.minibrowser_enabled && !p.numpad_transport);
     }
 
     #[test]

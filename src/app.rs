@@ -249,14 +249,16 @@ enum PrefTab {
     Display,
     Playback,
     Playlist,
+    OptionalFeatures,
     About,
 }
 
 impl PrefTab {
-    const ALL: [PrefTab; 4] = [
+    const ALL: [PrefTab; 5] = [
         PrefTab::Display,
         PrefTab::Playback,
         PrefTab::Playlist,
+        PrefTab::OptionalFeatures,
         PrefTab::About,
     ];
     fn label(self) -> &'static str {
@@ -264,6 +266,7 @@ impl PrefTab {
             PrefTab::Display => "Display",
             PrefTab::Playback => "Playback",
             PrefTab::Playlist => "Playlist",
+            PrefTab::OptionalFeatures => "Optional Features",
             PrefTab::About => "About",
         }
     }
@@ -2036,6 +2039,7 @@ impl LinAmpApp {
                         PrefTab::Display => self.prefs_page_display(ctx, ui),
                         PrefTab::Playback => self.prefs_page_playback(ui),
                         PrefTab::Playlist => self.prefs_page_playlist(ui),
+                        PrefTab::OptionalFeatures => self.prefs_page_optional_features(ui),
                         PrefTab::About => self.prefs_page_about(ui),
                     });
             });
@@ -2096,14 +2100,44 @@ impl LinAmpApp {
                 }
             }
         });
+    }
+
+    fn prefs_page_optional_features(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(2.0);
+        ui.colored_label(
+            egui::Color32::from_rgb(200, 150, 60),
+            "These are obsolete or incomplete features included for \"full parity\". \
+             They may not function exactly as expected — enable at your own risk.",
+        );
+        ui.add_space(10.0);
         Self::pref_section(ui, "Minibrowser", |ui| {
-            ui.label("Address (opens in your default browser):");
-            let mut url = self.prefs.minibrowser_url.clone();
+            let mut on = self.prefs.minibrowser_enabled;
+            if ui.checkbox(&mut on, "Enable the Minibrowser").changed() {
+                self.prefs.minibrowser_enabled = on;
+                if !on {
+                    self.mb_visible = false;
+                }
+                self.prefs.save();
+            }
+            ui.add_enabled_ui(self.prefs.minibrowser_enabled, |ui| {
+                ui.label("Address (opens in your default browser):");
+                let mut url = self.prefs.minibrowser_url.clone();
+                if ui
+                    .add(egui::TextEdit::singleline(&mut url).desired_width(260.0))
+                    .changed()
+                {
+                    self.prefs.minibrowser_url = url;
+                    self.prefs.save();
+                }
+            });
+        });
+        Self::pref_section(ui, "Numeric keypad", |ui| {
+            let mut on = self.prefs.numpad_transport;
             if ui
-                .add(egui::TextEdit::singleline(&mut url).desired_width(260.0))
+                .checkbox(&mut on, "Bind the numeric keypad to transport controls")
                 .changed()
             {
-                self.prefs.minibrowser_url = url;
+                self.prefs.numpad_transport = on;
                 self.prefs.save();
             }
         });
@@ -2475,7 +2509,7 @@ impl LinAmpApp {
     /// the configured address and opens it in the system browser (LinAmp has no
     /// embedded web view), styled to match the active skin.
     fn ui_minibrowser(&mut self, ctx: &egui::Context) {
-        if !self.mb_visible {
+        if !self.mb_visible || !self.prefs.minibrowser_enabled {
             return;
         }
         let screen = self.win_pos[0] + egui::vec2(60.0, 60.0);
