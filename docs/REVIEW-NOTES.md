@@ -206,3 +206,11 @@ code plus a working/not-working binary): visual and behavior changes.
   Note Winamp's EQ range is wider than LinAmp's +/-12 dB, so imported presets are
   scaled into LinAmp's range (shape preserved, extremes compressed). The custom
   named-preset library (save/load presets within LinAmp) is still open under #142.
+
+- #130 (right-click Stop menu): right-clicking the main window's Stop button now
+  opens a stop-options menu (Stop / Stop after current / Stop with fade out)
+  instead of the generic Options menu; right-clicking elsewhere still opens
+  Options. The underlying actions were already implemented and the Stop hit region
+  is already tested, so this is UI wiring. Manual check: right-click the Stop
+  button, confirm the three options appear and each works, and that right-clicking
+  elsewhere on the main window still shows the Options menu.

@@ -17,6 +17,8 @@ pub(super) enum Popup {
     /// Right-click on empty playlist space.
     PlVoid,
     EqPresets,
+    /// Right-click on the main window's Stop button.
+    StopMenu,
 }
 
 /// Window size (points) for a popup menu, from its item/separator count.
@@ -32,6 +34,7 @@ pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
         Popup::PlTrack => (6, 2, 210.0),
         Popup::PlVoid => (12, 4, 210.0),
         Popup::EqPresets => (crate::eq::PRESETS.len() as i32 + 2, 1, 182.0),
+        Popup::StopMenu => (3, 0, 200.0),
     };
     (width, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
 }
@@ -425,6 +428,24 @@ impl super::LinAmpApp {
                             }
                             if item(ui, "Export preset (.eqf)…") {
                                 self.export_eqf();
+                                close = true;
+                            }
+                        }
+                        Popup::StopMenu => {
+                            if item(ui, "Stop") {
+                                self.stop_playback();
+                                close = true;
+                            }
+                            let after = if self.stop_after_current { "on" } else { "off" };
+                            if item(ui, &format!("Stop after current: {after}")) {
+                                self.stop_after_current = !self.stop_after_current;
+                                close = true;
+                            }
+                            if item(ui, "Stop with fade out") {
+                                if self.player.state() != PlayState::Stopped {
+                                    self.fade = Some(FADE_SECS);
+                                    self.status = "Fading out…".into();
+                                }
                                 close = true;
                             }
                         }
