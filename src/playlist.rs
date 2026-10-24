@@ -120,6 +120,12 @@ impl Track {
 pub struct Playlist {
     pub tracks: Vec<Track>,
     pub current: Option<usize>,
+    /// Shuffle "bag": a shuffled permutation of track indices and the position
+    /// of the next entry to play, so shuffle plays every track once per cycle
+    /// (classic Winamp behaviour) rather than picking at random with replacement.
+    /// Rebuilt lazily when the track count changes or the cycle is exhausted.
+    shuffle_order: Vec<usize>,
+    shuffle_pos: usize,
 }
 
 impl Playlist {
@@ -241,12 +247,12 @@ impl Playlist {
     }
 
     /// Index after `current`, honoring shuffle/repeat-all.
-    pub fn next_index(&self, shuffle: bool, repeat_all: bool) -> Option<usize> {
+    pub fn next_index(&mut self, shuffle: bool, repeat_all: bool) -> Option<usize> {
         if self.tracks.is_empty() {
             return None;
         }
         if shuffle {
-            return Some(random_other(self.tracks.len(), self.current));
+            return self.next_shuffle();
         }
         match self.current {
             Some(c) if c + 1 < self.tracks.len() => Some(c + 1),
@@ -262,12 +268,12 @@ impl Playlist {
     }
 
     /// Index before `current`.
-    pub fn prev_index(&self, shuffle: bool, repeat_all: bool) -> Option<usize> {
+    pub fn prev_index(&mut self, shuffle: bool, repeat_all: bool) -> Option<usize> {
         if self.tracks.is_empty() {
             return None;
         }
         if shuffle {
-            return Some(random_other(self.tracks.len(), self.current));
+            return self.prev_shuffle();
         }
         match self.current {
             Some(c) if c > 0 => Some(c - 1),
@@ -280,6 +286,73 @@ impl Playlist {
             }
             None => Some(0),
         }
+    }
+
+    /// Next track from the shuffle bag — each track plays once per cycle; a new
+    /// shuffled cycle starts when the current one is exhausted, never repeating
+    /// the just-played track back-to-back.
+    fn next_shuffle(&mut self) -> Option<usize> {
+        let len = self.tracks.len();
+        if len == 1 {
+            return Some(0);
+        }
+        if self.shuffle_order.len() != len || self.shuffle_pos >= self.shuffle_order.len() {
+            self.refill_shuffle();
+        }
+        let idx = self.shuffle_order[self.shuffle_pos];
+        self.shuffle_pos += 1;
+        Some(idx)
+    }
+
+    /// Step back through the shuffle bag (the previously-played entry).
+    fn prev_shuffle(&mut self) -> Option<usize> {
+        let len = self.tracks.len();
+        if len == 1 {
+            return Some(0);
+        }
+        if self.shuffle_order.len() != len {
+            self.refill_shuffle();
+        }
+        if self.shuffle_pos > 1 {
+            self.shuffle_pos -= 1;
+            Some(self.shuffle_order[self.shuffle_pos - 1])
+        } else {
+            Some(*self.shuffle_order.first().unwrap_or(&0))
+        }
+    }
+
+    /// Rebuild the shuffle bag: a fresh random permutation of all track indices,
+    /// arranged so the first entry isn't the current track (no back-to-back repeat
+    /// across cycle boundaries). Clock-seeded; a playlist shuffle needs no
+    /// cryptographic quality.
+    fn refill_shuffle(&mut self) {
+        let len = self.tracks.len();
+        let mut order: Vec<usize> = (0..len).collect();
+        let mut s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9E37_79B9_7F4A_7C15)
+            | 1;
+        let mut next = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        for i in (1..len).rev() {
+            let j = (next() % (i as u64 + 1)) as usize;
+            order.swap(i, j);
+        }
+        // Avoid immediately replaying the current track at the start of a new cycle.
+        if len > 1 {
+            if let Some(c) = self.current {
+                if order[0] == c {
+                    order.swap(0, 1);
+                }
+            }
+        }
+        self.shuffle_order = order;
+        self.shuffle_pos = 0;
     }
 }
 
@@ -409,34 +482,6 @@ pub fn is_supported(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Tiny time-seeded index picker so we don't pull in the `rand` crate for a
-/// shuffle that doesn't need to be cryptographically anything.
-fn pseudo_random(len: usize) -> usize {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos() as usize)
-        .unwrap_or(0);
-    nanos % len.max(1)
-}
-
-/// A random index in `0..len` that isn't `current`, so shuffle never replays the
-/// current track back-to-back (classic Winamp behaviour). Falls back to any index
-/// when there's no current track or only one track.
-fn random_other(len: usize, current: Option<usize>) -> usize {
-    match current {
-        Some(c) if len > 1 && c < len => {
-            let r = pseudo_random(len - 1); // 0..len-1, then skip over c
-            if r >= c {
-                r + 1
-            } else {
-                r
-            }
-        }
-        _ => pseudo_random(len),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,6 +526,7 @@ mod tests {
         Playlist {
             tracks: paths.iter().map(|p| Track::new(PathBuf::from(p))).collect(),
             current,
+            ..Default::default()
         }
     }
 
@@ -518,6 +564,7 @@ mod tests {
         let mut pl = Playlist {
             tracks: vec![Track::new(gone), Track::new(real.clone())],
             current: Some(1),
+            ..Default::default()
         };
         assert_eq!(pl.remove_missing(), 1);
         assert_eq!(pl.tracks.len(), 1);
@@ -610,15 +657,29 @@ mod tests {
     }
 
     #[test]
-    fn shuffle_never_repeats_current_track() {
-        let pl = pl_of(&["/0.mp3", "/1.mp3", "/2.mp3", "/3.mp3"], Some(2));
+    fn shuffle_plays_through_all_before_repeating() {
+        let mut pl = pl_of(&["/0.mp3", "/1.mp3", "/2.mp3", "/3.mp3"], Some(2));
+        // The first pick must not be the current track (no back-to-back repeat).
+        let first = pl.next_index(true, false).unwrap();
+        assert_ne!(first, 2, "shuffle must not replay the current track immediately");
+        // One cycle (the remaining 3) must cover every other index exactly once,
+        // i.e. all 4 tracks play once before any repeats.
+        let mut seen = vec![first];
+        for _ in 0..3 {
+            let i = pl.next_index(true, false).unwrap();
+            pl.current = Some(i);
+            seen.push(i);
+        }
+        seen.sort();
+        assert_eq!(seen, vec![0, 1, 2, 3], "every track plays once per shuffle cycle");
+        // All indices stay in range across many cycles.
         for _ in 0..64 {
-            assert_ne!(pl.next_index(true, false), Some(2));
-            assert_ne!(pl.prev_index(true, false), Some(2));
-            assert!(pl.next_index(true, false).unwrap() < 4);
+            let i = pl.next_index(true, false).unwrap();
+            pl.current = Some(i);
+            assert!(i < 4);
         }
         // A single-track list can only return that track.
-        let one = pl_of(&["/only.mp3"], Some(0));
+        let mut one = pl_of(&["/only.mp3"], Some(0));
         assert_eq!(one.next_index(true, false), Some(0));
     }
 
@@ -632,7 +693,7 @@ mod tests {
         assert_eq!(pl(Some(1)).prev_index(false, false), Some(0));
         assert_eq!(pl(Some(0)).prev_index(false, false), None); // first, no repeat
         assert_eq!(pl(Some(0)).prev_index(false, true), Some(2)); // first, repeat wraps
-        let empty = Playlist { tracks: vec![], current: None };
+        let mut empty = Playlist { tracks: vec![], current: None, ..Default::default() };
         assert_eq!(empty.next_index(false, false), None);
     }
 

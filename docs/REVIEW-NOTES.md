@@ -189,3 +189,11 @@ code plus a working/not-working binary): visual and behavior changes.
   dark on light), so it's minimally usable on any skin. Unit-tested. Manual check:
   load qa-tools/test-skins/base_no_eq.wsz, collapse the EQ, and confirm the bar and
   its volume/balance thumbs are visible and draggable.
+
+- #141 (shuffle bag): shuffle now plays every track once per cycle (a shuffled
+  permutation) before repeating, instead of picking at random with replacement, and
+  never replays the current track back-to-back. The play-through property is
+  unit-tested, but the feel wants a listen-test with shuffle on: confirm Next walks
+  through the whole list without early repeats, a new cycle reshuffles, and Previous
+  steps back sensibly (prev-in-shuffle walks back through the bag, which is a
+  reasonable approximation of Winamp's history-based prev, not an exact match).
