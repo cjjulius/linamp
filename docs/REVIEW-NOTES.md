@@ -361,3 +361,41 @@ code plus a working/not-working binary): visual and behavior changes.
   URL and confirm the UI stays fully responsive (windows drag, transport works) while
   it connects, then plays or shows the error/timeout. Note: a device change during a
   stream now stops it rather than restarting from live (re-open with Ctrl+L).
+
+## 2026-10-24 (QA follow-ups)
+
+- #15 (stream title not showing with a playlist loaded, bug fix): the title only
+  showed the stream/ICY metadata when there was no current playlist track, so with a
+  playlist loaded the stale track name shadowed the stream. The stream (what's
+  actually playing) now takes precedence over any still-selected playlist track.
+  Can't be verified headlessly. Manual check: load a playlist, then Ctrl+L an ICY
+  radio stream and confirm the scrolling title shows the stream address and then the
+  live song name, not the old playlist track.
+
+- Bookmarks menu actions off-screen with a long list (bug fix): the Add/Remove/Clear
+  actions sat after an unbounded scroll area, so ~20 bookmarks pushed them past the
+  window's bottom edge and they became unreachable. The actions are now pinned to a
+  bottom panel and the list scrolls in the space above them. Manual check: add 20+
+  bookmarks, open Options > Bookmarks, and confirm the list scrolls while Add current
+  / Clear bookmarks stay visible and clickable at the bottom.
+
+- Popup menu one-frame flash (bug fix): opening a classic menu briefly flashed the
+  popup window at a default position before it moved to the click point (the OS
+  creates the window, then `with_position` moves it). The popup is now kept hidden on
+  its opening frame and revealed the next frame, once positioned. Visual check:
+  open the Options menu and the playlist/EQ menus repeatedly and confirm there's no
+  longer a flash of the window drawing elsewhere first.
+
+- EQ buttons misaligned on some skins (OPEN, needs repro): reported on MacOSXAqua1-5
+  and Osmosis_2 — the ON/AUTO/PRESETS buttons don't line up with their slots. The
+  draw coords and the click hit-regions both match the canonical Winamp EQMAIN.BMP
+  layout (On 14,18 26x12; Auto 40,18 32x12; Presets 217,18 44x12) that every other
+  bundled skin renders correctly, so the coords were left unchanged rather than risk
+  breaking the other 11 skins. Needs a visual repro on these two skins compared with
+  real Winamp 2.666 to find what differs. Filed as an issue.
+
+- Minibrowser "embed a real browser" (OPEN, design decision): the current window is a
+  themed simulation that opens the address in the system browser (the agreed option
+  B — a nod to the original, no web view). A request to embed an actual browser view
+  would need a native webview dependency (e.g. wry/WebView2) overlaid on the egui
+  window, a significant scope change. Awaiting a decision before any work.
