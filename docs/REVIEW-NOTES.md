@@ -181,3 +181,11 @@ code plus a working/not-working binary): visual and behavior changes.
   re-centres it (balance 0), matching Winamp; this completes #140 alongside the EQ
   band/preamp reset. Both use egui's native double-click detection. Manual check:
   pan the balance off-centre, double-click it, and confirm it snaps back to centre.
+
+- #18 (QA fix): a collapsed EQ on a skin missing both eq_ex.bmp and EQMAIN.BMP
+  previously rendered unreadable (black-on-black) with no sliders. It now draws a
+  solid bar in the skin's background colour plus synthesized volume/balance thumbs
+  and a close marker, in a tone picked to contrast that background (light on dark,
+  dark on light), so it's minimally usable on any skin. Unit-tested. Manual check:
+  load qa-tools/test-skins/base_no_eq.wsz, collapse the EQ, and confirm the bar and
+  its volume/balance thumbs are visible and draggable.
