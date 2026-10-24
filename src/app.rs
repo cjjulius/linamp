@@ -412,6 +412,10 @@ pub struct LinAmpApp {
     pending_popup: Option<(Popup, ClWin, egui::Pos2)>,
     /// Alt+I bookmarks, persisted to bookmarks.json.
     bookmarks: crate::config::Bookmarks,
+    /// User-named EQ presets, persisted to eq_presets.json.
+    eq_presets: crate::config::EqPresets,
+    /// When `Some`, the "Save EQ preset as…" name dialog is open with this buffer.
+    eq_save_name: Option<String>,
     popup_fresh: bool,
     /// Whether the popup window's rounded region has been applied for the current
     /// popup, so we apply it once (retrying only until it succeeds) instead of
@@ -599,6 +603,8 @@ impl LinAmpApp {
             popup: None,
             pending_popup: None,
             bookmarks: crate::config::Bookmarks::load(),
+            eq_presets: crate::config::EqPresets::load(),
+            eq_save_name: None,
             popup_fresh: false,
             popup_rounded: false,
             main_shade: false,
@@ -1754,6 +1760,36 @@ impl LinAmpApp {
         }
     }
 
+    /// Apply a user-named preset from the in-app library (by index).
+    fn load_named_eq_preset(&mut self, idx: usize) {
+        let Some((bands, preamp, name)) = self
+            .eq_presets
+            .items
+            .get(idx)
+            .map(|p| (p.bands, p.preamp, p.name.clone()))
+        else {
+            return;
+        };
+        self.eq_bands = bands;
+        self.eq_preamp_db = preamp;
+        self.eq_auto = false; // an explicit preset is a manual override
+        self.eq_enabled = true;
+        self.apply_eq();
+        self.status = format!("Loaded EQ preset: {name}");
+    }
+
+    /// Save the current EQ curve as a named preset (replacing one of the same name).
+    fn commit_eq_preset(&mut self, name: String) {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        self.eq_presets
+            .save_preset(name.clone(), self.eq_preamp_db, self.eq_bands);
+        self.eq_presets.save_to_disk();
+        self.status = format!("Saved EQ preset: {name}");
+    }
+
     /// Import a Winamp `.EQF` preset file and apply its first preset.
     fn import_eqf(&mut self) {
         hide_popup_window();
@@ -2267,6 +2303,60 @@ impl LinAmpApp {
         }
     }
 
+    /// "Save EQ preset as…": name the current EQ curve and store it in the library.
+    fn ui_eq_save_name(&mut self, ctx: &egui::Context) {
+        if self.eq_save_name.is_none() {
+            return;
+        }
+        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp — Save EQ preset")
+            .with_position(screen)
+            .with_inner_size(egui::vec2(260.0, 110.0))
+            .with_resizable(false)
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
+        let id = egui::ViewportId::from_hash_of("linamp_eqsave");
+        let mut close = false;
+        let mut save: Option<String> = None;
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let name = {
+                    let buf = self.eq_save_name.as_mut().unwrap();
+                    ui.label("Preset name:");
+                    let resp = ui.add(egui::TextEdit::singleline(buf).hint_text("My preset"));
+                    resp.request_focus();
+                    buf.clone()
+                };
+                let valid = !name.trim().is_empty();
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(valid, egui::Button::new("Save")).clicked() {
+                        save = Some(name.clone());
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+                if valid && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    save = Some(name);
+                }
+                if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape))
+                {
+                    close = true;
+                }
+            });
+            self.apply_base_cursor(ctx, "LinAmp — Save EQ preset");
+        });
+        if let Some(name) = save {
+            self.commit_eq_preset(name);
+            close = true;
+        }
+        if close {
+            self.eq_save_name = None;
+        }
+    }
+
     fn apply_eq_slider(&mut self, region: classic::EqRegion, ey: f32) {
         let v = classic::eq_value_at_y(ey);
         match region {
@@ -2545,6 +2635,7 @@ impl LinAmpApp {
         self.ui_tag_editor(ctx);
         self.ui_jump_file(ctx);
         self.ui_jump_time(ctx);
+        self.ui_eq_save_name(ctx);
 
         // Initialise window positions, once.
         if !self.positions_init {
