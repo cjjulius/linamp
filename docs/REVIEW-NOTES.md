@@ -151,3 +151,13 @@ code plus a working/not-working binary): visual and behavior changes.
   travel, matching the real VOLUME/BALANCE sprite and the drag handler, so the
   drawn thumb sits exactly where a click on it lands. Unit-tested; no visual
   review needed beyond the existing fallback check above.
+
+- Skins (#76): added three more bundled skins — ZaxonRemake1-0 (brushed metal),
+  XMMS-Turquoise (dark/turquoise) and Vizor1-01 (biomechanical artwork). Each was
+  rendered with --render-all and visually checked across the main/EQ/playlist
+  windows, and all three load and compose under the every-bundled-skin test. They
+  come from the webamp project's curated demo-skin set (same provenance as the
+  already-bundled MacOSXAqua, TopazAmp, Green-Dimension and Skinner_Atlas). Before
+  release: confirm the redistribution terms are acceptable alongside the existing
+  skins, and give each a final visual pass. Note Vizor1-01's playlist uses a bronze
+  background with dark text by design (not a rendering bug).
