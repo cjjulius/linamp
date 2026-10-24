@@ -212,6 +212,19 @@ impl Playlist {
         self.reselect(cur);
     }
 
+    /// Target index for a relative "jump N tracks" — classic Winamp's numpad
+    /// 1 and 3, which skip 10 songs back and forward. Counts from the current
+    /// track (or the top when nothing is playing), clamps at the list ends and
+    /// does not wrap. `None` for an empty list.
+    pub fn jump_target(&self, delta: i32) -> Option<usize> {
+        let len = self.tracks.len();
+        if len == 0 {
+            return None;
+        }
+        let base = self.current.unwrap_or(0) as i32;
+        Some((base + delta).clamp(0, len as i32 - 1) as usize)
+    }
+
     /// Shuffle the playlist into a random order, keeping the current track
     /// selected. The order is not reproducible (seeded from the clock).
     pub fn randomize(&mut self) {
@@ -681,6 +694,21 @@ mod tests {
         // A single-track list can only return that track.
         let mut one = pl_of(&["/only.mp3"], Some(0));
         assert_eq!(one.next_index(true, false), Some(0));
+    }
+
+    #[test]
+    fn jump_target_clamps_without_wrapping() {
+        let pl = pl_of(&["/0.mp3", "/1.mp3", "/2.mp3", "/3.mp3", "/4.mp3"], Some(1));
+        assert_eq!(pl.jump_target(2), Some(3));
+        assert_eq!(pl.jump_target(10), Some(4)); // clamps at the end, no wrap
+        assert_eq!(pl.jump_target(-10), Some(0)); // clamps at the start, no wrap
+        assert_eq!(pl.jump_target(0), Some(1));
+        // Nothing playing yet counts from the top of the list.
+        let none = pl_of(&["/0.mp3", "/1.mp3"], None);
+        assert_eq!(none.jump_target(1), Some(1));
+        assert_eq!(none.jump_target(-1), Some(0));
+        // An empty list has no target.
+        assert_eq!(Playlist::default().jump_target(5), None);
     }
 
     #[test]

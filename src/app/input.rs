@@ -34,6 +34,16 @@ struct KeyState {
     enter: bool,
     home: bool,
     end: bool,
+    // Numeric-keypad transport digits (3 is `key_3` above, shared with Alt+3).
+    num0: bool,
+    num1: bool,
+    num2: bool,
+    num4: bool,
+    num5: bool,
+    num6: bool,
+    num7: bool,
+    num8: bool,
+    num9: bool,
 }
 
 impl super::LinAmpApp {
@@ -72,6 +82,15 @@ impl super::LinAmpApp {
             k.enter = i.key_pressed(Key::Enter);
             k.home = i.key_pressed(Key::Home);
             k.end = i.key_pressed(Key::End);
+            k.num0 = i.key_pressed(Key::Num0);
+            k.num1 = i.key_pressed(Key::Num1);
+            k.num2 = i.key_pressed(Key::Num2);
+            k.num4 = i.key_pressed(Key::Num4);
+            k.num5 = i.key_pressed(Key::Num5);
+            k.num6 = i.key_pressed(Key::Num6);
+            k.num7 = i.key_pressed(Key::Num7);
+            k.num8 = i.key_pressed(Key::Num8);
+            k.num9 = i.key_pressed(Key::Num9);
         });
 
         if k.play {
@@ -102,7 +121,14 @@ impl super::LinAmpApp {
             self.next();
         }
         if k.prev {
-            self.prev();
+            if k.ctrl {
+                // Ctrl+Z — jump to the start of the list.
+                if !self.playlist.is_empty() {
+                    self.play_index(0);
+                }
+            } else {
+                self.prev();
+            }
         }
         if k.toggle {
             self.play_pause();
@@ -115,7 +141,13 @@ impl super::LinAmpApp {
             }
         }
         if k.repeat {
-            self.repeat_all = !self.repeat_all;
+            if k.ctrl {
+                // Ctrl+R — reverse the playlist order.
+                self.playlist.reverse();
+                self.pl_selection.clear();
+            } else {
+                self.repeat_all = !self.repeat_all;
+            }
         }
         if k.shuffle {
             self.shuffle = !self.shuffle;
@@ -146,6 +178,49 @@ impl super::LinAmpApp {
         }
         if k.seek_back {
             self.seek_relative(-5.0);
+        }
+        // Numeric-keypad transport (classic Winamp). egui's logical Key can't
+        // tell the keypad apart from the top number row, so these also fire for
+        // the top row; modifier combos (Alt+3 tag editor, Ctrl+digit) are
+        // excluded so they keep their own meanings.
+        if !k.ctrl && !k.alt {
+            if k.num0 {
+                self.open_files(); // keypad 0 — open/play file(s)
+            }
+            if k.num5 {
+                self.play_pause(); // keypad 5 — play
+            }
+            if k.num4 {
+                self.prev(); // keypad 4 — previous track
+            }
+            if k.num6 {
+                self.next(); // keypad 6 — next track
+            }
+            if k.num8 {
+                self.adjust_volume(0.05); // keypad 8 — volume up
+            }
+            if k.num2 {
+                self.adjust_volume(-0.05); // keypad 2 — volume down
+            }
+            if k.num9 {
+                self.seek_relative(5.0); // keypad 9 — forward 5s
+            }
+            if k.num7 {
+                self.seek_relative(-5.0); // keypad 7 — back 5s
+            }
+            // keypad 3 / 1 — skip forward / back 10 tracks (3 is `key_3`).
+            let jump = if k.key_3 {
+                Some(10)
+            } else if k.num1 {
+                Some(-10)
+            } else {
+                None
+            };
+            if let Some(delta) = jump {
+                if let Some(target) = self.playlist.jump_target(delta) {
+                    self.play_index(target);
+                }
+            }
         }
         if k.ctrl && k.key_d {
             let dbl = !self.prefs.double_size;
