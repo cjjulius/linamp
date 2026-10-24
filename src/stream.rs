@@ -59,13 +59,48 @@ impl Source for StreamSource {
     }
 }
 
-/// Open `url` and start decoding it on a background thread. Returns a rodio
-/// source once the format has been probed (so sample rate / channels are known),
-/// plus a shared handle to the live ICY stream title; or an error if the
-/// connection or probe failed.
-pub fn open(url: &str) -> Result<(StreamSource, SharedTitle)> {
+/// A stream being opened: the decode thread is connecting/probing in the
+/// background while the UI keeps running. Poll it each frame with [`Pending::poll`].
+pub struct Pending {
+    info_rx: Receiver<Result<(u32, u16), String>>,
+    sample_rx: Option<Receiver<f32>>,
+    title: SharedTitle,
+}
+
+impl Pending {
+    /// Check whether the stream is ready: `Some(Ok(source))` once the format is
+    /// known, `Some(Err(..))` if it failed, `None` while still connecting.
+    pub fn poll(&mut self) -> Option<Result<StreamSource>> {
+        use std::sync::mpsc::TryRecvError;
+        match self.info_rx.try_recv() {
+            Ok(Ok((sample_rate, channels))) => {
+                let rx = self.sample_rx.take()?;
+                Some(Ok(StreamSource {
+                    rx,
+                    sample_rate,
+                    channels,
+                }))
+            }
+            Ok(Err(e)) => Some(Err(anyhow!(e))),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                Some(Err(anyhow!("stream closed before it started")))
+            }
+        }
+    }
+
+    /// Shared handle to the live ICY stream title.
+    pub fn title(&self) -> SharedTitle {
+        self.title.clone()
+    }
+}
+
+/// Start opening `url` on a background thread without blocking. The connection,
+/// format probe and decode all run off the UI thread; poll the returned
+/// [`Pending`] to pick up the source once it's ready.
+pub fn open(url: &str) -> Result<Pending> {
     let url = url.to_string();
-    // Carries the probed format info (or an early error) back to this call.
+    // Carries the probed format info (or an early error) back to the poller.
     let (info_tx, info_rx) = sync_channel::<Result<(u32, u16), String>>(1);
     let (sample_tx, sample_rx) = sync_channel::<f32>(CHANNEL_SAMPLES);
     let title: SharedTitle = Arc::new(Mutex::new(None));
@@ -76,20 +111,11 @@ pub fn open(url: &str) -> Result<(StreamSource, SharedTitle)> {
         .spawn(move || decode_loop(&url, info_tx, sample_tx, title_thread))
         .map_err(|e| anyhow!("couldn't start stream thread: {e}"))?;
 
-    // Bound the wait so a server that connects but never sends data can't freeze
-    // the UI thread; the decode thread cleans itself up when these channels drop.
-    match info_rx.recv_timeout(Duration::from_secs(20)) {
-        Ok(Ok((sample_rate, channels))) => Ok((
-            StreamSource {
-                rx: sample_rx,
-                sample_rate,
-                channels,
-            },
-            title,
-        )),
-        Ok(Err(e)) => Err(anyhow!(e)),
-        Err(_) => Err(anyhow!("timed out opening stream")),
-    }
+    Ok(Pending {
+        info_rx,
+        sample_rx: Some(sample_rx),
+        title,
+    })
 }
 
 /// A `Read` adapter that strips ICY (SHOUTcast/Icecast) metadata blocks from an

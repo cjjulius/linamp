@@ -353,3 +353,11 @@ code plus a working/not-working binary): visual and behavior changes.
   before returning a "timed out opening stream" error. Hard to unit-test (needs a
   dead/slow host); manual check: Ctrl+L a bad host or an unreachable URL and confirm
   the app stays responsive and shows the error rather than hanging.
+
+- #148 (non-blocking stream connect): opening a location no longer blocks the UI at
+  all — the connect/probe runs off-thread and the app polls each frame, showing
+  "Connecting: …" until the format is known (or a 20s timeout / error). Replaces the
+  earlier bounded-but-still-blocking open. Manual check: Ctrl+L a slow or unreachable
+  URL and confirm the UI stays fully responsive (windows drag, transport works) while
+  it connects, then plays or shows the error/timeout. Note: a device change during a
+  stream now stops it rather than restarting from live (re-open with Ctrl+L).

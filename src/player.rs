@@ -77,7 +77,6 @@ impl Player {
             return;
         }
         let path = self.current_path.clone();
-        let url = self.current_url.clone();
         let pos = self.position();
         let was = self.state;
         if let Ok((stream, handle)) = OutputStream::try_default() {
@@ -86,7 +85,10 @@ impl Player {
             self.device_name = current;
             self.sink = None;
             self.state = PlayState::Stopped;
+            // A stream can't be resumed in place on a device change; it simply
+            // stops (re-open it with Ctrl+L). Only local files resume.
             self.current_url = None;
+            self.stream_title = None;
             if matches!(was, PlayState::Playing | PlayState::Paused) {
                 if let Some(p) = path {
                     if self.play_file(&p).is_ok() {
@@ -94,11 +96,6 @@ impl Player {
                         if was == PlayState::Paused {
                             self.pause();
                         }
-                    }
-                } else if let Some(u) = url {
-                    // Streams can't be resumed at a position; restart from live.
-                    if self.play_url(&u).is_ok() && was == PlayState::Paused {
-                        self.pause();
                     }
                 }
             }
@@ -184,11 +181,15 @@ impl Player {
         Ok(())
     }
 
-    /// Start streaming an HTTP(S) location (internet radio / remote file). The
-    /// connection and decode run on a background thread; this returns once the
-    /// stream's format is known, or with an error if it couldn't be opened.
-    pub fn play_url(&mut self, url: &str) -> Result<()> {
-        let (source, title) = crate::stream::open(url)?;
+    /// Start playing an already-opened stream source (see [`crate::stream`]). The
+    /// connection and decode happen on a background thread; the UI opens the
+    /// stream without blocking and calls this once the format is known.
+    pub fn play_stream(
+        &mut self,
+        source: crate::stream::StreamSource,
+        title: crate::stream::SharedTitle,
+        url: String,
+    ) -> Result<()> {
         self.stream_title = Some(title);
         self.viz.clear();
         self.viz.set_rate(source.sample_rate());
@@ -201,7 +202,7 @@ impl Player {
         sink.append(balanced);
         self.sink = Some(sink);
         self.current_path = None;
-        self.current_url = Some(url.to_string());
+        self.current_url = Some(url);
         self.state = PlayState::Playing;
         self.apply_gain();
         Ok(())

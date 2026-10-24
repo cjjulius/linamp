@@ -491,6 +491,9 @@ pub struct LinAmpApp {
     jump_time: Option<String>,
     /// Open-location (stream URL) input buffer (Some while the dialog is open).
     location_entry: Option<String>,
+    /// A stream being opened off the UI thread: (pending, url, started-at). Polled
+    /// each frame until the format is known, then handed to the player.
+    pending_stream: Option<(crate::stream::Pending, String, Instant)>,
 
     marquee_offset: f32,
     last_frame: Instant,
@@ -651,6 +654,7 @@ impl LinAmpApp {
             jump_file: None,
             jump_time: None,
             location_entry: None,
+            pending_stream: None,
             marquee_offset: 0.0,
             last_frame: Instant::now(),
             last_device_check: Instant::now(),
@@ -1310,6 +1314,7 @@ impl LinAmpApp {
             || self.fade.is_some()
             || self.drag.is_some()
             || self.classic_seek_preview.is_some()
+            || self.pending_stream.is_some() // keep polling while a stream connects
             || self.popup.is_some()
             || self.quit_countdown.is_some()
             // Keep repainting while a background scan runs so its progress and the
@@ -2432,15 +2437,44 @@ impl LinAmpApp {
         self.location_entry = Some(String::new());
     }
 
-    /// Start streaming the entered URL.
+    /// Begin streaming the entered URL. The connect/probe happens off the UI
+    /// thread; `poll_pending_stream` picks it up once ready.
     fn play_location(&mut self, url: &str) {
-        let url = url.trim();
+        let url = url.trim().to_string();
         if url.is_empty() {
             return;
         }
-        match self.player.play_url(url) {
-            Ok(()) => self.status = format!("Streaming: {url}"),
+        match crate::stream::open(&url) {
+            Ok(pending) => {
+                self.status = format!("Connecting: {}", crate::text::display_url(&url));
+                self.pending_stream = Some((pending, url, Instant::now()));
+            }
             Err(e) => self.status = format!("Couldn't open location: {e}"),
+        }
+    }
+
+    /// Poll a stream that's being opened; hand it to the player once ready, or
+    /// report a failure/timeout. Runs each frame while a connect is in flight.
+    fn poll_pending_stream(&mut self) {
+        let Some((mut pending, url, started)) = self.pending_stream.take() else {
+            return;
+        };
+        match pending.poll() {
+            Some(Ok(source)) => {
+                let title = pending.title();
+                match self.player.play_stream(source, title, url.clone()) {
+                    Ok(()) => self.status = format!("Streaming: {}", crate::text::display_url(&url)),
+                    Err(e) => self.status = format!("Couldn't play stream: {e}"),
+                }
+            }
+            Some(Err(e)) => self.status = format!("Couldn't open location: {e}"),
+            None => {
+                if started.elapsed() > std::time::Duration::from_secs(20) {
+                    self.status = "Timed out opening stream".into();
+                } else {
+                    self.pending_stream = Some((pending, url, started)); // keep waiting
+                }
+            }
         }
     }
 
@@ -2884,6 +2918,7 @@ impl LinAmpApp {
         self.ui_eq_save_name(ctx);
         self.ui_location(ctx);
         self.ui_minibrowser(ctx);
+        self.poll_pending_stream();
 
         // Initialise window positions, once.
         if !self.positions_init {
