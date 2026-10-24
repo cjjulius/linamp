@@ -1425,6 +1425,7 @@ impl LinAmpApp {
         if self.bookmarks.add(path, title.clone()) {
             self.bookmarks.save();
             self.status = format!("Bookmarked: {title}");
+            self.refresh_bookmarks_view_if_shown();
         } else {
             self.status = "Already bookmarked".into();
         }
@@ -1472,6 +1473,7 @@ impl LinAmpApp {
             self.bookmarks.remove_path(&p);
             self.bookmarks.save();
             self.status = "Removed bookmark".into();
+            self.refresh_bookmarks_view_if_shown();
         }
     }
 
@@ -1480,6 +1482,15 @@ impl LinAmpApp {
         self.bookmarks.items.clear();
         self.bookmarks.save();
         self.status = "Bookmarks cleared".into();
+        self.refresh_bookmarks_view_if_shown();
+    }
+
+    /// Rebuild the Media Library Bookmarks list after the bookmark store changes,
+    /// so an open library on that view reflects the add/remove/clear immediately.
+    fn refresh_bookmarks_view_if_shown(&mut self) {
+        if self.lib_nav == crate::library::LibView::Bookmarks {
+            self.refresh_library();
+        }
     }
 
     /// The persistable last-session snapshot (playlist, window layout, EQ).
