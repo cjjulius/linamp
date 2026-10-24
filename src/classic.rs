@@ -509,6 +509,10 @@ impl ClassicSkin {
             let tx = 107 + (v * (68.0 - 14.0)) as i32;
             let sx = if st.pressed == Some(Btn::Volume) { 0 } else { 15 };
             blit(&mut c, vb, tx, 58, sx, 422, 14, 11);
+        } else {
+            // Skin ships no VOLUME.BMP: show the level with a synthesized slider
+            // instead of an empty recess (#18).
+            draw_fallback_slider(&mut c, 107, 68, st.volume.clamp(0.0, 1.0));
         }
 
         // Balance.
@@ -518,6 +522,9 @@ impl ClassicSkin {
             let tx = 177 + ((st.balance * 0.5 + 0.5).clamp(0.0, 1.0) * (38.0 - 14.0)) as i32;
             let sx = if st.pressed == Some(Btn::Balance) { 0 } else { 15 };
             blit(&mut c, bb, tx, 58, sx, 422, 14, 11);
+        } else {
+            // Skin ships no BALANCE.BMP: synthesized pan indicator, centre = 0 (#18).
+            draw_fallback_slider(&mut c, 177, 38, st.balance * 0.5 + 0.5);
         }
 
         // Scrolling title, kbps, khz (bitmap font). The title sits centered in
@@ -882,7 +889,9 @@ fn blit(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, sy: u32
 /// ASCII-only bitmap font renders it readably instead of as a blank (#97, e.g.
 /// Vietnamese "Trường" -> "Truong"). Returns the char unchanged when unmapped.
 /// This is a readability fallback; full non-Latin glyphs would need a font atlas.
-fn ascii_fold(ch: char) -> char {
+/// Also reused when writing ID3v1 (Latin-1 only) to fold characters outside
+/// Latin-1 to base ASCII instead of the "?" a lossy encode produces.
+pub(crate) fn ascii_fold(ch: char) -> char {
     match ch as u32 {
         // Latin-1 Supplement
         0xC0..=0xC6 | 0xE0..=0xE6 => 'a',
@@ -900,14 +909,16 @@ fn ascii_fold(ch: char) -> char {
         0x106..=0x10D => 'c',
         0x110 | 0x111 => 'd',
         0x112..=0x11B => 'e',
+        0x11C..=0x123 => 'g', // Ĝ ĝ Ğ ğ Ġ ġ Ģ ģ (Turkish ğ, Esperanto ĝ)
+        0x124..=0x127 => 'h', // Ĥ ĥ Ħ ħ
         0x128..=0x131 => 'i',
         0x139..=0x142 => 'l',
-        0x143..=0x148 => 'n',
+        0x143..=0x14B => 'n', // through ŉ Ŋ ŋ
         0x14C..=0x151 | 0x1A0 | 0x1A1 => 'o',
         0x154..=0x159 => 'r',
         0x15A..=0x161 => 's',
-        0x162..=0x165 => 't',
-        0x168..=0x16F | 0x1AF | 0x1B0 => 'u',
+        0x162..=0x167 => 't', // through Ŧ ŧ
+        0x168..=0x173 | 0x1AF | 0x1B0 => 'u', // through Ű ű Ų ų (Hungarian)
         0x174 | 0x175 => 'w',
         0x176..=0x178 => 'y',
         0x179..=0x17E => 'z',
@@ -1438,6 +1449,39 @@ impl ClassicSkin {
             let sy = if focused { 134 } else { 149 };
             blit(&mut c, e, 0, 0, 0, sy, 275, 14);
             blit(&mut c, e, 264, 3, 0, 116, 9, 9); // close
+        } else {
+            // Neither eq_ex.bmp nor EQMAIN.BMP is present, so the skin ships no
+            // shade-bar graphics. Draw a minimal but usable bar from the skin's
+            // colours: a solid background plus synthesized volume/balance thumbs and
+            // a close marker, in a tone that contrasts the background so it never
+            // renders unreadable (e.g. black-on-black) (#18).
+            let bg = self.text_bg;
+            fill_rect(&mut c, 0, 0, 275, 14, bg);
+            // Light controls on a dark bar, dark controls on a light bar.
+            let lum = (bg[0] as u32 * 299 + bg[1] as u32 * 587 + bg[2] as u32 * 114) / 1000;
+            let (groove, thumb) = if lum < 128 {
+                ([120u8, 120, 120], [220u8, 220, 220])
+            } else {
+                ([110u8, 110, 110], [30u8, 30, 30])
+            };
+            // Volume and balance grooves with a thumb at the current value, at the
+            // same track bounds eq_ex.bmp would use so the hit-testing still lines up.
+            let track = |c: &mut RgbaImage, frac: f32, lo: i32, w: i32| {
+                let frac = frac.clamp(0.0, 1.0);
+                fill_rect(c, lo, 6, w, 2, groove);
+                let tx = lo + (frac * (w - 3).max(0) as f32).round() as i32;
+                fill_rect(c, tx, 4, 3, 7, thumb);
+            };
+            track(&mut c, volume.clamp(0.0, 1.0), EQ_SHADE_VOL_X as i32, EQ_SHADE_VOL_W as i32);
+            track(
+                &mut c,
+                balance.clamp(-1.0, 1.0) * 0.5 + 0.5,
+                EQ_SHADE_BAL_X as i32,
+                EQ_SHADE_BAL_W as i32,
+            );
+            // Close marker (the close region is hit-tested regardless; this just
+            // makes it visible).
+            fill_rect(&mut c, 265, 4, 7, 7, thumb);
         }
         c
     }
@@ -1679,6 +1723,25 @@ fn fill_rect(dst: &mut RgbaImage, x: i32, y: i32, w: i32, h: i32, col: [u8; 3]) 
     }
 }
 
+/// Minimal volume / balance indicator for skins that omit VOLUME.BMP / BALANCE.BMP:
+/// a dim groove with a brighter thumb at `frac` (0..1), so the current level is
+/// still visible instead of a dead recess (#18). `x`/`w` are the slider track's
+/// destination bounds in the main window; the geometry matches the real sprites
+/// (thumb y=58, height 11; the 7px thumb reaches the right edge at frac 1).
+fn draw_fallback_slider(c: &mut RgbaImage, x: i32, w: i32, frac: f32) {
+    const GROOVE: [u8; 3] = [72, 72, 72];
+    const THUMB: [u8; 3] = [200, 200, 200];
+    // The thumb is 14px wide with a (w - 14) travel, matching the real VOLUME.BMP
+    // / BALANCE.BMP thumb and, crucially, the click-to-value handler
+    // (apply at `Btn::Volume`/`Btn::Balance`), so the drawn thumb sits exactly
+    // where a click on it maps.
+    const THUMB_W: i32 = 14;
+    fill_rect(c, x, 62, w, 2, GROOVE);
+    let frac = frac.clamp(0.0, 1.0);
+    let tx = x + (frac * (w - THUMB_W).max(0) as f32).round() as i32;
+    fill_rect(c, tx, 58, THUMB_W, 11, THUMB);
+}
+
 /// Blit a glyph, recolouring its lit pixels to `color` (transparent elsewhere).
 /// Most common colour in an image — used as the bitmap font's background.
 fn dominant_color(img: &RgbaImage) -> [u8; 3] {
@@ -1891,6 +1954,7 @@ mod tests {
         for (accented, base) in [
             ('é', 'e'), ('ñ', 'n'), ('ü', 'u'), ('ç', 'c'), ('ø', 'o'),
             ('Đ', 'd'), ('ư', 'u'), ('ờ', 'o'), ('ế', 'e'), ('ạ', 'a'), ('ý', 'y'),
+            ('ğ', 'g'), ('Ğ', 'g'), ('ĥ', 'h'), ('ŋ', 'n'), ('ŧ', 't'), ('ű', 'u'), ('ų', 'u'),
         ] {
             assert_eq!(char_cell(accented), char_cell(base), "{accented} -> {base}");
             assert_ne!(char_cell(accented), char_cell(' '), "{accented} folded to blank");
@@ -2360,6 +2424,66 @@ mod tests {
         for gx in [100u32, 140, 180] {
             assert_eq!(*img.get_pixel(gx, 35), grad_bot, "bottom-row curve at x={gx}");
         }
+    }
+
+    #[test]
+    fn eq_shade_fallback_is_readable_with_visible_bars() {
+        // A skin missing BOTH eq_ex.bmp and EQMAIN.BMP must still render the
+        // collapsed EQ as a readable bar: a solid background plus contrasting
+        // volume/balance thumbs and a close marker, never black-on-black (#18).
+        let skin = ClassicSkin {
+            bitmaps: HashMap::new(),
+            eq_sprites: Vec::new(),
+            text_bg: [20, 20, 40], // dark skin background
+            regions: crate::region::parse(""),
+            cursors: HashMap::new(),
+        };
+        let img = skin.compose_eq_shade(true, 0.5, 0.0);
+        assert_eq!(img.dimensions(), (275, 14));
+        // Fully opaque, no transparent void.
+        assert!(img.pixels().all(|p| p[3] == 255), "shade bar must be opaque");
+        // Background is the skin's text colour (sampled off the sliders).
+        assert_eq!(*img.get_pixel(5, 2), Rgba([20, 20, 40, 255]));
+        // Volume groove and close marker are drawn light so they contrast the dark
+        // background (not black-on-black).
+        assert!(img.get_pixel(70, 6)[0] > 100, "volume groove must contrast the bar");
+        assert!(img.get_pixel(266, 5)[0] > 100, "close marker must contrast the bar");
+    }
+
+    #[test]
+    fn eq_shade_fallback_contrasts_a_black_background() {
+        // Pure-black text_bg is the worst case; controls must still be visible.
+        let skin = ClassicSkin {
+            bitmaps: HashMap::new(),
+            eq_sprites: Vec::new(),
+            text_bg: [0, 0, 0],
+            regions: crate::region::parse(""),
+            cursors: HashMap::new(),
+        };
+        let img = skin.compose_eq_shade(false, 0.0, 0.0);
+        assert!(img.pixels().all(|p| p[3] == 255), "shade bar must be opaque");
+        // The close marker is light on the black bar.
+        assert!(img.get_pixel(266, 5)[0] > 100, "controls must contrast black");
+    }
+
+    #[test]
+    fn fallback_slider_tracks_value_without_a_sprite() {
+        // VOLUME.BMP / BALANCE.BMP absent: the synthesized slider still shows the
+        // level — the bright thumb sits at the left for 0 and the right for 1,
+        // with only the dim groove elsewhere (#18).
+        let thumb = 200u8;
+        let groove = 72u8;
+
+        let mut lo = RgbaImage::new(275, 116);
+        draw_fallback_slider(&mut lo, 107, 68, 0.0);
+        assert_eq!(lo.get_pixel(107, 63)[0], thumb, "thumb at left for frac 0");
+        assert_eq!(lo.get_pixel(107 + 67, 63)[0], groove, "groove at right for frac 0");
+
+        let mut hi = RgbaImage::new(275, 116);
+        draw_fallback_slider(&mut hi, 107, 68, 1.0);
+        // thumb left edge = 107 + (68 - 14) = 161, matching the click-to-value map
+        assert_eq!(hi.get_pixel(161, 63)[0], thumb, "thumb at right for frac 1");
+        assert_eq!(hi.get_pixel(107, 63)[0], groove, "groove at left for frac 1");
     }
 
     #[test]

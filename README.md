@@ -4,7 +4,7 @@
 
 **A Winamp-inspired audio player for Linux and Windows, in Rust.**
 
-Pixel-perfect classic skin · 10-band EQ · live analyzer · playlist · Winamp keyboard shortcuts
+Pixel-perfect classic skin - 10-band EQ - live analyzer - playlist - Winamp keyboard shortcuts
 
 <img src="assets/screenshot.png" alt="LinAmp in the classic skin — main player, equalizer and playlist" width="380">
 
@@ -116,9 +116,13 @@ folder. Headless preview: `linamp --render-all skin.wsz out.png`.
 | `classic.rs` | classic-skin compositor (main / EQ / playlist) |
 | `dock.rs` | window docking + magnetic-snap geometry |
 | `player.rs` | playback (rodio) + device following |
-| `eq.rs` · `balance.rs` · `viz.rs` | equalizer DSP, stereo balance, analyzer FFT |
-| `skin.rs` · `text.rs` | `.wsz` theming, LCD text helpers |
-| `playlist.rs` · `tags.rs` · `library.rs` · `config.rs` | playlist, metadata, media library, settings |
+| `eq.rs` - `balance.rs` - `viz.rs` | equalizer DSP, stereo balance, analyzer FFT |
+| `skin.rs` - `text.rs` | `.wsz` theming, LCD text helpers |
+| `playlist.rs` - `tags.rs` - `library.rs` - `config.rs` | playlist, metadata, media library, settings |
+
+For how the pieces fit together — the multi-window model, the fingerprint-cached
+render pipeline, and the platform FFI boundary — see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 `cargo test` runs the suite (pure, cross-platform); CI builds and tests on Linux
 and Windows for every push and PR.

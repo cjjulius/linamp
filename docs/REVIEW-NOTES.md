@@ -117,3 +117,75 @@ code plus a working/not-working binary): visual and behavior changes.
   toggling, shift-range (mouse and keyboard), Home/End, that a double-click still
   plays, and that Invert/Crop operate on the new multi-selection. If any specific
   key should behave differently (esp. Ctrl+Up/Down), it's easy to adjust.
+
+## 2026-10-23 (parity cron)
+
+- #97 (partial): extended the classic bitmap-font ASCII-folding to cover Latin
+  letters that were still rendering garbled — the g/h block (incl. Turkish Ğ and
+  Esperanto ĝ/ĥ) and the tails of n/t/u (ŋ, ŧ, and Hungarian Ű/Ų/ű/ų). Covered by
+  the ascii_fold unit test. Optional visual check: a track title containing Ğ or
+  Ű shows as "G"/"U" in the classic marquee, not a blank or garbled cell.
+  (A QA song is prepared for this: qa-music/Aria Nocturne - Crystal Harbor.mp3
+  now has the title "Ğűitar Ĥűŋŧ", which should render as GUITAR HUNT.)
+
+- #18 (partial): a collapsed equalizer on a skin that ships neither eq_ex.bmp nor
+  EQMAIN.BMP used to render as a fully transparent bar — the close box was still
+  clickable but invisible, so the window looked broken. The EQ shade now falls
+  back to a solid bar painted in the skin's text-background colour plus the
+  titlebar close button, so it always reads as a real, restorable bar. Covered by
+  two unit tests (opaque output with and without a titlebar.bmp). Optional visual
+  check: load a minimal skin missing those bitmaps, collapse the EQ, and confirm
+  the shade bar is visible with a working close button. (The bundled skins all
+  ship EQMAIN, so this fallback only shows on sparse third-party skins.)
+
+- #18 (partial, cont.): the main window's volume and balance sliders now draw a
+  synthesized groove + thumb when the skin omits VOLUME.BMP / BALANCE.BMP, so the
+  level and pan stay visible instead of sitting in a dead recess. The thumb
+  position is unit-tested; the appearance is a plain grey groove with a lighter
+  thumb. Optional visual check: on a skin missing those bitmaps, confirm the
+  volume/balance levels read clearly and track the controls. (All bundled skins
+  ship both bitmaps, so this only shows on sparse third-party skins.)
+
+- #18 (follow-up): aligned the synthesized volume/balance thumb with the actual
+  click-to-value mapping — the fallback thumb is now 14px wide with a (track-14)
+  travel, matching the real VOLUME/BALANCE sprite and the drag handler, so the
+  drawn thumb sits exactly where a click on it lands. Unit-tested; no visual
+  review needed beyond the existing fallback check above.
+
+- Skins (#76): added three more bundled skins — ZaxonRemake1-0 (brushed metal),
+  XMMS-Turquoise (dark/turquoise) and Vizor1-01 (biomechanical artwork). Each was
+  rendered with --render-all and visually checked across the main/EQ/playlist
+  windows, and all three load and compose under the every-bundled-skin test. They
+  come from the webamp project's curated demo-skin set (same provenance as the
+  already-bundled MacOSXAqua, TopazAmp, Green-Dimension and Skinner_Atlas). Before
+  release: confirm the redistribution terms are acceptable alongside the existing
+  skins, and give each a final visual pass. Note Vizor1-01's playlist uses a bronze
+  background with dark text by design (not a rendering bug).
+
+- Parity: mouse wheel over the main window now adjusts volume (scroll up louder,
+  down quieter), matching classic Winamp; the playlist still scrolls and the EQ
+  window has no wheel action. The direction/clamp logic is unit-tested; the feel
+  (step size, direction) wants a quick manual check — scroll over the main window
+  and confirm the volume slider moves the expected way. Found during a Winamp
+  classic-parity audit; the other gaps found were filed as issues #139 (drag the
+  EQ graph to draw the curve) and #140 (double-click a band/preamp/balance to
+  reset), not implemented this pass.
+
+- Parity (#140, partial): double-clicking an EQ preamp or band slider now resets
+  it to 0 dB (flat), like Winamp. The double-click detection and reset wiring want
+  a quick manual check — double-click a band and the preamp and confirm each
+  snaps to centre and the sound updates. The double-click timing logic is
+  unit-tested. Balance double-click-to-centre is still open under #140.
+
+- Parity (#140, complete): double-clicking the main window's balance slider now
+  re-centres it (balance 0), matching Winamp; this completes #140 alongside the EQ
+  band/preamp reset. Both use egui's native double-click detection. Manual check:
+  pan the balance off-centre, double-click it, and confirm it snaps back to centre.
+
+- #18 (QA fix): a collapsed EQ on a skin missing both eq_ex.bmp and EQMAIN.BMP
+  previously rendered unreadable (black-on-black) with no sliders. It now draws a
+  solid bar in the skin's background colour plus synthesized volume/balance thumbs
+  and a close marker, in a tone picked to contrast that background (light on dark,
+  dark on light), so it's minimally usable on any skin. Unit-tested. Manual check:
+  load qa-tools/test-skins/base_no_eq.wsz, collapse the EQ, and confirm the bar and
+  its volume/balance thumbs are visible and draggable.

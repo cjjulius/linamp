@@ -2,10 +2,17 @@
 
 use std::time::Duration;
 
-/// `mm:ss` for a track position / length.
+/// `mm:ss` for a track position / length, or `h:mm:ss` once it reaches an hour
+/// (so a 75-minute track reads `1:15:30`, not `75:30`), matching the classic
+/// playlist's `fmt_pl_time`.
 pub(crate) fn fmt_time(d: Duration) -> String {
     let total = d.as_secs();
-    format!("{:02}:{:02}", total / 60, total % 60)
+    let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
+    if h > 0 {
+        format!("{}:{:02}:{:02}", h, m, s)
+    } else {
+        format!("{:02}:{:02}", m, s)
+    }
 }
 
 /// Horizontally scrolled view of `text` for the modern-view LCD marquee.
@@ -34,6 +41,15 @@ pub(crate) fn scroll_text(text: &str, offset: f32, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fmt_time_handles_hours() {
+        assert_eq!(fmt_time(Duration::from_secs(0)), "00:00");
+        assert_eq!(fmt_time(Duration::from_secs(225)), "03:45"); // under an hour: mm:ss
+        assert_eq!(fmt_time(Duration::from_secs(59 * 60 + 59)), "59:59");
+        assert_eq!(fmt_time(Duration::from_secs(3600)), "1:00:00"); // exactly an hour
+        assert_eq!(fmt_time(Duration::from_secs(75 * 60 + 30)), "1:15:30"); // was 75:30
+    }
 
     #[test]
     fn scroll_text_passthrough_when_fits() {

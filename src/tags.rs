@@ -175,10 +175,25 @@ pub fn read_info(path: &Path) -> FileInfo {
 /// by byte index and panics if a multibyte character straddles it (#115), which
 /// aborts the save mid-write and corrupts the file. Capping here avoids that.
 fn v1_text(s: &str, max: usize) -> Option<String> {
-    let s = s.trim();
+    // ID3v1 predates Unicode and carries no encoding flag, and the writer emits
+    // these bytes as UTF-8 — which a pre-Unicode ("circa 2001") player decodes as
+    // Latin-1, turning any multi-byte character into mojibake. To stay in spec and
+    // readable everywhere, keep ID3v1 to pure ASCII: fold accents to their base
+    // letter (é -> e, Ğ -> g) and replace anything with no ASCII equivalent with
+    // '?'. The full Unicode text is preserved in ID3v2.
+    let ascii: String = s
+        .chars()
+        .map(|c| {
+            let f = crate::classic::ascii_fold(c);
+            if f.is_ascii() { f } else { '?' }
+        })
+        .collect();
+    let s = ascii.trim();
     if s.is_empty() {
         return None;
     }
+    // Pure ASCII now, so byte index == char index; the boundary guard is a no-op
+    // kept for safety.
     let mut end = s.len().min(max);
     while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
@@ -302,6 +317,23 @@ fn apply_v2(tag: &mut lofty::tag::Tag, f: &Id3Fields) {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn v1_text_is_always_pure_ascii() {
+        // Latin Extended accents fold to base ASCII...
+        assert_eq!(
+            v1_text("\u{11E}\u{171}itar \u{124}\u{171}\u{14B}\u{167}", V1_MAX_TEXT),
+            Some("guitar hunt".to_string())
+        );
+        // ...and so do Latin-1 accents (ID3v1 can't safely hold them).
+        assert_eq!(v1_text("Café ñandú", V1_MAX_TEXT), Some("Cafe nandu".to_string()));
+        // Characters with no ASCII equivalent become '?'.
+        assert_eq!(v1_text("A\u{65E5}B", V1_MAX_TEXT), Some("A?B".to_string()));
+        // The result is always pure ASCII; plain text is unchanged; blank -> None.
+        let out = v1_text("Hello", V1_MAX_TEXT).unwrap();
+        assert!(out.is_ascii() && out == "Hello");
+        assert_eq!(v1_text("   ", V1_MAX_TEXT), None);
+    }
 
     #[test]
     fn editable_exts() {
