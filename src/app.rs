@@ -1670,6 +1670,52 @@ impl LinAmpApp {
         }
     }
 
+    /// Import a Winamp `.EQF` preset file and apply its first preset.
+    fn import_eqf(&mut self) {
+        hide_popup_window();
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Winamp EQ preset", &["eqf", "q1"])
+            .pick_file()
+        else {
+            return;
+        };
+        match std::fs::read(&path).map_err(anyhow::Error::from).and_then(|b| crate::eqf::parse(&b)) {
+            Ok(presets) => match presets.into_iter().next() {
+                Some(p) => {
+                    self.eq_bands = p.bands;
+                    self.eq_preamp_db = p.preamp;
+                    self.eq_auto = false; // an explicit preset is a manual override
+                    self.eq_enabled = true;
+                    self.apply_eq();
+                    self.status = format!("Loaded EQ preset: {}", p.name);
+                }
+                None => self.status = "EQ preset file has no presets".into(),
+            },
+            Err(e) => self.status = format!("Couldn't load EQ preset: {e}"),
+        }
+    }
+
+    /// Export the current EQ settings to a Winamp `.EQF` file.
+    fn export_eqf(&mut self) {
+        hide_popup_window();
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Winamp EQ preset", &["eqf"])
+            .set_file_name("linamp.eqf")
+            .save_file()
+        else {
+            return;
+        };
+        let preset = crate::eqf::EqfPreset {
+            name: "LinAmp".to_string(),
+            bands: self.eq_bands,
+            preamp: self.eq_preamp_db,
+        };
+        match std::fs::write(&path, crate::eqf::write(std::slice::from_ref(&preset))) {
+            Ok(()) => self.status = "Saved EQ preset".into(),
+            Err(e) => self.status = format!("Couldn't save EQ preset: {e}"),
+        }
+    }
+
     /// When Auto is on, set the preamp to offset the loudest boosted band so the
     /// EQ is less likely to clip.
     fn apply_eq_auto_gain(&mut self) {
