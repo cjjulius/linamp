@@ -214,3 +214,16 @@ code plus a working/not-working binary): visual and behavior changes.
   is already tested, so this is UI wiring. Manual check: right-click the Stop
   button, confirm the three options appear and each works, and that right-clicking
   elsewhere on the main window still shows the Options menu.
+
+- #144 (partial, 2.x keyboard shortcuts): added the classic numeric-keypad
+  transport set — 0 open file(s), 5 play, 4/6 previous/next track, 8/2 volume
+  up/down, 9/7 seek forward/back 5s, 3/1 skip forward/back 10 tracks — plus Ctrl+Z
+  (jump to start of list) and Ctrl+R (reverse the playlist). The jump-by-N clamping
+  and the reverse are unit-tested. Manual checks: (1) the keypad digits do the
+  above; note egui's logical key can't distinguish the numpad from the top number
+  row, so these also fire for the top-row digits — confirm that's acceptable, or
+  this needs a physical-key path. (2) Verify Ctrl+Z and Ctrl+R against real Winamp
+  2.666 (these letter combos came from the issue's research, not re-confirmed this
+  cycle). Still open under #144: Ctrl+A always-on-top (resolve the playlist
+  select-all conflict), Ctrl+E EasyMove, Alt+W toggle the main window, and
+  Ctrl+keypad-0 open-location (ties to #15 Open URL).
