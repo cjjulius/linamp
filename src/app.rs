@@ -1778,6 +1778,15 @@ impl LinAmpApp {
         self.status = format!("Loaded EQ preset: {name}");
     }
 
+    /// Delete a saved preset from the in-app library (by index).
+    fn delete_named_eq_preset(&mut self, idx: usize) {
+        if idx < self.eq_presets.items.len() {
+            let name = self.eq_presets.items.remove(idx).name;
+            self.eq_presets.save_to_disk();
+            self.status = format!("Deleted EQ preset: {name}");
+        }
+    }
+
     /// Save the current EQ curve as a named preset (replacing one of the same name).
     fn commit_eq_preset(&mut self, name: String) {
         let name = name.trim().to_string();
