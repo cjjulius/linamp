@@ -411,3 +411,13 @@ code plus a working/not-working binary): visual and behavior changes.
   click "Bookmarks", confirm they list, double-click plays, right-click > Remove
   bookmark drops just that one, and the search box filters. The "Playlists" nav entry
   is still an intentional placeholder (saved-playlist management is issue #150).
+
+- Open location in the Options menu (discoverability): "Open location… (Ctrl+L)" is
+  now in the right-click Options menu, just under Open file(s)/Open folder, so a
+  stream can be started with the mouse instead of only the keyboard shortcut. The
+  Options menu height is now computed from the item count (including the optional
+  Minibrowser toggle) rather than a fixed value, so the last row no longer risks
+  clipping when the Minibrowser item is shown. Manual check: right-click the main
+  window, pick "Open location…", and confirm the URL dialog opens; with the
+  Minibrowser enabled in Preferences, confirm the Options menu still shows every row
+  (Exit at the bottom) without clipping.
