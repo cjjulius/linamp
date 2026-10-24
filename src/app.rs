@@ -407,6 +407,11 @@ pub struct LinAmpApp {
     /// act on exactly that row rather than the selection's min / current track.
     pl_ctx_row: Option<usize>,
     popup: Option<(Popup, ClWin, egui::Pos2)>,
+    /// A popup to open once the current one closes (for opening the Bookmarks
+    /// list from an Options-menu item — classic popups aren't nested).
+    pending_popup: Option<(Popup, ClWin, egui::Pos2)>,
+    /// Alt+I bookmarks, persisted to bookmarks.json.
+    bookmarks: crate::config::Bookmarks,
     popup_fresh: bool,
     /// Whether the popup window's rounded region has been applied for the current
     /// popup, so we apply it once (retrying only until it succeeds) instead of
@@ -592,6 +597,8 @@ impl LinAmpApp {
             pl_last_click: None,
             pl_ctx_row: None,
             popup: None,
+            pending_popup: None,
+            bookmarks: crate::config::Bookmarks::load(),
             popup_fresh: false,
             popup_rounded: false,
             main_shade: false,
@@ -1372,6 +1379,48 @@ impl LinAmpApp {
             self.player.stop();
             self.fade = None;
         }
+    }
+
+    /// Bookmark the current track (classic Winamp Alt+I). No-op with nothing
+    /// playing, and a duplicate path is skipped.
+    fn add_bookmark(&mut self) {
+        let (path, title) = match self.playlist.current_track() {
+            Some(t) => (t.path.to_string_lossy().into_owned(), t.display_name()),
+            None => {
+                self.status = "Nothing playing to bookmark".into();
+                return;
+            }
+        };
+        if self.bookmarks.add(path, title.clone()) {
+            self.bookmarks.save();
+            self.status = format!("Bookmarked: {title}");
+        } else {
+            self.status = "Already bookmarked".into();
+        }
+    }
+
+    /// Play a bookmarked track, appending it to the playlist first if it isn't
+    /// already there.
+    fn play_bookmark(&mut self, idx: usize) {
+        let Some(bm) = self.bookmarks.items.get(idx) else {
+            return;
+        };
+        let path = PathBuf::from(&bm.path);
+        let target = match self.playlist.tracks.iter().position(|t| t.path == path) {
+            Some(i) => i,
+            None => {
+                self.playlist.tracks.push(crate::playlist::Track::new(path));
+                self.playlist.len() - 1
+            }
+        };
+        self.play_index(target);
+    }
+
+    /// Clear every bookmark.
+    fn clear_bookmarks(&mut self) {
+        self.bookmarks.items.clear();
+        self.bookmarks.save();
+        self.status = "Bookmarks cleared".into();
     }
 
     /// The persistable last-session snapshot (playlist, window layout, EQ).

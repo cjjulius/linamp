@@ -151,9 +151,82 @@ impl Session {
     }
 }
 
+/// A bookmarked track or stream (classic Winamp's Alt+I bookmarks), stored in
+/// its own file so it outlives the per-session state.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Bookmark {
+    pub path: String,
+    pub title: String,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Bookmarks {
+    pub items: Vec<Bookmark>,
+}
+
+impl Bookmarks {
+    fn path() -> PathBuf {
+        dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("LinAmp")
+            .join("bookmarks.json")
+    }
+
+    pub fn load() -> Self {
+        std::fs::read_to_string(Self::path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) {
+        let p = Self::path();
+        if let Some(d) = p.parent() {
+            std::fs::create_dir_all(d).ok();
+        }
+        if let Ok(s) = serde_json::to_string_pretty(self) {
+            std::fs::write(p, s).ok();
+        }
+    }
+
+    /// Add a bookmark, skipping an exact-path duplicate (so re-bookmarking the
+    /// playing track is a no-op). Returns true when it was actually added.
+    pub fn add(&mut self, path: String, title: String) -> bool {
+        if self.items.iter().any(|b| b.path == path) {
+            return false;
+        }
+        self.items.push(Bookmark { path, title });
+        true
+    }
+
+    /// Drop the bookmark with this path, if present.
+    pub fn remove_path(&mut self, path: &str) {
+        self.items.retain(|b| b.path != path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bookmarks_add_dedups_and_remove() {
+        let mut b = Bookmarks::default();
+        assert!(b.add("/a.mp3".into(), "A".into()));
+        assert!(b.add("/b.mp3".into(), "B".into()));
+        // Same path again is a no-op (dedup by path, not title).
+        assert!(!b.add("/a.mp3".into(), "A (again)".into()));
+        assert_eq!(b.items.len(), 2);
+        b.remove_path("/a.mp3");
+        assert_eq!(b.items.len(), 1);
+        assert_eq!(b.items[0].path, "/b.mp3");
+        // JSON round-trips and an empty/legacy file loads as no bookmarks.
+        let j = serde_json::to_string(&b).unwrap();
+        let q: Bookmarks = serde_json::from_str(&j).unwrap();
+        assert_eq!(q.items, b.items);
+        assert!(serde_json::from_str::<Bookmarks>("{}").unwrap().items.is_empty());
+    }
 
     #[test]
     fn session_loads_legacy_json_missing_fields() {
