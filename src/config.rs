@@ -206,9 +206,87 @@ impl Bookmarks {
     }
 }
 
+/// A user-named equalizer preset (LinAmp's in-app preset library — the classic
+/// Winamp "Presets > Load/Save" list). Stored losslessly as JSON; the separate
+/// .EQF import/export covers Winamp-format interop.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct NamedEqPreset {
+    pub name: String,
+    pub preamp: f32,
+    pub bands: [f32; 10],
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EqPresets {
+    pub items: Vec<NamedEqPreset>,
+}
+
+impl EqPresets {
+    fn path() -> PathBuf {
+        dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("LinAmp")
+            .join("eq_presets.json")
+    }
+
+    pub fn load() -> Self {
+        std::fs::read_to_string(Self::path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_to_disk(&self) {
+        let p = Self::path();
+        if let Some(d) = p.parent() {
+            std::fs::create_dir_all(d).ok();
+        }
+        if let Ok(s) = serde_json::to_string_pretty(self) {
+            std::fs::write(p, s).ok();
+        }
+    }
+
+    /// Store a preset under `name`, replacing one of the same name (case-sensitive)
+    /// so re-saving updates in place rather than duplicating.
+    pub fn save_preset(&mut self, name: String, preamp: f32, bands: [f32; 10]) {
+        let preset = NamedEqPreset { name, preamp, bands };
+        match self.items.iter_mut().find(|p| p.name == preset.name) {
+            Some(existing) => *existing = preset,
+            None => self.items.push(preset),
+        }
+    }
+
+    /// Remove the preset with this name, if present.
+    pub fn remove(&mut self, name: &str) {
+        self.items.retain(|p| p.name != name);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eq_presets_save_replaces_by_name() {
+        let mut p = EqPresets::default();
+        p.save_preset("Rock".into(), -3.0, [1.0; 10]);
+        p.save_preset("Jazz".into(), 0.0, [2.0; 10]);
+        assert_eq!(p.items.len(), 2);
+        // Same name overwrites in place (no duplicate), keeping order.
+        p.save_preset("Rock".into(), 6.0, [3.0; 10]);
+        assert_eq!(p.items.len(), 2);
+        let rock = p.items.iter().find(|x| x.name == "Rock").unwrap();
+        assert_eq!(rock.preamp, 6.0);
+        assert_eq!(rock.bands, [3.0; 10]);
+        // Remove + JSON round-trip.
+        p.remove("Jazz");
+        assert_eq!(p.items.len(), 1);
+        let j = serde_json::to_string(&p).unwrap();
+        let q: EqPresets = serde_json::from_str(&j).unwrap();
+        assert_eq!(q.items, p.items);
+        assert!(serde_json::from_str::<EqPresets>("{}").unwrap().items.is_empty());
+    }
 
     #[test]
     fn bookmarks_add_dedups_and_remove() {

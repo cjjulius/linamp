@@ -90,14 +90,21 @@ impl super::LinAmpApp {
         let Some((kind, owner, pos)) = self.popup else {
             return;
         };
-        let (w, h) = if kind == Popup::Bookmarks {
-            // Grows with the bookmark count (capped so a long list scrolls rather
-            // than running off-screen): the list, a separator, then Add + Clear.
-            let (width, _, _) = (240.0_f32, 0, 0);
-            let rows = self.bookmarks.items.len().clamp(1, 12) as f32;
-            (width, (rows + 2.0) * 24.0 + 9.0 + 16.0)
-        } else {
-            popup_dims(kind)
+        let (w, h) = match kind {
+            Popup::Bookmarks => {
+                // Grows with the bookmark count (capped so a long list scrolls rather
+                // than running off-screen): the list, a separator, then Add + Clear.
+                let rows = self.bookmarks.items.len().clamp(1, 12) as f32;
+                (240.0, (rows + 2.0) * 24.0 + 9.0 + 16.0)
+            }
+            Popup::EqPresets => {
+                // Built-in presets + the saved library + 3 actions (Save/Import/
+                // Export). Capped height; the arm scrolls when it overflows.
+                let rows = (crate::eq::PRESETS.len() + self.eq_presets.items.len() + 3) as f32;
+                let seps = if self.eq_presets.items.is_empty() { 1.0 } else { 2.0 };
+                (182.0, (rows * 24.0 + seps * 9.0 + 16.0).min(420.0))
+            }
+            _ => popup_dims(kind),
         };
         let mut screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
         // Keep the menu fully on the desktop: a tall menu (e.g. the empty-area
@@ -433,21 +440,45 @@ impl super::LinAmpApp {
                             }
                         }
                         Popup::EqPresets => {
-                            for (i, (name, _, _)) in crate::eq::PRESETS.iter().enumerate() {
-                                if item(ui, name) {
-                                    self.apply_eq_preset(i);
+                            // Snapshot the saved library so clicks can borrow self
+                            // mutably without aliasing the list.
+                            let saved: Vec<(usize, String)> = self
+                                .eq_presets
+                                .items
+                                .iter()
+                                .enumerate()
+                                .map(|(i, p)| (i, p.name.clone()))
+                                .collect();
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                for (i, (name, _, _)) in crate::eq::PRESETS.iter().enumerate() {
+                                    if item(ui, name) {
+                                        self.apply_eq_preset(i);
+                                        close = true;
+                                    }
+                                }
+                                if !saved.is_empty() {
+                                    ui.separator();
+                                    for (i, name) in &saved {
+                                        if item(ui, name) {
+                                            self.load_named_eq_preset(*i);
+                                            close = true;
+                                        }
+                                    }
+                                }
+                                ui.separator();
+                                if item(ui, "Save current as…") {
+                                    self.eq_save_name = Some(String::new());
                                     close = true;
                                 }
-                            }
-                            ui.separator();
-                            if item(ui, "Import preset (.eqf)…") {
-                                self.import_eqf();
-                                close = true;
-                            }
-                            if item(ui, "Export preset (.eqf)…") {
-                                self.export_eqf();
-                                close = true;
-                            }
+                                if item(ui, "Import preset (.eqf)…") {
+                                    self.import_eqf();
+                                    close = true;
+                                }
+                                if item(ui, "Export preset (.eqf)…") {
+                                    self.export_eqf();
+                                    close = true;
+                                }
+                            });
                         }
                         Popup::StopMenu => {
                             if item(ui, "Stop") {

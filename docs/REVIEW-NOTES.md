@@ -276,3 +276,12 @@ code plus a working/not-working binary): visual and behavior changes.
   delete its file and click the bookmark — expect the status message, not a dead
   playlist row; and confirm the add/remove entry flips based on the current track.
   Full arbitrary per-item removal from the list is still a follow-up under #45.
+
+- #142 (closed, custom EQ preset library): the EQ Presets menu now lists user-named
+  presets below the built-ins and has "Save current as…", which opens a name dialog
+  and stores the current curve (replacing one of the same name). Presets persist to
+  eq_presets.json; the store (save/replace-by-name/remove + JSON round-trip) is
+  unit-tested. With .EQF import/export already done, this completes #142's scope.
+  Manual check: set a curve, Save current as… with a name, pick another preset, then
+  reopen the menu and load your saved one back; confirm it survives a restart. A
+  menu affordance to delete a single saved preset is tracked as a small follow-up.
