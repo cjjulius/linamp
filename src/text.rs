@@ -38,9 +38,25 @@ pub(crate) fn scroll_text(text: &str, offset: f32, width: usize) -> String {
     padded.iter().cycle().skip(start).take(width).collect()
 }
 
+/// A stream URL shown in the title LCD, with the scheme trimmed for brevity.
+pub(crate) fn display_url(url: &str) -> String {
+    url.strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url)
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_url_trims_scheme() {
+        assert_eq!(display_url("https://stream.example.com/radio"), "stream.example.com/radio");
+        assert_eq!(display_url("http://host/path"), "host/path");
+        // No scheme (or an unusual one) passes through unchanged.
+        assert_eq!(display_url("stream.example.com"), "stream.example.com");
+    }
 
     #[test]
     fn fmt_time_handles_hours() {

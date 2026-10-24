@@ -1191,6 +1191,10 @@ impl LinAmpApp {
             khz = t.sample_rate.map(|s| (s / 1000).to_string()).unwrap_or_default();
             stereo = t.channels.map(|c| c >= 2).unwrap_or(true);
             dur = t.duration.map(|d| d.as_secs_f32()).unwrap_or(0.0);
+        } else if let Some(url) = self.player.current_url() {
+            // Streaming "Open location": there's no playlist track, so show the
+            // location in the title (ICY stream-title metadata is a follow-up).
+            title = crate::text::display_url(url);
         }
         let pos = self
             .classic_seek_preview

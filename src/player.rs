@@ -121,6 +121,11 @@ impl Player {
         self.state
     }
 
+    /// The URL currently streaming (classic "Open location"), if any.
+    pub fn current_url(&self) -> Option<&str> {
+        self.current_url.as_deref()
+    }
+
     pub fn volume(&self) -> f32 {
         self.volume
     }
