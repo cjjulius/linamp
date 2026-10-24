@@ -28,7 +28,9 @@ pub(super) enum Popup {
 /// Window size (points) for a popup menu, from its item/separator count.
 pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
     let (buttons, seps, width) = match kind {
-        Popup::Options => (11, 3, 182.0),
+        // Height is computed dynamically in draw_popup_viewport (it counts the
+        // optional Minibrowser item); this is only a fallback.
+        Popup::Options => (13, 3, 182.0),
         Popup::PlAdd => (2, 0, 182.0),
         Popup::PlRem => (4, 0, 182.0),
         Popup::PlSel => (3, 0, 182.0),
@@ -94,6 +96,13 @@ impl super::LinAmpApp {
             return;
         };
         let (w, h) = match kind {
+            Popup::Options => {
+                // 12 fixed items + the optional Minibrowser toggle, 3 separators.
+                // Computed here (not in popup_dims) so the height tracks the
+                // conditional item instead of clipping the last row when it shows.
+                let buttons = 12 + i32::from(self.prefs.minibrowser_enabled);
+                (182.0, buttons as f32 * 24.0 + 3.0 * 9.0 + 16.0)
+            }
             Popup::Bookmarks => {
                 // Grows with the bookmark count (capped so a long list scrolls rather
                 // than running off-screen): the list, a separator, then Add + Clear.
@@ -182,6 +191,10 @@ impl super::LinAmpApp {
                             }
                             if item(ui, "Open folder…") {
                                 self.open_folder();
+                                close = true;
+                            }
+                            if item(ui, "Open location… (Ctrl+L)") {
+                                self.open_location();
                                 close = true;
                             }
                             ui.separator();
