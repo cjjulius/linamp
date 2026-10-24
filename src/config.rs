@@ -19,6 +19,9 @@ pub struct Prefs {
     pub always_on_top: bool,
     /// true = ignore a skin's custom cursors and use the system cursor instead.
     pub disable_skin_cursors: bool,
+    /// The Minibrowser's address — a nod to Winamp's SHOUTcast pane. Persisted so
+    /// the user can point it anywhere; defaults to the project repository.
+    pub minibrowser_url: String,
 }
 
 impl Default for Prefs {
@@ -32,6 +35,7 @@ impl Default for Prefs {
             fade_on_stop: false,
             always_on_top: false,
             disable_skin_cursors: false,
+            minibrowser_url: "https://github.com/cjjulius/linamp".to_string(),
         }
     }
 }
@@ -333,6 +337,8 @@ mod tests {
         assert!(!p.double_size && p.tag_on_load);
         assert_eq!(p.scale(), 1.0);
         assert!(p.last_skin.is_none());
+        // The Minibrowser defaults to the project repository.
+        assert!(p.minibrowser_url.contains("github.com/cjjulius/linamp"));
     }
 
     #[test]
