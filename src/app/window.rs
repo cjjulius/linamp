@@ -188,6 +188,12 @@ impl super::LinAmpApp {
                             Some(H::Stop) => self.trigger_classic(ctx, Btn::Stop),
                             Some(H::Next) => self.trigger_classic(ctx, Btn::Next),
                             Some(H::Eject) => self.trigger_classic(ctx, Btn::Eject),
+                            Some(H::Pos) => {
+                                // Click/drag the mini-posbar to seek; reuses the
+                                // expanded seek drag machinery (active_region).
+                                self.active_region = Some(Btn::Seek);
+                                self.apply_classic_slider(Btn::Seek, nx);
+                            }
                             None => {}
                         }
                     }

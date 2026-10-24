@@ -1312,8 +1312,14 @@ impl LinAmpApp {
                     .map(|d| d.as_secs_f32())
                     .unwrap_or(0.0);
                 if dur > 0.0 {
-                    let frac = ((lx - 16.0) / (248.0 - 29.0)).clamp(0.0, 1.0);
-                    self.classic_seek_preview = Some(frac * dur);
+                    let frac = if self.main_shade {
+                        // Collapsed main bar uses the shorter mini-posbar track.
+                        (lx - classic::SHADE_POS_X)
+                            / (classic::SHADE_POS_W - classic::SHADE_POS_THUMB_W)
+                    } else {
+                        (lx - 16.0) / (248.0 - 29.0)
+                    };
+                    self.classic_seek_preview = Some(frac.clamp(0.0, 1.0) * dur);
                 }
             }
             Btn::Volume => {

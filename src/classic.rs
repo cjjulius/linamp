@@ -249,7 +249,17 @@ pub enum ShadeHit {
     Stop,
     Next,
     Eject,
+    /// The mini position/seek slider on the collapsed main bar.
+    Pos,
 }
+
+/// Main windowshade position (seek) bar, measured from Webamp: the track sits at
+/// x=226, is 17px wide and 7px tall (y 4..11); the 3px thumb travels the inner
+/// `SHADE_POS_W - SHADE_POS_THUMB_W` pixels. Sprites come from TITLEBAR.BMP
+/// (background at 0,36; thumb at 20,36; left/right end caps at 17,36 / 23,36).
+pub const SHADE_POS_X: f32 = 226.0;
+pub const SHADE_POS_W: f32 = 17.0;
+pub const SHADE_POS_THUMB_W: f32 = 3.0;
 
 /// Mini-transport buttons baked into the collapsed main window bar:
 /// (hit, x, width) in native skin pixels. Measured from TITLEBAR.BMP's
@@ -295,6 +305,10 @@ pub fn main_shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
         if x >= *bx as f32 && x < (*bx + *bw) as f32 {
             return Some(*hit);
         }
+    }
+    // Mini position/seek slider (between the transport buttons and Restore).
+    if x >= SHADE_POS_X && x < SHADE_POS_X + SHADE_POS_W {
+        return Some(ShadeHit::Pos);
     }
     Some(ShadeHit::TitleBar)
 }
@@ -562,6 +576,30 @@ impl ClassicSkin {
             if remaining {
                 fill_rect(&mut c, 126, 7, 4, 2, st.fg); // minus sign before the minutes
             }
+        }
+        // Mini position/seek slider: the track background plus a thumb at the
+        // current position, mirroring the expanded posbar. Draws from TITLEBAR.BMP
+        // (background 0,36 17x7; thumb 20,36 3x7, with end-cap variants at the
+        // extremes). st.pos already reflects a live seek-drag preview.
+        if let Some(tb) = self.bmp("titlebar.bmp") {
+            let x = SHADE_POS_X as i32;
+            blit(&mut c, tb, x, 4, 0, 36, 17, 7);
+            let frac = if st.duration > 0.0 {
+                (st.pos / st.duration).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let travel = SHADE_POS_W - SHADE_POS_THUMB_W;
+            let tx = x + (frac * travel).round() as i32;
+            // End-cap thumb sprites at the extremes, middle thumb in between.
+            let sx = if frac <= 0.0 {
+                17
+            } else if frac >= 1.0 {
+                23
+            } else {
+                20
+            };
+            blit(&mut c, tb, tx, 4, sx, 36, 3, 7);
         }
         c
     }
@@ -2312,8 +2350,22 @@ mod tests {
         assert_eq!(main_shade_region_at(258.0, 6.0), Some(ShadeHit::Restore));
         assert_eq!(main_shade_region_at(268.0, 6.0), Some(ShadeHit::Close));
         assert_eq!(main_shade_region_at(100.0, 6.0), Some(ShadeHit::TitleBar));
+        // Mini position/seek slider sits between the transport buttons and Restore.
+        assert_eq!(main_shade_region_at(SHADE_POS_X, 6.0), Some(ShadeHit::Pos));
+        assert_eq!(main_shade_region_at(235.0, 6.0), Some(ShadeHit::Pos));
+        assert_eq!(
+            main_shade_region_at(SHADE_POS_X + SHADE_POS_W - 1.0, 6.0),
+            Some(ShadeHit::Pos)
+        );
+        // Just outside the slider: the gap before Restore is draggable title bar.
+        assert_eq!(
+            main_shade_region_at(SHADE_POS_X + SHADE_POS_W, 6.0),
+            Some(ShadeHit::TitleBar)
+        );
+        assert_eq!(main_shade_region_at(SHADE_POS_X - 1.0, 6.0), Some(ShadeHit::TitleBar));
         // The EQ/playlist shade tester has no transport buttons there.
         assert_eq!(shade_region_at(180.0, 6.0), Some(ShadeHit::TitleBar));
+        assert_eq!(shade_region_at(SHADE_POS_X, 6.0), Some(ShadeHit::TitleBar));
     }
 
     #[test]

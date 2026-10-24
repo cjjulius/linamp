@@ -237,3 +237,13 @@ code plus a working/not-working binary): visual and behavior changes.
   close is right: move the windows, window-shade one, close another, relaunch, and
   confirm the exact layout (positions + shade + which windows are open) comes back;
   optionally drop screen resolution and confirm an off-screen window is nudged back.
+
+- #17 (partial, window-shade polish): added the mini position/seek slider to the
+  collapsed main window bar — a track plus a thumb that tracks playback, draggable
+  and click-to-seek, reusing the expanded posbar's seek drag. Coordinates are from
+  the Webamp reference (track at x226, 17px wide; 3px thumb). The hit region is
+  unit-tested; the appearance can't be verified headlessly (there's no shade-render
+  path). Manual check: collapse the main window (the title-bar shade button), play a
+  track, and confirm the mini slider fills as it plays and that clicking/dragging it
+  seeks. The always-on-top toggle and mini-transport parts of #17 were already done;
+  this leaves #17 only needing a visual sign-off on the new slider.
