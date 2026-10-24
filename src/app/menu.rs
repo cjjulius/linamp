@@ -143,6 +143,11 @@ impl super::LinAmpApp {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
+            // The OS window is created at a default spot and only then moved to
+            // `screen`, which flashes a frame at the wrong place. Keep it hidden on
+            // its opening frame (while it gets positioned/sized) and reveal it next
+            // frame, so the menu only ever appears where it was clicked.
+            .with_visible(!self.popup_fresh)
             // Always on top: the EQ/playlist/library windows are *owned* by the main
             // window (group_child_windows), which keeps them above sibling windows,
             // and clicking one re-raises it — so only a system-topmost popup stays
@@ -557,34 +562,45 @@ impl super::LinAmpApp {
                                 .enumerate()
                                 .map(|(i, b)| (i, b.title.clone()))
                                 .collect();
-                            if list.is_empty() {
-                                menu_item(ui, "(no bookmarks)", "");
-                            } else {
-                                egui::ScrollArea::vertical().show(ui, |ui| {
-                                    for (i, title) in &list {
-                                        if item(ui, title) {
-                                            self.play_bookmark(*i);
+                            // Pin the actions to the bottom so a long list can never
+                            // push Add/Remove/Clear off the window; the list scrolls in
+                            // the space above them.
+                            egui::TopBottomPanel::bottom("bm_actions")
+                                .frame(egui::Frame::none())
+                                .show_inside(ui, |ui| {
+                                    ui.separator();
+                                    // Toggle: offer to remove the current track's bookmark
+                                    // when it's already bookmarked, else to add it.
+                                    if self.current_is_bookmarked() {
+                                        if item(ui, "Remove current track from bookmarks") {
+                                            self.remove_current_bookmark();
                                             close = true;
                                         }
+                                    } else if item(ui, "Add current track (Alt+I)") {
+                                        self.add_bookmark();
+                                        close = true;
+                                    }
+                                    if item(ui, "Clear bookmarks") {
+                                        self.clear_bookmarks();
+                                        close = true;
                                     }
                                 });
-                            }
-                            ui.separator();
-                            // Toggle: offer to remove the current track's bookmark
-                            // when it's already bookmarked, else to add it.
-                            if self.current_is_bookmarked() {
-                                if item(ui, "Remove current track from bookmarks") {
-                                    self.remove_current_bookmark();
-                                    close = true;
-                                }
-                            } else if item(ui, "Add current track (Alt+I)") {
-                                self.add_bookmark();
-                                close = true;
-                            }
-                            if item(ui, "Clear bookmarks") {
-                                self.clear_bookmarks();
-                                close = true;
-                            }
+                            egui::CentralPanel::default()
+                                .frame(egui::Frame::none())
+                                .show_inside(ui, |ui| {
+                                    if list.is_empty() {
+                                        menu_item(ui, "(no bookmarks)", "");
+                                    } else {
+                                        egui::ScrollArea::vertical().show(ui, |ui| {
+                                            for (i, title) in &list {
+                                                if item(ui, title) {
+                                                    self.play_bookmark(*i);
+                                                    close = true;
+                                                }
+                                            }
+                                        });
+                                    }
+                                });
                         }
                     }
                 });
@@ -626,6 +642,12 @@ impl super::LinAmpApp {
             let _ = round_popup_window(radius, self.popup_fresh);
         }
 
+        if self.popup_fresh {
+            // The opening frame drew the menu hidden (see `with_visible` above);
+            // request the next frame now so it's revealed immediately rather than
+            // waiting on the next input event.
+            ctx.request_repaint();
+        }
         self.popup_fresh = false;
         if close {
             self.popup = None;
