@@ -653,6 +653,10 @@ impl super::LinAmpApp {
         #[cfg(all(unix, not(target_os = "macos")))]
         {
             let _ = round_popup_window(radius, self.popup_fresh);
+            // Always-on-top isn't enough on X11: the main window's transient-for
+            // children (EQ/playlist/library) can stack over the popup, so it opens
+            // behind them. Raise it each frame while it's open to keep it visible.
+            raise_popup_window();
         }
 
         if self.popup_fresh {
