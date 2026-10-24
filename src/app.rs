@@ -2135,6 +2135,23 @@ impl LinAmpApp {
         }
     }
 
+    /// Reset an EQ preamp/band to 0 dB (flat), as Winamp does on a double-click.
+    fn reset_eq_slider(&mut self, region: classic::EqRegion) {
+        match region {
+            classic::EqRegion::Preamp => {
+                self.eq_auto = false; // a manual override, like dragging it
+                self.eq_preamp_db = 0.0;
+                self.apply_eq();
+            }
+            classic::EqRegion::Band(i) if i < 10 => {
+                self.eq_bands[i] = 0.0;
+                self.apply_eq_auto_gain();
+                self.apply_eq();
+            }
+            _ => {}
+        }
+    }
+
     /// Apply each classic window's REGION.TXT shape (main/EQ/playlist, per shade
     /// state, scaled). Fingerprinted so the X calls only happen on change. No-op
     /// for skins without regions (unless we previously shaped — then reset to

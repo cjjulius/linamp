@@ -23,7 +23,7 @@ impl super::LinAmpApp {
             (Some(o), Some(l)) => Some(o.min + l.to_vec2()),
             _ => None,
         };
-        let (pressed, released, down, secondary, scroll, mods) = ctx.input(|i| {
+        let (pressed, released, down, secondary, scroll, mods, dbl_click) = ctx.input(|i| {
             (
                 i.pointer.primary_pressed(),
                 i.pointer.primary_released(),
@@ -31,6 +31,7 @@ impl super::LinAmpApp {
                 i.pointer.secondary_clicked(),
                 i.raw_scroll_delta.y,
                 i.modifiers,
+                i.pointer.button_double_clicked(egui::PointerButton::Primary),
             )
         });
         // Platform-aware Ctrl (Command on macOS) for selection gestures.
@@ -101,6 +102,39 @@ impl super::LinAmpApp {
             let max = self.playlist.len().saturating_sub(1) as i32;
             let step = if scroll > 0.0 { -3 } else { 3 };
             self.pl_first = (self.pl_first as i32 + step).clamp(0, max.max(0)) as usize;
+        }
+
+        // Mouse wheel over the main window adjusts volume, like classic Winamp
+        // (scroll up louder, down quieter). The playlist uses the wheel to scroll;
+        // the EQ window has no wheel action. Applies in shade mode too.
+        if win == ClWin::Main && scroll != 0.0 {
+            let v = wheel_volume(self.player.volume(), scroll, 0.05);
+            self.player.set_volume(v);
+        }
+
+        // Double-click an EQ band or preamp to reset it to 0 dB (flat), like Winamp
+        // (#140). Uses egui's own double-click detection (fires on the second
+        // release), which is reliable regardless of frame timing.
+        if dbl_click && win == ClWin::Eq && !shaded {
+            if let Some(l) = local {
+                let (nx, ny) = (l.x / self.scale, l.y / self.scale);
+                if let Some(er @ (classic::EqRegion::Preamp | classic::EqRegion::Band(_))) =
+                    classic::eq_region_at(nx, ny)
+                {
+                    self.reset_eq_slider(er);
+                }
+            }
+        }
+
+        // Double-click the balance slider to re-centre it (#140), as Winamp does.
+        if dbl_click && win == ClWin::Main && !shaded {
+            if let Some(l) = local {
+                let (nx, ny) = (l.x / self.scale, l.y / self.scale);
+                if classic::region_at(nx, ny) == Some(Btn::Balance) {
+                    self.balance = 0.0;
+                    self.player.set_balance(0.0);
+                }
+            }
         }
 
         if pressed {
@@ -175,7 +209,10 @@ impl super::LinAmpApp {
                                     self.start_drag(ctx, win, screen_cursor);
                                 }
                                 Some(er @ (classic::EqRegion::Preamp | classic::EqRegion::Band(_))) => {
-                                    self.apply_eq_slider(er, ny)
+                                    // A press sets the slider from the click position;
+                                    // a double-click resets it to 0 dB (handled below,
+                                    // on the second release) (#140).
+                                    self.apply_eq_slider(er, ny);
                                 }
                                 Some(
                                     er @ (classic::EqRegion::ShadeVolume
@@ -696,5 +733,33 @@ impl super::LinAmpApp {
             self.lib_pos = main + (self.lib_pos - main) * ratio;
         }
         self.root_last = None; // force the root window to resize next frame
+    }
+}
+
+/// Volume after one mouse-wheel notch over the main window: scrolling up is
+/// louder, down is quieter, clamped to 0..=1 (classic Winamp main-window wheel
+/// behaviour). `step` is the per-notch change.
+pub(crate) fn wheel_volume(current: f32, scroll: f32, step: f32) -> f32 {
+    let delta = if scroll > 0.0 {
+        step
+    } else if scroll < 0.0 {
+        -step
+    } else {
+        0.0
+    };
+    (current + delta).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wheel_volume;
+
+    #[test]
+    fn wheel_volume_scrolls_and_clamps() {
+        assert!((wheel_volume(0.5, 1.0, 0.05) - 0.55).abs() < 1e-6, "up is louder");
+        assert!((wheel_volume(0.5, -1.0, 0.05) - 0.45).abs() < 1e-6, "down is quieter");
+        assert_eq!(wheel_volume(0.98, 1.0, 0.05), 1.0, "clamps at max");
+        assert_eq!(wheel_volume(0.02, -1.0, 0.05), 0.0, "clamps at min");
+        assert_eq!(wheel_volume(0.5, 0.0, 0.05), 0.5, "no scroll, no change");
     }
 }
