@@ -1406,14 +1406,42 @@ impl LinAmpApp {
             return;
         };
         let path = PathBuf::from(&bm.path);
-        let target = match self.playlist.tracks.iter().position(|t| t.path == path) {
-            Some(i) => i,
-            None => {
+        let title = bm.title.clone();
+        match self.playlist.tracks.iter().position(|t| t.path == path) {
+            Some(i) => self.play_index(i),
+            None if path.exists() => {
                 self.playlist.tracks.push(crate::playlist::Track::new(path));
-                self.playlist.len() - 1
+                let last = self.playlist.len() - 1;
+                self.play_index(last);
             }
-        };
-        self.play_index(target);
+            // A moved/deleted bookmark shouldn't drop a permanently-unplayable row
+            // into the playlist — just report it. (URL bookmarks wait on #15.)
+            None => self.status = format!("Bookmark file not found: {title}"),
+        }
+    }
+
+    /// Path of the currently-playing track as stored in bookmarks, if any.
+    fn current_bookmark_path(&self) -> Option<String> {
+        self.playlist
+            .current_track()
+            .map(|t| t.path.to_string_lossy().into_owned())
+    }
+
+    /// Whether the current track is already bookmarked.
+    fn current_is_bookmarked(&self) -> bool {
+        match self.current_bookmark_path() {
+            Some(p) => self.bookmarks.items.iter().any(|b| b.path == p),
+            None => false,
+        }
+    }
+
+    /// Remove the current track's bookmark.
+    fn remove_current_bookmark(&mut self) {
+        if let Some(p) = self.current_bookmark_path() {
+            self.bookmarks.remove_path(&p);
+            self.bookmarks.save();
+            self.status = "Removed bookmark".into();
+        }
     }
 
     /// Clear every bookmark.

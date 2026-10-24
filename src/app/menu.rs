@@ -490,7 +490,14 @@ impl super::LinAmpApp {
                                 });
                             }
                             ui.separator();
-                            if item(ui, "Add current track (Alt+I)") {
+                            // Toggle: offer to remove the current track's bookmark
+                            // when it's already bookmarked, else to add it.
+                            if self.current_is_bookmarked() {
+                                if item(ui, "Remove current track from bookmarks") {
+                                    self.remove_current_bookmark();
+                                    close = true;
+                                }
+                            } else if item(ui, "Add current track (Alt+I)") {
                                 self.add_bookmark();
                                 close = true;
                             }
