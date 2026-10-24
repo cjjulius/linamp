@@ -63,7 +63,14 @@ impl super::LinAmpApp {
 
         if secondary && win == ClWin::Main {
             if let Some(l) = local {
-                self.open_popup_in(Popup::Options, win, l);
+                // Right-click on the Stop button opens the stop options (classic
+                // Winamp); anywhere else on the main window opens the Options menu.
+                let (nx, ny) = (l.x / self.scale, l.y / self.scale);
+                if !self.main_shade && classic::region_at(nx, ny) == Some(Btn::Stop) {
+                    self.open_popup_in(Popup::StopMenu, win, l);
+                } else {
+                    self.open_popup_in(Popup::Options, win, l);
+                }
             }
         }
 
@@ -181,6 +188,12 @@ impl super::LinAmpApp {
                             Some(H::Stop) => self.trigger_classic(ctx, Btn::Stop),
                             Some(H::Next) => self.trigger_classic(ctx, Btn::Next),
                             Some(H::Eject) => self.trigger_classic(ctx, Btn::Eject),
+                            Some(H::Pos) => {
+                                // Click/drag the mini-posbar to seek; reuses the
+                                // expanded seek drag machinery (active_region).
+                                self.active_region = Some(Btn::Seek);
+                                self.apply_classic_slider(Btn::Seek, nx);
+                            }
                             None => {}
                         }
                     }

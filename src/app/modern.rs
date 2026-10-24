@@ -308,6 +308,8 @@ impl super::LinAmpApp {
                         SortKey::Artist,
                         SortKey::Album,
                         SortKey::Duration,
+                        SortKey::Filename,
+                        SortKey::Path,
                     ] {
                         ui.selectable_value(&mut self.sort_key, k, k.label());
                     }

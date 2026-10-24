@@ -501,6 +501,53 @@ mod x11util {
         .unwrap_or(false)
     }
 
+    /// Keep the window titled `title` above the main window and its transient-for
+    /// children. The main window + children carry `_NET_WM_STATE_ABOVE` (the
+    /// always-on-top pref), but the popup is created invisible to avoid a
+    /// position flash, and Mutter drops a pre-map always-on-top request — so the
+    /// popup ends up a normal-layer window stacked *below* the above-layer group.
+    /// `XRaiseWindow` can't cross layers, so add `_NET_WM_STATE_ABOVE` explicitly
+    /// (once the window is mapped, i.e. a frame after it opens), then raise it to
+    /// the top of that layer. Idempotent; safe to call each frame.
+    pub fn raise(title: &str) {
+        with_conn(|xlib, d| unsafe {
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            let win = window_by_title(xlib, d, title);
+            if win != 0 {
+                set_above(xlib, d, win);
+                (xlib.XRaiseWindow)(d, win);
+                (xlib.XFlush)(d);
+            }
+            (xlib.XSetErrorHandler)(prev);
+        });
+    }
+
+    /// Add `_NET_WM_STATE_ABOVE` to `win` via the EWMH client message (same shape
+    /// as [`skip_taskbar`]). `_NET_WM_STATE_ADD` is idempotent.
+    unsafe fn set_above(xlib: &xlib::Xlib, d: *mut xlib::Display, win: xlib::Window) {
+        let root = (xlib.XDefaultRootWindow)(d);
+        let net_wm_state = intern(xlib, d, "_NET_WM_STATE");
+        let above = intern(xlib, d, "_NET_WM_STATE_ABOVE");
+        const NET_WM_STATE_ADD: c_long = 1;
+        let mut ev: xlib::XEvent = std::mem::zeroed();
+        {
+            let cm = &mut ev.client_message;
+            cm.type_ = xlib::ClientMessage;
+            cm.send_event = 1;
+            cm.display = d;
+            cm.window = win;
+            cm.message_type = net_wm_state;
+            cm.format = 32;
+            cm.data.set_long(0, NET_WM_STATE_ADD);
+            cm.data.set_long(1, above as c_long);
+            cm.data.set_long(2, 0);
+            cm.data.set_long(3, 1); // source indication: normal application
+            cm.data.set_long(4, 0);
+        }
+        let mask = xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask;
+        (xlib.XSendEvent)(d, root, 0, mask, &mut ev);
+    }
+
     /// Horizontal run rectangles filling a `w`×`h` rounded rectangle with corner
     /// radius `r`, one per scanline — the shape the Shape extension clips to.
     fn rounded_rect_rects(w: i32, h: i32, r: i32) -> Vec<(i16, i16, u16, u16)> {
@@ -846,6 +893,19 @@ pub(crate) fn round_popup_window(radius: i32, force: bool) -> bool {
     {
         let _ = (radius, force);
         true
+    }
+}
+
+/// Keep the borderless context-menu popup above the main window's transient-for
+/// children on X11. The popup is created always-on-top, but on X11 the WM can
+/// still stack the `WM_TRANSIENT_FOR` children (EQ/playlist/library) over it, so
+/// it opened *behind* those windows; raising it each frame fixes that. Windows
+/// relies on the always-on-top window level (owner windows sort below it); a
+/// no-op elsewhere.
+pub(crate) fn raise_popup_window() {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::raise("LinAmp Menu");
     }
 }
 
