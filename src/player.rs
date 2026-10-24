@@ -32,6 +32,10 @@ pub struct Player {
     /// Extra output gain multiplier for fades (1.0 = normal).
     fade: f32,
     current_path: Option<PathBuf>,
+    /// The streaming URL currently playing (classic "Open location"), if any.
+    current_url: Option<String>,
+    /// Live ICY stream title for the current stream (updated by its decode thread).
+    stream_title: Option<crate::stream::SharedTitle>,
     viz: Arc<VizShared>,
     eq: Arc<EqShared>,
     balance: Arc<BalanceShared>,
@@ -49,6 +53,8 @@ impl Player {
             volume: 0.8,
             fade: 1.0,
             current_path: None,
+            current_url: None,
+            stream_title: None,
             viz: VizShared::new(),
             eq: EqShared::new(),
             balance: BalanceShared::new(),
@@ -79,8 +85,12 @@ impl Player {
             self.device_name = current;
             self.sink = None;
             self.state = PlayState::Stopped;
-            if let Some(p) = path {
-                if matches!(was, PlayState::Playing | PlayState::Paused) {
+            // A stream can't be resumed in place on a device change; it simply
+            // stops (re-open it with Ctrl+L). Only local files resume.
+            self.current_url = None;
+            self.stream_title = None;
+            if matches!(was, PlayState::Playing | PlayState::Paused) {
+                if let Some(p) = path {
                     if self.play_file(&p).is_ok() {
                         self.seek(pos);
                         if was == PlayState::Paused {
@@ -109,6 +119,19 @@ impl Player {
 
     pub fn state(&self) -> PlayState {
         self.state
+    }
+
+    /// The URL currently streaming (classic "Open location"), if any.
+    pub fn current_url(&self) -> Option<&str> {
+        self.current_url.as_deref()
+    }
+
+    /// The live ICY stream title ("now playing") for the current stream, if the
+    /// stream reports one.
+    pub fn stream_title(&self) -> Option<String> {
+        self.stream_title
+            .as_ref()
+            .and_then(|t| t.lock().ok().and_then(|g| g.clone()))
     }
 
     pub fn volume(&self) -> f32 {
@@ -151,6 +174,35 @@ impl Player {
         sink.append(balanced);
         self.sink = Some(sink);
         self.current_path = Some(path.to_path_buf());
+        self.current_url = None;
+        self.stream_title = None;
+        self.state = PlayState::Playing;
+        self.apply_gain();
+        Ok(())
+    }
+
+    /// Start playing an already-opened stream source (see [`crate::stream`]). The
+    /// connection and decode happen on a background thread; the UI opens the
+    /// stream without blocking and calls this once the format is known.
+    pub fn play_stream(
+        &mut self,
+        source: crate::stream::StreamSource,
+        title: crate::stream::SharedTitle,
+        url: String,
+    ) -> Result<()> {
+        self.stream_title = Some(title);
+        self.viz.clear();
+        self.viz.set_rate(source.sample_rate());
+        // Same shaping as local playback, so EQ / analyzer / balance all apply.
+        let equalized = eq::eq(source, self.eq.clone());
+        let tapped = viz::tap(equalized, self.viz.clone());
+        let balanced = balance::balance(tapped, self.balance.clone());
+
+        let sink = Sink::try_new(&self.handle)?;
+        sink.append(balanced);
+        self.sink = Some(sink);
+        self.current_path = None;
+        self.current_url = Some(url);
         self.state = PlayState::Playing;
         self.apply_gain();
         Ok(())
@@ -187,6 +239,8 @@ impl Player {
             sink.stop();
         }
         self.state = PlayState::Stopped;
+        self.current_url = None;
+        self.stream_title = None;
         self.fade = 1.0; // reset so the next track isn't faded
         self.viz.clear(); // silence the analyzer so its bars fall to zero
     }

@@ -216,6 +216,8 @@ enum SortKey {
     Artist,
     Album,
     Duration,
+    Filename,
+    Path,
 }
 
 impl SortKey {
@@ -226,8 +228,17 @@ impl SortKey {
             SortKey::Artist => "Artist",
             SortKey::Album => "Album",
             SortKey::Duration => "Duration",
+            SortKey::Filename => "Filename",
+            SortKey::Path => "Path",
         }
     }
+}
+
+/// Lowercased file name of a path, for case-insensitive filename sorting.
+fn file_name_key(p: &std::path::Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default()
 }
 
 /// Categories in the Preferences window's left sidebar. Classic Winamp groups
@@ -238,14 +249,16 @@ enum PrefTab {
     Display,
     Playback,
     Playlist,
+    OptionalFeatures,
     About,
 }
 
 impl PrefTab {
-    const ALL: [PrefTab; 4] = [
+    const ALL: [PrefTab; 5] = [
         PrefTab::Display,
         PrefTab::Playback,
         PrefTab::Playlist,
+        PrefTab::OptionalFeatures,
         PrefTab::About,
     ];
     fn label(self) -> &'static str {
@@ -253,6 +266,7 @@ impl PrefTab {
             PrefTab::Display => "Display",
             PrefTab::Playback => "Playback",
             PrefTab::Playlist => "Playlist",
+            PrefTab::OptionalFeatures => "Optional Features",
             PrefTab::About => "About",
         }
     }
@@ -396,6 +410,15 @@ pub struct LinAmpApp {
     /// act on exactly that row rather than the selection's min / current track.
     pl_ctx_row: Option<usize>,
     popup: Option<(Popup, ClWin, egui::Pos2)>,
+    /// A popup to open once the current one closes (for opening the Bookmarks
+    /// list from an Options-menu item — classic popups aren't nested).
+    pending_popup: Option<(Popup, ClWin, egui::Pos2)>,
+    /// Alt+I bookmarks, persisted to bookmarks.json.
+    bookmarks: crate::config::Bookmarks,
+    /// User-named EQ presets, persisted to eq_presets.json.
+    eq_presets: crate::config::EqPresets,
+    /// When `Some`, the "Save EQ preset as…" name dialog is open with this buffer.
+    eq_save_name: Option<String>,
     popup_fresh: bool,
     /// Whether the popup window's rounded region has been applied for the current
     /// popup, so we apply it once (retrying only until it succeeds) instead of
@@ -458,11 +481,19 @@ pub struct LinAmpApp {
     prefs_pos: Option<egui::Pos2>,
     prefs_drag: Option<egui::Vec2>,
     lib_visible: bool,
+    /// Whether the Minibrowser window (a themed nod to Winamp's SHOUTcast pane)
+    /// is open. Transient — it opens from the Options menu each session.
+    mb_visible: bool,
     tag_editor: Option<tag_ui::TagEditor>,
     /// Jump-to-file search state (Some while the dialog is open).
     jump_file: Option<JumpFile>,
     /// Jump-to-time input buffer (Some while the dialog is open).
     jump_time: Option<String>,
+    /// Open-location (stream URL) input buffer (Some while the dialog is open).
+    location_entry: Option<String>,
+    /// A stream being opened off the UI thread: (pending, url, started-at). Polled
+    /// each frame until the format is known, then handed to the player.
+    pending_stream: Option<(crate::stream::Pending, String, Instant)>,
 
     marquee_offset: f32,
     last_frame: Instant,
@@ -581,6 +612,10 @@ impl LinAmpApp {
             pl_last_click: None,
             pl_ctx_row: None,
             popup: None,
+            pending_popup: None,
+            bookmarks: crate::config::Bookmarks::load(),
+            eq_presets: crate::config::EqPresets::load(),
+            eq_save_name: None,
             popup_fresh: false,
             popup_rounded: false,
             main_shade: false,
@@ -614,9 +649,12 @@ impl LinAmpApp {
             prefs_pos: None,
             prefs_drag: None,
             lib_visible: false,
+            mb_visible: false,
             tag_editor: None,
             jump_file: None,
             jump_time: None,
+            location_entry: None,
+            pending_stream: None,
             marquee_offset: 0.0,
             last_frame: Instant::now(),
             last_device_check: Instant::now(),
@@ -670,7 +708,8 @@ impl LinAmpApp {
                 app.pl_px_h = h.max(87.0);
             }
             // Restore which windows were open and their collapsed/full state.
-            // Positions aren't remembered; positions_init docks them on frame 1.
+            // The saved window positions (if any) are applied just below and
+            // placed on frame 1; absent them, positions_init docks the windows.
             app.eq_visible = session.eq_visible;
             app.pl_visible = session.pl_visible;
             app.main_shade = session.main_shade;
@@ -904,6 +943,15 @@ impl LinAmpApp {
                     .cmp(&(b.album.to_lowercase(), b.title.to_lowercase()))
             }),
             SortKey::Duration => t.sort_by(|a, b| a.duration.cmp(&b.duration)),
+            SortKey::Filename => {
+                t.sort_by(|a, b| file_name_key(&a.path).cmp(&file_name_key(&b.path)))
+            }
+            SortKey::Path => t.sort_by(|a, b| {
+                a.path
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .cmp(&b.path.to_string_lossy().to_lowercase())
+            }),
         }
         self.restore_current(cur);
     }
@@ -1141,7 +1189,17 @@ impl LinAmpApp {
         };
         let (mut title, mut kbps, mut khz, mut stereo, mut dur) =
             (String::from("linamp"), String::new(), String::new(), true, 0.0);
-        if let Some(t) = self.playlist.current_track() {
+        if let Some(url) = self.player.current_url() {
+            // Streaming "Open location": the stream is what's actually playing, so
+            // it wins over any still-selected playlist track. Show the live ICY
+            // stream title ("now playing") when the stream reports one, otherwise
+            // the location itself. Bitrate/rate/duration are unknown for a live
+            // stream, so they stay at their defaults.
+            title = match self.player.stream_title() {
+                Some(t) => t,
+                None => crate::text::display_url(url),
+            };
+        } else if let Some(t) = self.playlist.current_track() {
             title = t.display_name();
             kbps = t.bitrate.map(|b| b.to_string()).unwrap_or_default();
             khz = t.sample_rate.map(|s| (s / 1000).to_string()).unwrap_or_default();
@@ -1258,6 +1316,7 @@ impl LinAmpApp {
             || self.fade.is_some()
             || self.drag.is_some()
             || self.classic_seek_preview.is_some()
+            || self.pending_stream.is_some() // keep polling while a stream connects
             || self.popup.is_some()
             || self.quit_countdown.is_some()
             // Keep repainting while a background scan runs so its progress and the
@@ -1291,8 +1350,14 @@ impl LinAmpApp {
                     .map(|d| d.as_secs_f32())
                     .unwrap_or(0.0);
                 if dur > 0.0 {
-                    let frac = ((lx - 16.0) / (248.0 - 29.0)).clamp(0.0, 1.0);
-                    self.classic_seek_preview = Some(frac * dur);
+                    let frac = if self.main_shade {
+                        // Collapsed main bar uses the shorter mini-posbar track.
+                        (lx - classic::SHADE_POS_X)
+                            / (classic::SHADE_POS_W - classic::SHADE_POS_THUMB_W)
+                    } else {
+                        (lx - 16.0) / (248.0 - 29.0)
+                    };
+                    self.classic_seek_preview = Some(frac.clamp(0.0, 1.0) * dur);
                 }
             }
             Btn::Volume => {
@@ -1344,6 +1409,87 @@ impl LinAmpApp {
         } else {
             self.player.stop();
             self.fade = None;
+        }
+    }
+
+    /// Bookmark the current track (classic Winamp Alt+I). No-op with nothing
+    /// playing, and a duplicate path is skipped.
+    fn add_bookmark(&mut self) {
+        let (path, title) = match self.playlist.current_track() {
+            Some(t) => (t.path.to_string_lossy().into_owned(), t.display_name()),
+            None => {
+                self.status = "Nothing playing to bookmark".into();
+                return;
+            }
+        };
+        if self.bookmarks.add(path, title.clone()) {
+            self.bookmarks.save();
+            self.status = format!("Bookmarked: {title}");
+            self.refresh_bookmarks_view_if_shown();
+        } else {
+            self.status = "Already bookmarked".into();
+        }
+    }
+
+    /// Play a bookmarked track, appending it to the playlist first if it isn't
+    /// already there.
+    fn play_bookmark(&mut self, idx: usize) {
+        let Some(bm) = self.bookmarks.items.get(idx) else {
+            return;
+        };
+        let path = PathBuf::from(&bm.path);
+        let title = bm.title.clone();
+        match self.playlist.tracks.iter().position(|t| t.path == path) {
+            Some(i) => self.play_index(i),
+            None if path.exists() => {
+                self.playlist.tracks.push(crate::playlist::Track::new(path));
+                let last = self.playlist.len() - 1;
+                self.play_index(last);
+            }
+            // A moved/deleted bookmark shouldn't drop a permanently-unplayable row
+            // into the playlist — just report it. (URL bookmarks wait on #15.)
+            None => self.status = format!("Bookmark file not found: {title}"),
+        }
+    }
+
+    /// Path of the currently-playing track as stored in bookmarks, if any.
+    fn current_bookmark_path(&self) -> Option<String> {
+        self.playlist
+            .current_track()
+            .map(|t| t.path.to_string_lossy().into_owned())
+    }
+
+    /// Whether the current track is already bookmarked.
+    fn current_is_bookmarked(&self) -> bool {
+        match self.current_bookmark_path() {
+            Some(p) => self.bookmarks.items.iter().any(|b| b.path == p),
+            None => false,
+        }
+    }
+
+    /// Remove the current track's bookmark.
+    fn remove_current_bookmark(&mut self) {
+        if let Some(p) = self.current_bookmark_path() {
+            self.bookmarks.remove_path(&p);
+            self.bookmarks.save();
+            self.status = "Removed bookmark".into();
+            self.refresh_bookmarks_view_if_shown();
+        }
+    }
+
+    /// Clear every bookmark.
+    fn clear_bookmarks(&mut self) {
+        self.bookmarks.items.clear();
+        self.bookmarks.save();
+        self.status = "Bookmarks cleared".into();
+        self.refresh_bookmarks_view_if_shown();
+    }
+
+    /// Rebuild the Media Library Bookmarks list after the bookmark store changes,
+    /// so an open library on that view reflects the add/remove/clear immediately.
+    fn refresh_bookmarks_view_if_shown(&mut self) {
+        if self.lib_nav == crate::library::LibView::Bookmarks {
+            self.refresh_library();
         }
     }
 
@@ -1650,6 +1796,92 @@ impl LinAmpApp {
         }
     }
 
+    /// Apply a user-named preset from the in-app library (by index).
+    fn load_named_eq_preset(&mut self, idx: usize) {
+        let Some((bands, preamp, name)) = self
+            .eq_presets
+            .items
+            .get(idx)
+            .map(|p| (p.bands, p.preamp, p.name.clone()))
+        else {
+            return;
+        };
+        self.eq_bands = bands;
+        self.eq_preamp_db = preamp;
+        self.eq_auto = false; // an explicit preset is a manual override
+        self.eq_enabled = true;
+        self.apply_eq();
+        self.status = format!("Loaded EQ preset: {name}");
+    }
+
+    /// Delete a saved preset from the in-app library (by index).
+    fn delete_named_eq_preset(&mut self, idx: usize) {
+        let Some(name) = self.eq_presets.items.get(idx).map(|p| p.name.clone()) else {
+            return;
+        };
+        self.eq_presets.remove(&name);
+        self.eq_presets.save_to_disk();
+        self.status = format!("Deleted EQ preset: {name}");
+    }
+
+    /// Save the current EQ curve as a named preset (replacing one of the same name).
+    fn commit_eq_preset(&mut self, name: String) {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        self.eq_presets
+            .save_preset(name.clone(), self.eq_preamp_db, self.eq_bands);
+        self.eq_presets.save_to_disk();
+        self.status = format!("Saved EQ preset: {name}");
+    }
+
+    /// Import a Winamp `.EQF` preset file and apply its first preset.
+    fn import_eqf(&mut self) {
+        hide_popup_window();
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Winamp EQ preset", &["eqf", "q1"])
+            .pick_file()
+        else {
+            return;
+        };
+        match std::fs::read(&path).map_err(anyhow::Error::from).and_then(|b| crate::eqf::parse(&b)) {
+            Ok(presets) => match presets.into_iter().next() {
+                Some(p) => {
+                    self.eq_bands = p.bands;
+                    self.eq_preamp_db = p.preamp;
+                    self.eq_auto = false; // an explicit preset is a manual override
+                    self.eq_enabled = true;
+                    self.apply_eq();
+                    self.status = format!("Loaded EQ preset: {}", p.name);
+                }
+                None => self.status = "EQ preset file has no presets".into(),
+            },
+            Err(e) => self.status = format!("Couldn't load EQ preset: {e}"),
+        }
+    }
+
+    /// Export the current EQ settings to a Winamp `.EQF` file.
+    fn export_eqf(&mut self) {
+        hide_popup_window();
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Winamp EQ preset", &["eqf"])
+            .set_file_name("linamp.eqf")
+            .save_file()
+        else {
+            return;
+        };
+        let preset = crate::eqf::EqfPreset {
+            name: "LinAmp".to_string(),
+            bands: self.eq_bands,
+            preamp: self.eq_preamp_db,
+        };
+        match std::fs::write(&path, crate::eqf::write(std::slice::from_ref(&preset))) {
+            Ok(()) => self.status = "Saved EQ preset".into(),
+            Err(e) => self.status = format!("Couldn't save EQ preset: {e}"),
+        }
+    }
+
     /// When Auto is on, set the preamp to offset the loudest boosted band so the
     /// EQ is less likely to clip.
     fn apply_eq_auto_gain(&mut self) {
@@ -1833,6 +2065,7 @@ impl LinAmpApp {
                         PrefTab::Display => self.prefs_page_display(ctx, ui),
                         PrefTab::Playback => self.prefs_page_playback(ui),
                         PrefTab::Playlist => self.prefs_page_playlist(ui),
+                        PrefTab::OptionalFeatures => self.prefs_page_optional_features(ui),
                         PrefTab::About => self.prefs_page_about(ui),
                     });
             });
@@ -1891,6 +2124,47 @@ impl LinAmpApp {
                 } else {
                     self.cur_cursor = [None; 3];
                 }
+            }
+        });
+    }
+
+    fn prefs_page_optional_features(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(2.0);
+        ui.colored_label(
+            egui::Color32::from_rgb(200, 150, 60),
+            "These are obsolete or incomplete features included for \"full parity\". \
+             They may not function exactly as expected — enable at your own risk.",
+        );
+        ui.add_space(10.0);
+        Self::pref_section(ui, "Minibrowser", |ui| {
+            let mut on = self.prefs.minibrowser_enabled;
+            if ui.checkbox(&mut on, "Enable the Minibrowser").changed() {
+                self.prefs.minibrowser_enabled = on;
+                if !on {
+                    self.mb_visible = false;
+                }
+                self.prefs.save();
+            }
+            ui.add_enabled_ui(self.prefs.minibrowser_enabled, |ui| {
+                ui.label("Address (opens in your default browser):");
+                let mut url = self.prefs.minibrowser_url.clone();
+                if ui
+                    .add(egui::TextEdit::singleline(&mut url).desired_width(260.0))
+                    .changed()
+                {
+                    self.prefs.minibrowser_url = url;
+                    self.prefs.save();
+                }
+            });
+        });
+        Self::pref_section(ui, "Numeric keypad", |ui| {
+            let mut on = self.prefs.numpad_transport;
+            if ui
+                .checkbox(&mut on, "Bind the numeric keypad to transport controls")
+                .changed()
+            {
+                self.prefs.numpad_transport = on;
+                self.prefs.save();
             }
         });
     }
@@ -2114,6 +2388,265 @@ impl LinAmpApp {
         }
         if close {
             self.jump_time = None;
+        }
+    }
+
+    /// "Save EQ preset as…": name the current EQ curve and store it in the library.
+    fn ui_eq_save_name(&mut self, ctx: &egui::Context) {
+        if self.eq_save_name.is_none() {
+            return;
+        }
+        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp — Save EQ preset")
+            .with_position(screen)
+            .with_inner_size(egui::vec2(260.0, 110.0))
+            .with_resizable(false)
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
+        let id = egui::ViewportId::from_hash_of("linamp_eqsave");
+        let mut close = false;
+        let mut save: Option<String> = None;
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let name = {
+                    let buf = self.eq_save_name.as_mut().unwrap();
+                    ui.label("Preset name:");
+                    let resp = ui.add(egui::TextEdit::singleline(buf).hint_text("My preset"));
+                    resp.request_focus();
+                    buf.clone()
+                };
+                let valid = !name.trim().is_empty();
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(valid, egui::Button::new("Save")).clicked() {
+                        save = Some(name.clone());
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+                if valid && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    save = Some(name);
+                }
+                if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape))
+                {
+                    close = true;
+                }
+            });
+            self.apply_base_cursor(ctx, "LinAmp — Save EQ preset");
+        });
+        if let Some(name) = save {
+            self.commit_eq_preset(name);
+            close = true;
+        }
+        if close {
+            self.eq_save_name = None;
+        }
+    }
+
+    /// Open the "Open location" dialog (classic Ctrl+L) to stream a URL.
+    fn open_location(&mut self) {
+        self.location_entry = Some(String::new());
+    }
+
+    /// Begin streaming the entered URL. The connect/probe happens off the UI
+    /// thread; `poll_pending_stream` picks it up once ready.
+    fn play_location(&mut self, url: &str) {
+        let url = url.trim().to_string();
+        if url.is_empty() {
+            return;
+        }
+        match crate::stream::open(&url) {
+            Ok(pending) => {
+                self.status = format!("Connecting: {}", crate::text::display_url(&url));
+                self.pending_stream = Some((pending, url, Instant::now()));
+            }
+            Err(e) => self.status = format!("Couldn't open location: {e}"),
+        }
+    }
+
+    /// Poll a stream that's being opened; hand it to the player once ready, or
+    /// report a failure/timeout. Runs each frame while a connect is in flight.
+    fn poll_pending_stream(&mut self) {
+        let Some((mut pending, url, started)) = self.pending_stream.take() else {
+            return;
+        };
+        match pending.poll() {
+            Some(Ok(source)) => {
+                let title = pending.title();
+                match self.player.play_stream(source, title, url.clone()) {
+                    Ok(()) => self.status = format!("Streaming: {}", crate::text::display_url(&url)),
+                    Err(e) => self.status = format!("Couldn't play stream: {e}"),
+                }
+            }
+            Some(Err(e)) => self.status = format!("Couldn't open location: {e}"),
+            None => {
+                if started.elapsed() > std::time::Duration::from_secs(20) {
+                    self.status = "Timed out opening stream".into();
+                } else {
+                    self.pending_stream = Some((pending, url, started)); // keep waiting
+                }
+            }
+        }
+    }
+
+    /// "Open location": enter a stream URL and play it (classic Winamp Ctrl+L).
+    fn ui_location(&mut self, ctx: &egui::Context) {
+        if self.location_entry.is_none() {
+            return;
+        }
+        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp — Open location")
+            .with_position(screen)
+            .with_inner_size(egui::vec2(320.0, 110.0))
+            .with_resizable(false)
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
+        let id = egui::ViewportId::from_hash_of("linamp_location");
+        let mut close = false;
+        let mut go: Option<String> = None;
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let url = {
+                    let buf = self.location_entry.as_mut().unwrap();
+                    ui.label("Open location (URL):");
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(buf)
+                            .hint_text("http://stream.example.com/radio"),
+                    );
+                    resp.request_focus();
+                    buf.clone()
+                };
+                let valid = !url.trim().is_empty();
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(valid, egui::Button::new("Open")).clicked() {
+                        go = Some(url.clone());
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+                if valid && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    go = Some(url);
+                }
+                if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape))
+                {
+                    close = true;
+                }
+            });
+            self.apply_base_cursor(ctx, "LinAmp — Open location");
+        });
+        if let Some(url) = go {
+            self.play_location(&url);
+            close = true;
+        }
+        if close {
+            self.location_entry = None;
+        }
+    }
+
+    /// Open the configured Minibrowser URL in the system default browser.
+    fn open_minibrowser_url(&mut self) {
+        let url = self.prefs.minibrowser_url.trim().to_string();
+        if url.is_empty() {
+            return;
+        }
+        match open::that(&url) {
+            Ok(()) => self.status = format!("Opened in browser: {url}"),
+            Err(e) => self.status = format!("Couldn't open browser: {e}"),
+        }
+    }
+
+    /// The Minibrowser window: a themed nod to Winamp's SHOUTcast pane. It shows
+    /// the configured address and opens it in the system browser (LinAmp has no
+    /// embedded web view), styled to match the active skin.
+    fn ui_minibrowser(&mut self, ctx: &egui::Context) {
+        if !self.mb_visible || !self.prefs.minibrowser_enabled {
+            return;
+        }
+        let screen = self.win_pos[0] + egui::vec2(60.0, 60.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp — Minibrowser")
+            .with_position(screen)
+            .with_inner_size(egui::vec2(360.0, 220.0))
+            .with_resizable(false)
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
+        let id = egui::ViewportId::from_hash_of("linamp_minibrowser");
+        let mut close = false;
+        let mut open_url = false;
+        let url = self.prefs.minibrowser_url.clone();
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            let style = ctx.style();
+            let border = egui::Stroke::new(1.0_f32, style.visuals.window_stroke.color);
+            egui::TopBottomPanel::top("mb_bar").show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Address:").strong());
+                    // The address is read-only here; it's edited in Preferences.
+                    let mut addr = url.clone();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut addr)
+                            .desired_width(f32::INFINITY)
+                            .interactive(false),
+                    );
+                });
+                ui.add_space(4.0);
+            });
+            egui::TopBottomPanel::bottom("mb_actions").show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Open in browser").clicked() {
+                        open_url = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new("Set the address in Preferences")
+                                .small()
+                                .color(egui::Color32::GRAY),
+                        );
+                    });
+                });
+                ui.add_space(4.0);
+            });
+            egui::CentralPanel::default().show(ctx, |ui| {
+                // A simulated "page" — a nod to the original minibrowser rather
+                // than a real web view.
+                ui.vertical_centered(|ui| {
+                    ui.add_space(24.0);
+                    ui.heading("LinAmp Minibrowser");
+                    ui.add_space(6.0);
+                    ui.label(&url);
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new("Click \"Open in browser\" to visit this address.")
+                            .italics(),
+                    );
+                });
+            });
+            // On-theme border just inside the window edge, matching the menus.
+            let vr = ctx.screen_rect().shrink(1.0);
+            ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("linamp_mb_border"),
+            ))
+            .rect_stroke(vr, egui::Rounding::ZERO, border);
+            self.apply_base_cursor(ctx, "LinAmp — Minibrowser");
+            if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
+                close = true;
+            }
+        });
+        if open_url {
+            self.open_minibrowser_url();
+        }
+        if close {
+            self.mb_visible = false;
         }
     }
 
@@ -2395,6 +2928,10 @@ impl LinAmpApp {
         self.ui_tag_editor(ctx);
         self.ui_jump_file(ctx);
         self.ui_jump_time(ctx);
+        self.ui_eq_save_name(ctx);
+        self.ui_location(ctx);
+        self.ui_minibrowser(ctx);
+        self.poll_pending_stream();
 
         // Initialise window positions, once.
         if !self.positions_init {
@@ -2936,7 +3473,19 @@ fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_time, reorder_play_next};
+    use super::{file_name_key, parse_time, reorder_play_next};
+
+    #[test]
+    fn file_name_key_is_lowercased_basename() {
+        use std::path::Path;
+        assert_eq!(file_name_key(Path::new("/music/B/Zebra.MP3")), "zebra.mp3");
+        assert_eq!(file_name_key(Path::new("/music/A/apple.flac")), "apple.flac");
+        // Filename sort ignores the directory, so a file in B/ can precede one in A/.
+        let mut names: Vec<String> =
+            ["/z/Alpha.mp3", "/a/beta.mp3"].iter().map(|p| file_name_key(Path::new(p))).collect();
+        names.sort();
+        assert_eq!(names, vec!["alpha.mp3".to_string(), "beta.mp3".to_string()]);
+    }
 
     #[test]
     fn play_next_moves_selection_after_current() {

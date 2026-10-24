@@ -17,12 +17,20 @@ pub(super) enum Popup {
     /// Right-click on empty playlist space.
     PlVoid,
     EqPresets,
+    /// Right-click on the main window's Stop button.
+    StopMenu,
+    /// The Alt+I bookmarks list (opened from the Options menu).
+    Bookmarks,
+    /// Delete-a-saved-EQ-preset list (opened from the EQ Presets menu).
+    EqDelete,
 }
 
 /// Window size (points) for a popup menu, from its item/separator count.
 pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
     let (buttons, seps, width) = match kind {
-        Popup::Options => (9, 3, 182.0),
+        // Height is computed dynamically in draw_popup_viewport (it counts the
+        // optional Minibrowser item); this is only a fallback.
+        Popup::Options => (13, 3, 182.0),
         Popup::PlAdd => (2, 0, 182.0),
         Popup::PlRem => (4, 0, 182.0),
         Popup::PlSel => (3, 0, 182.0),
@@ -31,7 +39,11 @@ pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
         // Right-click context menus: wider to fit the shortcut column.
         Popup::PlTrack => (6, 2, 210.0),
         Popup::PlVoid => (12, 4, 210.0),
-        Popup::EqPresets => (crate::eq::PRESETS.len() as i32, 0, 182.0),
+        Popup::EqPresets => (crate::eq::PRESETS.len() as i32 + 2, 1, 182.0),
+        Popup::StopMenu => (3, 0, 200.0),
+        // Heights overridden per item count in draw_popup_viewport.
+        Popup::Bookmarks => (2, 1, 240.0),
+        Popup::EqDelete => (1, 0, 200.0),
     };
     (width, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
 }
@@ -83,7 +95,34 @@ impl super::LinAmpApp {
         let Some((kind, owner, pos)) = self.popup else {
             return;
         };
-        let (w, h) = popup_dims(kind);
+        let (w, h) = match kind {
+            Popup::Options => {
+                // 12 fixed items + the optional Minibrowser toggle, 3 separators.
+                // Computed here (not in popup_dims) so the height tracks the
+                // conditional item instead of clipping the last row when it shows.
+                let buttons = 12 + i32::from(self.prefs.minibrowser_enabled);
+                (182.0, buttons as f32 * 24.0 + 3.0 * 9.0 + 16.0)
+            }
+            Popup::Bookmarks => {
+                // Grows with the bookmark count (capped so a long list scrolls rather
+                // than running off-screen): the list, a separator, then Add + Clear.
+                let rows = self.bookmarks.items.len().clamp(1, 12) as f32;
+                (240.0, (rows + 2.0) * 24.0 + 9.0 + 16.0)
+            }
+            Popup::EqPresets => {
+                // Built-in presets + the saved library + up to 4 actions (Save,
+                // optional Delete, Import, Export). Capped height; the arm scrolls.
+                let actions = if self.eq_presets.items.is_empty() { 3 } else { 4 };
+                let rows = (crate::eq::PRESETS.len() + self.eq_presets.items.len() + actions) as f32;
+                let seps = if self.eq_presets.items.is_empty() { 1.0 } else { 2.0 };
+                (182.0, (rows * 24.0 + seps * 9.0 + 16.0).min(420.0))
+            }
+            Popup::EqDelete => {
+                let rows = self.eq_presets.items.len().clamp(1, 12) as f32;
+                (200.0, rows * 24.0 + 16.0)
+            }
+            _ => popup_dims(kind),
+        };
         let mut screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
         // Keep the menu fully on the desktop: a tall menu (e.g. the empty-area
         // menu) opened near the bottom/right edge would otherwise spill off-screen
@@ -113,6 +152,11 @@ impl super::LinAmpApp {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
+            // The OS window is created at a default spot and only then moved to
+            // `screen`, which flashes a frame at the wrong place. Keep it hidden on
+            // its opening frame (while it gets positioned/sized) and reveal it next
+            // frame, so the menu only ever appears where it was clicked.
+            .with_visible(!self.popup_fresh)
             // Always on top: the EQ/playlist/library windows are *owned* by the main
             // window (group_child_windows), which keeps them above sibling windows,
             // and clicking one re-raises it — so only a system-topmost popup stays
@@ -147,6 +191,10 @@ impl super::LinAmpApp {
                             }
                             if item(ui, "Open folder…") {
                                 self.open_folder();
+                                close = true;
+                            }
+                            if item(ui, "Open location… (Ctrl+L)") {
+                                self.open_location();
                                 close = true;
                             }
                             ui.separator();
@@ -191,6 +239,24 @@ impl super::LinAmpApp {
                                 self.prefs.always_on_top = !self.prefs.always_on_top;
                                 self.prefs.save();
                                 close = true;
+                            }
+                            if item(ui, "Bookmarks…") {
+                                // Classic popups aren't nested; open the list once
+                                // this menu closes.
+                                self.pending_popup = Some((Popup::Bookmarks, owner, pos));
+                                close = true;
+                            }
+                            // The Minibrowser is an opt-in "Optional Features" extra.
+                            if self.prefs.minibrowser_enabled {
+                                let mbl = if self.mb_visible {
+                                    "Hide Minibrowser"
+                                } else {
+                                    "Show Minibrowser"
+                                };
+                                if item(ui, mbl) {
+                                    self.mb_visible = !self.mb_visible;
+                                    close = true;
+                                }
                             }
                             if item(ui, "Preferences…") {
                                 self.prefs_open = true;
@@ -269,6 +335,14 @@ impl super::LinAmpApp {
                             }
                             if item(ui, "Sort by duration") {
                                 sort(self, SortKey::Duration);
+                                close = true;
+                            }
+                            if item(ui, "Sort by filename") {
+                                sort(self, SortKey::Filename);
+                                close = true;
+                            }
+                            if item(ui, "Sort by path") {
+                                sort(self, SortKey::Path);
                                 close = true;
                             }
                             if item(ui, "Randomize list") {
@@ -378,6 +452,14 @@ impl super::LinAmpApp {
                                 sort(self, SortKey::Duration);
                                 close = true;
                             }
+                            if menu_item(ui, "Sort by filename", "") {
+                                sort(self, SortKey::Filename);
+                                close = true;
+                            }
+                            if menu_item(ui, "Sort by path", "") {
+                                sort(self, SortKey::Path);
+                                close = true;
+                            }
                             ui.separator();
                             if menu_item(ui, "Remove all", "") {
                                 self.playlist.clear();
@@ -396,12 +478,142 @@ impl super::LinAmpApp {
                             }
                         }
                         Popup::EqPresets => {
-                            for (i, (name, _, _)) in crate::eq::PRESETS.iter().enumerate() {
-                                if item(ui, name) {
-                                    self.apply_eq_preset(i);
+                            // Snapshot the saved library so clicks can borrow self
+                            // mutably without aliasing the list.
+                            let saved: Vec<(usize, String)> = self
+                                .eq_presets
+                                .items
+                                .iter()
+                                .enumerate()
+                                .map(|(i, p)| (i, p.name.clone()))
+                                .collect();
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                for (i, (name, _, _)) in crate::eq::PRESETS.iter().enumerate() {
+                                    if item(ui, name) {
+                                        self.apply_eq_preset(i);
+                                        close = true;
+                                    }
+                                }
+                                if !saved.is_empty() {
+                                    ui.separator();
+                                    for (i, name) in &saved {
+                                        if item(ui, name) {
+                                            self.load_named_eq_preset(*i);
+                                            close = true;
+                                        }
+                                    }
+                                }
+                                ui.separator();
+                                if item(ui, "Save current as…") {
+                                    self.eq_save_name = Some(String::new());
                                     close = true;
                                 }
+                                if !saved.is_empty() && item(ui, "Delete a saved preset…") {
+                                    // Classic popups aren't nested; open the delete
+                                    // list once this menu closes.
+                                    self.pending_popup = Some((Popup::EqDelete, owner, pos));
+                                    close = true;
+                                }
+                                if item(ui, "Import preset (.eqf)…") {
+                                    self.import_eqf();
+                                    close = true;
+                                }
+                                if item(ui, "Export preset (.eqf)…") {
+                                    self.export_eqf();
+                                    close = true;
+                                }
+                            });
+                        }
+                        Popup::EqDelete => {
+                            let saved: Vec<(usize, String)> = self
+                                .eq_presets
+                                .items
+                                .iter()
+                                .enumerate()
+                                .map(|(i, p)| (i, p.name.clone()))
+                                .collect();
+                            if saved.is_empty() {
+                                menu_item(ui, "(no saved presets)", "");
+                            } else {
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    // Delete highest index first so earlier indices
+                                    // stay valid; one click deletes one preset.
+                                    for (i, name) in &saved {
+                                        if item(ui, &format!("Delete: {name}")) {
+                                            self.delete_named_eq_preset(*i);
+                                            close = true;
+                                        }
+                                    }
+                                });
                             }
+                        }
+                        Popup::StopMenu => {
+                            if item(ui, "Stop") {
+                                self.stop_playback();
+                                close = true;
+                            }
+                            let after = if self.stop_after_current { "on" } else { "off" };
+                            if item(ui, &format!("Stop after current: {after}")) {
+                                self.stop_after_current = !self.stop_after_current;
+                                close = true;
+                            }
+                            if item(ui, "Stop with fade out") {
+                                if self.player.state() != PlayState::Stopped {
+                                    self.fade = Some(FADE_SECS);
+                                    self.status = "Fading out…".into();
+                                }
+                                close = true;
+                            }
+                        }
+                        Popup::Bookmarks => {
+                            // Snapshot (index, title) so the click handler can borrow
+                            // self mutably to play without aliasing the list.
+                            let list: Vec<(usize, String)> = self
+                                .bookmarks
+                                .items
+                                .iter()
+                                .enumerate()
+                                .map(|(i, b)| (i, b.title.clone()))
+                                .collect();
+                            // Pin the actions to the bottom so a long list can never
+                            // push Add/Remove/Clear off the window; the list scrolls in
+                            // the space above them.
+                            egui::TopBottomPanel::bottom("bm_actions")
+                                .frame(egui::Frame::none())
+                                .show_inside(ui, |ui| {
+                                    ui.separator();
+                                    // Toggle: offer to remove the current track's bookmark
+                                    // when it's already bookmarked, else to add it.
+                                    if self.current_is_bookmarked() {
+                                        if item(ui, "Remove current track from bookmarks") {
+                                            self.remove_current_bookmark();
+                                            close = true;
+                                        }
+                                    } else if item(ui, "Add current track (Alt+I)") {
+                                        self.add_bookmark();
+                                        close = true;
+                                    }
+                                    if item(ui, "Clear bookmarks") {
+                                        self.clear_bookmarks();
+                                        close = true;
+                                    }
+                                });
+                            egui::CentralPanel::default()
+                                .frame(egui::Frame::none())
+                                .show_inside(ui, |ui| {
+                                    if list.is_empty() {
+                                        menu_item(ui, "(no bookmarks)", "");
+                                    } else {
+                                        egui::ScrollArea::vertical().show(ui, |ui| {
+                                            for (i, title) in &list {
+                                                if item(ui, title) {
+                                                    self.play_bookmark(*i);
+                                                    close = true;
+                                                }
+                                            }
+                                        });
+                                    }
+                                });
                         }
                     }
                 });
@@ -441,11 +653,25 @@ impl super::LinAmpApp {
         #[cfg(all(unix, not(target_os = "macos")))]
         {
             let _ = round_popup_window(radius, self.popup_fresh);
+            // Always-on-top isn't enough on X11: the main window's transient-for
+            // children (EQ/playlist/library) can stack over the popup, so it opens
+            // behind them. Raise it each frame while it's open to keep it visible.
+            raise_popup_window();
         }
 
+        if self.popup_fresh {
+            // The opening frame drew the menu hidden (see `with_visible` above);
+            // request the next frame now so it's revealed immediately rather than
+            // waiting on the next input event.
+            ctx.request_repaint();
+        }
         self.popup_fresh = false;
         if close {
             self.popup = None;
+            // Chain to a queued popup (e.g. Options → Bookmarks) now this one is gone.
+            if let Some((k, w, p)) = self.pending_popup.take() {
+                self.open_popup_in(k, w, p);
+            }
         }
     }
 

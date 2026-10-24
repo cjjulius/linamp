@@ -1,6 +1,6 @@
 [package]
 name = "linamp"
-version = "0.4.8"
+version = "0.4.9"
 edition = "2021"
 description = "LinAmp - a Winamp-inspired audio player for Linux and Windows, built in Rust"
 authors = ["LinAmp contributors"]
@@ -22,6 +22,14 @@ rustfft = "6"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# HTTP(S) client for streaming "Open location" URLs (internet radio / remote
+# files). Blocking, pure-Rust TLS; used only on a background decode thread.
+ureq = "2"
+# Direct symphonia decode of a non-seekable network stream (rodio's Decoder
+# needs Read+Seek, which a live stream isn't). Versions track rodio's symphonia.
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "isomp4", "ogg", "vorbis", "flac", "pcm", "alac"] }
+# Open a URL in the user's default browser (the Minibrowser's "nod" action).
+open = "5"
 
 # Linux/X11 only: query the global cursor position (XQueryPointer) so classic
 # windows can be dragged and docked as a group, matching the Windows behaviour.

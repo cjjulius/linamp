@@ -19,6 +19,14 @@ pub struct Prefs {
     pub always_on_top: bool,
     /// true = ignore a skin's custom cursors and use the system cursor instead.
     pub disable_skin_cursors: bool,
+    /// The Minibrowser's address — a nod to Winamp's SHOUTcast pane. Persisted so
+    /// the user can point it anywhere; defaults to the project repository.
+    pub minibrowser_url: String,
+    /// "Optional Features" opt-ins (obsolete / incomplete parity extras, off by
+    /// default). `minibrowser_enabled` surfaces the Minibrowser; `numpad_transport`
+    /// binds the numeric keypad to transport controls.
+    pub minibrowser_enabled: bool,
+    pub numpad_transport: bool,
 }
 
 impl Default for Prefs {
@@ -32,6 +40,9 @@ impl Default for Prefs {
             fade_on_stop: false,
             always_on_top: false,
             disable_skin_cursors: false,
+            minibrowser_url: "https://github.com/cjjulius/linamp".to_string(),
+            minibrowser_enabled: false,
+            numpad_transport: false,
         }
     }
 }
@@ -151,9 +162,160 @@ impl Session {
     }
 }
 
+/// A bookmarked track or stream (classic Winamp's Alt+I bookmarks), stored in
+/// its own file so it outlives the per-session state.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Bookmark {
+    pub path: String,
+    pub title: String,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Bookmarks {
+    pub items: Vec<Bookmark>,
+}
+
+impl Bookmarks {
+    fn path() -> PathBuf {
+        dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("LinAmp")
+            .join("bookmarks.json")
+    }
+
+    pub fn load() -> Self {
+        std::fs::read_to_string(Self::path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) {
+        let p = Self::path();
+        if let Some(d) = p.parent() {
+            std::fs::create_dir_all(d).ok();
+        }
+        if let Ok(s) = serde_json::to_string_pretty(self) {
+            std::fs::write(p, s).ok();
+        }
+    }
+
+    /// Add a bookmark, skipping an exact-path duplicate (so re-bookmarking the
+    /// playing track is a no-op). Returns true when it was actually added.
+    pub fn add(&mut self, path: String, title: String) -> bool {
+        if self.items.iter().any(|b| b.path == path) {
+            return false;
+        }
+        self.items.push(Bookmark { path, title });
+        true
+    }
+
+    /// Drop the bookmark with this path, if present.
+    pub fn remove_path(&mut self, path: &str) {
+        self.items.retain(|b| b.path != path);
+    }
+}
+
+/// A user-named equalizer preset (LinAmp's in-app preset library — the classic
+/// Winamp "Presets > Load/Save" list). Stored losslessly as JSON; the separate
+/// .EQF import/export covers Winamp-format interop.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct NamedEqPreset {
+    pub name: String,
+    pub preamp: f32,
+    pub bands: [f32; 10],
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EqPresets {
+    pub items: Vec<NamedEqPreset>,
+}
+
+impl EqPresets {
+    fn path() -> PathBuf {
+        dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("LinAmp")
+            .join("eq_presets.json")
+    }
+
+    pub fn load() -> Self {
+        std::fs::read_to_string(Self::path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_to_disk(&self) {
+        let p = Self::path();
+        if let Some(d) = p.parent() {
+            std::fs::create_dir_all(d).ok();
+        }
+        if let Ok(s) = serde_json::to_string_pretty(self) {
+            std::fs::write(p, s).ok();
+        }
+    }
+
+    /// Store a preset under `name`, replacing one of the same name (case-sensitive)
+    /// so re-saving updates in place rather than duplicating.
+    pub fn save_preset(&mut self, name: String, preamp: f32, bands: [f32; 10]) {
+        let preset = NamedEqPreset { name, preamp, bands };
+        match self.items.iter_mut().find(|p| p.name == preset.name) {
+            Some(existing) => *existing = preset,
+            None => self.items.push(preset),
+        }
+    }
+
+    /// Remove the preset with this name, if present.
+    pub fn remove(&mut self, name: &str) {
+        self.items.retain(|p| p.name != name);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eq_presets_save_replaces_by_name() {
+        let mut p = EqPresets::default();
+        p.save_preset("Rock".into(), -3.0, [1.0; 10]);
+        p.save_preset("Jazz".into(), 0.0, [2.0; 10]);
+        assert_eq!(p.items.len(), 2);
+        // Same name overwrites in place (no duplicate), keeping order.
+        p.save_preset("Rock".into(), 6.0, [3.0; 10]);
+        assert_eq!(p.items.len(), 2);
+        let rock = p.items.iter().find(|x| x.name == "Rock").unwrap();
+        assert_eq!(rock.preamp, 6.0);
+        assert_eq!(rock.bands, [3.0; 10]);
+        // Remove + JSON round-trip.
+        p.remove("Jazz");
+        assert_eq!(p.items.len(), 1);
+        let j = serde_json::to_string(&p).unwrap();
+        let q: EqPresets = serde_json::from_str(&j).unwrap();
+        assert_eq!(q.items, p.items);
+        assert!(serde_json::from_str::<EqPresets>("{}").unwrap().items.is_empty());
+    }
+
+    #[test]
+    fn bookmarks_add_dedups_and_remove() {
+        let mut b = Bookmarks::default();
+        assert!(b.add("/a.mp3".into(), "A".into()));
+        assert!(b.add("/b.mp3".into(), "B".into()));
+        // Same path again is a no-op (dedup by path, not title).
+        assert!(!b.add("/a.mp3".into(), "A (again)".into()));
+        assert_eq!(b.items.len(), 2);
+        b.remove_path("/a.mp3");
+        assert_eq!(b.items.len(), 1);
+        assert_eq!(b.items[0].path, "/b.mp3");
+        // JSON round-trips and an empty/legacy file loads as no bookmarks.
+        let j = serde_json::to_string(&b).unwrap();
+        let q: Bookmarks = serde_json::from_str(&j).unwrap();
+        assert_eq!(q.items, b.items);
+        assert!(serde_json::from_str::<Bookmarks>("{}").unwrap().items.is_empty());
+    }
 
     #[test]
     fn session_loads_legacy_json_missing_fields() {
@@ -167,6 +329,12 @@ mod tests {
         assert!(!s.main_shade && !s.eq_shade && !s.pl_shade);
         assert!(!s.eq_enabled && !s.eq_auto);
         assert!(s.eq_bands.is_empty());
+        // No saved positions in a legacy session: the layout falls back to the
+        // default dock arrangement rather than restoring absolute positions (#145).
+        assert_eq!(s.main_pos, None);
+        assert_eq!(s.eq_pos, None);
+        assert_eq!(s.pl_pos, None);
+        assert_eq!(s.lib_pos, None);
     }
 
     #[test]
@@ -176,6 +344,10 @@ mod tests {
         assert!(!p.double_size && p.tag_on_load);
         assert_eq!(p.scale(), 1.0);
         assert!(p.last_skin.is_none());
+        // The Minibrowser defaults to the project repository.
+        assert!(p.minibrowser_url.contains("github.com/cjjulius/linamp"));
+        // Optional Features are opt-in (off by default).
+        assert!(!p.minibrowser_enabled && !p.numpad_transport);
     }
 
     #[test]
