@@ -1451,15 +1451,37 @@ impl ClassicSkin {
             blit(&mut c, e, 264, 3, 0, 116, 9, 9); // close
         } else {
             // Neither eq_ex.bmp nor EQMAIN.BMP is present, so the skin ships no
-            // shade-bar graphics at all. Leaving the bar empty would render a
-            // transparent void with an invisible (though still clickable) close
-            // box. Instead paint the bar in the skin's text background colour and
-            // borrow the titlebar close button, so a collapsed EQ on a minimal
-            // skin still reads as a real, restorable bar (#18).
-            fill_rect(&mut c, 0, 0, 275, 14, self.text_bg);
-            if let Some(tb) = self.bmp("titlebar.bmp") {
-                blit(&mut c, tb, 264, 3, 18, 0, 9, 9); // close button
-            }
+            // shade-bar graphics. Draw a minimal but usable bar from the skin's
+            // colours: a solid background plus synthesized volume/balance thumbs and
+            // a close marker, in a tone that contrasts the background so it never
+            // renders unreadable (e.g. black-on-black) (#18).
+            let bg = self.text_bg;
+            fill_rect(&mut c, 0, 0, 275, 14, bg);
+            // Light controls on a dark bar, dark controls on a light bar.
+            let lum = (bg[0] as u32 * 299 + bg[1] as u32 * 587 + bg[2] as u32 * 114) / 1000;
+            let (groove, thumb) = if lum < 128 {
+                ([120u8, 120, 120], [220u8, 220, 220])
+            } else {
+                ([110u8, 110, 110], [30u8, 30, 30])
+            };
+            // Volume and balance grooves with a thumb at the current value, at the
+            // same track bounds eq_ex.bmp would use so the hit-testing still lines up.
+            let track = |c: &mut RgbaImage, frac: f32, lo: i32, w: i32| {
+                let frac = frac.clamp(0.0, 1.0);
+                fill_rect(c, lo, 6, w, 2, groove);
+                let tx = lo + (frac * (w - 3).max(0) as f32).round() as i32;
+                fill_rect(c, tx, 4, 3, 7, thumb);
+            };
+            track(&mut c, volume.clamp(0.0, 1.0), EQ_SHADE_VOL_X as i32, EQ_SHADE_VOL_W as i32);
+            track(
+                &mut c,
+                balance.clamp(-1.0, 1.0) * 0.5 + 0.5,
+                EQ_SHADE_BAL_X as i32,
+                EQ_SHADE_BAL_W as i32,
+            );
+            // Close marker (the close region is hit-tested regardless; this just
+            // makes it visible).
+            fill_rect(&mut c, 265, 4, 7, 7, thumb);
         }
         c
     }
@@ -2405,42 +2427,32 @@ mod tests {
     }
 
     #[test]
-    fn eq_shade_falls_back_when_no_shade_bitmaps() {
+    fn eq_shade_fallback_is_readable_with_visible_bars() {
         // A skin missing BOTH eq_ex.bmp and EQMAIN.BMP must still render the
-        // collapsed-EQ bar as a solid, restorable strip rather than a transparent
-        // void (#18). Build a minimal skin with only a titlebar close sprite.
-        let mut bitmaps: HashMap<String, RgbaImage> = HashMap::new();
-        // A tiny titlebar.bmp whose close-button sprite (src 18,0, 9x9) is a
-        // distinct opaque colour, so we can confirm it gets blitted onto the bar.
-        let mut tb = RgbaImage::new(64, 32);
-        for y in 0..9 {
-            for x in 0..9 {
-                tb.put_pixel(18 + x, y, Rgba([10, 200, 60, 255]));
-            }
-        }
-        bitmaps.insert("titlebar.bmp".to_string(), tb);
+        // collapsed EQ as a readable bar: a solid background plus contrasting
+        // volume/balance thumbs and a close marker, never black-on-black (#18).
         let skin = ClassicSkin {
-            bitmaps,
+            bitmaps: HashMap::new(),
             eq_sprites: Vec::new(),
-            text_bg: [20, 20, 40],
+            text_bg: [20, 20, 40], // dark skin background
             regions: crate::region::parse(""),
             cursors: HashMap::new(),
         };
-
         let img = skin.compose_eq_shade(true, 0.5, 0.0);
         assert_eq!(img.dimensions(), (275, 14));
-        // No transparent void: every pixel is fully opaque.
+        // Fully opaque, no transparent void.
         assert!(img.pixels().all(|p| p[3] == 255), "shade bar must be opaque");
-        // The bar is filled with the skin's text background colour...
-        assert_eq!(*img.get_pixel(5, 7), Rgba([20, 20, 40, 255]));
-        // ...and the titlebar close button is composited at dest (264,3).
-        assert_eq!(*img.get_pixel(266, 5), Rgba([10, 200, 60, 255]));
+        // Background is the skin's text colour (sampled off the sliders).
+        assert_eq!(*img.get_pixel(5, 2), Rgba([20, 20, 40, 255]));
+        // Volume groove and close marker are drawn light so they contrast the dark
+        // background (not black-on-black).
+        assert!(img.get_pixel(70, 6)[0] > 100, "volume groove must contrast the bar");
+        assert!(img.get_pixel(266, 5)[0] > 100, "close marker must contrast the bar");
     }
 
     #[test]
-    fn eq_shade_void_without_titlebar_is_still_opaque() {
-        // Even a skin with no titlebar.bmp at all must not leave the collapsed-EQ
-        // bar transparent; the text-bg fill alone keeps it readable (#18).
+    fn eq_shade_fallback_contrasts_a_black_background() {
+        // Pure-black text_bg is the worst case; controls must still be visible.
         let skin = ClassicSkin {
             bitmaps: HashMap::new(),
             eq_sprites: Vec::new(),
@@ -2450,6 +2462,8 @@ mod tests {
         };
         let img = skin.compose_eq_shade(false, 0.0, 0.0);
         assert!(img.pixels().all(|p| p[3] == 255), "shade bar must be opaque");
+        // The close marker is light on the black bar.
+        assert!(img.get_pixel(266, 5)[0] > 100, "controls must contrast black");
     }
 
     #[test]
