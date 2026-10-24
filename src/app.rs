@@ -405,6 +405,8 @@ pub struct LinAmpApp {
     eq_shade: bool,
     pl_shade: bool,
     tb_last_click: Option<(ClWin, Instant)>,
+    /// Last press on an EQ preamp/band slider, so a double-click resets it (#140).
+    eq_last_click: Option<(classic::EqRegion, Instant)>,
     // multi-window geometry (points)
     win_pos: [egui::Pos2; 3],
     pl_px_h: f32,
@@ -587,6 +589,7 @@ impl LinAmpApp {
             eq_shade: false,
             pl_shade: false,
             tb_last_click: None,
+            eq_last_click: None,
             win_pos: [egui::pos2(100.0, 100.0); 3],
             pl_px_h: classic::PL_H as f32,
             pl_px_w: classic::MAIN_W as f32,
@@ -2128,6 +2131,23 @@ impl LinAmpApp {
             }
             classic::EqRegion::Band(i) if i < 10 => {
                 self.eq_bands[i] = v * 12.0;
+                self.apply_eq_auto_gain();
+                self.apply_eq();
+            }
+            _ => {}
+        }
+    }
+
+    /// Reset an EQ preamp/band to 0 dB (flat), as Winamp does on a double-click.
+    fn reset_eq_slider(&mut self, region: classic::EqRegion) {
+        match region {
+            classic::EqRegion::Preamp => {
+                self.eq_auto = false; // a manual override, like dragging it
+                self.eq_preamp_db = 0.0;
+                self.apply_eq();
+            }
+            classic::EqRegion::Band(i) if i < 10 => {
+                self.eq_bands[i] = 0.0;
                 self.apply_eq_auto_gain();
                 self.apply_eq();
             }
