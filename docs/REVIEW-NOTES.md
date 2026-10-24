@@ -292,3 +292,8 @@ code plus a working/not-working binary): visual and behavior changes.
   re-saves the library. Manual check: save a couple of presets, then Delete a saved
   preset… and remove one — confirm it disappears from the list and stays gone after
   a restart. Deletion by name is covered by the config store test.
+
+- Code quality (no behavior change): routed the EQ preset menu delete through the
+  by-name store method (clearing a dead-code warning) and broadened the ID3v2
+  round-trip test to assert every editable frame, not just a sample. No manual
+  review needed beyond confirming tests pass.

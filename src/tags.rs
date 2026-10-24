@@ -395,10 +395,23 @@ mod tests {
         let (gv1, gv2) = read_id3(&tmp);
         let gv1 = gv1.expect("v1 present");
         let gv2 = gv2.expect("v2 present");
+        // Every ID3v2 field round-trips (not just a sample), covering the full
+        // editable frame set exposed in the tag editor.
+        assert_eq!(gv2.track, "3");
         assert_eq!(gv2.title, "V2 Title");
+        assert_eq!(gv2.artist, "V2 Artist");
+        assert_eq!(gv2.album, "V2 Album");
+        assert_eq!(gv2.year, "2024");
+        assert_eq!(gv2.genre, "Rock");
+        assert_eq!(gv2.comment, "v2 comment");
         assert_eq!(gv2.composer, "A. Composer");
+        assert_eq!(gv2.orig_artist, "Orig");
+        assert_eq!(gv2.copyright, "(c) 2024");
+        assert_eq!(gv2.url, "https://example.com");
         assert_eq!(gv2.encoded_by, "LinAmp");
+        // ID3v1 fields round-trip too.
         assert_eq!(gv1.title, "V1 Title");
+        assert_eq!(gv1.artist, "V1 Artist");
         assert_eq!(gv1.year, "1999");
 
         // Removing ID3v1 leaves ID3v2 intact.
