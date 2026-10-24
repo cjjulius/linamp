@@ -29,7 +29,9 @@ window has focus and no text field is active.
 
 ## Numeric keypad
 
-The keypad mirrors Winamp's transport controls.
+Off by default — enable "Numeric keypad" under Preferences > Optional Features.
+When on, the keypad mirrors Winamp's transport controls (note: these also fire
+for the top number row).
 
 | Key | Action |
 | --- | --- |

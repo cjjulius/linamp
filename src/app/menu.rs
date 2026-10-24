@@ -228,14 +228,17 @@ impl super::LinAmpApp {
                                 self.pending_popup = Some((Popup::Bookmarks, owner, pos));
                                 close = true;
                             }
-                            let mbl = if self.mb_visible {
-                                "Hide Minibrowser"
-                            } else {
-                                "Show Minibrowser"
-                            };
-                            if item(ui, mbl) {
-                                self.mb_visible = !self.mb_visible;
-                                close = true;
+                            // The Minibrowser is an opt-in "Optional Features" extra.
+                            if self.prefs.minibrowser_enabled {
+                                let mbl = if self.mb_visible {
+                                    "Hide Minibrowser"
+                                } else {
+                                    "Show Minibrowser"
+                                };
+                                if item(ui, mbl) {
+                                    self.mb_visible = !self.mb_visible;
+                                    close = true;
+                                }
                             }
                             if item(ui, "Preferences…") {
                                 self.prefs_open = true;

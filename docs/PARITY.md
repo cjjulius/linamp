@@ -43,14 +43,19 @@ close:
 - **#17** — window-shade polish: the mini position/seek slider on the collapsed
   main bar (always-on-top and the mini transport were already done).
 - **#45** — bookmarks (Alt+I) with a recall list in the Options menu.
-- **#144** (partial) — numeric-keypad transport, Ctrl+Z (start of list) and
-  Ctrl+R (reverse). The numpad-only platform path is dropped for now (per your
-  call); the keypad digits also fire for the top row, which is acceptable.
+- **#144** (partial) — numeric-keypad transport (now opt-in under Optional
+  Features), Ctrl+Z (start of list) and Ctrl+R (reverse). The numpad-only
+  platform path is dropped (per your call).
 - **#15** — Open location (Ctrl+L): stream an HTTP(S) URL (internet radio or a
   remote file). Decoded on a background thread; needs a live-stream test.
 - **#146** — Minibrowser: a themed window (Options > Show Minibrowser) that shows a
-  persisted, user-editable address (Preferences, default = the repo) and opens it in
-  the system browser — a nod to the original, not a real web view.
+  persisted, user-editable address (default = the repo) and opens it in the system
+  browser — a nod to the original, not a real web view. Opt-in under Preferences >
+  Optional Features.
+
+Preferences > Optional Features gathers the obsolete/incomplete "full parity" extras
+(the Minibrowser and numeric-keypad transport), off by default with an enable-at-your-
+own-risk note.
 
 ## Open — needs work or a direction
 

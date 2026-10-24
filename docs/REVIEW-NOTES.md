@@ -322,3 +322,13 @@ code plus a working/not-working binary): visual and behavior changes.
   a restart and is what the button opens. Note: the window is themed via the skin's
   egui colors with an on-theme border (like the menus), not a full gen.bmp classic
   frame; open-state isn't persisted (it opens from the menu each session).
+
+- Optional Features (Preferences): added a new "Optional Features" Preferences
+  category that leads with an enable-at-your-own-risk note (obsolete/incomplete
+  "full parity" extras). It now gates two opt-ins, both off by default: "Enable the
+  Minibrowser" (with its address field; the Options > Minibrowser item and window
+  only appear when enabled) and "Bind the numeric keypad to transport controls"
+  (the keypad shortcuts from #144 now do nothing unless this is on). Default-off is
+  unit-tested. Manual check: open Preferences > Optional Features, confirm the note
+  and both toggles; enabling the Minibrowser makes its Options entry appear, and
+  enabling the keypad makes 0/1-9 drive transport; both settings survive a restart.

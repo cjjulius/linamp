@@ -185,11 +185,11 @@ impl super::LinAmpApp {
         if k.seek_back {
             self.seek_relative(-5.0);
         }
-        // Numeric-keypad transport (classic Winamp). egui's logical Key can't
-        // tell the keypad apart from the top number row, so these also fire for
-        // the top row; modifier combos (Alt+3 tag editor, Ctrl+digit) are
-        // excluded so they keep their own meanings.
-        if !k.ctrl && !k.alt {
+        // Numeric-keypad transport (classic Winamp). Opt-in under Optional
+        // Features — egui's logical Key can't tell the keypad apart from the top
+        // number row, so these also fire for the top row; modifier combos (Alt+3
+        // tag editor, Ctrl+digit) are excluded so they keep their own meanings.
+        if self.prefs.numpad_transport && !k.ctrl && !k.alt {
             if k.num0 {
                 self.open_files(); // keypad 0 — open/play file(s)
             }
