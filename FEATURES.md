@@ -3,7 +3,7 @@
 A Winamp-inspired audio player for Linux and Windows, written in Rust
 (`eframe`/`egui` for UI, `rodio`/`symphonia` for audio, `lofty` for tags).
 
-Legend: ✅ done · 🔜 planned · 🧪 partial
+Legend: ✅ done - 🔜 planned - 🧪 partial
 
 > Planned work and known shortfalls are tracked as **GitHub issues** in
 > [cjjulius/linamp](https://github.com/cjjulius/linamp/issues) — that's the
