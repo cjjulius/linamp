@@ -170,3 +170,9 @@ code plus a working/not-working binary): visual and behavior changes.
   classic-parity audit; the other gaps found were filed as issues #139 (drag the
   EQ graph to draw the curve) and #140 (double-click a band/preamp/balance to
   reset), not implemented this pass.
+
+- Parity (#140, partial): double-clicking an EQ preamp or band slider now resets
+  it to 0 dB (flat), like Winamp. The double-click detection and reset wiring want
+  a quick manual check — double-click a band and the preamp and confirm each
+  snaps to centre and the sound updates. The double-click timing logic is
+  unit-tested. Balance double-click-to-centre is still open under #140.
