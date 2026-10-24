@@ -271,6 +271,14 @@ impl super::LinAmpApp {
                                 sort(self, SortKey::Duration);
                                 close = true;
                             }
+                            if item(ui, "Sort by filename") {
+                                sort(self, SortKey::Filename);
+                                close = true;
+                            }
+                            if item(ui, "Sort by path") {
+                                sort(self, SortKey::Path);
+                                close = true;
+                            }
                             if item(ui, "Randomize list") {
                                 self.playlist.randomize();
                                 self.pl_selection.clear();
@@ -376,6 +384,14 @@ impl super::LinAmpApp {
                             }
                             if menu_item(ui, "Sort by duration", "") {
                                 sort(self, SortKey::Duration);
+                                close = true;
+                            }
+                            if menu_item(ui, "Sort by filename", "") {
+                                sort(self, SortKey::Filename);
+                                close = true;
+                            }
+                            if menu_item(ui, "Sort by path", "") {
+                                sort(self, SortKey::Path);
                                 close = true;
                             }
                             ui.separator();

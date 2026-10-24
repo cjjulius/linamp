@@ -216,6 +216,8 @@ enum SortKey {
     Artist,
     Album,
     Duration,
+    Filename,
+    Path,
 }
 
 impl SortKey {
@@ -226,8 +228,17 @@ impl SortKey {
             SortKey::Artist => "Artist",
             SortKey::Album => "Album",
             SortKey::Duration => "Duration",
+            SortKey::Filename => "Filename",
+            SortKey::Path => "Path",
         }
     }
+}
+
+/// Lowercased file name of a path, for case-insensitive filename sorting.
+fn file_name_key(p: &std::path::Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default()
 }
 
 /// Categories in the Preferences window's left sidebar. Classic Winamp groups
@@ -904,6 +915,15 @@ impl LinAmpApp {
                     .cmp(&(b.album.to_lowercase(), b.title.to_lowercase()))
             }),
             SortKey::Duration => t.sort_by(|a, b| a.duration.cmp(&b.duration)),
+            SortKey::Filename => {
+                t.sort_by(|a, b| file_name_key(&a.path).cmp(&file_name_key(&b.path)))
+            }
+            SortKey::Path => t.sort_by(|a, b| {
+                a.path
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .cmp(&b.path.to_string_lossy().to_lowercase())
+            }),
         }
         self.restore_current(cur);
     }
@@ -2936,7 +2956,19 @@ fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_time, reorder_play_next};
+    use super::{file_name_key, parse_time, reorder_play_next};
+
+    #[test]
+    fn file_name_key_is_lowercased_basename() {
+        use std::path::Path;
+        assert_eq!(file_name_key(Path::new("/music/B/Zebra.MP3")), "zebra.mp3");
+        assert_eq!(file_name_key(Path::new("/music/A/apple.flac")), "apple.flac");
+        // Filename sort ignores the directory, so a file in B/ can precede one in A/.
+        let mut names: Vec<String> =
+            ["/z/Alpha.mp3", "/a/beta.mp3"].iter().map(|p| file_name_key(Path::new(p))).collect();
+        names.sort();
+        assert_eq!(names, vec!["alpha.mp3".to_string(), "beta.mp3".to_string()]);
+    }
 
     #[test]
     fn play_next_moves_selection_after_current() {
