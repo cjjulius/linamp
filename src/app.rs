@@ -1189,20 +1189,22 @@ impl LinAmpApp {
         };
         let (mut title, mut kbps, mut khz, mut stereo, mut dur) =
             (String::from("linamp"), String::new(), String::new(), true, 0.0);
-        if let Some(t) = self.playlist.current_track() {
+        if let Some(url) = self.player.current_url() {
+            // Streaming "Open location": the stream is what's actually playing, so
+            // it wins over any still-selected playlist track. Show the live ICY
+            // stream title ("now playing") when the stream reports one, otherwise
+            // the location itself. Bitrate/rate/duration are unknown for a live
+            // stream, so they stay at their defaults.
+            title = match self.player.stream_title() {
+                Some(t) => t,
+                None => crate::text::display_url(url),
+            };
+        } else if let Some(t) = self.playlist.current_track() {
             title = t.display_name();
             kbps = t.bitrate.map(|b| b.to_string()).unwrap_or_default();
             khz = t.sample_rate.map(|s| (s / 1000).to_string()).unwrap_or_default();
             stereo = t.channels.map(|c| c >= 2).unwrap_or(true);
             dur = t.duration.map(|d| d.as_secs_f32()).unwrap_or(0.0);
-        } else if let Some(url) = self.player.current_url() {
-            // Streaming "Open location": there's no playlist track, so show the
-            // live ICY stream title ("now playing") when the stream reports one,
-            // otherwise the location itself.
-            title = match self.player.stream_title() {
-                Some(t) => t,
-                None => crate::text::display_url(url),
-            };
         }
         let pos = self
             .classic_seek_preview
