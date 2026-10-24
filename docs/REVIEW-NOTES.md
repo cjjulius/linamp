@@ -161,3 +161,12 @@ code plus a working/not-working binary): visual and behavior changes.
   release: confirm the redistribution terms are acceptable alongside the existing
   skins, and give each a final visual pass. Note Vizor1-01's playlist uses a bronze
   background with dark text by design (not a rendering bug).
+
+- Parity: mouse wheel over the main window now adjusts volume (scroll up louder,
+  down quieter), matching classic Winamp; the playlist still scrolls and the EQ
+  window has no wheel action. The direction/clamp logic is unit-tested; the feel
+  (step size, direction) wants a quick manual check — scroll over the main window
+  and confirm the volume slider moves the expected way. Found during a Winamp
+  classic-parity audit; the other gaps found were filed as issues #139 (drag the
+  EQ graph to draw the curve) and #140 (double-click a band/preamp/balance to
+  reset), not implemented this pass.
