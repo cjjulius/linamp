@@ -21,6 +21,8 @@ pub(super) enum Popup {
     StopMenu,
     /// The Alt+I bookmarks list (opened from the Options menu).
     Bookmarks,
+    /// Delete-a-saved-EQ-preset list (opened from the EQ Presets menu).
+    EqDelete,
 }
 
 /// Window size (points) for a popup menu, from its item/separator count.
@@ -37,8 +39,9 @@ pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
         Popup::PlVoid => (12, 4, 210.0),
         Popup::EqPresets => (crate::eq::PRESETS.len() as i32 + 2, 1, 182.0),
         Popup::StopMenu => (3, 0, 200.0),
-        // Height is overridden per bookmark count in draw_popup_viewport.
+        // Heights overridden per item count in draw_popup_viewport.
         Popup::Bookmarks => (2, 1, 240.0),
+        Popup::EqDelete => (1, 0, 200.0),
     };
     (width, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
 }
@@ -98,11 +101,16 @@ impl super::LinAmpApp {
                 (240.0, (rows + 2.0) * 24.0 + 9.0 + 16.0)
             }
             Popup::EqPresets => {
-                // Built-in presets + the saved library + 3 actions (Save/Import/
-                // Export). Capped height; the arm scrolls when it overflows.
-                let rows = (crate::eq::PRESETS.len() + self.eq_presets.items.len() + 3) as f32;
+                // Built-in presets + the saved library + up to 4 actions (Save,
+                // optional Delete, Import, Export). Capped height; the arm scrolls.
+                let actions = if self.eq_presets.items.is_empty() { 3 } else { 4 };
+                let rows = (crate::eq::PRESETS.len() + self.eq_presets.items.len() + actions) as f32;
                 let seps = if self.eq_presets.items.is_empty() { 1.0 } else { 2.0 };
                 (182.0, (rows * 24.0 + seps * 9.0 + 16.0).min(420.0))
+            }
+            Popup::EqDelete => {
+                let rows = self.eq_presets.items.len().clamp(1, 12) as f32;
+                (200.0, rows * 24.0 + 16.0)
             }
             _ => popup_dims(kind),
         };
@@ -470,6 +478,12 @@ impl super::LinAmpApp {
                                     self.eq_save_name = Some(String::new());
                                     close = true;
                                 }
+                                if !saved.is_empty() && item(ui, "Delete a saved preset…") {
+                                    // Classic popups aren't nested; open the delete
+                                    // list once this menu closes.
+                                    self.pending_popup = Some((Popup::EqDelete, owner, pos));
+                                    close = true;
+                                }
                                 if item(ui, "Import preset (.eqf)…") {
                                     self.import_eqf();
                                     close = true;
@@ -479,6 +493,29 @@ impl super::LinAmpApp {
                                     close = true;
                                 }
                             });
+                        }
+                        Popup::EqDelete => {
+                            let saved: Vec<(usize, String)> = self
+                                .eq_presets
+                                .items
+                                .iter()
+                                .enumerate()
+                                .map(|(i, p)| (i, p.name.clone()))
+                                .collect();
+                            if saved.is_empty() {
+                                menu_item(ui, "(no saved presets)", "");
+                            } else {
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    // Delete highest index first so earlier indices
+                                    // stay valid; one click deletes one preset.
+                                    for (i, name) in &saved {
+                                        if item(ui, &format!("Delete: {name}")) {
+                                            self.delete_named_eq_preset(*i);
+                                            close = true;
+                                        }
+                                    }
+                                });
+                            }
                         }
                         Popup::StopMenu => {
                             if item(ui, "Stop") {

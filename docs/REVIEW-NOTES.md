@@ -285,3 +285,10 @@ code plus a working/not-working binary): visual and behavior changes.
   Manual check: set a curve, Save current as… with a name, pick another preset, then
   reopen the menu and load your saved one back; confirm it survives a restart. A
   menu affordance to delete a single saved preset is tracked as a small follow-up.
+
+- #147 (closed, delete a saved EQ preset): the EQ Presets menu now shows "Delete a
+  saved preset…" when the library is non-empty; it opens a list (same deferred-popup
+  pattern as Options > Bookmarks) where clicking an entry removes that preset and
+  re-saves the library. Manual check: save a couple of presets, then Delete a saved
+  preset… and remove one — confirm it disappears from the list and stays gone after
+  a restart. Deletion by name is covered by the config store test.
