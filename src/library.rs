@@ -21,6 +21,9 @@ pub enum LibView {
     RecentlyPlayed,
     NeverPlayed,
     TopRated,
+    /// The user's bookmarks. Served from the bookmark store (bookmarks.json),
+    /// not the library DB, so it works even for files that were never scanned.
+    Bookmarks,
 }
 
 /// Progress messages from a background scan.
@@ -213,6 +216,8 @@ impl Library {
             }
             LibView::NeverPlayed => ("WHERE play_count = 0", "artist, album, title"),
             LibView::TopRated => ("WHERE rating > 0", "rating DESC, artist, album, title"),
+            // Bookmarks aren't a DB query; the UI builds this view from the store.
+            LibView::Bookmarks => return Vec::new(),
         };
         self.query(
             &format!("SELECT {COLS} FROM tracks {filter} ORDER BY {order} LIMIT ?1"),
@@ -246,6 +251,17 @@ impl Library {
             "UPDATE tracks SET rating = ?2 WHERE path = ?1",
             params![path.to_string_lossy(), rating.clamp(0, 5)],
         );
+    }
+
+    /// A single track by its exact path, if the library has it indexed. Used to
+    /// give bookmarked tracks their full metadata in the Bookmarks view.
+    pub fn track_for_path(&self, path: &Path) -> Option<Track> {
+        self.query(
+            &format!("SELECT {COLS} FROM tracks WHERE path = ?1 LIMIT 1"),
+            params![path.to_string_lossy()],
+        )
+        .into_iter()
+        .next()
     }
 
     /// Current rating for a track (0 when absent).
@@ -517,6 +533,21 @@ mod tests {
         // Clamped to 0..=5.
         lib.set_rating(Path::new("/m/a2.mp3"), 99);
         assert_eq!(lib.rating(Path::new("/m/a2.mp3")), 5);
+    }
+
+    #[test]
+    fn track_for_path_finds_indexed_tracks_only() {
+        let lib = Library::open_in_memory();
+        seed(&lib);
+        // An indexed path returns its full metadata; the Bookmarks view relies on
+        // this to fill in artist/album for bookmarked tracks.
+        let t = lib.track_for_path(Path::new("/m/a1.mp3")).expect("indexed");
+        assert_eq!(t.artist, "Alice");
+        // A path the library never scanned returns nothing (the UI then falls back
+        // to the bookmark's own title).
+        assert!(lib.track_for_path(Path::new("/m/not-scanned.mp3")).is_none());
+        // Bookmarks is not a DB-backed view.
+        assert!(lib.view(LibView::Bookmarks, 100).is_empty());
     }
 
     #[test]
