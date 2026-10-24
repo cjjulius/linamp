@@ -1193,8 +1193,12 @@ impl LinAmpApp {
             dur = t.duration.map(|d| d.as_secs_f32()).unwrap_or(0.0);
         } else if let Some(url) = self.player.current_url() {
             // Streaming "Open location": there's no playlist track, so show the
-            // location in the title (ICY stream-title metadata is a follow-up).
-            title = crate::text::display_url(url);
+            // live ICY stream title ("now playing") when the stream reports one,
+            // otherwise the location itself.
+            title = match self.player.stream_title() {
+                Some(t) => t,
+                None => crate::text::display_url(url),
+            };
         }
         let pos = self
             .classic_seek_preview
