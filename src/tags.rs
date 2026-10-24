@@ -175,7 +175,15 @@ pub fn read_info(path: &Path) -> FileInfo {
 /// by byte index and panics if a multibyte character straddles it (#115), which
 /// aborts the save mid-write and corrupts the file. Capping here avoids that.
 fn v1_text(s: &str, max: usize) -> Option<String> {
-    let s = s.trim();
+    // ID3v1 is Latin-1 only. Fold characters outside Latin-1 to their base ASCII
+    // (e.g. "Ğűitar" -> "guitar") so the field stays readable and matches the
+    // classic playlist's on-screen folding, instead of the "?" mojibake a lossy
+    // Latin-1 encode produces. Latin-1 characters (é, ü, ñ, …) are kept as-is.
+    let folded: String = s
+        .chars()
+        .map(|c| if (c as u32) <= 0xFF { c } else { crate::classic::ascii_fold(c) })
+        .collect();
+    let s = folded.trim();
     if s.is_empty() {
         return None;
     }
@@ -302,6 +310,20 @@ fn apply_v2(tag: &mut lofty::tag::Tag, f: &Id3Fields) {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn v1_text_folds_non_latin1_but_keeps_latin1() {
+        // Characters outside Latin-1 fold to base ASCII (no "?" mojibake)...
+        assert_eq!(
+            v1_text("\u{11E}\u{171}itar \u{124}\u{171}\u{14B}\u{167}", V1_MAX_TEXT),
+            Some("guitar hunt".to_string())
+        );
+        // ...while Latin-1 accents (é, ü, ñ) are preserved.
+        assert_eq!(v1_text("Café ñandú", V1_MAX_TEXT), Some("Café ñandú".to_string()));
+        // Plain ASCII is unchanged; blank trims to None.
+        assert_eq!(v1_text("Hello", V1_MAX_TEXT), Some("Hello".to_string()));
+        assert_eq!(v1_text("   ", V1_MAX_TEXT), None);
+    }
 
     #[test]
     fn editable_exts() {

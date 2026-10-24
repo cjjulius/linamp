@@ -889,7 +889,9 @@ fn blit(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, sy: u32
 /// ASCII-only bitmap font renders it readably instead of as a blank (#97, e.g.
 /// Vietnamese "Trường" -> "Truong"). Returns the char unchanged when unmapped.
 /// This is a readability fallback; full non-Latin glyphs would need a font atlas.
-fn ascii_fold(ch: char) -> char {
+/// Also reused when writing ID3v1 (Latin-1 only) to fold characters outside
+/// Latin-1 to base ASCII instead of the "?" a lossy encode produces.
+pub(crate) fn ascii_fold(ch: char) -> char {
     match ch as u32 {
         // Latin-1 Supplement
         0xC0..=0xC6 | 0xE0..=0xE6 => 'a',
