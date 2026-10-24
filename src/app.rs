@@ -483,6 +483,8 @@ pub struct LinAmpApp {
     jump_file: Option<JumpFile>,
     /// Jump-to-time input buffer (Some while the dialog is open).
     jump_time: Option<String>,
+    /// Open-location (stream URL) input buffer (Some while the dialog is open).
+    location_entry: Option<String>,
 
     marquee_offset: f32,
     last_frame: Instant,
@@ -641,6 +643,7 @@ impl LinAmpApp {
             tag_editor: None,
             jump_file: None,
             jump_time: None,
+            location_entry: None,
             marquee_offset: 0.0,
             last_frame: Instant::now(),
             last_device_check: Instant::now(),
@@ -2367,6 +2370,80 @@ impl LinAmpApp {
         }
     }
 
+    /// Open the "Open location" dialog (classic Ctrl+L) to stream a URL.
+    fn open_location(&mut self) {
+        self.location_entry = Some(String::new());
+    }
+
+    /// Start streaming the entered URL.
+    fn play_location(&mut self, url: &str) {
+        let url = url.trim();
+        if url.is_empty() {
+            return;
+        }
+        match self.player.play_url(url) {
+            Ok(()) => self.status = format!("Streaming: {url}"),
+            Err(e) => self.status = format!("Couldn't open location: {e}"),
+        }
+    }
+
+    /// "Open location": enter a stream URL and play it (classic Winamp Ctrl+L).
+    fn ui_location(&mut self, ctx: &egui::Context) {
+        if self.location_entry.is_none() {
+            return;
+        }
+        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp — Open location")
+            .with_position(screen)
+            .with_inner_size(egui::vec2(320.0, 110.0))
+            .with_resizable(false)
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
+        let id = egui::ViewportId::from_hash_of("linamp_location");
+        let mut close = false;
+        let mut go: Option<String> = None;
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let url = {
+                    let buf = self.location_entry.as_mut().unwrap();
+                    ui.label("Open location (URL):");
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(buf)
+                            .hint_text("http://stream.example.com/radio"),
+                    );
+                    resp.request_focus();
+                    buf.clone()
+                };
+                let valid = !url.trim().is_empty();
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(valid, egui::Button::new("Open")).clicked() {
+                        go = Some(url.clone());
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+                if valid && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    go = Some(url);
+                }
+                if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape))
+                {
+                    close = true;
+                }
+            });
+            self.apply_base_cursor(ctx, "LinAmp — Open location");
+        });
+        if let Some(url) = go {
+            self.play_location(&url);
+            close = true;
+        }
+        if close {
+            self.location_entry = None;
+        }
+    }
+
     fn apply_eq_slider(&mut self, region: classic::EqRegion, ey: f32) {
         let v = classic::eq_value_at_y(ey);
         match region {
@@ -2646,6 +2723,7 @@ impl LinAmpApp {
         self.ui_jump_file(ctx);
         self.ui_jump_time(ctx);
         self.ui_eq_save_name(ctx);
+        self.ui_location(ctx);
 
         // Initialise window positions, once.
         if !self.positions_init {

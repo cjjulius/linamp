@@ -135,12 +135,16 @@ impl super::LinAmpApp {
         if k.toggle {
             self.play_pause();
         }
-        if k.open && !k.alt {
+        if k.open && !k.alt && !k.ctrl {
             if k.shift {
                 self.open_folder();
             } else {
                 self.open_files();
             }
+        }
+        if k.ctrl && k.open {
+            // Ctrl+L — open a stream location (URL).
+            self.open_location();
         }
         if k.repeat {
             if k.ctrl {
