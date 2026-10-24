@@ -19,12 +19,14 @@ pub(super) enum Popup {
     EqPresets,
     /// Right-click on the main window's Stop button.
     StopMenu,
+    /// The Alt+I bookmarks list (opened from the Options menu).
+    Bookmarks,
 }
 
 /// Window size (points) for a popup menu, from its item/separator count.
 pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
     let (buttons, seps, width) = match kind {
-        Popup::Options => (9, 3, 182.0),
+        Popup::Options => (10, 3, 182.0),
         Popup::PlAdd => (2, 0, 182.0),
         Popup::PlRem => (4, 0, 182.0),
         Popup::PlSel => (3, 0, 182.0),
@@ -35,6 +37,8 @@ pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
         Popup::PlVoid => (12, 4, 210.0),
         Popup::EqPresets => (crate::eq::PRESETS.len() as i32 + 2, 1, 182.0),
         Popup::StopMenu => (3, 0, 200.0),
+        // Height is overridden per bookmark count in draw_popup_viewport.
+        Popup::Bookmarks => (2, 1, 240.0),
     };
     (width, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
 }
@@ -86,7 +90,15 @@ impl super::LinAmpApp {
         let Some((kind, owner, pos)) = self.popup else {
             return;
         };
-        let (w, h) = popup_dims(kind);
+        let (w, h) = if kind == Popup::Bookmarks {
+            // Grows with the bookmark count (capped so a long list scrolls rather
+            // than running off-screen): the list, a separator, then Add + Clear.
+            let (width, _, _) = (240.0_f32, 0, 0);
+            let rows = self.bookmarks.items.len().clamp(1, 12) as f32;
+            (width, (rows + 2.0) * 24.0 + 9.0 + 16.0)
+        } else {
+            popup_dims(kind)
+        };
         let mut screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
         // Keep the menu fully on the desktop: a tall menu (e.g. the empty-area
         // menu) opened near the bottom/right edge would otherwise spill off-screen
@@ -193,6 +205,12 @@ impl super::LinAmpApp {
                             if item(ui, aot) {
                                 self.prefs.always_on_top = !self.prefs.always_on_top;
                                 self.prefs.save();
+                                close = true;
+                            }
+                            if item(ui, "Bookmarks…") {
+                                // Classic popups aren't nested; open the list once
+                                // this menu closes.
+                                self.pending_popup = Some((Popup::Bookmarks, owner, pos));
                                 close = true;
                             }
                             if item(ui, "Preferences…") {
@@ -449,6 +467,38 @@ impl super::LinAmpApp {
                                 close = true;
                             }
                         }
+                        Popup::Bookmarks => {
+                            // Snapshot (index, title) so the click handler can borrow
+                            // self mutably to play without aliasing the list.
+                            let list: Vec<(usize, String)> = self
+                                .bookmarks
+                                .items
+                                .iter()
+                                .enumerate()
+                                .map(|(i, b)| (i, b.title.clone()))
+                                .collect();
+                            if list.is_empty() {
+                                menu_item(ui, "(no bookmarks)", "");
+                            } else {
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    for (i, title) in &list {
+                                        if item(ui, title) {
+                                            self.play_bookmark(*i);
+                                            close = true;
+                                        }
+                                    }
+                                });
+                            }
+                            ui.separator();
+                            if item(ui, "Add current track (Alt+I)") {
+                                self.add_bookmark();
+                                close = true;
+                            }
+                            if item(ui, "Clear bookmarks") {
+                                self.clear_bookmarks();
+                                close = true;
+                            }
+                        }
                     }
                 });
             // Outline just inside the window edge — a stroke centred on the edge
@@ -492,6 +542,10 @@ impl super::LinAmpApp {
         self.popup_fresh = false;
         if close {
             self.popup = None;
+            // Chain to a queued popup (e.g. Options → Bookmarks) now this one is gone.
+            if let Some((k, w, p)) = self.pending_popup.take() {
+                self.open_popup_in(k, w, p);
+            }
         }
     }
 

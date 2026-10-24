@@ -28,6 +28,7 @@ struct KeyState {
     key_e: bool,
     key_g: bool,
     key_a: bool,
+    key_i: bool,
     key_j: bool,
     del: bool,
     insert: bool,
@@ -76,6 +77,7 @@ impl super::LinAmpApp {
             k.key_e = i.key_pressed(Key::E);
             k.key_g = i.key_pressed(Key::G);
             k.key_a = i.key_pressed(Key::A);
+            k.key_i = i.key_pressed(Key::I);
             k.key_j = i.key_pressed(Key::J);
             k.del = i.key_pressed(Key::Delete);
             k.insert = i.key_pressed(Key::Insert);
@@ -234,6 +236,9 @@ impl super::LinAmpApp {
         }
         if k.alt && k.key_3 {
             self.open_tag_editor();
+        }
+        if k.alt && k.key_i {
+            self.add_bookmark();
         }
         if k.key_j {
             if k.ctrl {

@@ -247,3 +247,14 @@ code plus a working/not-working binary): visual and behavior changes.
   track, and confirm the mini slider fills as it plays and that clicking/dragging it
   seeks. The always-on-top toggle and mini-transport parts of #17 were already done;
   this leaves #17 only needing a visual sign-off on the new slider.
+
+- #45 (bookmarks, Alt+I): bookmark the current track with Alt+I; recall from a new
+  Bookmarks list in the Options menu (click a bookmark to play it, adding it back to
+  the playlist if needed), plus "Add current track" and "Clear bookmarks". Bookmarks
+  persist to a bookmarks.json next to the config. The store (add/dedup-by-path/remove
+  and JSON round-trip) is unit-tested. Manual checks: play a track and press Alt+I
+  (status shows "Bookmarked: …"); open Options > Bookmarks and click the entry to
+  play it; confirm bookmarks survive a restart. Known gaps for a follow-up: no
+  per-item remove in the menu yet (only Clear all), and stream/URL bookmarks wait on
+  #15 (Open URL). The menu is a new popup opened after the Options menu closes
+  (classic popups aren't nested) — worth a quick look that the hand-off feels right.
