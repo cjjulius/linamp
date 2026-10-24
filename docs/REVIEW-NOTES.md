@@ -266,3 +266,13 @@ code plus a working/not-working binary): visual and behavior changes.
   match what the app actually does. #77 itself stays open: the Preferences window
   deliberately surfaces only persistent settings (one-shot actions and view toggles
   keep their shortcuts but aren't shown there), so that's a design call to confirm.
+
+- #45 (bookmarks hardening): reviewed this branch's new code and tightened the
+  bookmarks feature — playing a bookmark whose file has since moved/been deleted now
+  reports "Bookmark file not found" instead of appending a permanently-unplayable
+  row to the playlist, and the Bookmarks menu now offers "Remove current track from
+  bookmarks" when the playing track is already bookmarked (otherwise "Add current").
+  Covered by the existing store tests. Manual check: bookmark a track, then move or
+  delete its file and click the bookmark — expect the status message, not a dead
+  playlist row; and confirm the add/remove entry flips based on the current track.
+  Full arbitrary per-item removal from the list is still a follow-up under #45.
