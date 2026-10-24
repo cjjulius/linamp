@@ -346,3 +346,10 @@ code plus a working/not-working binary): visual and behavior changes.
   stripping and title parsing (including a clean-EOF edge case) are unit-tested; the
   live path needs a real ICY radio stream to confirm. Manual check: play an Icecast/
   SHOUTcast MP3 stream and confirm the title shows the song and updates as it changes.
+
+- #15 robustness (bug fix): opening a location no longer risks freezing the UI if a
+  server connects but stalls — the fetch now has a 10s connect timeout (no read
+  timeout, so live streams keep flowing) and the open handshake waits at most 20s
+  before returning a "timed out opening stream" error. Hard to unit-test (needs a
+  dead/slow host); manual check: Ctrl+L a bad host or an unreachable URL and confirm
+  the app stays responsive and shows the error rather than hanging.

@@ -76,7 +76,9 @@ pub fn open(url: &str) -> Result<(StreamSource, SharedTitle)> {
         .spawn(move || decode_loop(&url, info_tx, sample_tx, title_thread))
         .map_err(|e| anyhow!("couldn't start stream thread: {e}"))?;
 
-    match info_rx.recv() {
+    // Bound the wait so a server that connects but never sends data can't freeze
+    // the UI thread; the decode thread cleans itself up when these channels drop.
+    match info_rx.recv_timeout(Duration::from_secs(20)) {
         Ok(Ok((sample_rate, channels))) => Ok((
             StreamSource {
                 rx: sample_rx,
@@ -86,7 +88,7 @@ pub fn open(url: &str) -> Result<(StreamSource, SharedTitle)> {
             title,
         )),
         Ok(Err(e)) => Err(anyhow!(e)),
-        Err(_) => Err(anyhow!("stream closed before it started")),
+        Err(_) => Err(anyhow!("timed out opening stream")),
     }
 }
 
@@ -169,8 +171,13 @@ fn decode_loop(
     use symphonia::core::probe::Hint;
 
     // Connect (blocking) on this background thread so the UI never stalls. Ask
-    // for ICY metadata so radio streams can report their current song.
-    let resp = match ureq::get(url).set("Icy-MetaData", "1").call() {
+    // for ICY metadata so radio streams can report their current song. A connect
+    // timeout keeps a dead host from hanging the thread; we set no read timeout
+    // because a live stream is read continuously.
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .build();
+    let resp = match agent.get(url).set("Icy-MetaData", "1").call() {
         Ok(r) => r,
         Err(e) => {
             let _ = info_tx.send(Err(format!("couldn't open {url}: {e}")));
