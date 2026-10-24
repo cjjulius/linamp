@@ -421,3 +421,9 @@ code plus a working/not-working binary): visual and behavior changes.
   window, pick "Open location…", and confirm the URL dialog opens; with the
   Minibrowser enabled in Preferences, confirm the Options menu still shows every row
   (Exit at the bottom) without clipping.
+
+- Media Library Bookmarks view live refresh (bug fix): adding (Alt+I or Options >
+  Bookmarks), removing, or clearing a bookmark now rebuilds the library's Bookmarks
+  list immediately when that view is open, instead of only on the next click.
+  Manual check: open the Media Library on Bookmarks, play a track and press Alt+I,
+  and confirm the new entry appears in the list without re-selecting the view.
