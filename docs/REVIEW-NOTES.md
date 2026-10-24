@@ -338,3 +338,11 @@ code plus a working/not-working binary): visual and behavior changes.
   unit-tested. Manual check: play a stream and confirm the title shows the address
   and scrolls. Parsing live ICY stream-title metadata (the actual song name) is a
   follow-up.
+
+- #15 (ICY stream titles): radio streams that send ICY metadata now show the current
+  song in the title (falling back to the address when a stream has no metadata). The
+  decode thread requests `Icy-MetaData: 1`, strips the interleaved metadata blocks
+  before decoding, and publishes the latest `StreamTitle` to the UI. The metadata
+  stripping and title parsing (including a clean-EOF edge case) are unit-tested; the
+  live path needs a real ICY radio stream to confirm. Manual check: play an Icecast/
+  SHOUTcast MP3 stream and confirm the title shows the song and updates as it changes.

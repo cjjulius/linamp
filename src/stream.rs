@@ -11,7 +11,9 @@
 //! Dropping the `StreamSource` (sink stopped) closes the receiver, which makes
 //! the decode thread's `send` fail and the thread exit — so it is self-cleaning.
 
+use std::io::Read;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -20,6 +22,10 @@ use rodio::Source;
 /// ~1 second of stereo audio buffered between the decode thread and the audio
 /// output, giving the network/decoder slack without unbounded memory growth.
 const CHANNEL_SAMPLES: usize = 48_000 * 2;
+
+/// The current ICY stream title (SHOUTcast/Icecast "now playing"), shared from
+/// the decode thread to the UI. `None` when the stream carries no metadata.
+pub type SharedTitle = Arc<Mutex<Option<String>>>;
 
 /// A rodio source fed by the background decode thread.
 pub struct StreamSource {
@@ -55,26 +61,95 @@ impl Source for StreamSource {
 
 /// Open `url` and start decoding it on a background thread. Returns a rodio
 /// source once the format has been probed (so sample rate / channels are known),
-/// or an error if the connection or probe failed.
-pub fn open(url: &str) -> Result<StreamSource> {
+/// plus a shared handle to the live ICY stream title; or an error if the
+/// connection or probe failed.
+pub fn open(url: &str) -> Result<(StreamSource, SharedTitle)> {
     let url = url.to_string();
     // Carries the probed format info (or an early error) back to this call.
     let (info_tx, info_rx) = sync_channel::<Result<(u32, u16), String>>(1);
     let (sample_tx, sample_rx) = sync_channel::<f32>(CHANNEL_SAMPLES);
+    let title: SharedTitle = Arc::new(Mutex::new(None));
+    let title_thread = title.clone();
 
     std::thread::Builder::new()
         .name("linamp-stream".into())
-        .spawn(move || decode_loop(&url, info_tx, sample_tx))
+        .spawn(move || decode_loop(&url, info_tx, sample_tx, title_thread))
         .map_err(|e| anyhow!("couldn't start stream thread: {e}"))?;
 
     match info_rx.recv() {
-        Ok(Ok((sample_rate, channels))) => Ok(StreamSource {
-            rx: sample_rx,
-            sample_rate,
-            channels,
-        }),
+        Ok(Ok((sample_rate, channels))) => Ok((
+            StreamSource {
+                rx: sample_rx,
+                sample_rate,
+                channels,
+            },
+            title,
+        )),
         Ok(Err(e)) => Err(anyhow!(e)),
         Err(_) => Err(anyhow!("stream closed before it started")),
+    }
+}
+
+/// A `Read` adapter that strips ICY (SHOUTcast/Icecast) metadata blocks from an
+/// audio stream, exposing only the audio bytes and publishing the latest
+/// `StreamTitle` to a shared handle. Metadata arrives every `metaint` audio
+/// bytes as a length byte (×16) followed by that many bytes of text.
+struct IcyReader<R> {
+    inner: R,
+    metaint: usize,
+    until_meta: usize,
+    title: SharedTitle,
+}
+
+impl<R: Read> IcyReader<R> {
+    fn new(inner: R, metaint: usize, title: SharedTitle) -> Self {
+        Self {
+            inner,
+            metaint,
+            until_meta: metaint,
+            title,
+        }
+    }
+}
+
+impl<R: Read> Read for IcyReader<R> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.until_meta == 0 {
+            let mut len_byte = [0u8; 1];
+            // A clean EOF right on a metadata boundary ends the stream.
+            if self.inner.read(&mut len_byte)? == 0 {
+                return Ok(0);
+            }
+            let len = len_byte[0] as usize * 16;
+            if len > 0 {
+                let mut meta = vec![0u8; len];
+                self.inner.read_exact(&mut meta)?;
+                if let Some(t) = parse_stream_title(&meta) {
+                    if let Ok(mut guard) = self.title.lock() {
+                        *guard = Some(t);
+                    }
+                }
+            }
+            self.until_meta = self.metaint;
+        }
+        let want = out.len().min(self.until_meta);
+        let n = self.inner.read(&mut out[..want])?;
+        self.until_meta -= n;
+        Ok(n)
+    }
+}
+
+/// Extract the song title from an ICY metadata block (`StreamTitle='...';`).
+fn parse_stream_title(meta: &[u8]) -> Option<String> {
+    let s = String::from_utf8_lossy(meta);
+    let start = s.find("StreamTitle='")? + "StreamTitle='".len();
+    let rest = &s[start..];
+    let end = rest.find("';")?;
+    let title = rest[..end].trim().trim_matches('\0').trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title.to_string())
     }
 }
 
@@ -84,6 +159,7 @@ fn decode_loop(
     url: &str,
     info_tx: SyncSender<Result<(u32, u16), String>>,
     sample_tx: SyncSender<f32>,
+    title: SharedTitle,
 ) {
     use symphonia::core::audio::SampleBuffer;
     use symphonia::core::codecs::DecoderOptions;
@@ -92,8 +168,9 @@ fn decode_loop(
     use symphonia::core::meta::MetadataOptions;
     use symphonia::core::probe::Hint;
 
-    // Connect (blocking) on this background thread so the UI never stalls.
-    let resp = match ureq::get(url).call() {
+    // Connect (blocking) on this background thread so the UI never stalls. Ask
+    // for ICY metadata so radio streams can report their current song.
+    let resp = match ureq::get(url).set("Icy-MetaData", "1").call() {
         Ok(r) => r,
         Err(e) => {
             let _ = info_tx.send(Err(format!("couldn't open {url}: {e}")));
@@ -109,7 +186,15 @@ fn decode_loop(
         }
     }
 
-    let reader = resp.into_reader();
+    // If the server interleaves ICY metadata, strip it out before decoding.
+    let metaint = resp
+        .header("icy-metaint")
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0);
+    let reader: Box<dyn Read + Send + Sync> = match metaint {
+        Some(mi) => Box::new(IcyReader::new(resp.into_reader(), mi, title)),
+        None => resp.into_reader(),
+    };
     let mss = MediaSourceStream::new(Box::new(ReadOnlySource::new(reader)), Default::default());
 
     let probed = match symphonia::default::get_probe().format(
@@ -207,7 +292,41 @@ fn mime_to_ext(content_type: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::mime_to_ext;
+    use super::*;
+    use std::io::{Cursor, Read};
+
+    #[test]
+    fn parse_stream_title_extracts_song() {
+        let meta = b"StreamTitle='Artist - Song';StreamUrl='http://x';\0\0\0";
+        assert_eq!(parse_stream_title(meta).as_deref(), Some("Artist - Song"));
+        // Empty title yields None.
+        assert_eq!(parse_stream_title(b"StreamTitle='';\0"), None);
+        // No StreamTitle field yields None.
+        assert_eq!(parse_stream_title(b"StreamUrl='x';"), None);
+    }
+
+    #[test]
+    fn icy_reader_strips_metadata_and_captures_title() {
+        // metaint = 4: 4 audio bytes, then a 1-byte length (×16) + that many meta
+        // bytes, then audio again.
+        let title_text = b"StreamTitle='Now Playing';";
+        let blocks = (title_text.len() + 15) / 16; // length byte is in 16-byte units
+        let mut meta = vec![0u8; blocks * 16];
+        meta[..title_text.len()].copy_from_slice(title_text);
+        let mut raw = Vec::new();
+        raw.extend_from_slice(b"AAAA"); // audio
+        raw.push(blocks as u8); // meta length byte
+        raw.extend_from_slice(&meta); // meta block
+        raw.extend_from_slice(b"BBBB"); // audio
+
+        let title: SharedTitle = Arc::new(Mutex::new(None));
+        let mut r = IcyReader::new(Cursor::new(raw), 4, title.clone());
+        let mut audio = Vec::new();
+        r.read_to_end(&mut audio).unwrap();
+        // Only the audio bytes come through; the metadata block is stripped.
+        assert_eq!(audio, b"AAAABBBB");
+        assert_eq!(title.lock().unwrap().as_deref(), Some("Now Playing"));
+    }
 
     #[test]
     fn mime_maps_common_stream_types() {

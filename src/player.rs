@@ -34,6 +34,8 @@ pub struct Player {
     current_path: Option<PathBuf>,
     /// The streaming URL currently playing (classic "Open location"), if any.
     current_url: Option<String>,
+    /// Live ICY stream title for the current stream (updated by its decode thread).
+    stream_title: Option<crate::stream::SharedTitle>,
     viz: Arc<VizShared>,
     eq: Arc<EqShared>,
     balance: Arc<BalanceShared>,
@@ -52,6 +54,7 @@ impl Player {
             fade: 1.0,
             current_path: None,
             current_url: None,
+            stream_title: None,
             viz: VizShared::new(),
             eq: EqShared::new(),
             balance: BalanceShared::new(),
@@ -126,6 +129,14 @@ impl Player {
         self.current_url.as_deref()
     }
 
+    /// The live ICY stream title ("now playing") for the current stream, if the
+    /// stream reports one.
+    pub fn stream_title(&self) -> Option<String> {
+        self.stream_title
+            .as_ref()
+            .and_then(|t| t.lock().ok().and_then(|g| g.clone()))
+    }
+
     pub fn volume(&self) -> f32 {
         self.volume
     }
@@ -167,6 +178,7 @@ impl Player {
         self.sink = Some(sink);
         self.current_path = Some(path.to_path_buf());
         self.current_url = None;
+        self.stream_title = None;
         self.state = PlayState::Playing;
         self.apply_gain();
         Ok(())
@@ -176,7 +188,8 @@ impl Player {
     /// connection and decode run on a background thread; this returns once the
     /// stream's format is known, or with an error if it couldn't be opened.
     pub fn play_url(&mut self, url: &str) -> Result<()> {
-        let source = crate::stream::open(url)?;
+        let (source, title) = crate::stream::open(url)?;
+        self.stream_title = Some(title);
         self.viz.clear();
         self.viz.set_rate(source.sample_rate());
         // Same shaping as local playback, so EQ / analyzer / balance all apply.
@@ -226,6 +239,7 @@ impl Player {
         }
         self.state = PlayState::Stopped;
         self.current_url = None;
+        self.stream_title = None;
         self.fade = 1.0; // reset so the next track isn't faded
         self.viz.clear(); // silence the analyzer so its bars fall to zero
     }
