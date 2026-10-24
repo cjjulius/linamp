@@ -39,10 +39,16 @@ impl super::LinAmpApp {
     /// Rebuild the library panes/results from the active nav node, search text
     /// and artist/album selection.
     pub(super) fn refresh_library(&mut self) {
+        let q = self.lib_query.trim().to_string();
+        // Bookmarks are backed by the store, not the DB, so this view works even
+        // without a library; the search box filters it in place.
+        if self.lib_nav == crate::library::LibView::Bookmarks {
+            self.refresh_bookmarks_view(&q);
+            return;
+        }
         if self.library.is_none() {
             return;
         }
-        let q = self.lib_query.trim().to_string();
         if !q.is_empty() {
             // A search overrides the nav node and the artist/album panes.
             self.lib_results = self.library.as_ref().unwrap().search(&q, 2000);
@@ -75,6 +81,40 @@ impl super::LinAmpApp {
         }
         self.lib_sel_tracks.clear();
         // Apply the user's column sort over the view's natural order, if any.
+        self.apply_lib_sort();
+    }
+
+    /// Build the Bookmarks view from the bookmark store. Each bookmark shows its
+    /// full library metadata when the track is indexed, otherwise just its saved
+    /// title and path (so bookmarks to un-scanned files still list and play). An
+    /// optional query filters by title or path.
+    fn refresh_bookmarks_view(&mut self, query: &str) {
+        self.lib_artists.clear();
+        self.lib_albums.clear();
+        self.lib_ratings.clear();
+        let q = query.to_lowercase();
+        let lib = self.library.as_ref();
+        self.lib_results = self
+            .bookmarks
+            .items
+            .iter()
+            .filter(|b| {
+                q.is_empty()
+                    || b.title.to_lowercase().contains(&q)
+                    || b.path.to_lowercase().contains(&q)
+            })
+            .map(|b| {
+                let path = std::path::PathBuf::from(&b.path);
+                lib.and_then(|l| l.track_for_path(&path)).unwrap_or_else(|| {
+                    let mut t = crate::playlist::Track::new(path);
+                    if !b.title.trim().is_empty() {
+                        t.title = b.title.clone();
+                    }
+                    t
+                })
+            })
+            .collect();
+        self.lib_sel_tracks.clear();
         self.apply_lib_sort();
     }
 
@@ -585,7 +625,17 @@ impl super::LinAmpApp {
                 nav(ui, "Top Rated", LibView::TopRated);
                 ui.add_space(6.0 * s);
                 ui.label(RichText::new("Playlists").color(dim).size(11.0 * s).italics());
-                ui.label(RichText::new("Bookmarks").color(dim).size(11.0 * s).italics());
+                ui.add_space(6.0 * s);
+                // A real, clickable view now (the same bookmarks as Options > Bookmarks).
+                if ui
+                    .selectable_label(
+                        self.lib_nav == LibView::Bookmarks,
+                        RichText::new("Bookmarks"),
+                    )
+                    .clicked()
+                {
+                    nav_click = Some(LibView::Bookmarks);
+                }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| match &self.library {
                     Some(lib) => {
                         ui.label(RichText::new(format!("{} tracks", lib.count())).color(dim).size(11.0 * s));
@@ -821,7 +871,15 @@ impl super::LinAmpApp {
                                     // populated library gets a message that fits it.
                                     let lib_empty =
                                         self.library.as_ref().map(|l| l.count()).unwrap_or(0) == 0;
-                                    let msg = if lib_empty {
+                                    let msg = if self.lib_nav == LibView::Bookmarks {
+                                        // Bookmarks live in their own store, so this
+                                        // view is empty independently of the DB.
+                                        if self.lib_query.trim().is_empty() {
+                                            "No bookmarks yet. Press Alt+I while a track plays to add one."
+                                        } else {
+                                            "No bookmarks match your search."
+                                        }
+                                    } else if lib_empty {
                                         "No tracks. Use \u{201c}Scan folder\u{2026}\u{201d} to index your music."
                                     } else if !self.lib_query.trim().is_empty() {
                                         "No tracks match your search."
@@ -833,6 +891,7 @@ impl super::LinAmpApp {
                                             LibView::NeverPlayed => "Every track has been played.",
                                             LibView::RecentlyAdded => "No tracks have been added recently.",
                                             LibView::Audio => "No tracks match the selected artist/album.",
+                                            LibView::Bookmarks => "No bookmarks yet.",
                                         }
                                     };
                                     ui.label(RichText::new(msg).color(dim).italics());
@@ -949,7 +1008,12 @@ impl super::LinAmpApp {
                                             ui.close_menu();
                                         }
                                         ui.separator();
-                                        if ui.button("Remove from library").clicked() {
+                                        let remove_label = if self.lib_nav == LibView::Bookmarks {
+                                            "Remove bookmark"
+                                        } else {
+                                            "Remove from library"
+                                        };
+                                        if ui.button(remove_label).clicked() {
                                             lib_action = Some(LibAction::Remove(rows.clone()));
                                             ui.close_menu();
                                         }
@@ -1109,7 +1173,14 @@ impl super::LinAmpApp {
                         .iter()
                         .filter_map(|&i| self.lib_results.get(i).map(|t| t.path.clone()))
                         .collect();
-                    if let Some(lib) = &self.library {
+                    if self.lib_nav == LibView::Bookmarks {
+                        // In the Bookmarks view "Remove" drops the bookmark, not the
+                        // library row (the file stays indexed and on disk).
+                        for p in &paths {
+                            self.bookmarks.remove_path(&p.to_string_lossy());
+                        }
+                        self.bookmarks.save();
+                    } else if let Some(lib) = &self.library {
                         lib.remove_paths(&paths);
                     }
                     self.lib_sel_tracks.clear();
