@@ -122,7 +122,8 @@ folder. Headless preview: `linamp --render-all skin.wsz out.png`.
 
 For how the pieces fit together — the multi-window model, the fingerprint-cached
 render pipeline, and the platform FFI boundary — see
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The keyboard and mouse shortcuts are
+listed in [docs/SHORTCUTS.md](docs/SHORTCUTS.md).
 
 `cargo test` runs the suite (pure, cross-platform); CI builds and tests on Linux
 and Windows for every push and PR.
