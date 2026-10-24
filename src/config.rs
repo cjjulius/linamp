@@ -167,6 +167,12 @@ mod tests {
         assert!(!s.main_shade && !s.eq_shade && !s.pl_shade);
         assert!(!s.eq_enabled && !s.eq_auto);
         assert!(s.eq_bands.is_empty());
+        // No saved positions in a legacy session: the layout falls back to the
+        // default dock arrangement rather than restoring absolute positions (#145).
+        assert_eq!(s.main_pos, None);
+        assert_eq!(s.eq_pos, None);
+        assert_eq!(s.pl_pos, None);
+        assert_eq!(s.lib_pos, None);
     }
 
     #[test]

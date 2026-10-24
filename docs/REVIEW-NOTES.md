@@ -227,3 +227,13 @@ code plus a working/not-working binary): visual and behavior changes.
   cycle). Still open under #144: Ctrl+A always-on-top (resolve the playlist
   select-all conflict), Ctrl+E EasyMove, Alt+W toggle the main window, and
   Ctrl+keypad-0 open-location (ties to #15 Open URL).
+
+- #145 (closed, remember window layout): this was already implemented — window
+  positions, open/visible state and window-shade state all persist to session.json
+  and restore on launch, with an off-screen clamp (tested `nudge_onto`) that pulls a
+  saved layout back onto the desktop after a resolution drop. Closed as resolved;
+  this cycle only corrected a stale code comment that claimed positions weren't
+  remembered and added a legacy-session assertion. Manual check to confirm the
+  close is right: move the windows, window-shade one, close another, relaunch, and
+  confirm the exact layout (positions + shade + which windows are open) comes back;
+  optionally drop screen resolution and confirm an off-screen window is nudged back.

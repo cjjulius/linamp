@@ -681,7 +681,8 @@ impl LinAmpApp {
                 app.pl_px_h = h.max(87.0);
             }
             // Restore which windows were open and their collapsed/full state.
-            // Positions aren't remembered; positions_init docks them on frame 1.
+            // The saved window positions (if any) are applied just below and
+            // placed on frame 1; absent them, positions_init docks the windows.
             app.eq_visible = session.eq_visible;
             app.pl_visible = session.pl_visible;
             app.main_shade = session.main_shade;
