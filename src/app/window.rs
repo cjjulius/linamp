@@ -103,6 +103,14 @@ impl super::LinAmpApp {
             self.pl_first = (self.pl_first as i32 + step).clamp(0, max.max(0)) as usize;
         }
 
+        // Mouse wheel over the main window adjusts volume, like classic Winamp
+        // (scroll up louder, down quieter). The playlist uses the wheel to scroll;
+        // the EQ window has no wheel action. Applies in shade mode too.
+        if win == ClWin::Main && scroll != 0.0 {
+            let v = wheel_volume(self.player.volume(), scroll, 0.05);
+            self.player.set_volume(v);
+        }
+
         if pressed {
             self.active_region = None;
             self.eq_active = None;
@@ -696,5 +704,33 @@ impl super::LinAmpApp {
             self.lib_pos = main + (self.lib_pos - main) * ratio;
         }
         self.root_last = None; // force the root window to resize next frame
+    }
+}
+
+/// Volume after one mouse-wheel notch over the main window: scrolling up is
+/// louder, down is quieter, clamped to 0..=1 (classic Winamp main-window wheel
+/// behaviour). `step` is the per-notch change.
+pub(crate) fn wheel_volume(current: f32, scroll: f32, step: f32) -> f32 {
+    let delta = if scroll > 0.0 {
+        step
+    } else if scroll < 0.0 {
+        -step
+    } else {
+        0.0
+    };
+    (current + delta).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wheel_volume;
+
+    #[test]
+    fn wheel_volume_scrolls_and_clamps() {
+        assert!((wheel_volume(0.5, 1.0, 0.05) - 0.55).abs() < 1e-6, "up is louder");
+        assert!((wheel_volume(0.5, -1.0, 0.05) - 0.45).abs() < 1e-6, "down is quieter");
+        assert_eq!(wheel_volume(0.98, 1.0, 0.05), 1.0, "clamps at max");
+        assert_eq!(wheel_volume(0.02, -1.0, 0.05), 0.0, "clamps at min");
+        assert_eq!(wheel_volume(0.5, 0.0, 0.05), 0.5, "no scroll, no change");
     }
 }
