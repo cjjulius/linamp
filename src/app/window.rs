@@ -23,7 +23,7 @@ impl super::LinAmpApp {
             (Some(o), Some(l)) => Some(o.min + l.to_vec2()),
             _ => None,
         };
-        let (pressed, released, down, secondary, scroll, mods) = ctx.input(|i| {
+        let (pressed, released, down, secondary, scroll, mods, dbl_click) = ctx.input(|i| {
             (
                 i.pointer.primary_pressed(),
                 i.pointer.primary_released(),
@@ -31,6 +31,7 @@ impl super::LinAmpApp {
                 i.pointer.secondary_clicked(),
                 i.raw_scroll_delta.y,
                 i.modifiers,
+                i.pointer.button_double_clicked(egui::PointerButton::Primary),
             )
         });
         // Platform-aware Ctrl (Command on macOS) for selection gestures.
@@ -111,6 +112,20 @@ impl super::LinAmpApp {
             self.player.set_volume(v);
         }
 
+        // Double-click an EQ band or preamp to reset it to 0 dB (flat), like Winamp
+        // (#140). Uses egui's own double-click detection (fires on the second
+        // release), which is reliable regardless of frame timing.
+        if dbl_click && win == ClWin::Eq && !shaded {
+            if let Some(l) = local {
+                let (nx, ny) = (l.x / self.scale, l.y / self.scale);
+                if let Some(er @ (classic::EqRegion::Preamp | classic::EqRegion::Band(_))) =
+                    classic::eq_region_at(nx, ny)
+                {
+                    self.reset_eq_slider(er);
+                }
+            }
+        }
+
         if pressed {
             self.active_region = None;
             self.eq_active = None;
@@ -183,17 +198,10 @@ impl super::LinAmpApp {
                                     self.start_drag(ctx, win, screen_cursor);
                                 }
                                 Some(er @ (classic::EqRegion::Preamp | classic::EqRegion::Band(_))) => {
-                                    // Double-click a band/preamp to reset it to 0 dB
-                                    // (flat), like Winamp; otherwise set from the
-                                    // click position (#140).
-                                    let now = Instant::now();
-                                    if is_double_click(self.eq_last_click, er, now, 350) {
-                                        self.reset_eq_slider(er);
-                                        self.eq_last_click = None;
-                                    } else {
-                                        self.apply_eq_slider(er, ny);
-                                        self.eq_last_click = Some((er, now));
-                                    }
+                                    // A press sets the slider from the click position;
+                                    // a double-click resets it to 0 dB (handled below,
+                                    // on the second release) (#140).
+                                    self.apply_eq_slider(er, ny);
                                 }
                                 Some(
                                     er @ (classic::EqRegion::ShadeVolume
@@ -717,19 +725,6 @@ impl super::LinAmpApp {
     }
 }
 
-/// Whether clicking `item` at `now` counts as a double-click, given the previous
-/// click record `(item, when)` and a `within_ms` window. Same item and close
-/// enough in time. Factored out so the reset gesture is testable.
-pub(crate) fn is_double_click<T: PartialEq>(
-    prev: Option<(T, Instant)>,
-    item: T,
-    now: Instant,
-    within_ms: u128,
-) -> bool {
-    prev.map(|(p, t)| p == item && now.duration_since(t).as_millis() < within_ms)
-        .unwrap_or(false)
-}
-
 /// Volume after one mouse-wheel notch over the main window: scrolling up is
 /// louder, down is quieter, clamped to 0..=1 (classic Winamp main-window wheel
 /// behaviour). `step` is the per-notch change.
@@ -746,22 +741,7 @@ pub(crate) fn wheel_volume(current: f32, scroll: f32, step: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_double_click, wheel_volume};
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn double_click_matches_item_within_window() {
-        let now = Instant::now();
-        // Same item, no elapsed time: a double-click.
-        assert!(is_double_click(Some((7, now)), 7, now, 350));
-        // Different item: not a double-click even if simultaneous.
-        assert!(!is_double_click(Some((7, now)), 8, now, 350));
-        // No prior click: not a double-click.
-        assert!(!is_double_click(None::<(i32, Instant)>, 7, now, 350));
-        // Too old: outside the window.
-        let later = now + Duration::from_millis(400);
-        assert!(!is_double_click(Some((7, now)), 7, later, 350));
-    }
+    use super::wheel_volume;
 
     #[test]
     fn wheel_volume_scrolls_and_clamps() {
