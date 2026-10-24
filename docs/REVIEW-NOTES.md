@@ -258,3 +258,11 @@ code plus a working/not-working binary): visual and behavior changes.
   per-item remove in the menu yet (only Clear all), and stream/URL bookmarks wait on
   #15 (Open URL). The menu is a new popup opened after the Options menu closes
   (classic popups aren't nested) — worth a quick look that the hand-off feels right.
+
+- Docs (#77-related): added docs/SHORTCUTS.md, a full keyboard/mouse reference
+  derived from the input handler, and linked it from the README. This is the
+  "source of truth" #77 asks to audit the Preferences window against. No code
+  change, so nothing to validate beyond a read-through that the listed shortcuts
+  match what the app actually does. #77 itself stays open: the Preferences window
+  deliberately surfaces only persistent settings (one-shot actions and view toggles
+  keep their shortcuts but aren't shown there), so that's a design call to confirm.
