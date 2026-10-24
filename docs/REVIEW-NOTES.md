@@ -176,3 +176,8 @@ code plus a working/not-working binary): visual and behavior changes.
   a quick manual check — double-click a band and the preamp and confirm each
   snaps to centre and the sound updates. The double-click timing logic is
   unit-tested. Balance double-click-to-centre is still open under #140.
+
+- Parity (#140, complete): double-clicking the main window's balance slider now
+  re-centres it (balance 0), matching Winamp; this completes #140 alongside the EQ
+  band/preamp reset. Both use egui's native double-click detection. Manual check:
+  pan the balance off-centre, double-click it, and confirm it snaps back to centre.

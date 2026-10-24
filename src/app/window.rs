@@ -126,6 +126,17 @@ impl super::LinAmpApp {
             }
         }
 
+        // Double-click the balance slider to re-centre it (#140), as Winamp does.
+        if dbl_click && win == ClWin::Main && !shaded {
+            if let Some(l) = local {
+                let (nx, ny) = (l.x / self.scale, l.y / self.scale);
+                if classic::region_at(nx, ny) == Some(Btn::Balance) {
+                    self.balance = 0.0;
+                    self.player.set_balance(0.0);
+                }
+            }
+        }
+
         if pressed {
             self.active_region = None;
             self.eq_active = None;
