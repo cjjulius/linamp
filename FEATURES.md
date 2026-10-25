@@ -11,6 +11,10 @@ Legend: ✅ done - 🔜 planned - 🧪 partial
 
 ## Core playback
 - ✅ Decode MP3, FLAC, OGG/Vorbis, WAV, AAC/M4A, Opus, WavPack, AIFF
+- 🔜 More classic formats, tracked as issues: MPEG Layer I/II `.mp1`/`.mp2`
+  (#157), tracker modules `.mod`/`.xm`/`.s3m`/`.it` (#158), MIDI (#159), audio
+  CD (#160). AC-3 (#161) and WMA (#162) are **won't-fix** — restrictive /
+  proprietary licensing (and AC-3 was never a native classic-Winamp format)
 - ✅ Play / Pause / Stop / Next / Previous
 - ✅ Seek bar (scrub) with position + total time
 - ✅ Time display toggles elapsed ↔ remaining (−mm:ss) — Ctrl+T or click the time
@@ -19,6 +23,9 @@ Legend: ✅ done - 🔜 planned - 🧪 partial
 - ✅ Auto-advance on track end
 - ✅ Stereo balance (the balance slider pans the output, with centre snap)
 - ✅ Stop after current track (Ctrl+V) and stop with fade-out (Shift+V)
+- ✅ Open location / internet-radio streaming (Ctrl+L or the Options menu) —
+  HTTP/HTTPS with the live ICY song title
+- ✅ Skips tracks that can't be opened or decoded instead of stalling
 - 🔜 Crossfade, gapless, ReplayGain
 - 🔜 Playback speed / pitch
 
@@ -38,7 +45,7 @@ Legend: ✅ done - 🔜 planned - 🧪 partial
 - ✅ Robust playlist loading — M3U/PLS decoded leniently (tolerates a BOM or a
   stray non-UTF-8 byte), PLS ordered by `File<N>` index, and Windows-authored
   relative paths (backslashes) resolve on Linux too
-- 🔜 Jump-to-file
+- ✅ Jump-to-file (J) and jump-to-time (Ctrl+J)
 
 ## Metadata / Library
 - ✅ Read ID3v2 / Vorbis / FLAC tags (title/artist/album)
@@ -53,6 +60,8 @@ Legend: ✅ done - 🔜 planned - 🧪 partial
   its own window)
   — tag edits made in the editor update the library row immediately (no rescan);
   search treats `_` and `%` as literal text, not SQL wildcards
+- ✅ Bookmarks — Alt+I bookmarks the current track; Media Library → Bookmarks
+  view lists them (play, search filter, remove)
 - 🔜 Album art, smart views / playlists
 
 ## UI / UX (Winamp feel)
@@ -67,6 +76,8 @@ Legend: ✅ done - 🔜 planned - 🧪 partial
 - ✅ Accented / Vietnamese track text is ASCII-folded in the classic bitmap font
   (e.g. "Trường Sơn" → "Truong Son") instead of showing blank gaps 🧪
 - ✅ Always on top (options menu + Preferences)
+- ✅ Minibrowser — "Open in browser" opens the system browser (xdg-open on
+  Linux); the SHOUTcast directory pane is still planned (#146)
 
 ## Theming / Skins
 - ✅ **Pixel-perfect classic skin renderer** — composites real `.wsz` sprite
@@ -113,6 +124,7 @@ Legend: ✅ done - 🔜 planned - 🧪 partial
   the sound live; applied as a rodio `Source` ahead of the visualizer
 - ✅ Built-in presets (Rock, Pop, Jazz, Classical, Dance, Bass/Treble boost, …)
   via the classic **Presets** button and the modern view's dropdown
+- ✅ EQ preset library — import/export Winamp `.eqf` plus named save/load
 - ✅ **Auto** gain — sets the preamp to offset the loudest boosted band so the
   EQ is less likely to clip
 - ✅ EQ state (on/auto/preamp/bands) remembered across runs
@@ -152,12 +164,9 @@ Legend: ✅ done - 🔜 planned - 🧪 partial
 ## Planned / Backlog
 Big-ticket items; the full, current backlog is in
 [GitHub Issues](https://github.com/cjjulius/linamp/issues).
-- 🔜 Open URL / stream playback (Ctrl+L)
-- 🔜 Always-on-top; mini mode
 - 🔜 Crossfade, gapless, ReplayGain
 - 🔜 True "modern" (Winamp 3/5 `.wal` freeform) skin engine
 
 ## Keyboard shortcuts
-See the [README](README.md#keyboard-shortcuts) for the full list. Planned keys
-(e.g. `Ctrl+L` for streams) are tracked in the feature list above and the issue
-backlog.
+See the [README](README.md#keyboard-shortcuts) for the full list. Remaining
+Winamp 2.x shortcuts to fill in are tracked in #144.
