@@ -441,6 +441,6 @@ code plus a working/not-working binary): visual and behavior changes.
   but render an 18px item, and the inter-row spacing was loose, so menus read
   taller than their content (the Media Library's menus sit tighter). Row budget is
   now 21px via a shared MENU_ROW_H constant and the inter-row spacing is pinned to
-  2px, so every classic popup hugs its items. Visual change — confirm the Options,
+  2px, so every classic popup hugs its items. Visual change, confirm the Options,
   playlist and EQ-presets menus look tighter (closer to the Media Library's) with no
-  row clipped and the last item (e.g. Exit) still fully visible.
+  row clipped and the last item (example: Exit) still fully visible.
