@@ -267,9 +267,21 @@ impl super::LinAmpApp {
         if k.alt && k.open {
             self.toggle_library();
         }
-        // Playlist edit.
+        // Ctrl+A: select-all in the playlist window (where that's the Winamp
+        // meaning), else toggle always-on-top. Each classic window is its own
+        // viewport, so key presses only reach the focused one — `win` here is
+        // effectively the window with focus.
         if k.ctrl && k.key_a {
-            self.pl_select_all();
+            if win == ClWin::Pl {
+                self.pl_select_all();
+            } else {
+                self.prefs.always_on_top = !self.prefs.always_on_top;
+                self.prefs.save();
+                self.status = format!(
+                    "Always on top: {}",
+                    if self.prefs.always_on_top { "ON" } else { "off" }
+                );
+            }
         }
         if k.del {
             self.pl_remove(false);
