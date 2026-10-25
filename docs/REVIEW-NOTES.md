@@ -1,4 +1,4 @@
-# Review notes — feat/feature-set
+# Review notes, feat/feature-set
 
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
@@ -9,8 +9,8 @@ code plus a working/not-working binary): visual and behavior changes.
   change-detection hash in `persist_session_if_changed` (they were saved by
   `build_session` but never marked the session dirty, so a volume-only change was
   lost on the next launch). Verify interactively: change the volume, quit,
-  relaunch, and confirm the level is restored. End-to-end persistence was
-  confirmed by code inspection only — the automated test harness could not move
+  relaunch and confirm the level is restored. End-to-end persistence was
+  confirmed by code inspection only, the automated test harness could not move
   the volume control via synthetic mouse or keyboard input.
 
 - #115 ID3v2 to ID3v1 copy corruption: reproduced (writing a multibyte ID3v1
@@ -18,12 +18,12 @@ code plus a working/not-working binary): visual and behavior changes.
   and corrupting the file) and fixed by capping each v1 field to its byte limit
   on a char boundary (comment to 28 for the v1.1 track byte). Covered by a
   regression test. Optional interactive sanity check: open the tag editor on a
-  file with long/non-Latin tags, copy ID3v2 to ID3v1, save, and confirm the file
+  file with long/non-Latin tags, copy ID3v2 to ID3v1, save and confirm the file
   still plays.
 
 - #97 non-ASCII text readability (partial): the classic bitmap-font path now
-  ASCII-folds accented and Vietnamese characters to their base letter (e.g.
-  "Trường Sơn" renders as "Truong Son") instead of blank gaps. Visual change —
+  ASCII-folds accented and Vietnamese characters to their base letter (example:
+  "Trường Sơn" renders as "Truong Son") instead of blank gaps. Visual change,
   confirm accented/Vietnamese track titles read sensibly in the classic
   main/EQ/playlist windows. Full non-Latin glyph rendering still needs the font
   atlas approach from the issue; #97 left open for that.
@@ -36,7 +36,7 @@ code plus a working/not-working binary): visual and behavior changes.
 - #46 playlist editor extras: added "Remove missing files" (Rem menu) and
   "Randomize list" / "Reverse list" (Misc menu). The operations are unit-tested;
   the menu wiring and popup sizing (Rem now 4 rows, Misc now 6) need a visual
-  check — open the playlist bottom-bar Rem/Misc menus and confirm the new items
+  check, open the playlist bottom-bar Rem/Misc menus and confirm the new items
   show and behave.
 
 - #114 show app version: the Preferences window now shows "LinAmp <version>"
@@ -70,7 +70,7 @@ code plus a working/not-working binary): visual and behavior changes.
   strips a BOM. Fully covered by a unit test; no manual check required.
 
 - Windows-authored playlist paths (bug-fix): relative .m3u/.pls entries that use
-  backslash separators (e.g. "Music\Song.mp3", as nearly all Winamp-era
+  backslash separators (example: "Music\Song.mp3", as nearly all Winamp-era
   playlists do) were treated as literal filenames and never resolved on Linux.
   resolve() now converts backslashes to separators for relative entries. The
   path logic is unit-tested; a good end-to-end human check is to load an actual
@@ -78,13 +78,13 @@ code plus a working/not-working binary): visual and behavior changes.
   appear.
 
 - PLS entry ordering (bug-fix): .pls parsing used line order and ingested any
-  key starting with "File" (e.g. a stray "FileFoo="). It now orders entries by
+  key starting with "File" (example: a stray "FileFoo="). It now orders entries by
   the N in "File<N>=" per the PLS spec and ignores non-File<N> keys. Fully
   covered by a unit test; no manual check required.
 
 - Library search wildcard escaping (bug-fix): the search built a LIKE pattern
   without escaping, so a literal '_' or '%' in the typed text acted as a SQL
-  wildcard (e.g. "track_01" also matched "trackX01"). Wildcards are now escaped
+  wildcard (example: "track_01" also matched "trackX01"). Wildcards are now escaped
   with an ESCAPE clause. Fully covered by a unit test; no manual check required.
 
 - Tag edit not reflected in library (bug-fix): saving edited tags wrote the file
@@ -121,20 +121,20 @@ code plus a working/not-working binary): visual and behavior changes.
 ## 2026-10-23 (parity cron)
 
 - #97 (partial): extended the classic bitmap-font ASCII-folding to cover Latin
-  letters that were still rendering garbled — the g/h block (incl. Turkish Ğ and
-  Esperanto ĝ/ĥ) and the tails of n/t/u (ŋ, ŧ, and Hungarian Ű/Ų/ű/ų). Covered by
+  letters that were still rendering garbled, the g/h block (incl. Turkish Ğ and
+  Esperanto ĝ/ĥ) and the tails of n/t/u (ŋ, ŧ and Hungarian Ű/Ų/ű/ų). Covered by
   the ascii_fold unit test. Optional visual check: a track title containing Ğ or
   Ű shows as "G"/"U" in the classic marquee, not a blank or garbled cell.
   (A QA song is prepared for this: qa-music/Aria Nocturne - Crystal Harbor.mp3
   now has the title "Ğűitar Ĥűŋŧ", which should render as GUITAR HUNT.)
 
 - #18 (partial): a collapsed equalizer on a skin that ships neither eq_ex.bmp nor
-  EQMAIN.BMP used to render as a fully transparent bar — the close box was still
+  EQMAIN.BMP used to render as a fully transparent bar, the close box was still
   clickable but invisible, so the window looked broken. The EQ shade now falls
   back to a solid bar painted in the skin's text-background colour plus the
   titlebar close button, so it always reads as a real, restorable bar. Covered by
   two unit tests (opaque output with and without a titlebar.bmp). Optional visual
-  check: load a minimal skin missing those bitmaps, collapse the EQ, and confirm
+  check: load a minimal skin missing those bitmaps, collapse the EQ and confirm
   the shade bar is visible with a working close button. (The bundled skins all
   ship EQMAIN, so this fallback only shows on sparse third-party skins.)
 
@@ -147,12 +147,12 @@ code plus a working/not-working binary): visual and behavior changes.
   ship both bitmaps, so this only shows on sparse third-party skins.)
 
 - #18 (follow-up): aligned the synthesized volume/balance thumb with the actual
-  click-to-value mapping — the fallback thumb is now 14px wide with a (track-14)
+  click-to-value mapping, the fallback thumb is now 14px wide with a (track-14)
   travel, matching the real VOLUME/BALANCE sprite and the drag handler, so the
   drawn thumb sits exactly where a click on it lands. Unit-tested; no visual
   review needed beyond the existing fallback check above.
 
-- Skins (#76): added three more bundled skins — ZaxonRemake1-0 (brushed metal),
+- Skins (#76): added three more bundled skins, ZaxonRemake1-0 (brushed metal),
   XMMS-Turquoise (dark/turquoise) and Vizor1-01 (biomechanical artwork). Each was
   rendered with --render-all and visually checked across the main/EQ/playlist
   windows, and all three load and compose under the every-bundled-skin test. They
@@ -165,7 +165,7 @@ code plus a working/not-working binary): visual and behavior changes.
 - Parity: mouse wheel over the main window now adjusts volume (scroll up louder,
   down quieter), matching classic Winamp; the playlist still scrolls and the EQ
   window has no wheel action. The direction/clamp logic is unit-tested; the feel
-  (step size, direction) wants a quick manual check — scroll over the main window
+  (step size, direction) wants a quick manual check, scroll over the main window
   and confirm the volume slider moves the expected way. Found during a Winamp
   classic-parity audit; the other gaps found were filed as issues #139 (drag the
   EQ graph to draw the curve) and #140 (double-click a band/preamp/balance to
@@ -173,35 +173,35 @@ code plus a working/not-working binary): visual and behavior changes.
 
 - Parity (#140, partial): double-clicking an EQ preamp or band slider now resets
   it to 0 dB (flat), like Winamp. The double-click detection and reset wiring want
-  a quick manual check — double-click a band and the preamp and confirm each
+  a quick manual check, double-click a band and the preamp and confirm each
   snaps to centre and the sound updates. The double-click timing logic is
   unit-tested. Balance double-click-to-centre is still open under #140.
 
 - Parity (#140, complete): double-clicking the main window's balance slider now
   re-centres it (balance 0), matching Winamp; this completes #140 alongside the EQ
   band/preamp reset. Both use egui's native double-click detection. Manual check:
-  pan the balance off-centre, double-click it, and confirm it snaps back to centre.
+  pan the balance off-centre, double-click it and confirm it snaps back to centre.
 
 - #18 (QA fix): a collapsed EQ on a skin missing both eq_ex.bmp and EQMAIN.BMP
   previously rendered unreadable (black-on-black) with no sliders. It now draws a
   solid bar in the skin's background colour plus synthesized volume/balance thumbs
   and a close marker, in a tone picked to contrast that background (light on dark,
   dark on light), so it's minimally usable on any skin. Unit-tested. Manual check:
-  load qa-tools/test-skins/base_no_eq.wsz, collapse the EQ, and confirm the bar and
+  load qa-tools/test-skins/base_no_eq.wsz, collapse the EQ and confirm the bar and
   its volume/balance thumbs are visible and draggable.
 
 - #141 (shuffle bag): shuffle now plays every track once per cycle (a shuffled
   permutation) before repeating, instead of picking at random with replacement, and
   never replays the current track back-to-back. The play-through property is
   unit-tested, but the feel wants a listen-test with shuffle on: confirm Next walks
-  through the whole list without early repeats, a new cycle reshuffles, and Previous
+  through the whole list without early repeats, a new cycle reshuffles and Previous
   steps back sensibly (prev-in-shuffle walks back through the bag, which is a
   reasonable approximation of Winamp's history-based prev, not an exact match).
 
 - #142 (partial, .EQF interop): the EQ Presets menu now has Import/Export preset
   (.eqf), reading and writing Winamp's "Winamp EQ library file v1.1" format. The
-  byte<->dB mapping and round-trip are unit-tested, but the file-dialog path wants
-  a manual check: import a real Winamp .eqf (e.g. a winamp.q1 library) and confirm
+  byte-to-dB mapping and round-trip are unit-tested, but the file-dialog path wants
+  a manual check: import a real Winamp .eqf (example: a winamp.q1 library) and confirm
   the curve looks right, then export and re-import to confirm the shape survives.
   Note Winamp's EQ range is wider than LinAmp's +/-12 dB, so imported presets are
   scaled into LinAmp's range (shape preserved, extremes compressed). The custom
@@ -216,19 +216,19 @@ code plus a working/not-working binary): visual and behavior changes.
   elsewhere on the main window still shows the Options menu.
 
 - #144 (partial, 2.x keyboard shortcuts): added the classic numeric-keypad
-  transport set — 0 open file(s), 5 play, 4/6 previous/next track, 8/2 volume
-  up/down, 9/7 seek forward/back 5s, 3/1 skip forward/back 10 tracks — plus Ctrl+Z
+  transport set, 0 open file(s), 5 play, 4/6 previous/next track, 8/2 volume
+  up/down, 9/7 seek forward/back 5s, 3/1 skip forward/back 10 tracks, plus Ctrl+Z
   (jump to start of list) and Ctrl+R (reverse the playlist). The jump-by-N clamping
   and the reverse are unit-tested. Manual checks: (1) the keypad digits do the
   above; note egui's logical key can't distinguish the numpad from the top number
-  row, so these also fire for the top-row digits — confirm that's acceptable, or
+  row, so these also fire for the top-row digits, confirm that's acceptable, or
   this needs a physical-key path. (2) Verify Ctrl+Z and Ctrl+R against real Winamp
   2.666 (these letter combos came from the issue's research, not re-confirmed this
   cycle). Still open under #144: Ctrl+A always-on-top (resolve the playlist
   select-all conflict), Ctrl+E EasyMove, Alt+W toggle the main window, and
   Ctrl+keypad-0 open-location (ties to #15 Open URL).
 
-- #145 (closed, remember window layout): this was already implemented — window
+- #145 (closed, remember window layout): this was already implemented, window
   positions, open/visible state and window-shade state all persist to session.json
   and restore on launch, with an off-screen clamp (tested `nudge_onto`) that pulls a
   saved layout back onto the desktop after a resolution drop. Closed as resolved;
@@ -239,7 +239,7 @@ code plus a working/not-working binary): visual and behavior changes.
   optionally drop screen resolution and confirm an off-screen window is nudged back.
 
 - #17 (partial, window-shade polish): added the mini position/seek slider to the
-  collapsed main window bar — a track plus a thumb that tracks playback, draggable
+  collapsed main window bar, a track plus a thumb that tracks playback, draggable
   and click-to-seek, reusing the expanded posbar's seek drag. Coordinates are from
   the Webamp reference (track at x226, 17px wide; 3px thumb). The hit region is
   unit-tested; the appearance can't be verified headlessly (there's no shade-render
@@ -257,7 +257,7 @@ code plus a working/not-working binary): visual and behavior changes.
   play it; confirm bookmarks survive a restart. Known gaps for a follow-up: no
   per-item remove in the menu yet (only Clear all), and stream/URL bookmarks wait on
   #15 (Open URL). The menu is a new popup opened after the Options menu closes
-  (classic popups aren't nested) — worth a quick look that the hand-off feels right.
+  (classic popups aren't nested), worth a quick look that the hand-off feels right.
 
 - Docs (#77-related): added docs/SHORTCUTS.md, a full keyboard/mouse reference
   derived from the input handler, and linked it from the README. This is the
@@ -268,12 +268,12 @@ code plus a working/not-working binary): visual and behavior changes.
   keep their shortcuts but aren't shown there), so that's a design call to confirm.
 
 - #45 (bookmarks hardening): reviewed this branch's new code and tightened the
-  bookmarks feature — playing a bookmark whose file has since moved/been deleted now
+  bookmarks feature, playing a bookmark whose file has since moved/been deleted now
   reports "Bookmark file not found" instead of appending a permanently-unplayable
   row to the playlist, and the Bookmarks menu now offers "Remove current track from
   bookmarks" when the playing track is already bookmarked (otherwise "Add current").
   Covered by the existing store tests. Manual check: bookmark a track, then move or
-  delete its file and click the bookmark — expect the status message, not a dead
+  delete its file and click the bookmark, expect the status message, not a dead
   playlist row; and confirm the add/remove entry flips based on the current track.
   Full arbitrary per-item removal from the list is still a follow-up under #45.
 
@@ -290,7 +290,7 @@ code plus a working/not-working binary): visual and behavior changes.
   saved preset…" when the library is non-empty; it opens a list (same deferred-popup
   pattern as Options > Bookmarks) where clicking an entry removes that preset and
   re-saves the library. Manual check: save a couple of presets, then Delete a saved
-  preset… and remove one — confirm it disappears from the list and stays gone after
+  preset… and remove one, confirm it disappears from the list and stays gone after
   a restart. Deletion by name is covered by the config store test.
 
 - Code quality (no behavior change): routed the EQ preset menu delete through the
@@ -300,12 +300,12 @@ code plus a working/not-working binary): visual and behavior changes.
 
 - #15 (Open location / stream playback, Ctrl+L): added streaming of an HTTP(S) URL
   (internet radio or a remote file). Ctrl+L (or the dialog) opens a URL; a background
-  thread fetches it with ureq and decodes with symphonia directly — rodio's Decoder
+  thread fetches it with ureq and decodes with symphonia directly, rodio's Decoder
   needs Read+Seek, which a live stream isn't, so the samples flow through a bounded
   channel into a rodio Source that reuses the EQ / analyzer / balance pipeline. Only
-  the MIME→extension mapping is unit-tested; the streaming path CANNOT be verified
+  the MIME-to-extension mapping is unit-tested; the streaming path CANNOT be verified
   headlessly, so it needs a real live test. Manual checks: press Ctrl+L, enter a
-  direct audio URL (e.g. a .mp3) and an internet-radio stream URL (MP3/AAC) — confirm
+  direct audio URL (example: a .mp3) and an internet-radio stream URL (MP3/AAC), confirm
   each connects and plays with EQ/analyzer working, and that Stop ends it cleanly.
   Known limitations to note: the now-playing LCD/title stays blank while streaming
   (no playlist track backs it); seeking is a no-op on a live stream; and an output
@@ -348,14 +348,14 @@ code plus a working/not-working binary): visual and behavior changes.
   SHOUTcast MP3 stream and confirm the title shows the song and updates as it changes.
 
 - #15 robustness (bug fix): opening a location no longer risks freezing the UI if a
-  server connects but stalls — the fetch now has a 10s connect timeout (no read
+  server connects but stalls, the fetch now has a 10s connect timeout (no read
   timeout, so live streams keep flowing) and the open handshake waits at most 20s
   before returning a "timed out opening stream" error. Hard to unit-test (needs a
   dead/slow host); manual check: Ctrl+L a bad host or an unreachable URL and confirm
   the app stays responsive and shows the error rather than hanging.
 
 - #148 (non-blocking stream connect): opening a location no longer blocks the UI at
-  all — the connect/probe runs off-thread and the app polls each frame, showing
+  all, the connect/probe runs off-thread and the app polls each frame, showing
   "Connecting: …" until the format is known (or a 20s timeout / error). Replaces the
   earlier bounded-but-still-blocking open. Manual check: Ctrl+L a slow or unreachable
   URL and confirm the UI stays fully responsive (windows drag, transport works) while
@@ -376,7 +376,7 @@ code plus a working/not-working binary): visual and behavior changes.
   actions sat after an unbounded scroll area, so ~20 bookmarks pushed them past the
   window's bottom edge and they became unreachable. The actions are now pinned to a
   bottom panel and the list scrolls in the space above them. Manual check: add 20+
-  bookmarks, open Options > Bookmarks, and confirm the list scrolls while Add current
+  bookmarks, open Options > Bookmarks and confirm the list scrolls while Add current
   / Clear bookmarks stay visible and clickable at the bottom.
 
 - Popup menu one-frame flash (bug fix): opening a classic menu briefly flashed the
@@ -387,7 +387,7 @@ code plus a working/not-working binary): visual and behavior changes.
   longer a flash of the window drawing elsewhere first.
 
 - EQ buttons misaligned on some skins (OPEN, needs repro): reported on MacOSXAqua1-5
-  and Osmosis_2 — the ON/AUTO/PRESETS buttons don't line up with their slots. The
+  and Osmosis_2, the ON/AUTO/PRESETS buttons don't line up with their slots. The
   draw coords and the click hit-regions both match the canonical Winamp EQMAIN.BMP
   layout (On 14,18 26x12; Auto 40,18 32x12; Presets 217,18 44x12) that every other
   bundled skin renders correctly, so the coords were left unchanged rather than risk
@@ -396,8 +396,8 @@ code plus a working/not-working binary): visual and behavior changes.
 
 - Minibrowser "embed a real browser" (OPEN, design decision): the current window is a
   themed simulation that opens the address in the system browser (the agreed option
-  B — a nod to the original, no web view). A request to embed an actual browser view
-  would need a native webview dependency (e.g. wry/WebView2) overlaid on the egui
+  B, a nod to the original, no web view). A request to embed an actual browser view
+  would need a native webview dependency (example: wry/WebView2) overlaid on the egui
   window, a significant scope change. Left as-is for now per the user.
 
 - Media Library Bookmarks view (wired up): the left-nav "Bookmarks" entry was a dead
@@ -418,12 +418,12 @@ code plus a working/not-working binary): visual and behavior changes.
   Options menu height is now computed from the item count (including the optional
   Minibrowser toggle) rather than a fixed value, so the last row no longer risks
   clipping when the Minibrowser item is shown. Manual check: right-click the main
-  window, pick "Open location…", and confirm the URL dialog opens; with the
+  window, pick "Open location…" and confirm the URL dialog opens; with the
   Minibrowser enabled in Preferences, confirm the Options menu still shows every row
   (Exit at the bottom) without clipping.
 
 - Media Library Bookmarks view live refresh (bug fix): adding (Alt+I or Options >
-  Bookmarks), removing, or clearing a bookmark now rebuilds the library's Bookmarks
+  Bookmarks), removing or clearing a bookmark now rebuilds the library's Bookmarks
   list immediately when that view is open, instead of only on the next click.
   Manual check: open the Media Library on Bookmarks, play a track and press Alt+I,
   and confirm the new entry appears in the list without re-selecting the view.
@@ -435,4 +435,4 @@ code plus a working/not-working binary): visual and behavior changes.
   now caps the height so the window's bottom can't pass the desktop bottom
   (classic::pl_max_height, unit-tested). Manual check (best on X11, where it was
   observed): drag the playlist taller until its bottom reaches the screen edge and
-  confirm it simply stops — the top edge stays put and the window doesn't climb.
+  confirm it simply stops, the top edge stays put and the window doesn't climb.

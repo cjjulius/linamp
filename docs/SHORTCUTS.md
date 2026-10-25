@@ -29,7 +29,7 @@ window has focus and no text field is active.
 
 ## Numeric keypad
 
-Off by default — enable "Numeric keypad" under Preferences > Optional Features.
+Off by default, enable "Numeric keypad" under Preferences > Optional Features.
 When on, the keypad mirrors Winamp's transport controls (note: these also fire
 for the top number row).
 
@@ -81,6 +81,6 @@ for the top number row).
 | Gesture | Action |
 | --- | --- |
 | Mouse wheel over the main window | Adjust volume |
-| Double-click an EQ band, the preamp, or the balance slider | Reset it to centre |
+| Double-click an EQ band, the preamp or the balance slider | Reset it to centre |
 | Right-click the Stop button | Stop options (stop, stop after current, stop with fade) |
 | Right-click elsewhere on the main window | Options menu |
