@@ -8,7 +8,7 @@ code plus a working/not-working binary): visual and behavior changes.
 - #154 menu sizing, proper fix. The earlier "measure the content and hug it"
   attempt didn't work: it read ui.min_rect() on a CentralPanel, which is the whole
   window, so the window always stayed at the formula estimate. The formula was off
-  two ways — the per-row budget overestimated (main Options menu left an empty band
+  two ways, the per-row budget overestimated (main Options menu left an empty band
   below Exit) and the playlist menus' item counts were too low (PlVoid counted 12/4
   but draws 14/5, PlMisc counted 6 but draws 8), so those clipped their last rows.
   Fixed the row/separator constants to egui's real layout (20px row, 8px separator,
@@ -16,7 +16,7 @@ code plus a working/not-working binary): visual and behavior changes.
   (popup_content_h). A test now pins each fixed menu's item/separator counts against
   the size formula so they can't drift again. Verify visually on Windows and Linux:
   right-click the main, EQ and playlist windows (and the playlist's bottom-bar
-  fly-outs) a few times each — every menu should hug its items, with nothing clipped
+  fly-outs) a few times each, every menu should hug its items, with nothing clipped
   and no empty band, on repeat opens.
 
 ## 2026-10-25 (later 2)
