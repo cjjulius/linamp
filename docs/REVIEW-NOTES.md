@@ -558,3 +558,16 @@ code plus a working/not-working binary): visual and behavior changes.
   either; can be dropped from the supported list or revisited.)
 - #77: closed as-is per your call — stop-after-current / stop-with-fade stay in the
   Stop button's right-click menu; Preferences remains persistent-settings-only.
+
+- #159 (MIDI, integration): added src/midi.rs — a MidiSource rodio Source that
+  synthesizes .mid/.midi via rustysynth (pure Rust) and a SoundFont, through the same
+  EQ/analyzer/balance pipeline. play_file routes mid/midi here; mid/midi added to
+  SUPPORTED_EXTS; build.rs now also mirrors a soundfont/ folder next to the binary
+  (like skins/). The SoundFont is discovered at soundfont/*.sf2; MIDI errors cleanly
+  if none is present (caught by the skip guard). Compiles; the error path is
+  unit-tested. NOT yet playable: it needs a bundled SoundFont (.sf2) — see the
+  decision below. Once one is in soundfont/, manual check: play a .mid and confirm it
+  renders through the EQ/analyzer. Seeking is unsupported for MIDI (rustysynth has no
+  seek). Open decision: which redistributable SoundFont to bundle (GeneralUser GS is
+  free to distribute); committing a multi-MB .sf2 to the public repo is the remaining
+  step.

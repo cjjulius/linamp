@@ -178,12 +178,24 @@ impl Player {
 
     /// Load and immediately start playing a file.
     pub fn play_file(&mut self, path: &Path) -> Result<()> {
-        // All local files decode through one path: symphonia with an extension hint
-        // (see [`crate::decode`]), a lazy seekable source. This is the single decode
-        // path — rodio 0.20's `Decoder` is no longer used, which also removes its
-        // ISO-MP4 open panic and its inability to pass a format hint (#163).
-        let source = crate::decode::open_file(path)?;
-        self.append_source(source)?;
+        // MIDI is synthesized (rustysynth + a bundled SoundFont), not decoded (#159);
+        // everything else goes through the single symphonia decode path (#163). Both
+        // produce a rodio `Source` fed into the shared EQ / analyzer / balance chain.
+        let is_midi = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| matches!(e.to_ascii_lowercase().as_str(), "mid" | "midi"))
+            .unwrap_or(false);
+        if is_midi {
+            let sf = crate::midi::soundfont_path().ok_or_else(|| {
+                anyhow::anyhow!("MIDI playback needs a SoundFont (.sf2) in the soundfont/ folder")
+            })?;
+            let source = crate::midi::open_midi(path, &sf)?;
+            self.append_source(source)?;
+        } else {
+            let source = crate::decode::open_file(path)?;
+            self.append_source(source)?;
+        }
         self.current_path = Some(path.to_path_buf());
         self.current_url = None;
         self.stream_title = None;
