@@ -105,6 +105,12 @@ impl Track {
                 }
             }
         }
+        // Formats lofty can't read (MIDI, tracker modules) still have a known
+        // length; fill it in so the playlist shows a time for them too.
+        if self.duration.is_none() {
+            self.duration = crate::midi::duration(&self.path)
+                .or_else(|| crate::tracker::duration(&self.path));
+        }
     }
 
     /// Build a fully-loaded track (tags read immediately).
@@ -515,6 +521,30 @@ mod tests {
         assert!(is_supported(Path::new("A.FLAC")));
         assert!(!is_supported(Path::new("a.txt")));
         assert!(!is_supported(Path::new("noext")));
+    }
+
+    #[test]
+    fn track_load_fills_midi_length_via_the_fallback() {
+        // lofty can't read MIDI, so Track::load must fall back to midi::duration
+        // and show a time in the playlist (no SoundFont needed for the length).
+        let track: [u8; 12] = [
+            0x00, 0x90, 0x3C, 0x64, 0x60, 0x80, 0x3C, 0x00, 0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let mut mid = Vec::new();
+        mid.extend_from_slice(b"MThd");
+        mid.extend_from_slice(&6u32.to_be_bytes());
+        mid.extend_from_slice(&0u16.to_be_bytes());
+        mid.extend_from_slice(&1u16.to_be_bytes());
+        mid.extend_from_slice(&96u16.to_be_bytes());
+        mid.extend_from_slice(b"MTrk");
+        mid.extend_from_slice(&(track.len() as u32).to_be_bytes());
+        mid.extend_from_slice(&track);
+        let p = std::env::temp_dir().join("linamp_playlist_midi_len.mid");
+        std::fs::write(&p, &mid).unwrap();
+
+        let t = Track::from_path(p.clone());
+        assert!(t.duration.is_some(), "MIDI track should have a length in the playlist");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

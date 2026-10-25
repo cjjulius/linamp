@@ -130,6 +130,20 @@ impl Source for MidiSource {
     }
 }
 
+/// The length of a `.mid`/`.midi` file, read from the file alone (no SoundFont
+/// needed), so the playlist can show a time for MIDI like any other format.
+/// `None` when it isn't a MIDI file or can't be parsed.
+pub fn duration(path: &Path) -> Option<Duration> {
+    let ext = path.extension().and_then(|e| e.to_str())?;
+    if !matches!(ext.to_ascii_lowercase().as_str(), "mid" | "midi") {
+        return None;
+    }
+    let mut f = File::open(path).ok()?;
+    let mf = MidiFile::new(&mut f).ok()?;
+    let secs = mf.get_length();
+    (secs.is_finite() && secs > 0.0).then(|| Duration::from_secs_f64(secs))
+}
+
 /// Open a `.mid`/`.midi` file for playback, synthesized with the SoundFont at
 /// `soundfont_path`. Errors cleanly if the SoundFont or MIDI can't be read.
 pub fn open_midi(midi_path: &Path, soundfont_path: &Path) -> Result<MidiSource> {
@@ -212,6 +226,17 @@ mod tests {
         // Pull a block's worth of samples; synthesis should produce audio.
         let out: Vec<f32> = (&mut src).take(BLOCK * 2).collect();
         assert!(!out.is_empty(), "MIDI synthesis produced no samples");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn duration_reads_midi_length_without_a_soundfont() {
+        // The playlist length fallback must work with no SoundFont present (it
+        // reads the MIDI file only), and ignore non-MIDI paths.
+        let p = one_note_midi("dur");
+        let d = duration(&p).expect("MIDI length should be readable");
+        assert!(d.as_secs_f64() > 0.0, "length should be positive");
+        assert!(duration(Path::new("song.mp3")).is_none(), "non-MIDI returns None");
         let _ = std::fs::remove_file(&p);
     }
 
