@@ -378,6 +378,18 @@ impl super::LinAmpApp {
                     // as the size jumps between grid steps mid-drag.
                     self.pl_px_h = (ny + grab.y).max(87.0);
                     self.pl_px_w = (nx + grab.x).max(classic::MAIN_W as f32);
+                    // Stop growing at the screen edge: cap the height so the window's
+                    // bottom can't pass the bottom of the desktop. Otherwise the WM
+                    // pushes the top edge up to keep the window on-screen, so the
+                    // playlist appears to grow upward instead of just stopping (#156).
+                    // pl_px_h is in unscaled skin pixels; on-screen height is
+                    // pl_px_h * scale, so convert the available space back by /scale.
+                    if let Some(vr) = virtual_desktop_rect(ctx) {
+                        let top_y = self.win_pos[win_idx(ClWin::Pl)].y;
+                        if let Some(max_h) = classic::pl_max_height(vr.max.y, top_y, self.scale) {
+                            self.pl_px_h = self.pl_px_h.min(max_h);
+                        }
+                    }
                 }
             }
         }

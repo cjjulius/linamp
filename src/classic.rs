@@ -1230,6 +1230,22 @@ pub fn pl_visible_rows(height: u32) -> usize {
     ((height as i32 - PL_LIST_Y - 38 - 1).max(0) / PL_ROW_H) as usize
 }
 
+/// Smallest playlist height, in unscaled skin pixels (two title rows + a usable
+/// list area); mirrors the floor applied while resizing.
+pub const PL_MIN_H: f32 = 87.0;
+
+/// The tallest the playlist may grow (unscaled skin pixels) before its bottom
+/// edge would pass `desktop_bottom`, given the window top edge `top_y` and the UI
+/// `scale` (both in points; on-screen height is `pl_px_h * scale`). Returns `None`
+/// when there isn't even room for the minimum height — the caller then leaves the
+/// current height alone rather than shrinking it. Keeps a downward resize from
+/// running off the screen bottom, which the WM would otherwise answer by pushing
+/// the window's top edge upward (#156).
+pub fn pl_max_height(desktop_bottom: f32, top_y: f32, scale: f32) -> Option<f32> {
+    let max_h = (desktop_bottom - top_y) / scale.max(0.01);
+    (max_h >= PL_MIN_H).then_some(max_h)
+}
+
 impl ClassicSkin {
     pub fn compose_eq(&self, st: &EqState) -> RgbaImage {
         let mut c = RgbaImage::new(275, EQ_H);
@@ -2288,6 +2304,19 @@ mod tests {
         assert!(text_px(&shown) > 0, "shaded bar should draw the track and time");
         let empty = skin.compose_pl_shade(true, "", "", color);
         assert_eq!(text_px(&empty), 0, "no current track -> no text on the bar");
+    }
+
+    #[test]
+    fn pl_max_height_caps_at_desktop_bottom() {
+        // Desktop 1000px tall, window top at 200, scale 1: room is 800px.
+        assert_eq!(pl_max_height(1000.0, 200.0, 1.0), Some(800.0));
+        // Double-size (scale 2): the same 800pt of room is 400 skin px.
+        assert_eq!(pl_max_height(1000.0, 200.0, 2.0), Some(400.0));
+        // No room for even the minimum height -> None (leave the size alone), so a
+        // window already near the bottom isn't forcibly shrunk mid-drag.
+        assert_eq!(pl_max_height(1000.0, 950.0, 1.0), None);
+        // Exactly the minimum is allowed.
+        assert_eq!(pl_max_height(200.0 + PL_MIN_H, 200.0, 1.0), Some(PL_MIN_H));
     }
 
     #[test]
