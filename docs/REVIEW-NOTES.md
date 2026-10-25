@@ -3,6 +3,17 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-25 (later 6)
+
+- MP2 (MPEG Layer II) didn't actually decode. The symphonia dependency enabled
+  only the "mp3" (Layer III) feature, so a real .mp2/.mpa failed with "unsupported
+  codec" (confirmed against qa-music/Generated_tests/sample_scale.mp2) — #157's
+  Layer I/II support was never wired up. Enabled symphonia's "mp1" and "mp2"
+  features; a test now decodes and seeks the sample. With the format decoding, the
+  existing seek path works, so the requested MP2 seeking works too. Verify in-app
+  on Windows and Linux: play an .mp2 and drag the seek bar — it should jump and
+  keep playing. (Layer I .mp1 is enabled too but untested for lack of a sample.)
+
 ## 2026-10-25 (later 5)
 
 - MIDI seeking added. rustysynth's sequencer can't seek and MIDI state is

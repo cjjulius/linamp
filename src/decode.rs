@@ -194,6 +194,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn open_file_decodes_and_seeks_an_mp2() {
+        // MPEG Layer II needs symphonia's "mp2" feature (we also enable mp1); with
+        // only "mp3" it failed to decode with "unsupported codec" (#157). Uses the
+        // local qa sample when present (qa-music is gitignored, so this skips on CI).
+        let p = Path::new("qa-music/Generated_tests/sample_scale.mp2");
+        if !p.exists() {
+            return;
+        }
+        let mut src = open_file(p).expect("MP2 (Layer II) should decode");
+        assert!(src.sample_rate() >= 8000 && src.channels() >= 1);
+        assert!((&mut src).take(4096).count() > 0, "should yield audio");
+        // Seeking works (the user's request): jump a second in and keep decoding.
+        src.try_seek(Duration::from_secs(1)).expect("MP2 should seek");
+        assert!(src.next().is_some(), "should still decode after a seek");
+    }
+
+    #[test]
     fn supported_exts_match_the_symphonia_registry() {
         // Guard the SUPPORTED_EXTS list against advertising formats symphonia can't
         // decode. The decoders we rely on must be registered, and Opus / WavPack
