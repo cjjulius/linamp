@@ -60,24 +60,21 @@ own-risk note.
 ## Remaining 2.666 functional-parity work (this run's closeout list)
 
 This is the finish line: when these are done, LinAmp is at 2.666 functional
-parity. Scope confirmed with the maintainer, #77 and #97 are in, #40 and #43 are
-out (see Deferred).
+parity. Scope: #77 is in; #40 and #43 are out (see Deferred).
 
 - #144 (remaining), Ctrl+A always-on-top (vs playlist select-all), Ctrl+E
   EasyMove, Alt+W toggle main window, Ctrl+keypad-0 open-location.
 - #89, broaden tag editing. ID3v2 text frames are done; remaining is non-MP3
   writing (FLAC/OGG/M4A), album art, ID3v2.3-vs-2.4 and related Preferences.
 - #77, surface all persistent settings in the Preferences window.
-- #97, full non-Latin text in the classic bitmap-font path (a font-atlas
-  approach); ASCII-folding is already in.
-- #154, classic context menus are a little tall; match the Media Library's
-  tighter row sizing.
 - #149, EQ ON/AUTO/PRESETS buttons misaligned on some skins (MacOSXAqua,
   Osmosis); needs a visual repro vs real Winamp.
 
-Shipped in 0.4.9 and being closed: #15 (Open location), #45 (Bookmarks), #17
-(window-shade slider), #146 (Minibrowser sim). #156 (playlist resize clamp) fixed
-on feat/winamp-parity-3.
+Resolved on feat/winamp-parity-3: #156 (resize clamp), #154 (menu sizing), and
+#97 (accented/Vietnamese text now ASCII-folds to readable base letters; full
+non-Latin scripts in the classic bitmap path stay out of scope by design).
+Shipped in 0.4.9: #15, #45, #17, #146. Also closed: #76 (vetted skins bundled)
+and #49 (PipeWire verified on Pop!_OS, Mint assumed working).
 
 ## Deferred, beyond the 2.666 functional-parity bar
 
