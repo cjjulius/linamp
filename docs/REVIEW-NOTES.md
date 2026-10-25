@@ -458,8 +458,8 @@ code plus a working/not-working binary): visual and behavior changes.
 
 ## 2026-10-25 (Slack thread follow-ups)
 
-- #156 (resize clamp): user-verified working — marking confirmed on Linux.
-- #154 (menu sizing): reopened. The 21px row-budget change wasn't enough on Linux —
+- #156 (resize clamp): user-verified working, marking confirmed on Linux.
+- #154 (menu sizing): reopened. The 21px row-budget change wasn't enough on Linux,
   user reports the classic menu still reads too long there. Likely different popup
   metrics on Linux (font/DPI/spacing); needs a screenshot and a Linux-specific pass.
 
