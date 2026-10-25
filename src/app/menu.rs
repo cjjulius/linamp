@@ -735,7 +735,7 @@ mod tests {
     fn fixed_menu_sizes_match_their_draw_arms() {
         // (items, separators) for each fixed menu must match what
         // draw_popup_viewport actually draws, or the window clips the last rows
-        // (too few) or leaves an empty band (too many) — the #154 regression.
+        // (too few) or leaves an empty band (too many), the #154 regression.
         // Update these counts and the matching arm together.
         for (kind, items, seps) in [
             (Popup::PlAdd, 2, 0),
