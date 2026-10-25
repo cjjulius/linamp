@@ -902,6 +902,10 @@ pub(crate) fn round_popup_window(radius: i32, force: bool) -> bool {
 /// it opened *behind* those windows; raising it each frame fixes that. Windows
 /// relies on the always-on-top window level (owner windows sort below it); a
 /// no-op elsewhere.
+// The only caller is itself unix-gated, so on Windows this no-op is never
+// referenced; keep it defined (documented cross-platform shape) without the
+// dead-code warning.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
 pub(crate) fn raise_popup_window() {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
