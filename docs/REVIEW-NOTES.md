@@ -580,3 +580,13 @@ code plus a working/not-working binary): visual and behavior changes.
   so local test media never gets committed. Note: I added MIDI samples to qa-music but
   couldn't source license-clean .mp2/.m4a samples via download — drop your own of
   those (and a flac/ogg) into qa-music to exercise #157/#164 and the #163 single path.
+
+- #158 (tracker modules): .mod/.xm/.s3m/.it now play, via xmrs + xmrsplayer (pure
+  Rust). This is better than the approved libopenmpt path — no native C dependency, so
+  it builds everywhere with no DLL bundling. src/tracker.rs loads the module (xmrs) and
+  renders it lazily (xmrsplayer) as a seekable rodio Source; the player borrows the
+  module so a self_cell holds them together. Routed in play_file; mod/xm/s3m/it added
+  to SUPPORTED_EXTS. Verified end-to-end rendering against the xmrs example module
+  (note.xm, placed in qa-music). Manual check: drop a few real .mod/.xm/.s3m/.it files
+  in qa-music and confirm they play and sound right through the EQ/analyzer, and that
+  the track ends (auto-advances) rather than looping forever.

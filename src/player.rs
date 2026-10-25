@@ -192,6 +192,10 @@ impl Player {
             })?;
             let source = crate::midi::open_midi(path, &sf)?;
             self.append_source(source)?;
+        } else if crate::tracker::is_tracker(path) {
+            // Tracker modules (.mod/.xm/.s3m/.it) are rendered by xmrs (#158).
+            let source = crate::tracker::open_tracker(path)?;
+            self.append_source(source)?;
         } else {
             let source = crate::decode::open_file(path)?;
             self.append_source(source)?;
