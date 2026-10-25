@@ -488,3 +488,16 @@ code plus a working/not-working binary): visual and behavior changes.
   its measured content every time. Manual check: right-click the main/playlist windows
   several times in a row and confirm every menu hugs its items (no empty band), not
   just the first.
+
+## 2026-10-25 (audio format compatibility)
+
+- #157 (MPEG Layer I/II playback): .mp1/.mp2/.mpa now play. rodio 0.20's Decoder
+  can't pass symphonia a format hint, so these are decoded in a new src/decode.rs via
+  symphonia directly (with an extension hint) into an in-memory seekable source; the
+  file/stream pipelines were unified behind Player::append_source. The extensions are
+  added to SUPPORTED_EXTS and the open-file filter. Routing + the error path are
+  unit-tested, but the live decode couldn't be verified here (no MP2 encoder on this
+  box). Manual check: open a real .mp2 (and .mp1 if you have one) and confirm it plays
+  with EQ/analyzer working. Note: these files are decoded eagerly (whole file up front)
+  rather than streamed, so a very large one has a brief load pause; MP1/MP2 are rare
+  and usually short, so this is acceptable for now.

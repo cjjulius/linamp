@@ -156,28 +156,45 @@ impl Player {
         }
     }
 
-    /// Load and immediately start playing a file.
-    pub fn play_file(&mut self, path: &Path) -> Result<()> {
-        let file = File::open(path)?;
-        let source = Decoder::new(BufReader::new(file))?.convert_samples::<f32>();
-
+    /// Shape `source` through the EQ, the analyzer tap and the stereo balance, then
+    /// start it on a fresh sink. Shared by file and stream playback so both apply
+    /// the same pipeline (and so a new decode path only has to produce a `Source`).
+    fn append_source<S>(&mut self, source: S) -> Result<()>
+    where
+        S: Source<Item = f32> + Send + 'static,
+    {
         self.viz.clear();
         self.viz.set_rate(source.sample_rate());
-        // Shape the audio with the EQ, then tap for visualization so the
-        // analyzer reflects what you actually hear.
+        // Shape with the EQ, then tap for visualization so the analyzer reflects
+        // what you hear, and apply stereo balance last.
         let equalized = eq::eq(source, self.eq.clone());
         let tapped = viz::tap(equalized, self.viz.clone());
-        // Apply stereo balance last, after the viz tap.
         let balanced = balance::balance(tapped, self.balance.clone());
 
         let sink = Sink::try_new(&self.handle)?;
         sink.append(balanced);
         self.sink = Some(sink);
+        self.apply_gain();
+        Ok(())
+    }
+
+    /// Load and immediately start playing a file.
+    pub fn play_file(&mut self, path: &Path) -> Result<()> {
+        // Most formats go through rodio's `Decoder`; MPEG Layer I/II
+        // (.mp1/.mp2/.mpa) can't be opened by rodio 0.20 directly, so decode those
+        // via symphonia with an extension hint into an in-memory source (#157).
+        if crate::decode::needs_hinted_decode(path) {
+            let source = crate::decode::decode_file(path)?;
+            self.append_source(source)?;
+        } else {
+            let file = File::open(path)?;
+            let source = Decoder::new(BufReader::new(file))?.convert_samples::<f32>();
+            self.append_source(source)?;
+        }
         self.current_path = Some(path.to_path_buf());
         self.current_url = None;
         self.stream_title = None;
         self.state = PlayState::Playing;
-        self.apply_gain();
         Ok(())
     }
 
@@ -191,20 +208,10 @@ impl Player {
         url: String,
     ) -> Result<()> {
         self.stream_title = Some(title);
-        self.viz.clear();
-        self.viz.set_rate(source.sample_rate());
-        // Same shaping as local playback, so EQ / analyzer / balance all apply.
-        let equalized = eq::eq(source, self.eq.clone());
-        let tapped = viz::tap(equalized, self.viz.clone());
-        let balanced = balance::balance(tapped, self.balance.clone());
-
-        let sink = Sink::try_new(&self.handle)?;
-        sink.append(balanced);
-        self.sink = Some(sink);
+        self.append_source(source)?;
         self.current_path = None;
         self.current_url = Some(url);
         self.state = PlayState::Playing;
-        self.apply_gain();
         Ok(())
     }
 
