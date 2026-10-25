@@ -11,6 +11,8 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "mp1", "mp2", "mpa", "mp4", "m4b",
     // MIDI, synthesized via crate::midi (rustysynth + a bundled SoundFont) (#159).
     "mid", "midi",
+    // Tracker modules, rendered via crate::tracker (xmrs/xmrsplayer, pure Rust) (#158).
+    "mod", "xm", "s3m", "it",
 ];
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This

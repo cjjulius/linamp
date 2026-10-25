@@ -21,6 +21,7 @@ mod skin;
 mod stream;
 mod tags;
 mod text;
+mod tracker;
 mod viz;
 #[cfg(windows)]
 mod wincursor;
