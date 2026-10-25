@@ -455,3 +455,10 @@ code plus a working/not-working binary): visual and behavior changes.
   root viewport (ties to #40, deferred); Ctrl+E EasyMove is a niche drag-from-
   anywhere mode; Ctrl+keypad-0 can't be told from top-row 0 in egui (Ctrl+L already
   opens a location). #144 closed on that basis.
+
+## 2026-10-25 (Slack thread follow-ups)
+
+- #156 (resize clamp): user-verified working — marking confirmed on Linux.
+- #154 (menu sizing): reopened. The 21px row-budget change wasn't enough on Linux —
+  user reports the classic menu still reads too long there. Likely different popup
+  metrics on Linux (font/DPI/spacing); needs a screenshot and a Linux-specific pass.

@@ -67,8 +67,10 @@ parity. Scope: #77 is in; #40 and #43 are out (see Deferred).
 - #77, surface all persistent settings in the Preferences window.
 - #149, EQ ON/AUTO/PRESETS buttons misaligned on some skins (MacOSXAqua,
   Osmosis); needs a visual repro vs real Winamp.
+- #154 (reopened), classic menus still read too long on Linux after the 21px
+  row-budget change; needs a Linux-specific look (likely different popup metrics).
 
-Resolved on feat/winamp-parity-3: #156 (resize clamp), #154 (menu sizing), #97
+Resolved on feat/winamp-parity-3: #156 (resize clamp, user-verified on Linux), #97
 (accented/Vietnamese text now ASCII-folds to readable base letters; full non-Latin
 scripts in the classic bitmap path stay out of scope by design), and #144 (Ctrl+A
 always-on-top completes the shortcut set; Alt+W needs a tray (#40), Ctrl+E EasyMove
