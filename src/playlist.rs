@@ -9,6 +9,8 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // MPEG Layer I/II and the rest of the ISO-MP4 family, decoded via a symphonia
     // hint in crate::decode (rodio 0.20 can't open these directly) (#157/#164).
     "mp1", "mp2", "mpa", "mp4", "m4b",
+    // MIDI, synthesized via crate::midi (rustysynth + a bundled SoundFont) (#159).
+    "mid", "midi",
 ];
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
