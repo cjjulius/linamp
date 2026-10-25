@@ -520,3 +520,12 @@ code plus a working/not-working binary): visual and behavior changes.
   the hint). Manual check: play an .m4a, drag the seek bar, and confirm it scrubs and
   keeps playing. Remaining #163 work: route the everyday formats (mp3/flac/ogg/wav)
   through this path too so symphonia is the single local decoder.
+
+- #160 (Audio CD, groundwork): added src/cdda.rs with the device-agnostic pieces —
+  the CD track model, CDDA timing (2352 bytes/sector, 75 sectors/sec, 44.1 kHz
+  stereo), and the cdda://<device>/<track> playlist pseudo-path. All unit-tested. No
+  device code yet: the per-OS TOC and raw-sector reads (DeviceIoControl on Windows,
+  CDROM ioctls on Linux) and the playback source are the next step and need a real
+  optical drive to develop and verify — which this dev box doesn't have. No GPL deps
+  (libcdio is avoided). Nothing to verify in the app yet; the groundwork is covered
+  by code.
