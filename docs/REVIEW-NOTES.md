@@ -427,3 +427,12 @@ code plus a working/not-working binary): visual and behavior changes.
   list immediately when that view is open, instead of only on the next click.
   Manual check: open the Media Library on Bookmarks, play a track and press Alt+I,
   and confirm the new entry appears in the list without re-selecting the view.
+## 2026-10-25 (parity-3 cron)
+
+- #156 (playlist resize past the screen bottom, bug fix): dragging the playlist's
+  bottom-right grip to the bottom of the screen grew the window upward (the WM
+  pushed the top edge up to keep it on-screen) instead of just stopping. The resize
+  now caps the height so the window's bottom can't pass the desktop bottom
+  (classic::pl_max_height, unit-tested). Manual check (best on X11, where it was
+  observed): drag the playlist taller until its bottom reaches the screen edge and
+  confirm it simply stops — the top edge stays put and the window doesn't climb.
