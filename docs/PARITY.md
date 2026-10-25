@@ -64,6 +64,9 @@ parity. Scope: #77 is in; #40 and #43 are out (see Deferred).
 
 Audio format compatibility (current focus, per the maintainer):
 
+- #163, unify local decoding on direct symphonia with a hint, and prefer a
+  seekable source over crate::decode's current up-front in-memory decode. The
+  decode path is in place (#157/#164); remaining is the seekable generalization.
 - #158, tracker modules (.mod/.xm/.s3m/.it). Needs libopenmpt, a native C
   dependency in the build/bundle; awaiting the OK to add it.
 - #159, MIDI (.mid/.midi). Needs rustysynth plus a bundled multi-MB SoundFont;
@@ -81,7 +84,8 @@ Other remaining:
 - #154 (reopened), classic menus read too long on re-right-click; a fresh-viewport
   fix is pushed (each menu opens its own window), awaiting user confirmation.
 
-Resolved on feat/winamp-parity-3: #157 (MPEG Layer I/II .mp1/.mp2/.mpa via a hinted
+Resolved on feat/winamp-parity-3: #164 (ISO-MP4 .m4a/.mp4/.m4b open-panic — routed
+through the hinted decoder), #157 (MPEG Layer I/II .mp1/.mp2/.mpa via a hinted
 symphonia decode), #156 (resize clamp, user-verified on Linux), #97
 (accented/Vietnamese text now ASCII-folds to readable base letters; full non-Latin
 scripts in the classic bitmap path stay out of scope by design), and #144 (Ctrl+A
