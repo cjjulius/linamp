@@ -269,7 +269,7 @@ impl super::LinAmpApp {
         }
         // Ctrl+A: select-all in the playlist window (where that's the Winamp
         // meaning), else toggle always-on-top. Each classic window is its own
-        // viewport, so key presses only reach the focused one — `win` here is
+        // viewport, so key presses only reach the focused one, `win` here is
         // effectively the window with focus.
         if k.ctrl && k.key_a {
             if win == ClWin::Pl {
