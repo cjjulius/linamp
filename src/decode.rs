@@ -266,7 +266,7 @@ mod tests {
         // impl and try_seek without needing an .mp2/.m4a sample (none is on CI).
         let p = Path::new("music/Aria Nocturne - Crystal Harbor.mp3");
         if !p.exists() {
-            return; // fixture absent (e.g. a partial checkout): skip, don't fail
+            return; // fixture absent (example: a partial checkout): skip, don't fail
         }
         let mut src = open_file(p).expect("should decode the fixture");
         assert!(src.sample_rate() >= 8000);

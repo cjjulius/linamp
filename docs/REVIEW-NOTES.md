@@ -32,7 +32,7 @@ code plus a working/not-working binary): visual and behavior changes.
   identically on the base skin, MacOSXAqua and Osmosis). Dropped the inset to 1 so
   the thumb centres on the groove; a regression test now asserts the thumb centre
   sits within a pixel of the measured groove for those three skins. It was a ~1px
-  shift that only showed on crisp/narrow grooves (MacOSXAqua, Osmosis) — wide
+  shift that only showed on crisp/narrow grooves (MacOSXAqua, Osmosis), wide
   grooves like the base skin's masked it. Verify visually: open the EQ on
   MacOSXAqua and Osmosis and confirm each thumb now rides its bar, then spot-check
   a few wide-groove skins (base, Green Dimension, Topaz) to confirm nothing drifted.
@@ -517,7 +517,7 @@ code plus a working/not-working binary): visual and behavior changes.
   it isn't Winamp 2.666 behaviour. Ctrl+A in the playlist selects all; from other
   windows it toggles always-on-top.
 - #154 (re-click sizing): menus were correctly sized on the first open but reverted
-  to too-tall on subsequent right-clicks — the popup OS window was reused and kept a
+  to too-tall on subsequent right-clicks, the popup OS window was reused and kept a
   prior size. Each open now gets a fresh viewport id (and window), so it is sized to
   its measured content every time. Manual check: right-click the main/playlist windows
   several times in a row and confirm every menu hugs its items (no empty band), not
@@ -543,7 +543,7 @@ code plus a working/not-working binary): visual and behavior changes.
   so they play (or fail cleanly, caught by the guard). m4a/mp4/m4b added to
   HINTED_EXTS; mp4/m4b added to SUPPORTED_EXTS. Manual check: open an .m4a (AAC) and
   confirm it plays with EQ/analyzer and no crash. Note: like #157, these decode
-  up front into memory for now — fine for tracks, heavier for a long file; a seekable
+  up front into memory for now, fine for tracks, heavier for a long file; a seekable
   source is the #163 follow-up.
 
 - #163 (seekable decode, part 1): crate::decode no longer decodes the whole file up
@@ -551,20 +551,20 @@ code plus a working/not-working binary): visual and behavior changes.
   on demand and implements try_seek via symphonia's seek, so .mp2/.m4a/etc no longer
   sit fully decoded in memory and can be scrubbed. Covered by a real decode+seek unit
   test against the committed MP3 fixture (open_file works for any symphonia format via
-  the hint). Manual check: play an .m4a, drag the seek bar, and confirm it scrubs and
+  the hint). Manual check: play an .m4a, drag the seek bar and confirm it scrubs and
   keeps playing. Remaining #163 work: route the everyday formats (mp3/flac/ogg/wav)
   through this path too so symphonia is the single local decoder.
 
-- #160 (Audio CD, groundwork): added src/cdda.rs with the device-agnostic pieces —
+- #160 (Audio CD, groundwork): added src/cdda.rs with the device-agnostic pieces, 
   the CD track model, CDDA timing (2352 bytes/sector, 75 sectors/sec, 44.1 kHz
   stereo), and the cdda://<device>/<track> playlist pseudo-path. All unit-tested. No
   device code yet: the per-OS TOC and raw-sector reads (DeviceIoControl on Windows,
   CDROM ioctls on Linux) and the playback source are the next step and need a real
-  optical drive to develop and verify — which this dev box doesn't have. No GPL deps
+  optical drive to develop and verify, which this dev box doesn't have. No GPL deps
   (libcdio is avoided). Nothing to verify in the app yet; the groundwork is covered
   by code.
 
-- #160 (Audio CD, groundwork cont.): added cdda::pcm_s16le_to_f32 — converts a raw
+- #160 (Audio CD, groundwork cont.): added cdda::pcm_s16le_to_f32, converts a raw
   CDDA sector (16-bit little-endian stereo PCM) to interleaved f32 for the rodio
   pipeline, so the per-OS device layer can share one playback source. Device-
   independent and unit-tested (normalization + samples-per-sector). Still no device
@@ -586,20 +586,20 @@ code plus a working/not-working binary): visual and behavior changes.
   gives uniform seeking. Unit-tested via the MP3 fixture (decode+seek) and a
   generated WAV. IMPORTANT human verification: this changes the path EVERY local file
   takes, so please play one of each common format (mp3, flac, ogg, wav, m4a) and
-  confirm each plays, seeks, and sounds right with no gaps or stutter, and that
+  confirm each plays, seeks and sounds right with no gaps or stutter, and that
   track-to-track advance is clean. (Note: WavPack .wv and Opus .opus have no symphonia
-  decoder in 0.5, so those extensions won't play via this path — they didn't before
+  decoder in 0.5, so those extensions won't play via this path, they didn't before
   either; can be dropped from the supported list or revisited.)
-- #77: closed as-is per your call — stop-after-current / stop-with-fade stay in the
+- #77: closed as-is per your call, stop-after-current / stop-with-fade stay in the
   Stop button's right-click menu; Preferences remains persistent-settings-only.
 
-- #159 (MIDI, integration): added src/midi.rs — a MidiSource rodio Source that
+- #159 (MIDI, integration): added src/midi.rs, a MidiSource rodio Source that
   synthesizes .mid/.midi via rustysynth (pure Rust) and a SoundFont, through the same
   EQ/analyzer/balance pipeline. play_file routes mid/midi here; mid/midi added to
   SUPPORTED_EXTS; build.rs now also mirrors a soundfont/ folder next to the binary
   (like skins/). The SoundFont is discovered at soundfont/*.sf2; MIDI errors cleanly
   if none is present (caught by the skip guard). Compiles; the error path is
-  unit-tested. NOT yet playable: it needs a bundled SoundFont (.sf2) — see the
+  unit-tested. NOT yet playable: it needs a bundled SoundFont (.sf2), see the
   decision below. Once one is in soundfont/, manual check: play a .mid and confirm it
   renders through the EQ/analyzer. Seeking is unsupported for MIDI (rustysynth has no
   seek). Open decision: which redistributable SoundFont to bundle (GeneralUser GS is
@@ -607,16 +607,16 @@ code plus a working/not-working binary): visual and behavior changes.
   step.
 
 - #159 (MIDI, complete): bundled the GeneralUser GS SoundFont (soundfont/, free to
-  redistribute, ~32 MB) and verified end-to-end — a generated one-note MIDI renders
+  redistribute, ~32 MB) and verified end-to-end, a generated one-note MIDI renders
   audio through rustysynth + the SoundFont (unit-tested). MIDI now plays. Manual
   check: play one of the demo MIDIs placed in qa-music (Bond.mid, Dance.mid, Jump!.mid)
   and confirm it sounds right through the EQ/analyzer. Also: qa-music is now gitignored
   so local test media never gets committed. Note: I added MIDI samples to qa-music but
-  couldn't source license-clean .mp2/.m4a samples via download — drop your own of
+  couldn't source license-clean .mp2/.m4a samples via download, drop your own of
   those (and a flac/ogg) into qa-music to exercise #157/#164 and the #163 single path.
 
 - #158 (tracker modules): .mod/.xm/.s3m/.it now play, via xmrs + xmrsplayer (pure
-  Rust). This is better than the approved libopenmpt path — no native C dependency, so
+  Rust). This is better than the approved libopenmpt path, no native C dependency, so
   it builds everywhere with no DLL bundling. src/tracker.rs loads the module (xmrs) and
   renders it lazily (xmrsplayer) as a seekable rodio Source; the player borrows the
   module so a self_cell holds them together. Routed in play_file; mod/xm/s3m/it added

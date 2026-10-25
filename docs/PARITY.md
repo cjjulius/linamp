@@ -1,7 +1,7 @@
 # Winamp 2.666 parity
 
 LinAmp's classic-mode target is Winamp 2.666 specifically. This map tracks that
-version's feature set: what's done, what genuinely remains, and what belongs to
+version's feature set: what's done, what genuinely remains and what belongs to
 later Winamp lines (and so is out of scope until 2.666 is complete).
 
 For how each change was verified, see [REVIEW-NOTES.md](REVIEW-NOTES.md); for the
@@ -13,7 +13,7 @@ As of feat/winamp-parity-3, LinAmp meets the Winamp 2.666 functional feature set
 The only in-scope item not fully landed here is the audio-CD device layer (#160),
 which needs a real optical drive to write and verify and so is being built on the
 Linux box. A few completed changes are also waiting on a quick visual sign-off (see
-below) — those are confirmations, not missing features.
+below), those are confirmations, not missing features.
 
 Everything else still open in the tracker is either later-line work (Winamp 3/5+)
 or an internal refactor, listed under Deferred.
@@ -48,7 +48,7 @@ feature set:
   ICY stream title shown in the scrolling display.
 - Tag reading for every format lofty supports; ID3v1 and ID3v2 text-frame editing
   for MP3 (title, artist, album, year, track, genre, comment, composer, original
-  artist, copyright, URL, encoded-by) — the stock 2.666 File Info set and more.
+  artist, copyright, URL, encoded-by), the stock 2.666 File Info set and more.
 
 ### Audio formats decoded
 
@@ -62,7 +62,7 @@ disagree with it:
 - MIDI (.mid/.midi), synthesized by rustysynth with a bundled GeneralUser GS
   SoundFont (#159).
 - Tracker modules (.mod/.xm/.s3m/.it), rendered by the pure-Rust xmrs/xmrsplayer
-  (#158 — no native C dependency, so the build stays portable).
+  (#158, no native C dependency, so the build stays portable).
 
 ## Implemented, awaiting a visual sign-off
 
@@ -79,7 +79,7 @@ close, not further work:
 
 ## Genuinely remaining 2.666 work
 
-- #160, Audio CD (CDDA). The device-independent half is complete and tested — the
+- #160, Audio CD (CDDA). The device-independent half is complete and tested, the
   CD model, timing, the `cdda://` pseudo-path, PCM conversion, the `CdAudioSource`
   rodio source and the `CdDrive` contract (read_toc / read_sector). What remains is
   the per-OS raw TOC and sector reads, which need a real drive and disc to write
@@ -92,9 +92,9 @@ close, not further work:
   its groove centred at local x ~6, so the inset is now 1 (regression-tested).
 - #163, unified local decoding on direct symphonia with a hint; rodio's file
   Decoder is gone, so the m4a/mp2 decoder-mismatch class of bugs is closed.
-- #157 (MPEG Layer I/II), #164 (ISO-MP4 open-panic), #159 (MIDI), #158 (trackers)
-  — see "Audio formats decoded".
-- #77, shortcut-only stop actions: closed as-is — stop-after-current and
+- #157 (MPEG Layer I/II), #164 (ISO-MP4 open-panic), #159 (MIDI), #158 (trackers),
+  see "Audio formats decoded".
+- #77, shortcut-only stop actions: closed as-is, stop-after-current and
   stop-with-fade live in the Stop button's right-click menu (#130); Preferences
   stays limited to persistent settings (maintainer call, decision 4a).
 - #156 (resize clamp, user-verified on Linux), #97 (accented/Vietnamese text
@@ -114,8 +114,8 @@ Winamp lines rather than 2.x behaviour at all.
   not core).
 - Beyond 2.666 (post-2.x era), not stock 2.666 behaviour:
   - #89, broaden tag editing. The 2.666-relevant part (MP3 ID3v1/v2 text frames)
-    is done; the remainder — writing FLAC/OGG/M4A tags, album art, and the
-    ID3v2.3-vs-2.4 and related Preferences — is modern-era work (stock 2.666 edited
+    is done; the remainder, writing FLAC/OGG/M4A tags, album art and the
+    ID3v2.3-vs-2.4 and related Preferences, is modern-era work (stock 2.666 edited
     MP3 tags only). Hold until the parity bar is signed off.
   - #108, drop shadows on the classic context menus (a post-2.x window-compositing
     nicety).

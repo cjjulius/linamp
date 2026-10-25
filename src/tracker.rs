@@ -1,7 +1,7 @@
 //! Tracker module playback (.mod/.xm/.s3m/.it) via xmrs + xmrsplayer (#158).
 //!
 //! Classic Winamp played tracker modules natively. We load the module with xmrs
-//! and render it with xmrsplayer — both pure Rust, so unlike libopenmpt this adds
+//! and render it with xmrsplayer, both pure Rust, so unlike libopenmpt this adds
 //! no C build dependency and compiles everywhere. The player borrows the module,
 //! so a `self_cell` holds the two together and we expose them as a lazy, seekable
 //! rodio `Source` that renders on demand (no up-front decode of the whole song).
@@ -30,7 +30,7 @@ pub fn is_tracker(path: &Path) -> bool {
 }
 
 // The player borrows the module; keep both alive together. not_covariant keeps it
-// simple — we only call methods that return owned values (next / seek / duration).
+// simple, we only call methods that return owned values (next / seek / duration).
 self_cell::self_cell!(
     struct ModuleCell {
         owner: Module,
