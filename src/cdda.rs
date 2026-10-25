@@ -17,6 +17,10 @@
 
 use std::time::Duration;
 
+use anyhow::Result;
+use rodio::source::SeekError;
+use rodio::Source;
+
 /// CDDA is 16-bit stereo PCM at 44.1 kHz: 2352 bytes per sector, 75 sectors/sec.
 pub const CDDA_SECTOR_BYTES: usize = 2352;
 pub const CDDA_SECTORS_PER_SEC: u32 = 75;
@@ -81,6 +85,98 @@ pub fn pcm_s16le_to_f32(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
+/// What the per-OS device layer must provide for CD playback. Implementations do
+/// the raw device I/O (DeviceIoControl on Windows, the CDROM ioctls on Linux);
+/// everything above this trait is platform-independent and already tested.
+pub trait CdDrive: Send {
+    /// Read the disc's table of contents (the audio tracks, in order).
+    fn read_toc(&mut self) -> Result<Vec<CdTrack>>;
+    /// Read one 2352-byte CDDA audio sector at logical block address `lba`.
+    fn read_sector(&mut self, lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]>;
+}
+
+/// A rodio `Source` that plays one CD track by reading its sectors through a
+/// [`CdDrive`] and converting each to f32. Platform-independent: it works against
+/// any drive implementation, so only the device I/O is left per-OS.
+pub struct CdAudioSource<D: CdDrive> {
+    drive: D,
+    start_lba: u32,
+    next_lba: u32,
+    end_lba: u32,
+    samples: Vec<f32>,
+    pos: usize,
+}
+
+impl<D: CdDrive> CdAudioSource<D> {
+    /// Play `track` from `drive`.
+    pub fn new(drive: D, track: &CdTrack) -> Self {
+        Self {
+            drive,
+            start_lba: track.start_lba,
+            next_lba: track.start_lba,
+            end_lba: track.start_lba + track.sectors,
+            samples: Vec::new(),
+            pos: 0,
+        }
+    }
+
+    /// Read the next sector into `samples`; false at end of track / on a read error.
+    fn fill(&mut self) -> bool {
+        if self.next_lba >= self.end_lba {
+            return false;
+        }
+        match self.drive.read_sector(self.next_lba) {
+            Ok(sector) => {
+                self.samples = pcm_s16le_to_f32(&sector);
+                self.pos = 0;
+                self.next_lba += 1;
+                !self.samples.is_empty()
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+impl<D: CdDrive> Iterator for CdAudioSource<D> {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        if self.pos >= self.samples.len() && !self.fill() {
+            return None;
+        }
+        let s = self.samples[self.pos];
+        self.pos += 1;
+        Some(s)
+    }
+}
+
+impl<D: CdDrive> Source for CdAudioSource<D> {
+    fn current_frame_len(&self) -> Option<usize> {
+        let rem = self.samples.len() - self.pos;
+        (rem > 0).then_some(rem)
+    }
+    fn channels(&self) -> u16 {
+        CDDA_CHANNELS
+    }
+    fn sample_rate(&self) -> u32 {
+        CDDA_SAMPLE_RATE
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs_f64(
+            (self.end_lba - self.start_lba) as f64 / CDDA_SECTORS_PER_SEC as f64,
+        ))
+    }
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        // Seek to the sector that holds `pos` (75 sectors = 1 second), clamped to
+        // the track, then re-read from there.
+        let sector = (pos.as_secs_f64() * CDDA_SECTORS_PER_SEC as f64) as u32;
+        self.next_lba = (self.start_lba + sector).min(self.end_lba);
+        self.samples.clear();
+        self.pos = 0;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +215,42 @@ mod tests {
         // A whole sector yields exactly CDDA_SAMPLES_PER_SECTOR samples.
         let sector = vec![0u8; CDDA_SECTOR_BYTES];
         assert_eq!(pcm_s16le_to_f32(&sector).len(), CDDA_SAMPLES_PER_SECTOR);
+    }
+
+    /// A drive whose sectors are all silence — enough to exercise the Source's
+    /// paging and seeking without real hardware.
+    struct FakeDrive;
+    impl CdDrive for FakeDrive {
+        fn read_toc(&mut self) -> Result<Vec<CdTrack>> {
+            Ok(vec![])
+        }
+        fn read_sector(&mut self, _lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]> {
+            Ok([0u8; CDDA_SECTOR_BYTES])
+        }
+    }
+
+    #[test]
+    fn cd_audio_source_plays_whole_track_then_ends() {
+        let track = CdTrack { number: 1, start_lba: 100, sectors: 10 };
+        let src = CdAudioSource::new(FakeDrive, &track);
+        assert_eq!(src.channels(), CDDA_CHANNELS);
+        assert_eq!(src.sample_rate(), CDDA_SAMPLE_RATE);
+        assert_eq!(src.total_duration(), Some(Duration::from_secs_f64(10.0 / 75.0)));
+        // Exactly 10 sectors of audio, then the iterator ends.
+        assert_eq!(src.count(), 10 * CDDA_SAMPLES_PER_SECTOR);
+    }
+
+    #[test]
+    fn cd_audio_source_seeks_to_a_sector() {
+        let track = CdTrack { number: 1, start_lba: 100, sectors: 10 };
+        // Seek to sector 8 of 10: sectors 8 and 9 remain.
+        let mut src = CdAudioSource::new(FakeDrive, &track);
+        src.try_seek(Duration::from_secs_f64(8.0 / 75.0)).unwrap();
+        assert_eq!(src.count(), 2 * CDDA_SAMPLES_PER_SECTOR);
+        // Seeking past the end yields nothing (clamped to the track end).
+        let mut past = CdAudioSource::new(FakeDrive, &track);
+        past.try_seek(Duration::from_secs(60)).unwrap();
+        assert_eq!(past.count(), 0);
     }
 
     #[test]

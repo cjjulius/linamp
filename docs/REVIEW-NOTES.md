@@ -535,3 +535,10 @@ code plus a working/not-working binary): visual and behavior changes.
   pipeline, so the per-OS device layer can share one playback source. Device-
   independent and unit-tested (normalization + samples-per-sector). Still no device
   reads yet (those need a real drive); nothing to verify in the app.
+
+- #160 (Audio CD, playback contract): added the CdDrive trait (what the per-OS
+  device layer must provide: read_toc + read_sector) and CdAudioSource, a rodio
+  Source that plays a track by reading its sectors through any CdDrive and converting
+  to f32, with seeking. Verified against a fake drive (full-track length, seek to a
+  sector, seek-past-end clamp). This leaves only the real device I/O (DeviceIoControl
+  / CDROM ioctls) per-OS, which needs a drive. Nothing to verify in the app yet.
