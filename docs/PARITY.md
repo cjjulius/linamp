@@ -57,22 +57,33 @@ Preferences > Optional Features gathers the obsolete/incomplete "full parity" ex
 (the Minibrowser and numeric-keypad transport), off by default with an enable-at-your-
 own-risk note.
 
-## Open, needs work or a direction
+## Remaining 2.666 functional-parity work (this run's closeout list)
 
-- #40, system integration: global media keys, tray icon, file
-  associations. Platform-specific; needs a scope decision.
-- #77, surface all settings in Preferences. Largely a design call: the
-  Preferences window deliberately shows only persistent settings, while one-shot
-  actions and view toggles keep their shortcuts.
-- #89, broaden tag editing. ID3v2 text frames are done; remaining is
-  non-MP3 writing (FLAC/OGG/M4A), album art, ID3v2.3-vs-2.4 and related
-  Preferences, the issue asks to plan these together.
-- #144 (remaining), Ctrl+A always-on-top (vs playlist select-all),
-  Ctrl+E EasyMove, Alt+W toggle main window, Ctrl+keypad-0 open-location and an
-  optional platform raw-key path so keypad transport is keypad-only.
+This is the finish line: when these are done, LinAmp is at 2.666 functional
+parity. Scope confirmed with the maintainer, #77 and #97 are in, #40 and #43 are
+out (see Deferred).
 
-## Deferred, beyond 2.666
+- #144 (remaining), Ctrl+A always-on-top (vs playlist select-all), Ctrl+E
+  EasyMove, Alt+W toggle main window, Ctrl+keypad-0 open-location.
+- #89, broaden tag editing. ID3v2 text frames are done; remaining is non-MP3
+  writing (FLAC/OGG/M4A), album art, ID3v2.3-vs-2.4 and related Preferences.
+- #77, surface all persistent settings in the Preferences window.
+- #97, full non-Latin text in the classic bitmap-font path (a font-atlas
+  approach); ASCII-folding is already in.
+- #154, classic context menus are a little tall; match the Media Library's
+  tighter row sizing.
+- #149, EQ ON/AUTO/PRESETS buttons misaligned on some skins (MacOSXAqua,
+  Osmosis); needs a visual repro vs real Winamp.
 
-- 3.x: #20 modern `.wal` skin engine, #78 Media Library buildout, #139 EQ
-  graph drag-to-draw.
+Shipped in 0.4.9 and being closed: #15 (Open location), #45 (Bookmarks), #17
+(window-shade slider), #146 (Minibrowser sim). #156 (playlist resize clamp) fixed
+on feat/winamp-parity-3.
+
+## Deferred, beyond the 2.666 functional-parity bar
+
+- Out of scope for this run (maintainer call): #40, system integration (global
+  media keys, tray icon, file associations); #43, crossfade (a 2.x output plugin,
+  not core).
+- 3.x: #20 modern `.wal` skin engine, #78 Media Library buildout, #139 EQ graph
+  drag-to-draw.
 - 5.x: #42 gapless playback, #44 ReplayGain.
