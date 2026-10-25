@@ -980,13 +980,9 @@ impl LinAmpApp {
     fn open_files(&mut self) {
         hide_popup_window();
         if let Some(paths) = rfd::FileDialog::new()
-            .add_filter(
-                "Audio",
-                &[
-                    "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "opus", "wv", "aiff", "aif",
-                    "mp1", "mp2", "mpa",
-                ],
-            )
+            // Single source of truth: the same list `is_supported` gates on, so
+            // adding a format only touches `SUPPORTED_EXTS`.
+            .add_filter("Audio", crate::playlist::SUPPORTED_EXTS)
             .pick_files()
         {
             let was_empty = self.playlist.is_empty();
