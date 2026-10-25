@@ -66,6 +66,21 @@ pub fn is_cdda_path(s: &str) -> bool {
     s.starts_with("cdda://")
 }
 
+/// Interleaved f32 samples per CDDA sector (2352 bytes / 2 bytes per 16-bit sample).
+pub const CDDA_SAMPLES_PER_SECTOR: usize = CDDA_SECTOR_BYTES / 2;
+
+/// Convert raw CDDA sector bytes (16-bit little-endian stereo PCM, the on-disc
+/// form) to interleaved f32 in roughly -1.0..=1.0, which is what the rodio
+/// pipeline consumes. The per-OS device layer reads whole 2352-byte sectors; this
+/// turns them into audio, so it can share one playback source across platforms.
+/// A trailing odd byte (which a correct 2352-byte sector never has) is ignored.
+pub fn pcm_s16le_to_f32(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,6 +101,24 @@ mod tests {
             assert!(is_cdda_path(&p));
             assert_eq!(parse_track_path(&p), Some((dev.to_string(), n)));
         }
+    }
+
+    #[test]
+    fn pcm_s16le_converts_to_normalized_f32() {
+        // 0 -> 0.0, max -> ~+1, min -> -1; little-endian byte order.
+        let bytes = [
+            0x00, 0x00, // 0
+            0xff, 0x7f, // i16::MAX = 32767
+            0x00, 0x80, // i16::MIN = -32768
+        ];
+        let out = pcm_s16le_to_f32(&bytes);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0], 0.0);
+        assert!((out[1] - 0.99997).abs() < 1e-4);
+        assert_eq!(out[2], -1.0);
+        // A whole sector yields exactly CDDA_SAMPLES_PER_SECTOR samples.
+        let sector = vec![0u8; CDDA_SECTOR_BYTES];
+        assert_eq!(pcm_s16le_to_f32(&sector).len(), CDDA_SAMPLES_PER_SECTOR);
     }
 
     #[test]

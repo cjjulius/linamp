@@ -529,3 +529,9 @@ code plus a working/not-working binary): visual and behavior changes.
   optical drive to develop and verify — which this dev box doesn't have. No GPL deps
   (libcdio is avoided). Nothing to verify in the app yet; the groundwork is covered
   by code.
+
+- #160 (Audio CD, groundwork cont.): added cdda::pcm_s16le_to_f32 — converts a raw
+  CDDA sector (16-bit little-endian stereo PCM) to interleaved f32 for the rodio
+  pipeline, so the per-OS device layer can share one playback source. Device-
+  independent and unit-tested (normalization + samples-per-sector). Still no device
+  reads yet (those need a real drive); nothing to verify in the app.
