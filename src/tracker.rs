@@ -84,6 +84,15 @@ impl Source for TrackerSource {
     }
 }
 
+/// The length of a tracker module, so the playlist can show a time for it (lofty
+/// doesn't read these). `None` when it isn't a module or can't be loaded.
+pub fn duration(path: &Path) -> Option<Duration> {
+    if !is_tracker(path) {
+        return None;
+    }
+    open_tracker(path).ok().and_then(|s| s.total_duration())
+}
+
 /// Load a tracker module and expose it as a lazy, seekable source. Errors cleanly
 /// on an unrecognized or corrupt module (caught by the skip-unplayable guard).
 pub fn open_tracker(path: &Path) -> Result<TrackerSource> {
