@@ -10,13 +10,13 @@ pub const SUPPORTED_EXTS: &[&str] = &[
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
 /// happens with ID3v2 frames whose encoding byte says ISO-8859-1 while the bytes
-/// are actually UTF-8 (common in the wild, e.g. zing.vn MP3s), so an accented
+/// are actually UTF-8 (common in the wild, example: zing.vn MP3s), so an accented
 /// title like "Bằng Kiều" comes back as "Bá»±ng Kiá»u".
 ///
 /// When every char is U+00..=U+FF the original bytes are recoverable: map each
 /// char back to its byte and re-decode as UTF-8. Only used when that yields valid
 /// UTF-8 that actually changed, so correctly-tagged text (and plain ASCII/Latin-1
-/// that isn't disguised UTF-8) is left untouched. Idempotent — repaired text has
+/// that isn't disguised UTF-8) is left untouched. Idempotent, repaired text has
 /// chars above U+00FF, so a second pass is a no-op.
 fn repair_mojibake(s: &str) -> String {
     if s.is_empty() || !s.chars().all(|c| (c as u32) <= 0xFF) {
@@ -212,7 +212,7 @@ impl Playlist {
         self.reselect(cur);
     }
 
-    /// Target index for a relative "jump N tracks" — classic Winamp's numpad
+    /// Target index for a relative "jump N tracks", classic Winamp's numpad
     /// 1 and 3, which skip 10 songs back and forward. Counts from the current
     /// track (or the top when nothing is playing), clamps at the list ends and
     /// does not wrap. `None` for an empty list.
@@ -229,7 +229,7 @@ impl Playlist {
     /// selected. The order is not reproducible (seeded from the clock).
     pub fn randomize(&mut self) {
         let cur = self.current_path();
-        // xorshift64 — a playlist shuffle needs no cryptographic quality.
+        // xorshift64, a playlist shuffle needs no cryptographic quality.
         let mut s = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -301,7 +301,7 @@ impl Playlist {
         }
     }
 
-    /// Next track from the shuffle bag — each track plays once per cycle; a new
+    /// Next track from the shuffle bag, each track plays once per cycle; a new
     /// shuffled cycle starts when the current one is exhausted, never repeating
     /// the just-played track back-to-back.
     fn next_shuffle(&mut self) -> Option<usize> {
@@ -467,7 +467,7 @@ fn resolve(base: Option<&Path>, value: &str) -> PathBuf {
         return p;
     }
     // Classic playlists are overwhelmingly Windows-authored, where relative
-    // entries use backslash separators (e.g. "Music\Song.mp3"). Treat those as
+    // entries use backslash separators (example: "Music\Song.mp3"). Treat those as
     // path separators so the playlist resolves on Linux too.
     let p = PathBuf::from(value.replace('\\', "/"));
     if p.is_absolute() {
@@ -520,7 +520,7 @@ mod tests {
 
     #[test]
     fn repair_mojibake_leaves_clean_text_alone() {
-        // Plain ASCII, already-correct Unicode, and real Latin-1 that doesn't
+        // Plain ASCII, already-correct Unicode and real Latin-1 that doesn't
         // happen to form valid UTF-8 must pass through unchanged.
         for s in ["Hello World", "Bằng Kiều", "café", "naïve", "Mötley Crüe"] {
             assert_eq!(repair_mojibake(s), s, "should not alter {s:?}");
@@ -676,7 +676,7 @@ mod tests {
         let first = pl.next_index(true, false).unwrap();
         assert_ne!(first, 2, "shuffle must not replay the current track immediately");
         // One cycle (the remaining 3) must cover every other index exactly once,
-        // i.e. all 4 tracks play once before any repeats.
+        // ex: all 4 tracks play once before any repeats.
         let mut seen = vec![first];
         for _ in 0..3 {
             let i = pl.next_index(true, false).unwrap();

@@ -1,4 +1,4 @@
-//! The Media Library: 3-pane browser, its themed window frame, and the
+//! The Media Library: 3-pane browser, its themed window frame and the
 //! background scan/refresh plumbing.
 
 use egui::{Color32, RichText};
@@ -137,7 +137,7 @@ impl super::LinAmpApp {
 
     /// Re-order `lib_results` (and the parallel `lib_ratings`) by the active column
     /// sort. The rating column sorts by the numeric star count, not the rendered
-    /// "★★★☆☆" string (whose empty-star glyph would sort the wrong way).
+    /// star string (whose empty-star glyph would sort the wrong way).
     fn apply_lib_sort(&mut self) {
         let Some((col, asc)) = self.lib_sort else {
             return;
@@ -262,7 +262,7 @@ impl super::LinAmpApp {
     }
 
     /// Library window themed with the skin's GEN.BMP frame: composite the frame
-    /// behind the content, draw the caption, and inset the browser into the frame.
+    /// behind the content, draw the caption and inset the browser into the frame.
     fn ui_library_gen(&mut self, ctx: &egui::Context, close: &mut bool) {
         self.foc_lib = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_lib);
         // Use the shared app-level focus so the library doesn't dim merely because
@@ -438,7 +438,7 @@ impl super::LinAmpApp {
         }
         self.classic_clicked = false;
         // Clicking anywhere in the Library window also dismisses an open classic
-        // popup (playlist/options menu) — the classic click-away only runs for the
+        // popup (playlist/options menu), the classic click-away only runs for the
         // classic windows, so it never sees clicks landing here.
         if ui.ctx().input(|i| i.pointer.any_pressed()) {
             self.popup = None;
@@ -1041,7 +1041,7 @@ impl super::LinAmpApp {
             }
         }
         if let Some(ci) = header_click {
-            // Toggle direction on the same column; otherwise sort the new column —
+            // Toggle direction on the same column; otherwise sort the new column, 
             // ascending for text/time, descending for Rating so more stars sort
             // to the top first.
             self.lib_sort = Some(match self.lib_sort {

@@ -39,8 +39,8 @@ const CLASSIC_BANDS: usize = 19;
 const FADE_SECS: f32 = 2.0;
 
 /// Register a broad-Unicode fallback font so egui-rendered text (the Media
-/// Library, the modern UI, dialogs) can display scripts the default font lacks —
-/// e.g. Vietnamese. It is appended as a fallback, so the default look is kept for
+/// Library, the modern UI, dialogs) can display scripts the default font lacks, 
+/// example: Vietnamese. It is appended as a fallback, so the default look is kept for
 /// characters it already covers; only missing glyphs fall through to Noto Sans.
 /// The classic skin windows draw text from the skin's own bitmap font and are
 /// unaffected by this.
@@ -161,7 +161,7 @@ fn reorder_play_next<T>(
 }
 
 /// If `r` overlaps `keep` (the main window), the position `r` should move to so it
-/// no longer covers it — pushed to `keep`'s nearest edge (least movement). `None`
+/// no longer covers it, pushed to `keep`'s nearest edge (least movement). `None`
 /// when they don't overlap (flush/touching counts as not overlapping).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum UiMode {
@@ -411,7 +411,7 @@ pub struct LinAmpApp {
     pl_ctx_row: Option<usize>,
     popup: Option<(Popup, ClWin, egui::Pos2)>,
     /// A popup to open once the current one closes (for opening the Bookmarks
-    /// list from an Options-menu item — classic popups aren't nested).
+    /// list from an Options-menu item, classic popups aren't nested).
     pending_popup: Option<(Popup, ClWin, egui::Pos2)>,
     /// Alt+I bookmarks, persisted to bookmarks.json.
     bookmarks: crate::config::Bookmarks,
@@ -438,7 +438,7 @@ pub struct LinAmpApp {
     has_pos_memory: bool,
     /// App-level focus: true while any LinAmp window is focused. All windows show
     /// their active title bar together and their inactive one only when the whole
-    /// app loses focus (e.g. to another application), matching Winamp — rather
+    /// app loses focus (example: to another application), matching Winamp, rather
     /// than one window dimming when another LinAmp window is clicked. Per-window
     /// focus is tracked in `foc_*` and OR'd each frame.
     app_focused: bool,
@@ -450,7 +450,7 @@ pub struct LinAmpApp {
     /// library is its own OS window and egui's menu never sees clicks in the
     /// other windows. Set on a library right-click, cleared when a classic window
     /// is *primary*-pressed (mirroring the classic popups' click-away) or when a
-    /// classic popup opens — never on a secondary click, which is the library's
+    /// classic popup opens, never on a secondary click, which is the library's
     /// own open gesture.
     lib_menu_open: bool,
     /// One-shot: a classic window was primary-pressed (or a classic popup opened)
@@ -482,7 +482,7 @@ pub struct LinAmpApp {
     prefs_drag: Option<egui::Vec2>,
     lib_visible: bool,
     /// Whether the Minibrowser window (a themed nod to Winamp's SHOUTcast pane)
-    /// is open. Transient — it opens from the Options menu each session.
+    /// is open. Transient, it opens from the Options menu each session.
     mb_visible: bool,
     tag_editor: Option<tag_ui::TagEditor>,
     /// Jump-to-file search state (Some while the dialog is open).
@@ -735,7 +735,7 @@ impl LinAmpApp {
             }
 
             // Fresh install (no saved session): the classic trio open and
-            // stacked (at the 1x default), the library closed, and the bundled
+            // stacked (at the 1x default), the library closed and the bundled
             // demo song cued in the playlist. The base skin loads by default.
             if first_run {
                 app.eq_visible = true;
@@ -853,14 +853,14 @@ impl LinAmpApp {
                     }
                     return;
                 }
-                // Can't open/decode this one — skip to the next (wrapping).
+                // Can't open/decode this one, skip to the next (wrapping).
                 Err(_) => {
                     skipped += 1;
                     i = (i + 1) % len;
                 }
             }
         }
-        // Nothing in the playlist could be played — just stop, silently (#128);
+        // Nothing in the playlist could be played, just stop, silently (#128);
         // leave the prior status as-is rather than showing a message.
         self.player.stop();
         self.playlist.current = None;
@@ -1324,7 +1324,7 @@ impl LinAmpApp {
             || self.lib_scan.is_some()
             || (self.player.state() == PlayState::Stopped
                 && self.viz_mode == VizMode::Spectrum
-                // Bars *and* peak markers — the peaks fall slower, so without
+                // Bars *and* peak markers, the peaks fall slower, so without
                 // them the falloff would stall when the repaint rate drops.
                 && self
                     .cviz_bars
@@ -1400,7 +1400,7 @@ impl LinAmpApp {
         }
     }
 
-    /// Stop playback — fading out first when the "fade out when stopping" pref is
+    /// Stop playback, fading out first when the "fade out when stopping" pref is
     /// on (otherwise an immediate cut). Shift+V always forces a fade regardless.
     fn stop_playback(&mut self) {
         if self.prefs.fade_on_stop && self.player.state() != PlayState::Stopped {
@@ -1447,7 +1447,7 @@ impl LinAmpApp {
                 self.play_index(last);
             }
             // A moved/deleted bookmark shouldn't drop a permanently-unplayable row
-            // into the playlist — just report it. (URL bookmarks wait on #15.)
+            // into the playlist, just report it. (URL bookmarks wait on #15.)
             None => self.status = format!("Bookmark file not found: {title}"),
         }
     }
@@ -1949,7 +1949,7 @@ impl LinAmpApp {
         // Render in its own real window so it is never clipped by the (small)
         // borderless main window. Borderless with a skin-drawn title bar (like the
         // classic windows and the Library) so the skin cursor covers the whole
-        // window — including the title bar — with no OS chrome to break it.
+        // window, including the title bar, with no OS chrome to break it.
         let default_pos = self.win_pos[0] + egui::vec2(24.0, 24.0);
         let pos = *self.prefs_pos.get_or_insert(default_pos);
         let builder = egui::ViewportBuilder::default()
@@ -2056,7 +2056,7 @@ impl LinAmpApp {
             // Right: the selected category's options.
             // Right: the selected category's page, in a scroll area so a category
             // can grow tall without the fixed window clipping it. Each arm just
-            // dispatches to a `prefs_page_*` method — see `pref_section` for the
+            // dispatches to a `prefs_page_*` method, see `pref_section` for the
             // pattern that keeps every page consistent as options are added.
             egui::CentralPanel::default().show(ctx, |ui| {
                 egui::ScrollArea::vertical()
@@ -2083,9 +2083,9 @@ impl LinAmpApp {
     /// Preferences page reads the same however many groups it grows.
     ///
     /// Extending the Preferences window:
-    /// * **add a setting**  → drop a widget into the relevant `pref_section` below;
-    /// * **add a group**    → another `pref_section(ui, "Title", |ui| { … })`;
-    /// * **add a category** → a [`PrefTab`] variant (wired into `ALL` + `label`)
+    /// * add a setting: drop a widget into the relevant `pref_section` below;
+    /// * add a group: another `pref_section(ui, "Title", |ui| { … })`;
+    /// * add a category: a [`PrefTab`] variant (wired into `ALL` + `label`)
     ///   and a matching `prefs_page_*` method dispatched from `ui_prefs`.
     fn pref_section(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
         ui.add_space(2.0);
@@ -2098,8 +2098,8 @@ impl LinAmpApp {
     fn prefs_page_display(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         Self::pref_section(ui, "Window size", |ui| {
             let mut dbl = self.prefs.double_size;
-            ui.radio_value(&mut dbl, false, "1x — pixel-for-pixel");
-            ui.radio_value(&mut dbl, true, "2x — scaled for modern screens (Ctrl+D)");
+            ui.radio_value(&mut dbl, false, "1x, pixel-for-pixel");
+            ui.radio_value(&mut dbl, true, "2x, scaled for modern screens (Ctrl+D)");
             if dbl != self.prefs.double_size {
                 self.set_double_size(ctx, dbl);
             }
@@ -2133,7 +2133,7 @@ impl LinAmpApp {
         ui.colored_label(
             egui::Color32::from_rgb(200, 150, 60),
             "These are obsolete or incomplete features included for \"full parity\". \
-             They may not function exactly as expected — enable at your own risk.",
+             They may not function exactly as expected, enable at your own risk.",
         );
         ui.add_space(10.0);
         Self::pref_section(ui, "Minibrowser", |ui| {
@@ -2174,7 +2174,7 @@ impl LinAmpApp {
             // Only genuine, persistent settings belong in Preferences. One-shot
             // actions ("Stop after current", Ctrl+V) and view toggles ("time
             // remaining", Ctrl+T) keep their shortcuts but are deliberately not
-            // shown here — a settings checkbox implies it sticks, and they don't.
+            // shown here, a settings checkbox implies it sticks, and they don't.
             let mut fade = self.prefs.fade_on_stop;
             if ui
                 .checkbox(&mut fade, "Fade out when stopping (Shift+V)")
@@ -2189,8 +2189,8 @@ impl LinAmpApp {
     fn prefs_page_playlist(&mut self, ui: &mut egui::Ui) {
         Self::pref_section(ui, "ID3 tag loading", |ui| {
             let mut onload = self.prefs.tag_on_load;
-            ui.radio_value(&mut onload, true, "On load — scan when files are added");
-            ui.radio_value(&mut onload, false, "On view — lazily as rows scroll in");
+            ui.radio_value(&mut onload, true, "On load, scan when files are added");
+            ui.radio_value(&mut onload, false, "On view, lazily as rows scroll in");
             if onload != self.prefs.tag_on_load {
                 self.prefs.tag_on_load = onload;
                 self.prefs.save();
@@ -2224,7 +2224,7 @@ impl LinAmpApp {
         }
         let screen = self.win_pos[0] + egui::vec2(28.0, 28.0);
         let builder = egui::ViewportBuilder::default()
-            .with_title("LinAmp — Jump to file")
+            .with_title("LinAmp, Jump to file")
             .with_position(screen)
             .with_inner_size(egui::vec2(360.0, 300.0))
             .with_min_inner_size(egui::vec2(260.0, 160.0))
@@ -2323,7 +2323,7 @@ impl LinAmpApp {
                     close = true;
                 }
             });
-            self.apply_base_cursor(ctx, "LinAmp — Jump to file");
+            self.apply_base_cursor(ctx, "LinAmp, Jump to file");
         });
         if let Some(i) = play {
             self.play_index(i);
@@ -2341,7 +2341,7 @@ impl LinAmpApp {
         }
         let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
         let builder = egui::ViewportBuilder::default()
-            .with_title("LinAmp — Jump to time")
+            .with_title("LinAmp, Jump to time")
             .with_position(screen)
             .with_inner_size(egui::vec2(260.0, 110.0))
             .with_resizable(false)
@@ -2379,7 +2379,7 @@ impl LinAmpApp {
                     close = true;
                 }
             });
-            self.apply_base_cursor(ctx, "LinAmp — Jump to time");
+            self.apply_base_cursor(ctx, "LinAmp, Jump to time");
         });
         if let Some(s) = seek_to {
             self.player.seek(Duration::from_secs_f32(s));
@@ -2398,7 +2398,7 @@ impl LinAmpApp {
         }
         let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
         let builder = egui::ViewportBuilder::default()
-            .with_title("LinAmp — Save EQ preset")
+            .with_title("LinAmp, Save EQ preset")
             .with_position(screen)
             .with_inner_size(egui::vec2(260.0, 110.0))
             .with_resizable(false)
@@ -2434,7 +2434,7 @@ impl LinAmpApp {
                     close = true;
                 }
             });
-            self.apply_base_cursor(ctx, "LinAmp — Save EQ preset");
+            self.apply_base_cursor(ctx, "LinAmp, Save EQ preset");
         });
         if let Some(name) = save {
             self.commit_eq_preset(name);
@@ -2498,7 +2498,7 @@ impl LinAmpApp {
         }
         let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
         let builder = egui::ViewportBuilder::default()
-            .with_title("LinAmp — Open location")
+            .with_title("LinAmp, Open location")
             .with_position(screen)
             .with_inner_size(egui::vec2(320.0, 110.0))
             .with_resizable(false)
@@ -2537,7 +2537,7 @@ impl LinAmpApp {
                     close = true;
                 }
             });
-            self.apply_base_cursor(ctx, "LinAmp — Open location");
+            self.apply_base_cursor(ctx, "LinAmp, Open location");
         });
         if let Some(url) = go {
             self.play_location(&url);
@@ -2569,7 +2569,7 @@ impl LinAmpApp {
         }
         let screen = self.win_pos[0] + egui::vec2(60.0, 60.0);
         let builder = egui::ViewportBuilder::default()
-            .with_title("LinAmp — Minibrowser")
+            .with_title("LinAmp, Minibrowser")
             .with_position(screen)
             .with_inner_size(egui::vec2(360.0, 220.0))
             .with_resizable(false)
@@ -2616,7 +2616,7 @@ impl LinAmpApp {
                 ui.add_space(4.0);
             });
             egui::CentralPanel::default().show(ctx, |ui| {
-                // A simulated "page" — a nod to the original minibrowser rather
+                // A simulated "page", a nod to the original minibrowser rather
                 // than a real web view.
                 ui.vertical_centered(|ui| {
                     ui.add_space(24.0);
@@ -2637,7 +2637,7 @@ impl LinAmpApp {
                 egui::Id::new("linamp_mb_border"),
             ))
             .rect_stroke(vr, egui::Rounding::ZERO, border);
-            self.apply_base_cursor(ctx, "LinAmp — Minibrowser");
+            self.apply_base_cursor(ctx, "LinAmp, Minibrowser");
             if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }
@@ -2687,7 +2687,7 @@ impl LinAmpApp {
 
     /// Apply each classic window's REGION.TXT shape (main/EQ/playlist, per shade
     /// state, scaled). Fingerprinted so the X calls only happen on change. No-op
-    /// for skins without regions (unless we previously shaped — then reset to
+    /// for skins without regions (unless we previously shaped, then reset to
     /// rectangular). X11 only; a no-op on other platforms.
     fn apply_window_shapes(&mut self) {
         use crate::region::Polygon;
@@ -2703,7 +2703,7 @@ impl LinAmpApp {
             None => return,
         };
         if !has && !self.shaped_any {
-            return; // normal skin, never shaped — leave windows rectangular
+            return; // normal skin, never shaped, leave windows rectangular
         }
         let skin = self.theme.name.clone();
         let main: &[Polygon] = if self.main_shade { &main_sr } else { &main_r };
@@ -2862,7 +2862,7 @@ impl LinAmpApp {
         }
         // Pin egui's cursor to Default so its per-widget cursors (the pointing
         // hand over buttons/links, the text caret in fields) don't show through on
-        // these widget-heavy windows — we want the skin cursor everywhere inside
+        // these widget-heavy windows, we want the skin cursor everywhere inside
         // them. This runs only when skin cursors are on and the skin has them (the
         // early returns above), so the normal per-widget cursors are untouched
         // when skin cursors are off. On X11 it also stops egui-winit from
@@ -2874,7 +2874,7 @@ impl LinAmpApp {
         }
     }
 
-    /// Restore the system cursor on every window — used when the custom-cursor
+    /// Restore the system cursor on every window, used when the custom-cursor
     /// option is switched off, since our `XDefineCursor` otherwise persists.
     fn clear_skin_cursors(&mut self) {
         for title in [
@@ -2883,9 +2883,9 @@ impl LinAmpApp {
             "LinAmp Playlist",
             "LinAmp Library",
             "LinAmp Preferences",
-            "LinAmp — File Info",
-            "LinAmp — Jump to file",
-            "LinAmp — Jump to time",
+            "LinAmp, File Info",
+            "LinAmp, Jump to file",
+            "LinAmp, Jump to time",
             "LinAmp Menu",
         ] {
             unset_window_cursor(title);
@@ -2938,7 +2938,7 @@ impl LinAmpApp {
             if let Some(r) = ctx.input(|i| i.viewport().outer_rect) {
                 if self.has_pos_memory {
                     // Restore the saved layout. If it would sit (partly) off the
-                    // current virtual desktop — e.g. after a resolution drop — nudge
+                    // current virtual desktop, example: after a resolution drop, nudge
                     // the whole visible cluster back on, prioritising the top-left so
                     // the windows stay grabbable. Shifting every window by the same
                     // delta preserves the docking.
@@ -3096,7 +3096,7 @@ impl LinAmpApp {
                 });
                 if self.skins.is_empty() {
                     ui.label(
-                        RichText::new("No skins found in ./skins — use \"Load .wsz...\".")
+                        RichText::new("No skins found in ./skins, use \"Load .wsz...\".")
                             .italics()
                             .size(10.0)
                             .color(Color32::GRAY),
@@ -3211,8 +3211,8 @@ fn paint_track_row(
     let paint = move |x: f32, width: f32, text: &str, color: Color32, right: bool| {
         use egui::text::{LayoutJob, TextFormat, TextWrapping};
         // Lay the cell out as a single line that truncates with an ellipsis. Inset
-        // the text a little on both sides so a long value never runs into — or even
-        // touches — the neighbouring column or the resize divider at the boundary.
+        // the text a little on both sides so a long value never runs into, or even
+        // touches, the neighbouring column or the resize divider at the boundary.
         let gap = 6.0 * scale; // right gap before the next column
         let lpad = 3.0 * scale; // left gap after the column boundary / divider
         let avail = (width - gap - lpad).max(0.0);
@@ -3557,8 +3557,8 @@ mod tests {
     #[test]
     fn rating_must_sort_numerically_not_by_star_string() {
         // Guard the reason apply_lib_sort sorts the Rating column by the numeric
-        // star count: the empty-star glyph ☆ (U+2606) sorts AFTER the filled ★
-        // (U+2605), so sorting the rendered "★★★☆☆" string would rank a 3-star row
+        // star count: the empty-star glyph (U+2606) sorts AFTER the filled star
+        // (U+2605), so sorting the rendered star string would rank a 3-star row
         // above a 5-star one. Numeric sorting is correct; string sorting is not.
         assert!('\u{2606}' > '\u{2605}');
         assert!("\u{2605}\u{2605}\u{2605}\u{2606}\u{2606}" > "\u{2605}\u{2605}\u{2605}\u{2605}\u{2605}");

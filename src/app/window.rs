@@ -45,7 +45,7 @@ impl super::LinAmpApp {
 
         // A primary press on any classic window also dismisses an open Media
         // Library menu (its own OS window never sees the click). Keyed on the
-        // primary press only — the same gesture that dismisses a classic popup —
+        // primary press only, the same gesture that dismisses a classic popup, 
         // so the library's own right-click (secondary) doesn't trip it.
         if pressed {
             self.classic_clicked = true;
@@ -56,7 +56,7 @@ impl super::LinAmpApp {
             self.popup = None;
         }
         // Escape closes an open menu. The popup no longer steals focus, so its own
-        // viewport won't see the key — the focused window catches it here instead.
+        // viewport won't see the key, the focused window catches it here instead.
         if self.popup.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.popup = None;
         }
@@ -305,8 +305,8 @@ impl super::LinAmpApp {
                         let group = d.group.clone();
                         let lib_offset = d.lib_offset;
                         let press_pos = d.press_pos;
-                        // Clamp so the dragged window — and, for the main window, its
-                        // whole docked block (EQ/PL + library) — stops at the screen
+                        // Clamp so the dragged window, and, for the main window, its
+                        // whole docked block (EQ/PL + library), stops at the screen
                         // edge instead of being pushed off it.
                         // Clamp to the whole virtual desktop (all monitors), so the
                         // block can be dragged onto another display but not off the
@@ -635,8 +635,8 @@ impl super::LinAmpApp {
     }
 
     /// The full drag group for a main-window move: the EQ/playlist windows (by
-    /// offset) and the library (by offset) that are transitively docked to main —
-    /// including chains that pass *through* the library (e.g. main–library–playlist).
+    /// offset) and the library (by offset) that are transitively docked to main, 
+    /// including chains that pass *through* the library (example: main–library–playlist).
     fn main_drag_group(&self) -> (Vec<(usize, egui::Vec2)>, Option<egui::Vec2>) {
         let rects = [
             self.win_rect_pts(0),

@@ -46,7 +46,7 @@ impl Library {
         Self::init(Connection::open(dir.join("library.db"))?)
     }
 
-    /// Shared setup: base table, pragmas, and forward-only migrations. Split out
+    /// Shared setup: base table, pragmas and forward-only migrations. Split out
     /// so tests can run against an in-memory database.
     fn init(conn: Connection) -> Result<Self> {
         conn.execute_batch(
@@ -111,7 +111,7 @@ impl Library {
     /// Update the stored tags/properties for a track already in the library.
     /// Returns `false` (a no-op) when the path isn't present, so editing a
     /// playlist-only file never silently adds it to the library. Play count,
-    /// rating, and date_added are left untouched.
+    /// rating and date_added are left untouched.
     pub fn update_tags(&self, t: &Track) -> bool {
         self.conn
             .execute(

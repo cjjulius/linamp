@@ -86,7 +86,7 @@ impl super::LinAmpApp {
                 self.playlist.current.hash(&mut h);
                 // The bottom-bar / shade time advances once a second while playing.
                 self.player.position().as_secs().hash(&mut h);
-                // Visible rows' identity + text — catches selection, current-row
+                // Visible rows' identity + text, catches selection, current-row
                 // and lazy tag loads without hashing the whole playlist. (Tags only
                 // load for visible rows, so off-screen rows can't change unseen.)
                 let vis = if self.pl_shade {
