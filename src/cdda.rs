@@ -93,7 +93,26 @@ pub trait CdDrive: Send {
     fn read_toc(&mut self) -> Result<Vec<CdTrack>>;
     /// Read one 2352-byte CDDA audio sector at logical block address `lba`.
     fn read_sector(&mut self, lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]>;
+    /// Read `count` consecutive sectors from `lba`, returned as one byte run.
+    ///
+    /// The default loops `read_sector`, but a device layer should override this to
+    /// read the whole run in a single request. Playback reads ~1 second at a time
+    /// (see `CdAudioSource`); one request per second keeps the drive streaming,
+    /// whereas one request per 2352-byte sector makes it re-seek/spin constantly
+    /// and stutter (#160).
+    fn read_sectors(&mut self, lba: u32, count: u32) -> Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(count as usize * CDDA_SECTOR_BYTES);
+        for i in 0..count {
+            out.extend_from_slice(&self.read_sector(lba + i)?);
+        }
+        Ok(out)
+    }
 }
+
+/// Sectors read per drive access during playback (~1 second of audio). Reading a
+/// batch instead of a single 2352-byte sector per audio refill is what keeps CD
+/// playback from stuttering (#160).
+const READAHEAD_SECTORS: u32 = CDDA_SECTORS_PER_SEC;
 
 /// A rodio `Source` that plays one CD track by reading its sectors through a
 /// [`CdDrive`] and converting each to f32. Platform-independent: it works against
@@ -120,19 +139,23 @@ impl<D: CdDrive> CdAudioSource<D> {
         }
     }
 
-    /// Read the next sector into `samples`; false at end of track / on a read error.
+    /// Read the next batch of sectors into `samples`; false at end of track / on a
+    /// read error. Reads up to `READAHEAD_SECTORS` at once so the audio thread hits
+    /// the drive about once a second in a streaming burst, not once per 2352-byte
+    /// sector (which stutters as the drive re-seeks and spins up) (#160).
     fn fill(&mut self) -> bool {
         if self.next_lba >= self.end_lba {
             return false;
         }
-        match self.drive.read_sector(self.next_lba) {
-            Ok(sector) => {
-                self.samples = pcm_s16le_to_f32(&sector);
+        let count = (self.end_lba - self.next_lba).min(READAHEAD_SECTORS);
+        match self.drive.read_sectors(self.next_lba, count) {
+            Ok(bytes) if !bytes.is_empty() => {
+                self.samples = pcm_s16le_to_f32(&bytes);
                 self.pos = 0;
-                self.next_lba += 1;
+                self.next_lba += count;
                 !self.samples.is_empty()
             }
-            Err(_) => false,
+            _ => false,
         }
     }
 }
@@ -251,6 +274,42 @@ mod tests {
         let mut past = CdAudioSource::new(FakeDrive, &track);
         past.try_seek(Duration::from_secs(60)).unwrap();
         assert_eq!(past.count(), 0);
+    }
+
+    /// Records each read_sectors batch size so we can assert the source pages in
+    /// ~1-second runs instead of one sector at a time.
+    struct CountingDrive {
+        batches: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    }
+    impl CdDrive for CountingDrive {
+        fn read_toc(&mut self) -> Result<Vec<CdTrack>> {
+            Ok(vec![])
+        }
+        fn read_sector(&mut self, _lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]> {
+            Ok([0u8; CDDA_SECTOR_BYTES])
+        }
+        fn read_sectors(&mut self, _lba: u32, count: u32) -> Result<Vec<u8>> {
+            self.batches.lock().unwrap().push(count);
+            Ok(vec![0u8; count as usize * CDDA_SECTOR_BYTES])
+        }
+    }
+
+    #[test]
+    fn cd_audio_source_reads_sectors_in_batches() {
+        // A 200-sector track must be read through read_sectors in ~1-second batches
+        // (READAHEAD_SECTORS each), not one sector per read, so the drive streams
+        // rather than re-seeking and stuttering (#160).
+        let batches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let drive = CountingDrive { batches: batches.clone() };
+        let track = CdTrack { number: 1, start_lba: 0, sectors: 200 };
+        let src = CdAudioSource::new(drive, &track);
+        assert_eq!(src.count(), 200 * CDDA_SAMPLES_PER_SECTOR);
+        let calls = batches.lock().unwrap();
+        assert_eq!(
+            calls.as_slice(),
+            &[READAHEAD_SECTORS, READAHEAD_SECTORS, 200 - 2 * READAHEAD_SECTORS],
+            "should read in batches, not per-sector"
+        );
     }
 
     #[test]
