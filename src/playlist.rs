@@ -5,7 +5,9 @@ use walkdir::WalkDir;
 
 /// Supported audio file extensions.
 pub const SUPPORTED_EXTS: &[&str] = &[
-    "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "opus", "wv", "aiff", "aif",
+    "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "aiff", "aif",
+    // Not Opus or WavPack: symphonia 0.5 ships no decoder for either, so listing
+    // them would accept the file then fail at play time (decode::tests guards this).
     // MPEG Layer I/II and the rest of the ISO-MP4 family, decoded via a symphonia
     // hint in crate::decode (rodio 0.20 can't open these directly) (#157/#164).
     "mp1", "mp2", "mpa", "mp4", "m4b",

@@ -21,8 +21,9 @@ coordinates, on a modern cross-platform stack (`eframe`/`egui` UI,
 
 - Classic skin UI, loads real Winamp `.wsz` skins; main + EQ + playlist as
   separate windows that dock and snap together, with window-shade mode.
-- Playback, MP3, FLAC, OGG/Vorbis, WAV, AAC/M4A, Opus, WavPack, AIFF; seek,
-  volume, stereo balance, repeat/shuffle, stop-after/stop-with-fade.
+- Playback, MP3, MPEG Layer I/II, FLAC, OGG/Vorbis, WAV, AAC/M4A, AIFF, tracker
+  modules and MIDI; seek, volume, stereo balance, repeat/shuffle,
+  stop-after/stop-with-fade.
 - 10-band equalizer with presets, preamp and an auto-gain mode (live biquad DSP).
 - Visualizer, live FFT spectrum analyzer and oscilloscope, skin-coloured.
 - Playlist, add files/folders, drag-and-drop, reorder, sort, search, M3U/PLS.

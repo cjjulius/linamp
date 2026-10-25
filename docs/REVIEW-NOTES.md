@@ -3,6 +3,17 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-25 (later 2)
+
+- Supported-formats list claimed Opus and WavPack, which symphonia 0.5 can't
+  decode, so those files were accepted into playlists then silently skipped at
+  play time. Dropped .opus and .wv from SUPPORTED_EXTS (and from FEATURES.md /
+  README.md); a decode test now asserts the symphonia registry has decoders for
+  the formats we advertise and none for Opus/WavPack. Behaviour change to note:
+  any .opus/.wv files are no longer recognised in the open dialog or added to
+  playlists (they never actually played). FEATURES/README also now list trackers
+  and MIDI as shipped rather than planned. No in-app audio check needed.
+
 ## 2026-10-25 (later)
 
 - MIDI release/reverb tail was being cut off: playback stopped one ~23ms block
