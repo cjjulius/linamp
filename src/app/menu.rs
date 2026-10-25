@@ -4,7 +4,7 @@
 use super::*;
 
 /// Popup menus in classic mode (options + the playlist bottom-bar fly-outs).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Popup {
     Options,
     PlAdd,
@@ -25,17 +25,24 @@ pub(super) enum Popup {
     EqDelete,
 }
 
-/// Per-row height budget (points) for a popup menu: the 18px item row (see
-/// `menu_item`) plus the tightened inter-row spacing set on the popup, so the
-/// window hugs its content instead of carrying extra height (#154).
-const MENU_ROW_H: f32 = 21.0;
-/// Height budget for a separator row in a popup menu.
-const MENU_SEP_H: f32 = 9.0;
-/// Inner padding (points) around a popup menu's content, applied on the frame so
-/// the measured content height maps to a known window height (#154).
+/// Height (points) one item row costs in a popup menu: the 18px item (see
+/// `menu_item`) plus the 2px inter-row spacing set on the popup.
+const MENU_ROW_H: f32 = 20.0;
+/// Height one separator row costs: egui's 6px separator plus the 2px spacing.
+const MENU_SEP_H: f32 = 8.0;
+/// Inner padding (points) on each edge of a popup menu's content frame.
 const MENU_MARGIN: f32 = 6.0;
 
-/// Window size (points) for a popup menu, from its item/separator count.
+/// Window height for a popup with `buttons` item rows and `seps` separators. The
+/// rows/seps already include one inter-row gap each, so the fixed term is the
+/// two margins (2 × MENU_MARGIN) minus the one gap that the last row doesn't have.
+fn popup_height(buttons: i32, seps: i32) -> f32 {
+    buttons as f32 * MENU_ROW_H + seps as f32 * MENU_SEP_H + (2.0 * MENU_MARGIN - 2.0)
+}
+
+/// Window size (points) for a popup menu, from its item/separator count. The
+/// counts must match what the matching arm in `draw_popup_viewport` draws, or the
+/// window leaves an empty band (too many) or clips the last rows (too few) (#154).
 pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
     let (buttons, seps, width) = match kind {
         // Height is computed dynamically in draw_popup_viewport (it counts the
@@ -44,18 +51,20 @@ pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
         Popup::PlAdd => (2, 0, 182.0),
         Popup::PlRem => (4, 0, 182.0),
         Popup::PlSel => (3, 0, 182.0),
-        Popup::PlMisc => (6, 0, 182.0),
+        // 6 sort rows + Randomize + Reverse.
+        Popup::PlMisc => (8, 0, 182.0),
         Popup::PlList => (3, 0, 182.0),
         // Right-click context menus: wider to fit the shortcut column.
         Popup::PlTrack => (6, 2, 210.0),
-        Popup::PlVoid => (12, 4, 210.0),
+        // Add×2, Select×3, Sort×6, Remove all, Save/Load list = 14 items, 5 seps.
+        Popup::PlVoid => (14, 5, 210.0),
         Popup::EqPresets => (crate::eq::PRESETS.len() as i32 + 2, 1, 182.0),
         Popup::StopMenu => (3, 0, 200.0),
         // Heights overridden per item count in draw_popup_viewport.
         Popup::Bookmarks => (2, 1, 240.0),
         Popup::EqDelete => (1, 0, 200.0),
     };
-    (width, buttons as f32 * MENU_ROW_H + seps as f32 * MENU_SEP_H + 16.0)
+    (width, popup_height(buttons, seps))
 }
 
 /// A context-menu row: `label` on the left, dimmed `shortcut` on the right, full
@@ -111,35 +120,27 @@ impl super::LinAmpApp {
                 // Computed here (not in popup_dims) so the height tracks the
                 // conditional item instead of clipping the last row when it shows.
                 let buttons = 12 + i32::from(self.prefs.minibrowser_enabled);
-                (182.0, buttons as f32 * MENU_ROW_H + 3.0 * MENU_SEP_H + 16.0)
+                (182.0, popup_height(buttons, 3))
             }
             Popup::Bookmarks => {
                 // Grows with the bookmark count (capped so a long list scrolls rather
                 // than running off-screen): the list, a separator, then Add + Clear.
-                let rows = self.bookmarks.items.len().clamp(1, 12) as f32;
-                (240.0, (rows + 2.0) * MENU_ROW_H + MENU_SEP_H + 16.0)
+                let rows = self.bookmarks.items.len().clamp(1, 12) as i32;
+                (240.0, popup_height(rows + 2, 1))
             }
             Popup::EqPresets => {
                 // Built-in presets + the saved library + up to 4 actions (Save,
                 // optional Delete, Import, Export). Capped height; the arm scrolls.
                 let actions = if self.eq_presets.items.is_empty() { 3 } else { 4 };
-                let rows = (crate::eq::PRESETS.len() + self.eq_presets.items.len() + actions) as f32;
-                let seps = if self.eq_presets.items.is_empty() { 1.0 } else { 2.0 };
-                (182.0, (rows * MENU_ROW_H + seps * MENU_SEP_H + 16.0).min(420.0))
+                let rows = (crate::eq::PRESETS.len() + self.eq_presets.items.len()) as i32 + actions;
+                let seps = if self.eq_presets.items.is_empty() { 1 } else { 2 };
+                (182.0, popup_height(rows, seps).min(420.0))
             }
             Popup::EqDelete => {
-                let rows = self.eq_presets.items.len().clamp(1, 12) as f32;
-                (200.0, rows * MENU_ROW_H + 16.0)
+                let rows = self.eq_presets.items.len().clamp(1, 12) as i32;
+                (200.0, popup_height(rows, 0))
             }
             _ => popup_dims(kind),
-        };
-        // After the opening frame measures the real content height, size the window
-        // to it (never taller than the formula estimate), so the menu hugs its items
-        // instead of leaving an empty band below the last row (#154). The formula is
-        // only the first-frame estimate and the ceiling for the scrolling menus.
-        let h = match self.popup_content_h {
-            Some(c) if !self.popup_fresh => c.min(h),
-            _ => h,
         };
         let mut screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
         // Keep the menu fully on the desktop: a tall menu (example: the empty-area
@@ -183,16 +184,14 @@ impl super::LinAmpApp {
             // `hide_popup_window`).
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
         let id = egui::ViewportId::from_hash_of(("linamp_popup", self.popup_serial));
-        let mut measured: Option<f32> = None;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
-            let content_h = egui::CentralPanel::default()
+            egui::CentralPanel::default()
                 .frame(
                     // Rounded fill lining up with the window's rounded region (see
                     // `round_popup_window`). No stroke here, a frame stroke sits on
                     // the window edge and gets clipped by the region, so the border
-                    // is painted just inside the edge below instead. A fixed inner
-                    // margin makes the content height map to a known window height.
+                    // is painted just inside the edge below instead.
                     egui::Frame::popup(&style)
                         .stroke(egui::Stroke::NONE)
                         .rounding(corner)
@@ -641,11 +640,7 @@ impl super::LinAmpApp {
                                 });
                         }
                     }
-                    // The laid-out content height sizes the window next frame (#154).
-                    ui.min_rect().height()
-                })
-                .inner;
-            measured = Some(content_h + 2.0 * MENU_MARGIN);
+                });
             // Outline just inside the window edge, a stroke centred on the edge
             // has its inner half render invisibly on low-contrast skins once the
             // rounded region clips the outer half, so inset the whole 1px line one
@@ -666,16 +661,13 @@ impl super::LinAmpApp {
                 close = true;
             }
         });
-        // Remember this frame's measured content height so the next frame sizes the
-        // window to it (the fresh frame is hidden, so the resize isn't seen) (#154).
-        self.popup_content_h = measured;
 
         // Round the window's corners to match the frame's rounding (scaled to
         // physical pixels for the current DPI). Applied once per popup, retried
         // each frame only until it succeeds, rather than rebuilt every frame.
         let radius = (corner * ctx.pixels_per_point()).round() as i32;
-        // Rebuild the region when first opened and again once the window resizes to
-        // its measured content height, so the rounded corners track the real size.
+        // Rebuild the region when first opened, and if a different-sized menu opens
+        // into the same serial, so the rounded corners track the window size.
         let size_changed = self.popup_rounded_h != Some(h);
         if (!self.popup_rounded || size_changed) && round_popup_window(radius, self.popup_fresh || size_changed) {
             self.popup_rounded = true;
@@ -714,10 +706,8 @@ impl super::LinAmpApp {
     pub(super) fn open_popup_in(&mut self, kind: Popup, win: ClWin, local: egui::Pos2) {
         self.popup = Some((kind, win, local));
         self.popup_fresh = true;
-        // New popup window (or a resize to a different menu): re-apply the rounded
-        // region on the next frame, and re-measure its content height.
+        // New popup window: re-apply the rounded region on the next frame.
         self.popup_rounded = false;
-        self.popup_content_h = None;
         self.popup_rounded_h = None;
         // Fresh viewport id per open, so the menu never inherits a reused window's
         // size on a re-right-click (#154).
@@ -725,5 +715,40 @@ impl super::LinAmpApp {
         // Opening a classic popup dismisses an open Media Library menu, so the two
         // menu systems are never up at once.
         self.classic_clicked = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn popup_height_formula() {
+        // Row = 18px item + 2px gap; separator = 6px + 2px gap; plus the two 6px
+        // margins minus the one trailing gap the last row doesn't have.
+        assert_eq!(popup_height(1, 0), 20.0 + 10.0);
+        assert_eq!(popup_height(0, 1), 8.0 + 10.0);
+        assert_eq!(popup_height(14, 5), 14.0 * 20.0 + 5.0 * 8.0 + 10.0);
+    }
+
+    #[test]
+    fn fixed_menu_sizes_match_their_draw_arms() {
+        // (items, separators) for each fixed menu must match what
+        // draw_popup_viewport actually draws, or the window clips the last rows
+        // (too few) or leaves an empty band (too many) — the #154 regression.
+        // Update these counts and the matching arm together.
+        for (kind, items, seps) in [
+            (Popup::PlAdd, 2, 0),
+            (Popup::PlRem, 4, 0),
+            (Popup::PlSel, 3, 0),
+            (Popup::PlMisc, 8, 0),
+            (Popup::PlList, 3, 0),
+            (Popup::PlTrack, 6, 2),
+            (Popup::PlVoid, 14, 5),
+            (Popup::StopMenu, 3, 0),
+        ] {
+            let (_, h) = popup_dims(kind);
+            assert_eq!(h, popup_height(items, seps), "{kind:?} height mismatch");
+        }
     }
 }
