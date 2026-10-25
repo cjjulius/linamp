@@ -3,6 +3,16 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-25 (later 7)
+
+- Tag editor opened slowly on large non-MP3 files. read_info always ran the MPEG
+  frame scanner, which scans a whole non-MPEG file before failing (~60s on a 13MB
+  .aiff), freezing the File Info window as it opened. Gated the scan to MPEG
+  extensions; other formats were already showing blank MPEG fields, just slowly, so
+  behaviour is unchanged apart from opening instantly. Verify: open the tag editor
+  on a large .wav/.aiff and confirm it appears immediately.
+- Version bumped to 0.5.3 (building toward a 0.5.x release).
+
 ## 2026-10-25 (later 6)
 
 - MP2 (MPEG Layer II) didn't actually decode. The symphonia dependency enabled
