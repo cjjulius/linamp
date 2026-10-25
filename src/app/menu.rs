@@ -31,6 +31,9 @@ pub(super) enum Popup {
 const MENU_ROW_H: f32 = 21.0;
 /// Height budget for a separator row in a popup menu.
 const MENU_SEP_H: f32 = 9.0;
+/// Inner padding (points) around a popup menu's content, applied on the frame so
+/// the measured content height maps to a known window height (#154).
+const MENU_MARGIN: f32 = 6.0;
 
 /// Window size (points) for a popup menu, from its item/separator count.
 pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
@@ -130,6 +133,14 @@ impl super::LinAmpApp {
             }
             _ => popup_dims(kind),
         };
+        // After the opening frame measures the real content height, size the window
+        // to it (never taller than the formula estimate), so the menu hugs its items
+        // instead of leaving an empty band below the last row (#154). The formula is
+        // only the first-frame estimate and the ceiling for the scrolling menus.
+        let h = match self.popup_content_h {
+            Some(c) if !self.popup_fresh => c.min(h),
+            _ => h,
+        };
         let mut screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
         // Keep the menu fully on the desktop: a tall menu (example: the empty-area
         // menu) opened near the bottom/right edge would otherwise spill off-screen
@@ -172,18 +183,21 @@ impl super::LinAmpApp {
             // `hide_popup_window`).
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
         let id = egui::ViewportId::from_hash_of("linamp_popup");
+        let mut measured: Option<f32> = None;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
-            egui::CentralPanel::default()
+            let content_h = egui::CentralPanel::default()
                 .frame(
                     // Rounded fill lining up with the window's rounded region (see
                     // `round_popup_window`). No stroke here, a frame stroke sits on
                     // the window edge and gets clipped by the region, so the border
-                    // is painted just inside the edge below instead.
+                    // is painted just inside the edge below instead. A fixed inner
+                    // margin makes the content height map to a known window height.
                     egui::Frame::popup(&style)
                         .stroke(egui::Stroke::NONE)
                         .rounding(corner)
-                        .shadow(egui::epaint::Shadow::NONE),
+                        .shadow(egui::epaint::Shadow::NONE)
+                        .inner_margin(egui::Margin::same(MENU_MARGIN)),
                 )
                 .show(ctx, |ui| {
                     // Tighten the gap between rows so the menu hugs its items like the
@@ -627,7 +641,11 @@ impl super::LinAmpApp {
                                 });
                         }
                     }
-                });
+                    // The laid-out content height sizes the window next frame (#154).
+                    ui.min_rect().height()
+                })
+                .inner;
+            measured = Some(content_h + 2.0 * MENU_MARGIN);
             // Outline just inside the window edge, a stroke centred on the edge
             // has its inner half render invisibly on low-contrast skins once the
             // rounded region clips the outer half, so inset the whole 1px line one
@@ -648,13 +666,20 @@ impl super::LinAmpApp {
                 close = true;
             }
         });
+        // Remember this frame's measured content height so the next frame sizes the
+        // window to it (the fresh frame is hidden, so the resize isn't seen) (#154).
+        self.popup_content_h = measured;
 
         // Round the window's corners to match the frame's rounding (scaled to
         // physical pixels for the current DPI). Applied once per popup, retried
         // each frame only until it succeeds, rather than rebuilt every frame.
         let radius = (corner * ctx.pixels_per_point()).round() as i32;
-        if !self.popup_rounded && round_popup_window(radius, self.popup_fresh) {
+        // Rebuild the region when first opened and again once the window resizes to
+        // its measured content height, so the rounded corners track the real size.
+        let size_changed = self.popup_rounded_h != Some(h);
+        if (!self.popup_rounded || size_changed) && round_popup_window(radius, self.popup_fresh || size_changed) {
             self.popup_rounded = true;
+            self.popup_rounded_h = Some(h);
         }
         // On X11 the popup window is reused and resized between menus (and, when the
         // menu is switched rapidly, destroyed and recreated), while XGetGeometry can
@@ -690,8 +715,10 @@ impl super::LinAmpApp {
         self.popup = Some((kind, win, local));
         self.popup_fresh = true;
         // New popup window (or a resize to a different menu): re-apply the rounded
-        // region on the next frame.
+        // region on the next frame, and re-measure its content height.
         self.popup_rounded = false;
+        self.popup_content_h = None;
+        self.popup_rounded_h = None;
         // Opening a classic popup dismisses an open Media Library menu, so the two
         // menu systems are never up at once.
         self.classic_clicked = true;
