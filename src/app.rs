@@ -982,7 +982,10 @@ impl LinAmpApp {
         if let Some(paths) = rfd::FileDialog::new()
             .add_filter(
                 "Audio",
-                &["mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "opus", "wv", "aiff", "aif"],
+                &[
+                    "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "opus", "wv", "aiff", "aif",
+                    "mp1", "mp2", "mpa",
+                ],
             )
             .pick_files()
         {

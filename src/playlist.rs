@@ -6,6 +6,8 @@ use walkdir::WalkDir;
 /// Supported audio file extensions.
 pub const SUPPORTED_EXTS: &[&str] = &[
     "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "opus", "wv", "aiff", "aif",
+    // MPEG audio Layer I/II (decoded via a symphonia hint, see crate::decode) (#157).
+    "mp1", "mp2", "mpa",
 ];
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This

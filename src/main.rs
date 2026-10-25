@@ -6,6 +6,7 @@ mod balance;
 mod classic;
 mod config;
 mod cursor;
+mod decode;
 mod dock;
 mod eq;
 mod eqf;
