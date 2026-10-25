@@ -511,3 +511,12 @@ code plus a working/not-working binary): visual and behavior changes.
   confirm it plays with EQ/analyzer and no crash. Note: like #157, these decode
   up front into memory for now — fine for tracks, heavier for a long file; a seekable
   source is the #163 follow-up.
+
+- #163 (seekable decode, part 1): crate::decode no longer decodes the whole file up
+  front. open_file now returns a lazy, seekable SymphoniaSource that decodes packets
+  on demand and implements try_seek via symphonia's seek, so .mp2/.m4a/etc no longer
+  sit fully decoded in memory and can be scrubbed. Covered by a real decode+seek unit
+  test against the committed MP3 fixture (open_file works for any symphonia format via
+  the hint). Manual check: play an .m4a, drag the seek bar, and confirm it scrubs and
+  keeps playing. Remaining #163 work: route the everyday formats (mp3/flac/ogg/wav)
+  through this path too so symphonia is the single local decoder.
