@@ -64,6 +64,7 @@ for the top number row).
 | Ctrl+D | Toggle double size (1x / 2x) |
 | Ctrl+P | Open Preferences |
 | Ctrl+T | Toggle elapsed / remaining time |
+| Ctrl+A | Toggle always on top (selects all when the playlist has focus) |
 
 ## Playlist window
 
@@ -72,7 +73,7 @@ for the top number row).
 | Up / Down | Move the selection (Ctrl adds rows, Shift extends the range) |
 | Home / End | Select the first / last track |
 | Enter | Play the selected track |
-| Ctrl+A | Select all |
+| Ctrl+A | Select all (toggles always on top from the other windows) |
 | Insert | Add file(s) |
 | Delete | Remove the selected tracks |
 
