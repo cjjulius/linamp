@@ -2205,7 +2205,7 @@ impl LinAmpApp {
         Self::pref_section(ui, "LinAmp", |ui| {
             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
             ui.label(
-                egui::RichText::new(format!("build {} · {}", env!("GIT_HASH"), env!("COMMIT_DATE")))
+                egui::RichText::new(format!("build {} - {}", env!("GIT_HASH"), env!("COMMIT_DATE")))
                     .small()
                     .color(Color32::GRAY),
             );
@@ -2246,7 +2246,7 @@ impl LinAmpApp {
                 // Search box (keeps focus for typing).
                 let (q, changed) = {
                     let jf = self.jump_file.as_mut().unwrap();
-                    ui.label("Jump to file (type to filter · ↑/↓ + Enter):");
+                    ui.label("Jump to file (type to filter - Up/Down + Enter):");
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut jf.query)
                             .hint_text("title / artist / file"),
