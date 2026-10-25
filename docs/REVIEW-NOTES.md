@@ -462,3 +462,13 @@ code plus a working/not-working binary): visual and behavior changes.
 - #154 (menu sizing): reopened. The 21px row-budget change wasn't enough on Linux —
   user reports the classic menu still reads too long there. Likely different popup
   metrics on Linux (font/DPI/spacing); needs a screenshot and a Linux-specific pass.
+
+- #154 (real fix, supersedes the row-budget tweak): the per-row formula over-budgeted
+  the popup window on both Windows and Linux, leaving an empty band below the last
+  item. The window is now sized to the menu's MEASURED content height — on the first
+  (hidden) frame the content height is captured (ui.min_rect), and from the next frame
+  the window is sized to it (clamped to the old formula as a ceiling for the scrolling
+  menus), with a fixed 6px frame margin and the rounded-corner region rebuilt when the
+  size changes. Manual check (both platforms): open the Options, playlist right-click,
+  and EQ-presets menus and confirm there's no empty space below the last row, nothing
+  is clipped, and the scrolling menus (Bookmarks, EQ presets) still scroll.
