@@ -3,6 +3,18 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-25 (later 8)
+
+- Drag-and-drop now inserts at the drop point. Dropping files or folders onto the
+  playlist window inserts them at the row under the release point instead of always
+  appending; dropping on the main/EQ window (or in the modern fallback) still
+  appends. Folders and playlists expand in place, unsupported files are skipped
+  (same as menu Add), and the now-playing track is preserved. The insert/reorder
+  math (move_tail_to) is unit-tested; the pointer-to-row mapping is UI, so verify by
+  hand on Windows and Linux: drag files onto the top, middle and bottom of the
+  playlist (and into an empty list) and confirm they land where dropped; drag onto
+  the main/EQ window and confirm it appends.
+
 ## 2026-10-25 (later 7)
 
 - Tag editor opened slowly on large non-MP3 files. read_info always ran the MPEG
