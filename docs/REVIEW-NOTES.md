@@ -3,6 +3,16 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-25 (later)
+
+- MIDI release/reverb tail was being cut off: playback stopped one ~23ms block
+  after the last MIDI event, so note releases and the reverb/chorus decay were
+  clipped. It now keeps rendering after the sequence ends until the tail falls
+  below a silence threshold (with a ~3s safety cap so a stuck voice can't render
+  forever). A test confirms a one-note MIDI rings out past the note and still
+  terminates within the cap. Verify by ear: play a MIDI with a sustained/reverbed
+  ending and confirm it fades out naturally instead of stopping abruptly.
+
 ## 2026-10-25
 
 - #149 EQ slider thumb off the groove: confirmed it was ours, not the skins. The

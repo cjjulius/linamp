@@ -20,6 +20,12 @@ use rustysynth::{MidiFile, MidiFileSequencer, SoundFont, Synthesizer, Synthesize
 const SAMPLE_RATE: u32 = 44_100;
 /// Frames rendered per sequencer call.
 const BLOCK: usize = 1024;
+/// Once the MIDI events end, the synth keeps rendering the voices' release and
+/// the reverb/chorus tail. Keep rendering until that tail decays below this peak
+/// so endings ring out instead of being cut off mid-decay.
+const TAIL_SILENCE: f32 = 1.0e-4;
+/// Safety cap on the tail (~3s) so a stuck/sustained voice can't render forever.
+const MAX_TAIL_BLOCKS: u32 = (SAMPLE_RATE as usize * 3 / BLOCK) as u32;
 
 /// Locate the bundled SoundFont: the first `.sf2` in a `soundfont/` folder in the
 /// working directory or next to the executable (same scheme as `skins/`).
@@ -58,6 +64,9 @@ pub struct MidiSource {
     left: Vec<f32>,
     right: Vec<f32>,
     done: bool,
+    /// Blocks rendered after the sequence ended, while the release/reverb tail
+    /// decays; capped by `MAX_TAIL_BLOCKS`.
+    tail_blocks: u32,
 }
 
 impl MidiSource {
@@ -73,10 +82,16 @@ impl MidiSource {
             self.buf.push(*r);
         }
         self.pos = 0;
-        // Stop after the block in which the sequence ends (its release tail is
-        // included in that block's render).
+        // The last MIDI event has been processed, but the voices are still
+        // releasing and the reverb/chorus is still decaying. Keep rendering the
+        // tail until it falls below `TAIL_SILENCE` (or the safety cap) so the
+        // ending rings out instead of cutting off mid-decay.
         if self.sequencer.end_of_sequence() {
-            self.done = true;
+            self.tail_blocks += 1;
+            let peak = self.buf.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+            if peak < TAIL_SILENCE || self.tail_blocks >= MAX_TAIL_BLOCKS {
+                self.done = true;
+            }
         }
         !self.buf.is_empty()
     }
@@ -141,6 +156,7 @@ pub fn open_midi(midi_path: &Path, soundfont_path: &Path) -> Result<MidiSource> 
         left: vec![0.0; BLOCK],
         right: vec![0.0; BLOCK],
         done: false,
+        tail_blocks: 0,
     })
 }
 
@@ -159,15 +175,9 @@ mod tests {
         assert!(err.is_err());
     }
 
-    #[test]
-    fn open_midi_renders_a_note_with_the_bundled_soundfont() {
-        // End-to-end: synthesize a one-note MIDI with the bundled SoundFont and
-        // confirm it yields audio. Skips if the SoundFont isn't present.
-        let sf = Path::new("soundfont/GeneralUser-GS.sf2");
-        if !sf.exists() {
-            return;
-        }
-        // A minimal Format-0 MIDI: one note-on, note-off after 96 ticks, end.
+    /// Write a minimal Format-0 MIDI (one middle-C note, off after 96 ticks) to a
+    /// temp file and return its path. `tag` keeps parallel tests off each other.
+    fn one_note_midi(tag: &str) -> std::path::PathBuf {
         let track: [u8; 12] = [
             0x00, 0x90, 0x3C, 0x64, // t0: note on, middle C, vel 100
             0x60, 0x80, 0x3C, 0x00, // +96: note off
@@ -182,15 +192,46 @@ mod tests {
         mid.extend_from_slice(b"MTrk");
         mid.extend_from_slice(&(track.len() as u32).to_be_bytes());
         mid.extend_from_slice(&track);
-        let p = std::env::temp_dir().join("linamp_midi_test.mid");
+        let p = std::env::temp_dir().join(format!("linamp_midi_{tag}.mid"));
         std::fs::write(&p, &mid).unwrap();
+        p
+    }
 
+    #[test]
+    fn open_midi_renders_a_note_with_the_bundled_soundfont() {
+        // End-to-end: synthesize a one-note MIDI with the bundled SoundFont and
+        // confirm it yields audio. Skips if the SoundFont isn't present.
+        let sf = Path::new("soundfont/GeneralUser-GS.sf2");
+        if !sf.exists() {
+            return;
+        }
+        let p = one_note_midi("render");
         let mut src = open_midi(&p, sf).expect("should open the MIDI with the SoundFont");
         assert_eq!(src.channels(), 2);
         assert_eq!(src.sample_rate(), SAMPLE_RATE);
         // Pull a block's worth of samples; synthesis should produce audio.
         let out: Vec<f32> = (&mut src).take(BLOCK * 2).collect();
         assert!(!out.is_empty(), "MIDI synthesis produced no samples");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn midi_source_rings_out_the_tail_then_terminates() {
+        // The tail must ring out past the last event (so endings aren't clipped)
+        // but still terminate within the safety cap rather than render forever.
+        let sf = Path::new("soundfont/GeneralUser-GS.sf2");
+        if !sf.exists() {
+            return;
+        }
+        let p = one_note_midi("tail");
+        let mut src = open_midi(&p, sf).expect("should open the MIDI");
+        // Draining to None proves it terminates (the cap prevents an infinite tail).
+        let frames = (&mut src).count() / 2;
+        // The note is ~0.5s (96 ticks at the default 120 BPM); the tail adds decay.
+        // So we render clearly more than just the note, and never beyond the cap.
+        assert!(frames > SAMPLE_RATE as usize / 2, "tail should ring out past the note");
+        let cap = SAMPLE_RATE as usize * 8; // event length + 3s cap, with headroom
+        assert!(frames < cap, "tail must stay bounded by the cap, got {frames} frames");
         let _ = std::fs::remove_file(&p);
     }
 }
