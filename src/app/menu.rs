@@ -182,7 +182,7 @@ impl super::LinAmpApp {
             // sit under the menu, so dialog actions hide the menu first (see
             // `hide_popup_window`).
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
-        let id = egui::ViewportId::from_hash_of("linamp_popup");
+        let id = egui::ViewportId::from_hash_of(("linamp_popup", self.popup_serial));
         let mut measured: Option<f32> = None;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
@@ -719,6 +719,9 @@ impl super::LinAmpApp {
         self.popup_rounded = false;
         self.popup_content_h = None;
         self.popup_rounded_h = None;
+        // Fresh viewport id per open, so the menu never inherits a reused window's
+        // size on a re-right-click (#154).
+        self.popup_serial = self.popup_serial.wrapping_add(1);
         // Opening a classic popup dismisses an open Media Library menu, so the two
         // menu systems are never up at once.
         self.classic_clicked = true;
