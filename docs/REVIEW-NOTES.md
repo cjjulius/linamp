@@ -444,3 +444,14 @@ code plus a working/not-working binary): visual and behavior changes.
   2px, so every classic popup hugs its items. Visual change, confirm the Options,
   playlist and EQ-presets menus look tighter (closer to the Media Library's) with no
   row clipped and the last item (example: Exit) still fully visible.
+
+- #144 (Ctrl+A always-on-top, completing the shortcut set): Ctrl+A now toggles
+  always-on-top when a non-playlist window has focus, and still selects-all in the
+  playlist window (each classic window is its own viewport, so keys reach only the
+  focused one). Manual check: with the main or EQ window focused, press Ctrl+A and
+  confirm always-on-top toggles (status line shows it); with the playlist focused,
+  Ctrl+A still selects all tracks. The other #144 items are not being implemented:
+  Alt+W (show/hide main window) needs a tray to restore and the main window is the
+  root viewport (ties to #40, deferred); Ctrl+E EasyMove is a niche drag-from-
+  anywhere mode; Ctrl+keypad-0 can't be told from top-row 0 in egui (Ctrl+L already
+  opens a location). #144 closed on that basis.
