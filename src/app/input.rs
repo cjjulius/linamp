@@ -48,6 +48,17 @@ struct KeyState {
 }
 
 impl super::LinAmpApp {
+    /// Flip the always-on-top preference and report it on the status line (shared by
+    /// the Options menu toggle and the Ctrl+A shortcut).
+    fn toggle_always_on_top(&mut self) {
+        self.prefs.always_on_top = !self.prefs.always_on_top;
+        self.prefs.save();
+        self.status = format!(
+            "Always on top: {}",
+            if self.prefs.always_on_top { "ON" } else { "off" }
+        );
+    }
+
     pub(super) fn handle_shortcuts(&mut self, ctx: &egui::Context, win: ClWin) {
         if ctx.wants_keyboard_input() {
             return; // a text field has focus
@@ -267,20 +278,18 @@ impl super::LinAmpApp {
         if k.alt && k.open {
             self.toggle_library();
         }
-        // Ctrl+A: select-all in the playlist window (where that's the Winamp
-        // meaning), else toggle always-on-top. Each classic window is its own
-        // viewport, so key presses only reach the focused one, `win` here is
-        // effectively the window with focus.
+        // Ctrl+A: in the playlist it selects all (the Winamp meaning); a repeat
+        // press once everything is already selected, or Ctrl+A from any other
+        // window, toggles always-on-top, so the playlist still has a keyboard path
+        // to it. Each classic window is its own viewport, so key presses reach only
+        // the focused one, `win` here is effectively the window with focus.
         if k.ctrl && k.key_a {
-            if win == ClWin::Pl {
+            let all_selected =
+                !self.playlist.is_empty() && self.pl_selection.len() == self.playlist.len();
+            if win == ClWin::Pl && !all_selected {
                 self.pl_select_all();
             } else {
-                self.prefs.always_on_top = !self.prefs.always_on_top;
-                self.prefs.save();
-                self.status = format!(
-                    "Always on top: {}",
-                    if self.prefs.always_on_top { "ON" } else { "off" }
-                );
+                self.toggle_always_on_top();
             }
         }
         if k.del {
