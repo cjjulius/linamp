@@ -3,6 +3,21 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-25 (later 4)
+
+- CD playback stutter (#160): on the first real-hardware test, CD audio played but
+  stuttered — the drive audibly spun up again mid-track and track changes were slow.
+  Cause: CdAudioSource read one 2352-byte sector (~13ms of audio) per audio refill,
+  so it hit the drive constantly and any re-seek/spin-up became a gap. It now reads
+  ~1 second of sectors per access (READAHEAD_SECTORS) through a new batched
+  CdDrive::read_sectors, so the drive streams. The default read_sectors just loops
+  read_sector; the device layer (Linux box) should override it to read the whole run
+  in one request for the real win. Needs a human ear on the drive to confirm the
+  stutter is gone. Two items for the Linux box, which owns the device + TOC/playlist
+  code: (1) implement a true batched read_sectors (single ioctl/DeviceIoControl per
+  run); (2) the CD tracks show up labelled as WAV — set a sensible per-track title/
+  format where the TOC is turned into playlist entries.
+
 ## 2026-10-25 (later 3)
 
 - #154 menu sizing, proper fix. The earlier "measure the content and hug it"
