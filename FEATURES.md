@@ -10,11 +10,12 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 > backlog of record. The Planned: items below are kept only as a quick overview.
 
 ## Core playback
-- Decode MP3, FLAC, OGG/Vorbis, WAV, AAC/M4A, Opus, WavPack, AIFF
-- Planned: More classic formats, tracked as issues: MPEG Layer I/II `.mp1`/`.mp2`
-  (#157), tracker modules `.mod`/`.xm`/`.s3m`/`.it` (#158), MIDI (#159), audio
-  CD (#160). AC-3 (#161) and WMA (#162) are won't-fix, restrictive /
-  proprietary licensing (and AC-3 was never a native classic-Winamp format)
+- Decode MP3, MPEG Layer I/II (`.mp1`/`.mp2`/`.mpa`), FLAC, OGG/Vorbis, WAV,
+  AAC/M4A (`.m4a`/`.mp4`/`.m4b`), Opus, WavPack, AIFF
+- Planned: More classic formats, tracked as issues: tracker modules
+  `.mod`/`.xm`/`.s3m`/`.it` (#158), MIDI (#159), audio CD (#160). AC-3 (#161)
+  and WMA (#162) are won't-fix, restrictive / proprietary licensing (and AC-3
+  was never a native classic-Winamp format)
 - Play / Pause / Stop / Next / Previous
 - Seek bar (scrub) with position + total time
 - Time display toggles elapsed / remaining (−mm:ss), Ctrl+T or click the time
