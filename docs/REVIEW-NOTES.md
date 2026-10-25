@@ -501,3 +501,13 @@ code plus a working/not-working binary): visual and behavior changes.
   with EQ/analyzer working. Note: these files are decoded eagerly (whole file up front)
   rather than streamed, so a very large one has a brief load pause; MP1/MP2 are rare
   and usually short, so this is acceptable for now.
+
+- #164 (ISO-MP4 panic, bug fix): opening .m4a/.mp4/.m4b panicked (rodio 0.20's
+  Decoder hits an unreachable! seeking an ISO-MP4), which the skip-unplayable guard
+  couldn't catch, so it crashed the app. These extensions now route through
+  crate::decode (symphonia with a hint), which returns a Result instead of panicking,
+  so they play (or fail cleanly, caught by the guard). m4a/mp4/m4b added to
+  HINTED_EXTS; mp4/m4b added to SUPPORTED_EXTS. Manual check: open an .m4a (AAC) and
+  confirm it plays with EQ/analyzer and no crash. Note: like #157, these decode
+  up front into memory for now — fine for tracks, heavier for a long file; a seekable
+  source is the #163 follow-up.

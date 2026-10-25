@@ -13,8 +13,11 @@ use std::path::Path;
 use anyhow::{bail, Result};
 use rodio::buffer::SamplesBuffer;
 
-/// Extensions routed through this path instead of rodio's `Decoder`.
-pub const HINTED_EXTS: &[&str] = &["mp1", "mp2", "mpa"];
+/// Extensions routed through this path instead of rodio's `Decoder`: MPEG audio
+/// Layer I/II (rodio 0.20 can't pass a hint, #157) and the ISO-MP4 family (rodio
+/// 0.20 *panics* opening these — an `unreachable!` on a seek — #164). Both decode
+/// cleanly via symphonia with an extension hint.
+pub const HINTED_EXTS: &[&str] = &["mp1", "mp2", "mpa", "m4a", "mp4", "m4b"];
 
 /// True when `path` should be decoded here rather than by rodio's `Decoder`.
 pub fn needs_hinted_decode(path: &Path) -> bool {
@@ -101,10 +104,10 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn hinted_exts_are_the_mpeg_layer12_set() {
-        assert!(needs_hinted_decode(Path::new("song.mp2")));
-        assert!(needs_hinted_decode(Path::new("SONG.MP1"))); // case-insensitive
-        assert!(needs_hinted_decode(Path::new("clip.mpa")));
+    fn hinted_exts_cover_mpeg_layer12_and_iso_mp4() {
+        for p in ["song.mp2", "SONG.MP1", "clip.mpa", "track.m4a", "movie.mp4", "book.m4b"] {
+            assert!(needs_hinted_decode(Path::new(p)), "{p} should be hinted");
+        }
         // Everyday formats go through rodio's Decoder, not this path.
         assert!(!needs_hinted_decode(Path::new("song.mp3")));
         assert!(!needs_hinted_decode(Path::new("song.flac")));
