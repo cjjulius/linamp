@@ -25,6 +25,13 @@ pub(super) enum Popup {
     EqDelete,
 }
 
+/// Per-row height budget (points) for a popup menu: the 18px item row (see
+/// `menu_item`) plus the tightened inter-row spacing set on the popup, so the
+/// window hugs its content instead of carrying extra height (#154).
+const MENU_ROW_H: f32 = 21.0;
+/// Height budget for a separator row in a popup menu.
+const MENU_SEP_H: f32 = 9.0;
+
 /// Window size (points) for a popup menu, from its item/separator count.
 pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
     let (buttons, seps, width) = match kind {
@@ -45,7 +52,7 @@ pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
         Popup::Bookmarks => (2, 1, 240.0),
         Popup::EqDelete => (1, 0, 200.0),
     };
-    (width, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
+    (width, buttons as f32 * MENU_ROW_H + seps as f32 * MENU_SEP_H + 16.0)
 }
 
 /// A context-menu row: `label` on the left, dimmed `shortcut` on the right, full
@@ -101,13 +108,13 @@ impl super::LinAmpApp {
                 // Computed here (not in popup_dims) so the height tracks the
                 // conditional item instead of clipping the last row when it shows.
                 let buttons = 12 + i32::from(self.prefs.minibrowser_enabled);
-                (182.0, buttons as f32 * 24.0 + 3.0 * 9.0 + 16.0)
+                (182.0, buttons as f32 * MENU_ROW_H + 3.0 * MENU_SEP_H + 16.0)
             }
             Popup::Bookmarks => {
                 // Grows with the bookmark count (capped so a long list scrolls rather
                 // than running off-screen): the list, a separator, then Add + Clear.
                 let rows = self.bookmarks.items.len().clamp(1, 12) as f32;
-                (240.0, (rows + 2.0) * 24.0 + 9.0 + 16.0)
+                (240.0, (rows + 2.0) * MENU_ROW_H + MENU_SEP_H + 16.0)
             }
             Popup::EqPresets => {
                 // Built-in presets + the saved library + up to 4 actions (Save,
@@ -115,11 +122,11 @@ impl super::LinAmpApp {
                 let actions = if self.eq_presets.items.is_empty() { 3 } else { 4 };
                 let rows = (crate::eq::PRESETS.len() + self.eq_presets.items.len() + actions) as f32;
                 let seps = if self.eq_presets.items.is_empty() { 1.0 } else { 2.0 };
-                (182.0, (rows * 24.0 + seps * 9.0 + 16.0).min(420.0))
+                (182.0, (rows * MENU_ROW_H + seps * MENU_SEP_H + 16.0).min(420.0))
             }
             Popup::EqDelete => {
                 let rows = self.eq_presets.items.len().clamp(1, 12) as f32;
-                (200.0, rows * 24.0 + 16.0)
+                (200.0, rows * MENU_ROW_H + 16.0)
             }
             _ => popup_dims(kind),
         };
@@ -179,6 +186,10 @@ impl super::LinAmpApp {
                         .shadow(egui::epaint::Shadow::NONE),
                 )
                 .show(ctx, |ui| {
+                    // Tighten the gap between rows so the menu hugs its items like the
+                    // Media Library's menus, instead of reading a little long (#154).
+                    // Keep this in step with MENU_ROW_H (18px item + this spacing).
+                    ui.spacing_mut().item_spacing.y = 2.0;
                     // Route every classic menu through the shared `menu_item` look
                     // (frameless, themed) so the options/fly-out menus match the
                     // playlist and library context menus.
