@@ -131,7 +131,16 @@ pub fn read_info(path: &Path) -> FileInfo {
         size_bytes: std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
         ..Default::default()
     };
-    if let Ok(mut f) = std::fs::File::open(path) {
+    // The MPEG parser only populates this for MPEG audio, but on any other file it
+    // scans the whole thing looking for frames before failing — seconds of freeze on
+    // a large .wav/.aiff when the tag editor opens. Only run it for MPEG extensions.
+    let is_mpeg = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "mp3" | "mp2" | "mp1" | "mpa"))
+        .unwrap_or(false);
+    if is_mpeg {
+        if let Ok(mut f) = std::fs::File::open(path) {
         if let Ok(mpeg) = MpegFile::read_from(&mut f, ParseOptions::new()) {
             let p = mpeg.properties();
             info.length_secs = p.duration().as_secs();
@@ -165,6 +174,7 @@ pub fn read_info(path: &Path) -> FileInfo {
                 Some(Emphasis::CCIT_J17) => "CCIT J.17",
             }
             .to_string();
+            }
         }
     }
     info
