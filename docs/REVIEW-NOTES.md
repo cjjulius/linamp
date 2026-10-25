@@ -542,3 +542,19 @@ code plus a working/not-working binary): visual and behavior changes.
   to f32, with seeking. Verified against a fake drive (full-track length, seek to a
   sector, seek-past-end clamp). This leaves only the real device I/O (DeviceIoControl
   / CDROM ioctls) per-OS, which needs a drive. Nothing to verify in the app yet.
+
+## 2026-10-25 (decode unification + decisions)
+
+- #163 part 2 (single decode path): local files now ALL decode through
+  crate::decode::open_file (symphonia + hint), the lazy seekable source; rodio 0.20's
+  Decoder is no longer used for files. Added symphonia wav/aiff/adpcm features so the
+  single path covers WAV/AIFF too. This removes rodio's ISO-MP4 open panic class and
+  gives uniform seeking. Unit-tested via the MP3 fixture (decode+seek) and a
+  generated WAV. IMPORTANT human verification: this changes the path EVERY local file
+  takes, so please play one of each common format (mp3, flac, ogg, wav, m4a) and
+  confirm each plays, seeks, and sounds right with no gaps or stutter, and that
+  track-to-track advance is clean. (Note: WavPack .wv and Opus .opus have no symphonia
+  decoder in 0.5, so those extensions won't play via this path — they didn't before
+  either; can be dropped from the supported list or revisited.)
+- #77: closed as-is per your call — stop-after-current / stop-with-fade stay in the
+  Stop button's right-click menu; Preferences remains persistent-settings-only.
