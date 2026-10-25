@@ -9,7 +9,7 @@
 //! the existing EQ / visualization / balance pipeline applies unchanged.
 //!
 //! Dropping the `StreamSource` (sink stopped) closes the receiver, which makes
-//! the decode thread's `send` fail and the thread exit — so it is self-cleaning.
+//! the decode thread's `send` fail and the thread exit, so it is self-cleaning.
 
 use std::io::Read;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
@@ -211,7 +211,7 @@ fn decode_loop(
         }
     };
     // A content-type hint helps symphonia pick the right demuxer for streams
-    // whose URL has no file extension (e.g. "audio/mpeg").
+    // whose URL has no file extension (example: "audio/mpeg").
     let mut hint = Hint::new();
     if let Some(ct) = resp.header("Content-Type") {
         if let Some(ext) = mime_to_ext(ct) {

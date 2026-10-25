@@ -14,7 +14,7 @@ const VALUES: usize = 11; // 10 bands + preamp
 /// scaled into this range, and LinAmp-written files round-trip exactly.)
 const MAX_DB: f32 = 12.0;
 
-/// One EQ preset: name, 10 band gains (dB, low->high frequency), preamp (dB).
+/// One EQ preset: name, 10 band gains (dB, low to high frequency), preamp (dB).
 #[derive(Clone, Debug, PartialEq)]
 pub struct EqfPreset {
     pub name: String,
@@ -22,12 +22,12 @@ pub struct EqfPreset {
     pub preamp: f32,
 }
 
-/// On-disk byte (0 = max boost .. 63 = max cut) -> dB in -MAX_DB..=MAX_DB.
+/// On-disk byte (0 = max boost .. 63 = max cut) to dB in -MAX_DB..=MAX_DB.
 fn byte_to_db(b: u8) -> f32 {
     ((31.5 - b as f32) / 31.5 * MAX_DB).clamp(-MAX_DB, MAX_DB)
 }
 
-/// dB -> on-disk byte, clamped to 0..=63.
+/// dB to on-disk byte, clamped to 0..=63.
 fn db_to_byte(db: f32) -> u8 {
     (31.5 - (db.clamp(-MAX_DB, MAX_DB) / MAX_DB) * 31.5).round().clamp(0.0, 63.0) as u8
 }

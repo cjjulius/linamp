@@ -57,8 +57,8 @@ pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
 
 /// A context-menu row: `label` on the left, dimmed `shortcut` on the right, full
 /// width so shortcuts align to the menu's right edge. Returns true when clicked.
-/// Colours match an egui `Button` (and so the Media Library's context menus) —
-/// the themed override text colour and the standard hover highlight — so every
+/// Colours match an egui `Button` (and so the Media Library's context menus), 
+/// the themed override text colour and the standard hover highlight, so every
 /// menu shares one look across skins.
 pub(super) fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
     let w = ui.available_width();
@@ -131,7 +131,7 @@ impl super::LinAmpApp {
             _ => popup_dims(kind),
         };
         let mut screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
-        // Keep the menu fully on the desktop: a tall menu (e.g. the empty-area
+        // Keep the menu fully on the desktop: a tall menu (example: the empty-area
         // menu) opened near the bottom/right edge would otherwise spill off-screen
         // with its lower entries unreachable.
         if let Some(vr) = virtual_desktop_rect(ctx) {
@@ -142,7 +142,7 @@ impl super::LinAmpApp {
         // Corner radius (logical px) for the fill, border and window region. A hair
         // larger than egui's default 6 because the window's corners are cut by a
         // hard-edged (non-antialiased) GDI region, which reads tighter than the
-        // Media Library menu's smooth 6px round — 8 makes them match visually.
+        // Media Library menu's smooth 6px round, 8 makes them match visually.
         let corner = 8.0_f32;
         // Border that matches the Media Library menu: the same themed window
         // stroke colour (set in apply_theme), a crisp 1px line painted just inside
@@ -166,7 +166,7 @@ impl super::LinAmpApp {
             .with_visible(!self.popup_fresh)
             // Always on top: the EQ/playlist/library windows are *owned* by the main
             // window (group_child_windows), which keeps them above sibling windows,
-            // and clicking one re-raises it — so only a system-topmost popup stays
+            // and clicking one re-raises it, so only a system-topmost popup stays
             // reliably above them. A modal dialog opened from a menu item would then
             // sit under the menu, so dialog actions hide the menu first (see
             // `hide_popup_window`).
@@ -177,7 +177,7 @@ impl super::LinAmpApp {
             egui::CentralPanel::default()
                 .frame(
                     // Rounded fill lining up with the window's rounded region (see
-                    // `round_popup_window`). No stroke here — a frame stroke sits on
+                    // `round_popup_window`). No stroke here, a frame stroke sits on
                     // the window edge and gets clipped by the region, so the border
                     // is painted just inside the edge below instead.
                     egui::Frame::popup(&style)
@@ -240,7 +240,7 @@ impl super::LinAmpApp {
                                 close = true;
                             }
                             // ASCII box: the bundled Noto Sans has no U+2713 check
-                            // glyph, so a literal ✓ renders as tofu here.
+                            // glyph, so a literal checkmark renders as tofu here.
                             let aot = if self.prefs.always_on_top {
                                 "[x] Always on top"
                             } else {
@@ -628,7 +628,7 @@ impl super::LinAmpApp {
                         }
                     }
                 });
-            // Outline just inside the window edge — a stroke centred on the edge
+            // Outline just inside the window edge, a stroke centred on the edge
             // has its inner half render invisibly on low-contrast skins once the
             // rounded region clips the outer half, so inset the whole 1px line one
             // point in (rounding one less than the region's) where it can't be
@@ -642,7 +642,7 @@ impl super::LinAmpApp {
             self.apply_base_cursor(ctx, "LinAmp Menu");
             // Escape closes the menu. The popup is a separate always-on-top OS
             // window that can hold focus, in which case `handle_window_input`
-            // (which only runs for the classic windows) never sees the key — so
+            // (which only runs for the classic windows) never sees the key, so
             // the popup viewport must handle Escape itself.
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
@@ -650,8 +650,8 @@ impl super::LinAmpApp {
         });
 
         // Round the window's corners to match the frame's rounding (scaled to
-        // physical pixels for the current DPI). Applied once per popup — retried
-        // each frame only until it succeeds — rather than rebuilt every frame.
+        // physical pixels for the current DPI). Applied once per popup, retried
+        // each frame only until it succeeds, rather than rebuilt every frame.
         let radius = (corner * ctx.pixels_per_point()).round() as i32;
         if !self.popup_rounded && round_popup_window(radius, self.popup_fresh) {
             self.popup_rounded = true;
@@ -679,7 +679,7 @@ impl super::LinAmpApp {
         self.popup_fresh = false;
         if close {
             self.popup = None;
-            // Chain to a queued popup (e.g. Options → Bookmarks) now this one is gone.
+            // Chain to a queued popup (example: Options then Bookmarks) now this one is gone.
             if let Some((k, w, p)) = self.pending_popup.take() {
                 self.open_popup_in(k, w, p);
             }

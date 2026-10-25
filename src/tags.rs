@@ -170,16 +170,16 @@ pub fn read_info(path: &Path) -> FileInfo {
     info
 }
 
-/// Prepare an ID3v1 text field: trim, drop if empty, and cap to `max` bytes on a
+/// Prepare an ID3v1 text field: trim, drop if empty and cap to `max` bytes on a
 /// UTF-8 char boundary. ID3v1 fields are fixed-width; lofty truncates to the cap
 /// by byte index and panics if a multibyte character straddles it (#115), which
 /// aborts the save mid-write and corrupts the file. Capping here avoids that.
 fn v1_text(s: &str, max: usize) -> Option<String> {
     // ID3v1 predates Unicode and carries no encoding flag, and the writer emits
-    // these bytes as UTF-8 — which a pre-Unicode ("circa 2001") player decodes as
+    // these bytes as UTF-8, which a pre-Unicode ("circa 2001") player decodes as
     // Latin-1, turning any multi-byte character into mojibake. To stay in spec and
     // readable everywhere, keep ID3v1 to pure ASCII: fold accents to their base
-    // letter (é -> e, Ğ -> g) and replace anything with no ASCII equivalent with
+    // letter (é to e, Ğ to g) and replace anything with no ASCII equivalent with
     // '?'. The full Unicode text is preserved in ID3v2.
     let ascii: String = s
         .chars()
@@ -229,7 +229,7 @@ pub fn write_id3(path: &Path, v1: Option<&Id3Fields>, v2: Option<&Id3Fields>) ->
             let _ = TagType::Id3v2.remove_from_path(path);
         }
     }
-    // ID3v1 is positional (not frame-keyed), so build the concrete tag — the
+    // ID3v1 is positional (not frame-keyed), so build the concrete tag, the
     // generic Tag's set_year doesn't persist for ID3v1.
     match v1 {
         Some(f) => {
@@ -240,7 +240,7 @@ pub fn write_id3(path: &Path, v1: Option<&Id3Fields>, v2: Option<&Id3Fields>) ->
                 album: v1_text(&f.album, V1_MAX_TEXT),
                 year: v1_text(&f.year, 4),
                 // ID3v1.1 reserves the last 2 bytes of the 30-byte comment for the
-                // track number, so lofty caps comment at 28 — match it here.
+                // track number, so lofty caps comment at 28, match it here.
                 comment: v1_text(&f.comment, V1_MAX_TEXT - 2),
                 track_number: f.track.trim().parse::<u8>().ok(),
                 genre: GENRES
@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(v1_text("Café ñandú", V1_MAX_TEXT), Some("Cafe nandu".to_string()));
         // Characters with no ASCII equivalent become '?'.
         assert_eq!(v1_text("A\u{65E5}B", V1_MAX_TEXT), Some("A?B".to_string()));
-        // The result is always pure ASCII; plain text is unchanged; blank -> None.
+        // The result is always pure ASCII; plain text is unchanged; blank to None.
         let out = v1_text("Hello", V1_MAX_TEXT).unwrap();
         assert!(out.is_ascii() && out == "Hello");
         assert_eq!(v1_text("   ", V1_MAX_TEXT), None);
@@ -436,7 +436,7 @@ mod tests {
         std::fs::copy(src, &tmp).unwrap();
         let before = read_info(&tmp).length_secs;
 
-        let long = "Trường Sơn Đông, Trường Sơn Tây — ".repeat(2); // >30 bytes, multibyte
+        let long = "Trường Sơn Đông, Trường Sơn Tây, ".repeat(2); // >30 bytes, multibyte
         let v1 = Id3Fields {
             track: "5".into(),
             title: long.clone(),

@@ -19,7 +19,7 @@ pub struct Prefs {
     pub always_on_top: bool,
     /// true = ignore a skin's custom cursors and use the system cursor instead.
     pub disable_skin_cursors: bool,
-    /// The Minibrowser's address — a nod to Winamp's SHOUTcast pane. Persisted so
+    /// The Minibrowser's address, a nod to Winamp's SHOUTcast pane. Persisted so
     /// the user can point it anywhere; defaults to the project repository.
     pub minibrowser_url: String,
     /// "Optional Features" opt-ins (obsolete / incomplete parity extras, off by
@@ -131,7 +131,7 @@ impl Session {
     /// A content signature over everything the session persists, used to detect
     /// changes worth re-saving. Hashing the serialized form (rather than a
     /// hand-listed set of fields) means the dirty check can never drift from what
-    /// `save` actually writes — the root cause of volume not persisting (#105).
+    /// `save` actually writes, the root cause of volume not persisting (#105).
     pub fn sig(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -139,7 +139,7 @@ impl Session {
         h.finish()
     }
 
-    /// Whether a saved session exists — false on a truly first launch.
+    /// Whether a saved session exists, false on a truly first launch.
     pub fn exists() -> bool {
         Self::path().exists()
     }
@@ -217,7 +217,7 @@ impl Bookmarks {
     }
 }
 
-/// A user-named equalizer preset (LinAmp's in-app preset library — the classic
+/// A user-named equalizer preset (LinAmp's in-app preset library, the classic
 /// Winamp "Presets > Load/Save" list). Stored losslessly as JSON; the separate
 /// .EQF import/export covers Winamp-format interop.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

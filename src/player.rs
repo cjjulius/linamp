@@ -69,7 +69,7 @@ impl Player {
             .and_then(|d| d.name().ok())
     }
 
-    /// If the system default output device changed (e.g. headphones plugged in),
+    /// If the system default output device changed (example: headphones plugged in),
     /// rebuild the output stream on the new device and resume playback in place.
     pub fn poll_device(&mut self) {
         let current = Self::default_device_name();

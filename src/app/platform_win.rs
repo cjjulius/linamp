@@ -3,7 +3,7 @@
 
 /// Global cursor in egui points if the platform exposes it: `GetCursorPos`
 /// (Windows), `XQueryPointer` (X11/XWayland), `None` (native Wayland/else). When
-/// `Some`, the drag runs "manual" — we move the window and its docked group each
+/// `Some`, the drag runs "manual", we move the window and its docked group each
 /// frame; `None` falls back to the OS window-drag.
 pub(crate) fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
     #[cfg(windows)]
@@ -40,7 +40,7 @@ pub(crate) fn global_cursor_points(ctx: &egui::Context) -> Option<egui::Pos2> {
 /// The full virtual desktop (all monitors) in egui points, if the platform
 /// exposes it. Drags are clamped to this instead of a single monitor, so a
 /// dragged window (and its docked group) can cross to another display but can't
-/// be pushed off the desktop entirely. `None` → no manual clamp (OS handles it).
+/// be pushed off the desktop entirely. `None` means no manual clamp (OS handles it).
 /// Specialised to Windows (virtual-screen metrics) and X11 (Mint/Pop!_OS).
 pub(crate) fn virtual_desktop_rect(ctx: &egui::Context) -> Option<egui::Rect> {
     let ppp = ctx.pixels_per_point().max(0.1);
@@ -90,7 +90,7 @@ pub(crate) fn virtual_desktop_rect(ctx: &egui::Context) -> Option<egui::Rect> {
 /// Linux/X11 helpers for classic-window management: the global cursor query
 /// (manual tandem drag) and `WM_TRANSIENT_FOR` grouping (EQ/playlist ride the
 /// main window's z-order, no separate taskbar entry). A no-op without an X
-/// display (e.g. native Wayland), where the caller uses OS behaviour.
+/// display (example: native Wayland), where the caller uses OS behaviour.
 #[cfg(all(unix, not(target_os = "macos")))]
 mod x11util {
     use std::cell::RefCell;
@@ -169,7 +169,7 @@ mod x11util {
         (xlib.XInternAtom)(d, c.as_ptr(), 0)
     }
 
-    /// The root's `_NET_CLIENT_LIST` — the WM's managed top-level windows.
+    /// The root's `_NET_CLIENT_LIST`, the WM's managed top-level windows.
     unsafe fn client_list(xlib: &xlib::Xlib, d: *mut xlib::Display) -> Vec<xlib::Window> {
         let root = (xlib.XDefaultRootWindow)(d);
         let prop = intern(xlib, d, "_NET_CLIENT_LIST");
@@ -215,7 +215,7 @@ mod x11util {
         s
     }
 
-    /// Error handler that swallows async X errors (e.g. a `BadWindow` from a
+    /// Error handler that swallows async X errors (example: a `BadWindow` from a
     /// window destroyed mid-scan) so a stray property query can never abort the
     /// process via Xlib's default handler.
     unsafe extern "C" fn ignore_err(
@@ -264,7 +264,7 @@ mod x11util {
         let done = STATE.with(|s| {
             let mut s = s.borrow_mut();
             if (s.0, s.1, s.2) != cfg {
-                *s = (cfg.0, cfg.1, cfg.2, false); // visibility changed -> re-link
+                *s = (cfg.0, cfg.1, cfg.2, false); // visibility changed, so re-link
             }
             s.3
         });
@@ -426,7 +426,7 @@ mod x11util {
     }
 
     /// Clip the window titled `title` to a rounded rectangle of its current size
-    /// (corner radius `radius` px) via the Shape extension — the X11 counterpart
+    /// (corner radius `radius` px) via the Shape extension, the X11 counterpart
     /// of Windows' `SetWindowRgn`, so the popup's square corners don't show
     /// through the rounded fill. Returns true once applied; false while the window
     /// isn't mapped/sized yet, so the caller retries next frame.
@@ -435,8 +435,8 @@ mod x11util {
             return false;
         };
         // Last (window id, w, h, radius) the shape was built for, per window title.
-        // The popup window is reused and resized between menus — and sometimes
-        // destroyed and recreated with a new id at the *same* size — so key on the
+        // The popup window is reused and resized between menus, and sometimes
+        // destroyed and recreated with a new id at the *same* size, so key on the
         // id too: a new window must be re-shaped even when its size is unchanged.
         thread_local! {
             static LAST: RefCell<std::collections::HashMap<String, (xlib::Window, u32, u32, i32)>> =
@@ -461,7 +461,7 @@ mod x11util {
                 );
                 if got != 0 && w > 0 && h > 0 {
                     if LAST.with(|c| c.borrow().get(title).copied()) == Some((win, w, h, radius)) {
-                        // Already shaped for this exact window + size — nothing to do.
+                        // Already shaped for this exact window + size, nothing to do.
                         // (`force` cleared this entry above, so a just-opened popup
                         // always falls through to reshape.)
                         (xlib.XSetErrorHandler)(prev);
@@ -504,10 +504,10 @@ mod x11util {
     /// Keep the window titled `title` above the main window and its transient-for
     /// children. The main window + children carry `_NET_WM_STATE_ABOVE` (the
     /// always-on-top pref), but the popup is created invisible to avoid a
-    /// position flash, and Mutter drops a pre-map always-on-top request — so the
+    /// position flash, and Mutter drops a pre-map always-on-top request, so the
     /// popup ends up a normal-layer window stacked *below* the above-layer group.
     /// `XRaiseWindow` can't cross layers, so add `_NET_WM_STATE_ABOVE` explicitly
-    /// (once the window is mapped, i.e. a frame after it opens), then raise it to
+    /// (once the window is mapped, ex: a frame after it opens), then raise it to
     /// the top of that layer. Idempotent; safe to call each frame.
     pub fn raise(title: &str) {
         with_conn(|xlib, d| unsafe {
@@ -549,7 +549,7 @@ mod x11util {
     }
 
     /// Horizontal run rectangles filling a `w`×`h` rounded rectangle with corner
-    /// radius `r`, one per scanline — the shape the Shape extension clips to.
+    /// radius `r`, one per scanline, the shape the Shape extension clips to.
     fn rounded_rect_rects(w: i32, h: i32, r: i32) -> Vec<(i16, i16, u16, u16)> {
         let r = r.clamp(0, w.min(h) / 2);
         if r == 0 {
@@ -702,7 +702,7 @@ mod x11util {
     }
 
     /// Set the cursor of the window titled `title` to a custom ARGB cursor.
-    /// `cache_key` dedupes the created X cursor (e.g. "skin:posbar"). Premultiplied
+    /// `cache_key` dedupes the created X cursor (example: "skin:posbar"). Premultiplied
     /// ARGB pixels, row-major. Returns false when unavailable (caller no-ops).
     pub fn set_cursor(
         title: &str,
@@ -767,7 +767,7 @@ mod x11util {
 }
 
 /// Make EQ/playlist *owned* by the main window so they ride its z-order (rise
-/// together, stay above, hide on minimize) — Winamp-style grouping. Idempotent,
+/// together, stay above, hide on minimize), Winamp-style grouping. Idempotent,
 /// runs each frame to cover show/hide. Windows (owner window) and Linux/X11
 /// (`WM_TRANSIENT_FOR`); a no-op elsewhere.
 pub(crate) fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visible: bool) {
@@ -846,7 +846,7 @@ pub(crate) fn find_window(title: &str) -> isize {
 }
 
 /// Clip the borderless context-menu window to a rounded rectangle (corner radius
-/// `radius` physical px) so its corners are cut away at the OS level — otherwise
+/// `radius` physical px) so its corners are cut away at the OS level, otherwise
 /// the square opaque window shows its (dark) clear colour outside the frame's
 /// rounded fill. Returns true once the region is applied, so the caller stops
 /// retrying. `force` re-applies even if nothing seems to have changed (X11 only;
@@ -950,7 +950,7 @@ pub(crate) fn win_set_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
             return;
         }
         if rects.is_empty() {
-            SetWindowRgn(hwnd, 0, 1); // clear -> rectangular
+            SetWindowRgn(hwnd, 0, 1); // clear, rectangular
             return;
         }
         let rgn = CreateRectRgn(0, 0, 0, 0);
@@ -964,7 +964,7 @@ pub(crate) fn win_set_shape(title: &str, rects: &[(i16, i16, u16, u16)]) {
             CombineRgn(rgn, rgn, r, RGN_OR);
             DeleteObject(r);
         }
-        // SetWindowRgn takes ownership of `rgn` — do not delete it afterwards.
+        // SetWindowRgn takes ownership of `rgn`, do not delete it afterwards.
         SetWindowRgn(hwnd, rgn, 1);
     }
 }
