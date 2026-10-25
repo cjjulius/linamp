@@ -194,6 +194,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn supported_exts_match_the_symphonia_registry() {
+        // Guard the SUPPORTED_EXTS list against advertising formats symphonia can't
+        // decode. The decoders we rely on must be registered, and Opus / WavPack
+        // (no decoder in symphonia 0.5) must stay off the supported list, else a
+        // file is accepted into the playlist then fails to play.
+        use symphonia::core::codecs::{
+            CODEC_TYPE_AAC, CODEC_TYPE_ALAC, CODEC_TYPE_FLAC, CODEC_TYPE_MP3,
+            CODEC_TYPE_OPUS, CODEC_TYPE_VORBIS, CODEC_TYPE_WAVPACK,
+        };
+        let codecs = symphonia::default::get_codecs();
+        for c in [
+            CODEC_TYPE_MP3, CODEC_TYPE_AAC, CODEC_TYPE_VORBIS, CODEC_TYPE_FLAC, CODEC_TYPE_ALAC,
+        ] {
+            assert!(codecs.get_codec(c).is_some(), "expected a decoder for {c:?}");
+        }
+        for c in [CODEC_TYPE_OPUS, CODEC_TYPE_WAVPACK] {
+            assert!(codecs.get_codec(c).is_none(), "unexpected decoder for {c:?}");
+        }
+        for ext in ["opus", "wv"] {
+            assert!(
+                !crate::playlist::SUPPORTED_EXTS.contains(&ext),
+                "{ext} can't be decoded, so it must not be advertised as supported"
+            );
+        }
+    }
+
+    #[test]
     fn open_file_errors_instead_of_panicking_on_a_non_audio_file() {
         // A missing file surfaces an error rather than panicking.
         assert!(open_file(Path::new("definitely-not-here.mp2")).is_err());
