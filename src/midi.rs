@@ -158,4 +158,39 @@ mod tests {
         );
         assert!(err.is_err());
     }
+
+    #[test]
+    fn open_midi_renders_a_note_with_the_bundled_soundfont() {
+        // End-to-end: synthesize a one-note MIDI with the bundled SoundFont and
+        // confirm it yields audio. Skips if the SoundFont isn't present.
+        let sf = Path::new("soundfont/GeneralUser-GS.sf2");
+        if !sf.exists() {
+            return;
+        }
+        // A minimal Format-0 MIDI: one note-on, note-off after 96 ticks, end.
+        let track: [u8; 12] = [
+            0x00, 0x90, 0x3C, 0x64, // t0: note on, middle C, vel 100
+            0x60, 0x80, 0x3C, 0x00, // +96: note off
+            0x00, 0xFF, 0x2F, 0x00, // t0: end of track
+        ];
+        let mut mid = Vec::new();
+        mid.extend_from_slice(b"MThd");
+        mid.extend_from_slice(&6u32.to_be_bytes());
+        mid.extend_from_slice(&0u16.to_be_bytes()); // format 0
+        mid.extend_from_slice(&1u16.to_be_bytes()); // 1 track
+        mid.extend_from_slice(&96u16.to_be_bytes()); // division
+        mid.extend_from_slice(b"MTrk");
+        mid.extend_from_slice(&(track.len() as u32).to_be_bytes());
+        mid.extend_from_slice(&track);
+        let p = std::env::temp_dir().join("linamp_midi_test.mid");
+        std::fs::write(&p, &mid).unwrap();
+
+        let mut src = open_midi(&p, sf).expect("should open the MIDI with the SoundFont");
+        assert_eq!(src.channels(), 2);
+        assert_eq!(src.sample_rate(), SAMPLE_RATE);
+        // Pull a block's worth of samples; synthesis should produce audio.
+        let out: Vec<f32> = (&mut src).take(BLOCK * 2).collect();
+        assert!(!out.is_empty(), "MIDI synthesis produced no samples");
+        let _ = std::fs::remove_file(&p);
+    }
 }

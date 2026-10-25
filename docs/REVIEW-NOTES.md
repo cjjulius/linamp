@@ -571,3 +571,12 @@ code plus a working/not-working binary): visual and behavior changes.
   seek). Open decision: which redistributable SoundFont to bundle (GeneralUser GS is
   free to distribute); committing a multi-MB .sf2 to the public repo is the remaining
   step.
+
+- #159 (MIDI, complete): bundled the GeneralUser GS SoundFont (soundfont/, free to
+  redistribute, ~32 MB) and verified end-to-end — a generated one-note MIDI renders
+  audio through rustysynth + the SoundFont (unit-tested). MIDI now plays. Manual
+  check: play one of the demo MIDIs placed in qa-music (Bond.mid, Dance.mid, Jump!.mid)
+  and confirm it sounds right through the EQ/analyzer. Also: qa-music is now gitignored
+  so local test media never gets committed. Note: I added MIDI samples to qa-music but
+  couldn't source license-clean .mp2/.m4a samples via download — drop your own of
+  those (and a flac/ogg) into qa-music to exercise #157/#164 and the #163 single path.
