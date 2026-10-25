@@ -436,6 +436,10 @@ pub struct LinAmpApp {
     /// Window height the popup's rounded-corner region was last built for, so the
     /// region is rebuilt when the window resizes to its measured content (#154).
     popup_rounded_h: Option<f32>,
+    /// Bumped on every popup open so each menu gets a fresh viewport id (and OS
+    /// window). Reusing one window meant a reused window kept a previous menu's
+    /// size on re-right-clicks; a fresh window is sized correctly every time (#154).
+    popup_serial: u64,
     main_shade: bool,
     eq_shade: bool,
     pl_shade: bool,
@@ -632,6 +636,7 @@ impl LinAmpApp {
             popup_rounded: false,
             popup_content_h: None,
             popup_rounded_h: None,
+            popup_serial: 0,
             main_shade: false,
             eq_shade: false,
             pl_shade: false,

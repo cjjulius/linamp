@@ -478,3 +478,13 @@ code plus a working/not-working binary): visual and behavior changes.
   always-on-top (so the playlist keeps a keyboard path to it). Not standard Winamp
   behaviour, added by request. Manual check: in the playlist press Ctrl+A (all
   select), then Ctrl+A again and confirm always-on-top toggles (status line shows it).
+
+- #144 (revert fall-through): removed the repeat-Ctrl+A-toggles-always-on-top touch;
+  it isn't Winamp 2.666 behaviour. Ctrl+A in the playlist selects all; from other
+  windows it toggles always-on-top.
+- #154 (re-click sizing): menus were correctly sized on the first open but reverted
+  to too-tall on subsequent right-clicks — the popup OS window was reused and kept a
+  prior size. Each open now gets a fresh viewport id (and window), so it is sized to
+  its measured content every time. Manual check: right-click the main/playlist windows
+  several times in a row and confirm every menu hugs its items (no empty band), not
+  just the first.

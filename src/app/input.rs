@@ -278,15 +278,12 @@ impl super::LinAmpApp {
         if k.alt && k.open {
             self.toggle_library();
         }
-        // Ctrl+A: in the playlist it selects all (the Winamp meaning); a repeat
-        // press once everything is already selected, or Ctrl+A from any other
-        // window, toggles always-on-top, so the playlist still has a keyboard path
-        // to it. Each classic window is its own viewport, so key presses reach only
-        // the focused one, `win` here is effectively the window with focus.
+        // Ctrl+A: select-all in the playlist window (the Winamp meaning), else
+        // toggle always-on-top. Each classic window is its own viewport, so key
+        // presses reach only the focused one, `win` here is effectively the window
+        // with focus.
         if k.ctrl && k.key_a {
-            let all_selected =
-                !self.playlist.is_empty() && self.pl_selection.len() == self.playlist.len();
-            if win == ClWin::Pl && !all_selected {
+            if win == ClWin::Pl {
                 self.pl_select_all();
             } else {
                 self.toggle_always_on_top();
