@@ -62,17 +62,17 @@ own-risk note.
 This is the finish line: when these are done, LinAmp is at 2.666 functional
 parity. Scope: #77 is in; #40 and #43 are out (see Deferred).
 
-- #144 (remaining), Ctrl+A always-on-top (vs playlist select-all), Ctrl+E
-  EasyMove, Alt+W toggle main window, Ctrl+keypad-0 open-location.
 - #89, broaden tag editing. ID3v2 text frames are done; remaining is non-MP3
   writing (FLAC/OGG/M4A), album art, ID3v2.3-vs-2.4 and related Preferences.
 - #77, surface all persistent settings in the Preferences window.
 - #149, EQ ON/AUTO/PRESETS buttons misaligned on some skins (MacOSXAqua,
   Osmosis); needs a visual repro vs real Winamp.
 
-Resolved on feat/winamp-parity-3: #156 (resize clamp), #154 (menu sizing), and
-#97 (accented/Vietnamese text now ASCII-folds to readable base letters; full
-non-Latin scripts in the classic bitmap path stay out of scope by design).
+Resolved on feat/winamp-parity-3: #156 (resize clamp), #154 (menu sizing), #97
+(accented/Vietnamese text now ASCII-folds to readable base letters; full non-Latin
+scripts in the classic bitmap path stay out of scope by design), and #144 (Ctrl+A
+always-on-top completes the shortcut set; Alt+W needs a tray (#40), Ctrl+E EasyMove
+and Ctrl+keypad-0 are out of scope).
 Shipped in 0.4.9: #15, #45, #17, #146. Also closed: #76 (vetted skins bundled)
 and #49 (PipeWire verified on Pop!_OS, Mint assumed working).
 
