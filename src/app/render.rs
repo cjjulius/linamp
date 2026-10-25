@@ -1,5 +1,6 @@
 //! The classic window render pipeline: a per-window fingerprint gates a
 //! sprite re-composite and GPU re-upload, so windows only redraw on change.
+//! See docs/ARCHITECTURE.md (Render pipeline).
 
 use super::*;
 
