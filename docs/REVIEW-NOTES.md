@@ -472,3 +472,9 @@ code plus a working/not-working binary): visual and behavior changes.
   size changes. Manual check (both platforms): open the Options, playlist right-click,
   and EQ-presets menus and confirm there's no empty space below the last row, nothing
   is clipped, and the scrolling menus (Bookmarks, EQ presets) still scroll.
+
+- #144 follow-up (Ctrl+A fall-through, per maintainer): in the playlist, Ctrl+A
+  selects all; pressing it again once everything is already selected now toggles
+  always-on-top (so the playlist keeps a keyboard path to it). Not standard Winamp
+  behaviour, added by request. Manual check: in the playlist press Ctrl+A (all
+  select), then Ctrl+A again and confirm always-on-top toggles (status line shows it).
