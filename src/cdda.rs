@@ -1,14 +1,14 @@
-//! Audio CD (CDDA) support — the device-agnostic groundwork (#160).
+//! Audio CD (CDDA) support, the device-agnostic groundwork (#160).
 //!
 //! CD audio is uncompressed 16-bit stereo PCM at 44.1 kHz, so no codec or license
 //! is needed to decode it. The work is CD-ROM access: read the table of contents,
-//! then read raw CDDA sectors — which is per-OS (DeviceIoControl on Windows, the
+//! then read raw CDDA sectors, which is per-OS (DeviceIoControl on Windows, the
 //! CDROM ioctls on Linux) and needs a real optical drive to develop and verify.
 //! `libcdio` is GPL and incompatible with this app's Apache-2.0 licence, so the
 //! device layer uses raw OS reads instead.
 //!
 //! This module holds the parts that are OS- and hardware-independent (the track
-//! model, CDDA timing, and the playlist pseudo-path) so both platforms' device
+//! model, CDDA timing and the playlist pseudo-path) so both platforms' device
 //! code and the playback source can build on one shared representation.
 
 // The per-OS device layer and playback source are not wired in yet, so these are
@@ -48,7 +48,7 @@ impl CdTrack {
 
 /// The pseudo-path the playlist uses to refer to a CD audio track, which has no
 /// file on disk: `cdda://<device>/<track>`, where `<device>` is the OS drive id
-/// (e.g. `D:` on Windows, `/dev/sr0` on Linux) and `<track>` is the track number.
+/// (example: `D:` on Windows, `/dev/sr0` on Linux) and `<track>` is the track number.
 pub fn track_path(device: &str, track: u8) -> String {
     format!("cdda://{device}/{track}")
 }
@@ -57,7 +57,7 @@ pub fn track_path(device: &str, track: u8) -> String {
 pub fn parse_track_path(s: &str) -> Option<(String, u8)> {
     let rest = s.strip_prefix("cdda://")?;
     // The track number is the final `/<n>`; everything before it is the device,
-    // which itself may contain `/` (e.g. `/dev/sr0`).
+    // which itself may contain `/` (example: `/dev/sr0`).
     let (device, track) = rest.rsplit_once('/')?;
     if device.is_empty() {
         return None;
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn pcm_s16le_converts_to_normalized_f32() {
-        // 0 -> 0.0, max -> ~+1, min -> -1; little-endian byte order.
+        // 0 to 0.0, max to ~+1, min to -1; little-endian byte order.
         let bytes = [
             0x00, 0x00, // 0
             0xff, 0x7f, // i16::MAX = 32767
@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(pcm_s16le_to_f32(&sector).len(), CDDA_SAMPLES_PER_SECTOR);
     }
 
-    /// A drive whose sectors are all silence — enough to exercise the Source's
+    /// A drive whose sectors are all silence, enough to exercise the Source's
     /// paging and seeking without real hardware.
     struct FakeDrive;
     impl CdDrive for FakeDrive {

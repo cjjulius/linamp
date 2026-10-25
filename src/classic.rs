@@ -28,7 +28,7 @@ const EQ_SLIDER_TRAVEL: f32 = 52.0;
 /// Inset of the 11px slider thumb within its 14px band cell. The groove every
 /// skin draws is centred at local x ~6, so the thumb (visible centre at its own
 /// local x 5) is inset by 1 to sit on it. A `+2` inset left the thumb 1px right
-/// of the groove — invisible on wide grooves but obvious on crisp/narrow ones
+/// of the groove, invisible on wide grooves but obvious on crisp/narrow ones
 /// like MacOSXAqua and Osmosis (#149).
 const EQ_THUMB_INSET: i32 = 1;
 
@@ -2518,7 +2518,7 @@ mod tests {
         // Regression for #149: the 11px slider thumb must sit on the groove every
         // skin draws in its EQMAIN fill sprites. The groove is centred at local
         // x ~6, and the thumb's visible centre lands at EQ_THUMB_INSET + 5, so
-        // that must land within a pixel of the groove — otherwise the handle
+        // that must land within a pixel of the groove, otherwise the handle
         // drifts off the bar (obvious on crisp skins like MacOSXAqua / Osmosis).
         let lum = |p: &image::Rgba<u8>| {
             0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32
@@ -2546,7 +2546,7 @@ mod tests {
             let g = [3u32, 7, 11].iter().map(|&c| groove_centre(e, c)).sum::<f32>() / 3.0;
             assert!(
                 (g - thumb_centre).abs() <= 1.0,
-                "{name}: groove centre {g:.1} vs thumb centre {thumb_centre:.1} — thumb off the bar"
+                "{name}: groove centre {g:.1} vs thumb centre {thumb_centre:.1}, thumb off the bar"
             );
         }
     }

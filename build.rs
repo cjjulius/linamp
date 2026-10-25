@@ -13,7 +13,7 @@ fn main() {
     embed_windows_icon();
 
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    // OUT_DIR = target/<profile>/build/<pkg>-<hash>/out → go up to target/<profile>.
+    // OUT_DIR = target/<profile>/build/<pkg>-<hash>/out, go up to target/<profile>.
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let Some(target_dir) = out_dir.ancestors().nth(3).map(PathBuf::from) else {
         return;
@@ -44,7 +44,7 @@ fn copy_asset_dir(manifest: &Path, target_dir: &Path, name: &str) {
 /// Stamp the git short hash (with a `-dirty` marker when the working tree has
 /// uncommitted changes) and the commit date into the binary, so the running app
 /// can be matched to an exact source state. Values fall back to "unknown" when
-/// git isn't available (e.g. building from a source tarball).
+/// git isn't available (example: building from a source tarball).
 fn emit_build_info() {
     let mut hash = git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".into());
     let dirty = git(&["status", "--porcelain"])
@@ -61,7 +61,7 @@ fn emit_build_info() {
 
     // Re-run when the commit changes or the working tree does, so the hash and
     // the -dirty flag stay accurate. `.git/logs/HEAD` (the reflog) is appended on
-    // every commit/checkout/reset — unlike `.git/HEAD`, which only records the
+    // every commit/checkout/reset, unlike `.git/HEAD`, which only records the
     // branch name and so doesn't change when you commit on a branch. `.git/index`
     // covers staging and `src` covers uncommitted edits (the dirty flag).
     println!("cargo:rerun-if-changed=.git/logs/HEAD");
