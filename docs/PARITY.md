@@ -62,15 +62,27 @@ own-risk note.
 This is the finish line: when these are done, LinAmp is at 2.666 functional
 parity. Scope: #77 is in; #40 and #43 are out (see Deferred).
 
+Audio format compatibility (current focus, per the maintainer):
+
+- #158, tracker modules (.mod/.xm/.s3m/.it). Needs libopenmpt, a native C
+  dependency in the build/bundle; awaiting the OK to add it.
+- #159, MIDI (.mid/.midi). Needs rustysynth plus a bundled multi-MB SoundFont;
+  awaiting the OK.
+- #160, Audio CD (CDDA). Niche and hardware-dependent (raw device reads); low
+  priority.
+
+Other remaining:
+
 - #89, broaden tag editing. ID3v2 text frames are done; remaining is non-MP3
   writing (FLAC/OGG/M4A), album art, ID3v2.3-vs-2.4 and related Preferences.
 - #77, surface all persistent settings in the Preferences window.
 - #149, EQ ON/AUTO/PRESETS buttons misaligned on some skins (MacOSXAqua,
   Osmosis); needs a visual repro vs real Winamp.
-- #154 (reopened), classic menus still read too long on Linux after the 21px
-  row-budget change; needs a Linux-specific look (likely different popup metrics).
+- #154 (reopened), classic menus read too long on re-right-click; a fresh-viewport
+  fix is pushed (each menu opens its own window), awaiting user confirmation.
 
-Resolved on feat/winamp-parity-3: #156 (resize clamp, user-verified on Linux), #97
+Resolved on feat/winamp-parity-3: #157 (MPEG Layer I/II .mp1/.mp2/.mpa via a hinted
+symphonia decode), #156 (resize clamp, user-verified on Linux), #97
 (accented/Vietnamese text now ASCII-folds to readable base letters; full non-Latin
 scripts in the classic bitmap path stay out of scope by design), and #144 (Ctrl+A
 always-on-top completes the shortcut set; Alt+W needs a tray (#40), Ctrl+E EasyMove
