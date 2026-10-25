@@ -999,14 +999,27 @@ impl LinAmpApp {
     }
 
     /// Append any files/folders/playlists dropped onto this viewport's window.
-    fn handle_dropped(&mut self, ctx: &egui::Context) {
+    /// Add dropped files/folders/playlists. `win` is the classic window the drop
+    /// landed on (None in the modern fallback). A drop on the playlist inserts at the
+    /// row under the cursor; anywhere else appends. Unsupported files are skipped,
+    /// just like adding from the menu.
+    fn handle_dropped(&mut self, ctx: &egui::Context, win: Option<ClWin>) {
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect()
         });
         if dropped.is_empty() {
             return;
         }
+        // Where to insert: a drop on the (expanded) playlist window lands at the row
+        // under the release point; every other target appends (row = None).
+        let drop_row = if win == Some(ClWin::Pl) && !self.pl_shade {
+            ctx.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()))
+                .map(|p| classic::pl_row_at(p.y / self.scale, self.pl_first))
+        } else {
+            None
+        };
         let was_empty = self.playlist.is_empty();
+        let before = self.playlist.len();
         for p in dropped {
             let is_pl = matches!(
                 p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
@@ -1019,6 +1032,11 @@ impl LinAmpApp {
             } else {
                 self.playlist.add_file(p);
             }
+        }
+        // Move the just-appended block to the drop row (no-op when appending).
+        if let Some(row) = drop_row {
+            let added = self.playlist.len() - before;
+            self.playlist.move_tail_to(added, row);
         }
         self.maybe_scan_tags();
         if was_empty && !self.playlist.is_empty() {
@@ -3368,8 +3386,8 @@ impl eframe::App for LinAmpApp {
             return;
         }
 
-        // Modern fallback window: handle drops here.
-        self.handle_dropped(ctx);
+        // Modern fallback window: handle drops here (always appends).
+        self.handle_dropped(ctx, None);
 
         egui::TopBottomPanel::top("player").show(ctx, |ui| {
             ui.add_space(4.0);

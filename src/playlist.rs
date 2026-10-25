@@ -197,6 +197,30 @@ impl Playlist {
         }
     }
 
+    /// After appending `count` tracks (now the last `count` in the list), move them
+    /// to position `at`, so a drag-drop lands where it was released instead of only
+    /// at the end. `at` is clamped to the pre-existing length; the now-playing cursor
+    /// is kept on the same track. A no-op when `at` is already the end (plain append).
+    pub fn move_tail_to(&mut self, count: usize, at: usize) {
+        let len = self.tracks.len();
+        if count == 0 || count > len {
+            return;
+        }
+        let before = len - count; // first index of the appended block
+        let at = at.min(before);
+        if at == before {
+            return; // dropped at/after the end: it's already there
+        }
+        // Rotate the sub-slice [at..] right by `count` so the appended block (its
+        // last `count` elements) moves to `at` and the rest shifts down.
+        self.tracks[at..].rotate_right(count);
+        if let Some(cur) = self.current {
+            if cur >= at && cur < before {
+                self.current = Some(cur + count);
+            }
+        }
+    }
+
     pub fn remove(&mut self, index: usize) {
         if index >= self.tracks.len() {
             return;
@@ -545,6 +569,40 @@ mod tests {
         let t = Track::from_path(p.clone());
         assert!(t.duration.is_some(), "MIDI track should have a length in the playlist");
         let _ = std::fs::remove_file(&p);
+    }
+
+    fn names(pl: &Playlist) -> Vec<String> {
+        pl.tracks.iter().map(|t| t.path.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn move_tail_to_inserts_dropped_block_at_the_row() {
+        // Drag-drop: files are appended, then moved to the drop row.
+        let mut pl = Playlist::default();
+        for n in ["a.mp3", "b.mp3", "c.mp3"] {
+            pl.add_file(PathBuf::from(n));
+        }
+        pl.current = Some(2); // playing "c"
+        pl.add_file(PathBuf::from("x.mp3"));
+        pl.add_file(PathBuf::from("y.mp3"));
+        pl.move_tail_to(2, 1); // dropped between a and b
+        assert_eq!(names(&pl), ["a.mp3", "x.mp3", "y.mp3", "b.mp3", "c.mp3"]);
+        assert_eq!(pl.current, Some(4), "now-playing track stays the same one");
+    }
+
+    #[test]
+    fn move_tail_to_at_the_top_and_past_the_end() {
+        let mut pl = Playlist::default();
+        for n in ["a.mp3", "b.mp3"] {
+            pl.add_file(PathBuf::from(n));
+        }
+        pl.add_file(PathBuf::from("x.mp3"));
+        pl.move_tail_to(1, 0); // drop at the very top
+        assert_eq!(names(&pl), ["x.mp3", "a.mp3", "b.mp3"]);
+        // Dropping past the end just appends (clamped, no move).
+        pl.add_file(PathBuf::from("z.mp3"));
+        pl.move_tail_to(1, 99);
+        assert_eq!(names(&pl), ["x.mp3", "a.mp3", "b.mp3", "z.mp3"]);
     }
 
     #[test]

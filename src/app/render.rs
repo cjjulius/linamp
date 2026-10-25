@@ -119,7 +119,7 @@ impl super::LinAmpApp {
 
     pub(super) fn render_window(&mut self, ctx: &egui::Context, win: ClWin) {
         self.handle_window_input(ctx, win);
-        self.handle_dropped(ctx);
+        self.handle_dropped(ctx, Some(win));
 
         // Refresh the analyzer data for the main window.
         if win == ClWin::Main && !self.main_shade {
