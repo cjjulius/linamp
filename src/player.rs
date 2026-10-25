@@ -184,7 +184,7 @@ impl Player {
         // (.mp1/.mp2/.mpa) can't be opened by rodio 0.20 directly, so decode those
         // via symphonia with an extension hint into an in-memory source (#157).
         if crate::decode::needs_hinted_decode(path) {
-            let source = crate::decode::decode_file(path)?;
+            let source = crate::decode::open_file(path)?;
             self.append_source(source)?;
         } else {
             let file = File::open(path)?;
