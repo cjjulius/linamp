@@ -429,12 +429,8 @@ pub struct LinAmpApp {
     /// popup, so we apply it once (retrying only until it succeeds) instead of
     /// rebuilding the GDI region every frame the menu is open.
     popup_rounded: bool,
-    /// Measured content height (points) of the open popup, captured on its first
-    /// frame so the next frame sizes the window to its items instead of a formula
-    /// estimate (which over-budgeted and left menus reading too long) (#154).
-    popup_content_h: Option<f32>,
     /// Window height the popup's rounded-corner region was last built for, so the
-    /// region is rebuilt when the window resizes to its measured content (#154).
+    /// region is rebuilt only when a different-sized menu opens (#154).
     popup_rounded_h: Option<f32>,
     /// Bumped on every popup open so each menu gets a fresh viewport id (and OS
     /// window). Reusing one window meant a reused window kept a previous menu's
@@ -634,7 +630,6 @@ impl LinAmpApp {
             eq_save_name: None,
             popup_fresh: false,
             popup_rounded: false,
-            popup_content_h: None,
             popup_rounded_h: None,
             popup_serial: 0,
             main_shade: false,
