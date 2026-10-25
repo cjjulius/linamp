@@ -25,6 +25,12 @@ pub const EQ_BAND_X: [i32; 10] = [78, 96, 114, 132, 150, 168, 186, 204, 222, 240
 const EQ_PREAMP_X: i32 = 21;
 const EQ_SLIDER_TOP: f32 = 38.0;
 const EQ_SLIDER_TRAVEL: f32 = 52.0;
+/// Inset of the 11px slider thumb within its 14px band cell. The groove every
+/// skin draws is centred at local x ~6, so the thumb (visible centre at its own
+/// local x 5) is inset by 1 to sit on it. A `+2` inset left the thumb 1px right
+/// of the groove — invisible on wide grooves but obvious on crisp/narrow ones
+/// like MacOSXAqua and Osmosis (#149).
+const EQ_THUMB_INSET: i32 = 1;
 
 /// Clickable / draggable regions of the main window, in 275x116 space.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -1342,7 +1348,7 @@ impl ClassicSkin {
                 }
                 let ty = EQ_SLIDER_TOP as i32 + (frac * EQ_SLIDER_TRAVEL) as i32;
                 let sy = if sel { 176 } else { 164 };
-                blit(c, e, colx + 2, ty, 0, sy, 11, 11);
+                blit(c, e, colx + EQ_THUMB_INSET, ty, 0, sy, 11, 11);
             };
             draw_thumb(&mut c, e, EQ_PREAMP_X, st.preamp, st.pressed == Some(EqRegion::Preamp));
             for (i, &bx) in EQ_BAND_X.iter().enumerate() {
@@ -2504,6 +2510,44 @@ mod tests {
         let img = skin.compose_eq(&st);
         for gx in [100u32, 140, 180] {
             assert_eq!(*img.get_pixel(gx, 35), grad_bot, "bottom-row curve at x={gx}");
+        }
+    }
+
+    #[test]
+    fn eq_thumb_centres_on_the_groove() {
+        // Regression for #149: the 11px slider thumb must sit on the groove every
+        // skin draws in its EQMAIN fill sprites. The groove is centred at local
+        // x ~6, and the thumb's visible centre lands at EQ_THUMB_INSET + 5, so
+        // that must land within a pixel of the groove — otherwise the handle
+        // drifts off the bar (obvious on crisp skins like MacOSXAqua / Osmosis).
+        let lum = |p: &image::Rgba<u8>| {
+            0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32
+        };
+        // Weighted centre of the groove within a 14px fill-sprite cell, measured
+        // as each column's deviation from the cell's edge luminance.
+        let groove_centre = |e: &RgbaImage, col: u32| -> f32 {
+            let (sx, sy) = (13 + col * 15, 164u32);
+            let cols: Vec<f32> = (0..14)
+                .map(|lx| {
+                    let s: f32 = (8..55).map(|y| lum(e.get_pixel(sx + lx, sy + y))).sum();
+                    s / 47.0
+                })
+                .collect();
+            let edge = (cols[0] + cols[1] + cols[12] + cols[13]) / 4.0;
+            let dev: Vec<f32> = cols.iter().map(|c| (c - edge).abs()).collect();
+            let tot: f32 = dev.iter().sum::<f32>().max(1.0);
+            dev.iter().enumerate().map(|(i, d)| i as f32 * d).sum::<f32>() / tot
+        };
+        let thumb_centre = EQ_THUMB_INSET as f32 + 5.0; // 11px thumb, visible centre at local 5
+        for name in ["linamp_base_skin.wsz", "MacOSXAqua1-5.wsz", "Osmosis_2.wsz"] {
+            let skin = load_skin(name);
+            let e = skin.bmp("eqmain.bmp").unwrap();
+            // Average a few fill levels so one noisy sprite can't skew it.
+            let g = [3u32, 7, 11].iter().map(|&c| groove_centre(e, c)).sum::<f32>() / 3.0;
+            assert!(
+                (g - thumb_centre).abs() <= 1.0,
+                "{name}: groove centre {g:.1} vs thumb centre {thumb_centre:.1} — thumb off the bar"
+            );
         }
     }
 

@@ -3,6 +3,19 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-25
+
+- #149 EQ slider thumb off the groove: confirmed it was ours, not the skins. The
+  11px thumb was inset 2px into its 14px band cell, so its centre landed at local
+  x 7, while every skin draws its groove centred at local x ~6 (measured
+  identically on the base skin, MacOSXAqua and Osmosis). Dropped the inset to 1 so
+  the thumb centres on the groove; a regression test now asserts the thumb centre
+  sits within a pixel of the measured groove for those three skins. It was a ~1px
+  shift that only showed on crisp/narrow grooves (MacOSXAqua, Osmosis) — wide
+  grooves like the base skin's masked it. Verify visually: open the EQ on
+  MacOSXAqua and Osmosis and confirm each thumb now rides its bar, then spot-check
+  a few wide-groove skins (base, Green Dimension, Topaz) to confirm nothing drifted.
+
 ## 2026-10-22
 
 - #105 volume not remembered: fixed by adding volume and balance to the session
