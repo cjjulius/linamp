@@ -436,3 +436,11 @@ code plus a working/not-working binary): visual and behavior changes.
   (classic::pl_max_height, unit-tested). Manual check (best on X11, where it was
   observed): drag the playlist taller until its bottom reaches the screen edge and
   confirm it simply stops, the top edge stays put and the window doesn't climb.
+
+- #154 (classic menus a little long, fix): the popup menus budgeted 24px per row
+  but render an 18px item, and the inter-row spacing was loose, so menus read
+  taller than their content (the Media Library's menus sit tighter). Row budget is
+  now 21px via a shared MENU_ROW_H constant and the inter-row spacing is pinned to
+  2px, so every classic popup hugs its items. Visual change — confirm the Options,
+  playlist and EQ-presets menus look tighter (closer to the Media Library's) with no
+  row clipped and the last item (e.g. Exit) still fully visible.
