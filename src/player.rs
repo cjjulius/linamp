@@ -1,11 +1,9 @@
-use std::fs::File;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 
 use crate::balance::{self, BalanceShared};
 use crate::eq::{self, EqShared};
@@ -180,17 +178,12 @@ impl Player {
 
     /// Load and immediately start playing a file.
     pub fn play_file(&mut self, path: &Path) -> Result<()> {
-        // Most formats go through rodio's `Decoder`; MPEG Layer I/II
-        // (.mp1/.mp2/.mpa) can't be opened by rodio 0.20 directly, so decode those
-        // via symphonia with an extension hint into an in-memory source (#157).
-        if crate::decode::needs_hinted_decode(path) {
-            let source = crate::decode::open_file(path)?;
-            self.append_source(source)?;
-        } else {
-            let file = File::open(path)?;
-            let source = Decoder::new(BufReader::new(file))?.convert_samples::<f32>();
-            self.append_source(source)?;
-        }
+        // All local files decode through one path: symphonia with an extension hint
+        // (see [`crate::decode`]), a lazy seekable source. This is the single decode
+        // path — rodio 0.20's `Decoder` is no longer used, which also removes its
+        // ISO-MP4 open panic and its inability to pass a format hint (#163).
+        let source = crate::decode::open_file(path)?;
+        self.append_source(source)?;
         self.current_path = Some(path.to_path_buf());
         self.current_url = None;
         self.stream_title = None;

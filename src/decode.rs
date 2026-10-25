@@ -1,11 +1,10 @@
-//! Local-file decoding for formats rodio 0.20's `Decoder` can't open directly.
+//! The single local-file decode path: symphonia with an extension hint.
 //!
-//! rodio's public `Decoder` API can't pass a format hint to symphonia, so it
-//! returns `UnrecognizedFormat` on files it can't content-probe (MPEG audio Layer
-//! I/II — `.mp1`/`.mp2`/`.mpa`), and it outright *panics* on the ISO-MP4 family
-//! (`.m4a`/`.mp4`/`.m4b`) — an `unreachable!` on a seek. symphonia itself handles
-//! all of these; it just needs an extension hint. We decode such a file here with
-//! a hint and hand back a lazy, seekable rodio `Source` (#157/#164/#163).
+//! This replaces rodio 0.20's `Decoder` for local files (#163). rodio's `Decoder`
+//! can't pass a format hint (so it fails on MPEG Layer I/II, #157) and *panics*
+//! opening the ISO-MP4 family (an `unreachable!` on a seek, #164). Decoding here
+//! with symphonia and a hint handles every format and returns a lazy, seekable
+//! rodio `Source`, so one code path covers all local playback.
 
 use std::fs::File;
 use std::path::Path;
@@ -22,20 +21,6 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
-
-/// Extensions routed through this path instead of rodio's `Decoder`: MPEG audio
-/// Layer I/II (rodio 0.20 can't pass a hint, #157) and the ISO-MP4 family (rodio
-/// 0.20 *panics* opening these — an `unreachable!` on a seek — #164). Both decode
-/// cleanly via symphonia with an extension hint.
-pub const HINTED_EXTS: &[&str] = &["mp1", "mp2", "mpa", "m4a", "mp4", "m4b"];
-
-/// True when `path` should be decoded here rather than by rodio's `Decoder`.
-pub fn needs_hinted_decode(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| HINTED_EXTS.contains(&e.to_ascii_lowercase().as_str()))
-        .unwrap_or(false)
-}
 
 /// A lazy, seekable rodio `Source` backed by a symphonia decoder: packets are
 /// decoded on demand (not the whole file up front), so a long track isn't held in
@@ -132,10 +117,10 @@ impl Source for SymphoniaSource {
 }
 
 /// Open a local audio file as a lazy, seekable symphonia source, with an extension
-/// hint (which rodio 0.20's `Decoder` can't pass). Used for [`HINTED_EXTS`]. The
-/// first audio packet is decoded here so the real sample rate / channel count are
-/// known before playback, and so an unplayable file fails now with an error rather
-/// than later.
+/// hint (which rodio 0.20's `Decoder` can't pass). The single decode path for every
+/// local file (#163). The first audio packet is decoded here so the real sample
+/// rate / channel count are known before playback, and so an unplayable file fails
+/// now with an error rather than later.
 pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
     let file = File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -209,20 +194,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hinted_exts_cover_mpeg_layer12_and_iso_mp4() {
-        for p in ["song.mp2", "SONG.MP1", "clip.mpa", "track.m4a", "movie.mp4", "book.m4b"] {
-            assert!(needs_hinted_decode(Path::new(p)), "{p} should be hinted");
-        }
-        // Everyday formats go through rodio's Decoder, not this path.
-        assert!(!needs_hinted_decode(Path::new("song.mp3")));
-        assert!(!needs_hinted_decode(Path::new("song.flac")));
-        assert!(!needs_hinted_decode(Path::new("noext")));
-    }
-
-    #[test]
     fn open_file_errors_instead_of_panicking_on_a_non_audio_file() {
         // A missing file surfaces an error rather than panicking.
         assert!(open_file(Path::new("definitely-not-here.mp2")).is_err());
+    }
+
+    #[test]
+    fn open_file_decodes_a_wav() {
+        // Now that WAV is a symphonia format too, the single path decodes it. Write
+        // a tiny mono 16-bit PCM WAV (4 samples at 8 kHz) and decode it back.
+        let samples: [i16; 4] = [0, 8000, -8000, 16000];
+        let mut wav = Vec::new();
+        let data_len = (samples.len() * 2) as u32;
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes()); // fmt chunk size
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&8000u32.to_le_bytes()); // sample rate
+        wav.extend_from_slice(&16000u32.to_le_bytes()); // byte rate (8000*1*2)
+        wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+        wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        for s in samples {
+            wav.extend_from_slice(&s.to_le_bytes());
+        }
+        let p = std::env::temp_dir().join("linamp_decode_test.wav");
+        std::fs::write(&p, &wav).unwrap();
+
+        let mut src = open_file(&p).expect("should decode the WAV");
+        assert_eq!(src.sample_rate(), 8000);
+        assert_eq!(src.channels(), 1);
+        assert_eq!((&mut src).count(), samples.len());
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
