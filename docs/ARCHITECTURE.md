@@ -102,7 +102,8 @@ so the rest of the code stays portable:
 When the window manager asks LinAmp to close, it does not tear down immediately.
 A short countdown lets the child viewports (EQ/playlist/library) close before the
 root window, because dropping the root while child viewports are still alive can
-crash `winit`. The root closes last once the children are gone.
+crash `winit` (an unwrap on a TranslateCoordinates query against the dying
+window). The root closes last once the children are gone.
 
 ## Persistence
 

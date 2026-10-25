@@ -1,5 +1,6 @@
 //! Platform windowing glue: Win32 (owner windows, regions, cursors) and
 //! X11 (transient-for, shape, cursors) FFI. A no-op fallback elsewhere.
+//! See docs/ARCHITECTURE.md (Platform FFI boundary).
 
 /// Global cursor in egui points if the platform exposes it: `GetCursorPos`
 /// (Windows), `XQueryPointer` (X11/XWayland), `None` (native Wayland/else). When

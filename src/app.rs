@@ -1,3 +1,8 @@
+//! The `eframe::App`: application state, the per-frame update loop and the
+//! window focus / shutdown / double-size logic. The multi-window model, the
+//! fingerprint-cached render pipeline and the platform FFI boundary are
+//! documented in docs/ARCHITECTURE.md.
+
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -2898,10 +2903,9 @@ impl LinAmpApp {
             return;
         }
 
-        // App-level focus for this frame: this frame's root focus OR'd with last
-        // frame's child-window focus (children render later, below). Hidden
-        // windows don't hold focus. So all windows share one active/inactive
-        // title-bar state and only dim when the whole app is unfocused.
+        // App-level focus: this frame's root focus OR'd with last frame's child
+        // focus (children render later); hidden windows don't hold focus. The
+        // shared active/inactive title-bar behaviour is in docs/ARCHITECTURE.md.
         self.foc_root = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_root);
         if !self.eq_visible {
             self.foc_eq = false;
@@ -3269,11 +3273,10 @@ impl eframe::App for LinAmpApp {
         // so it survives exit without relying on eframe's save-on-exit.
         self.persist_session_if_changed();
 
-        // Graceful shutdown on a window-manager close (Alt+F4 / WM "X"). Tearing
-        // down the root window while the EQ/playlist/popup viewports still exist
-        // crashes winit (an unwrap on a TranslateCoordinates query of the dying
-        // window). Close the children first, stop drawing the classic windows,
-        // and close the root a couple of frames later once they're gone.
+        // Graceful shutdown on a WM close (Alt+F4 / the window "X"): close the
+        // child viewports first, then the root a couple of frames later. Closing
+        // the root while children still exist crashes winit. Full rationale in
+        // docs/ARCHITECTURE.md (Graceful shutdown).
         if self.quit_countdown.is_none() && ctx.input(|i| i.viewport().close_requested()) {
             self.eq_visible = false;
             self.pl_visible = false;
