@@ -3,6 +3,7 @@
 
 mod app;
 mod balance;
+mod cdda;
 mod classic;
 mod config;
 mod cursor;
