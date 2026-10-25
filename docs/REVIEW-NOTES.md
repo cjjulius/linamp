@@ -3,6 +3,16 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-25 (later 5)
+
+- MIDI seeking added. rustysynth's sequencer can't seek and MIDI state is
+  cumulative, so a seek restarts the sequence and fast-forwards (renders and
+  discards) to the target; synthesis is far faster than realtime so it's quick, and
+  the voice/controller state we land on is exactly what normal playback to that
+  point would give (no hanging notes). Verify by ear: start a MIDI, drag the seek
+  bar forward and back, and confirm playback jumps and continues cleanly from the
+  new spot.
+
 ## 2026-10-25 (later 4)
 
 - CD playback stutter (#160): on the first real-hardware test, CD audio played but

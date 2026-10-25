@@ -56,6 +56,8 @@ pub fn soundfont_path() -> Option<PathBuf> {
 /// A rodio `Source` that renders a MIDI file through rustysynth on demand.
 pub struct MidiSource {
     sequencer: MidiFileSequencer,
+    /// Kept so a seek can restart the sequence and fast-forward to the target.
+    midi: Arc<MidiFile>,
     total: Option<Duration>,
     /// Interleaved f32 for the current rendered block, and the read cursor.
     buf: Vec<f32>,
@@ -124,9 +126,33 @@ impl Source for MidiSource {
     fn total_duration(&self) -> Option<Duration> {
         self.total
     }
-    fn try_seek(&mut self, _pos: Duration) -> Result<(), SeekError> {
-        // rustysynth's sequencer can't seek; treat MIDI as non-seekable.
-        Err(SeekError::NotSupported { underlying_source: "midi" })
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        // rustysynth's sequencer has no seek, and MIDI state is cumulative (the
+        // instruments and controllers at a point depend on every event before it),
+        // so the correct way to seek is to restart and fast-forward: replay from the
+        // top, rendering and discarding up to the target. Synthesis is far faster
+        // than realtime, so even a far seek completes quickly, and the voice state we
+        // land on is exactly what normal playback to that point would produce.
+        self.sequencer.play(&self.midi, false);
+        self.done = false;
+        self.tail_blocks = 0;
+        self.buf.clear();
+        self.pos = 0;
+        let mut remaining = (pos.as_secs_f64() * SAMPLE_RATE as f64) as u64;
+        // Discard in ~1-second chunks for speed.
+        let chunk = SAMPLE_RATE as usize;
+        let mut dl = vec![0.0f32; chunk];
+        let mut dr = vec![0.0f32; chunk];
+        while remaining > 0 && !self.sequencer.end_of_sequence() {
+            let n = remaining.min(chunk as u64) as usize;
+            self.sequencer.render(&mut dl[..n], &mut dr[..n]);
+            remaining -= n as u64;
+        }
+        // Seeking at or past the end just ends the track.
+        if self.sequencer.end_of_sequence() {
+            self.done = true;
+        }
+        Ok(())
     }
 }
 
@@ -164,6 +190,7 @@ pub fn open_midi(midi_path: &Path, soundfont_path: &Path) -> Result<MidiSource> 
 
     Ok(MidiSource {
         sequencer,
+        midi: midi_file,
         total,
         buf: Vec::new(),
         pos: 0,
@@ -237,6 +264,22 @@ mod tests {
         let d = duration(&p).expect("MIDI length should be readable");
         assert!(d.as_secs_f64() > 0.0, "length should be positive");
         assert!(duration(Path::new("song.mp3")).is_none(), "non-MIDI returns None");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn midi_seek_is_supported_and_past_end_terminates() {
+        let sf = Path::new("soundfont/GeneralUser-GS.sf2");
+        if !sf.exists() {
+            return;
+        }
+        let p = one_note_midi("seek");
+        let mut src = open_midi(&p, sf).expect("should open the MIDI");
+        // Seeking is now supported (replay-and-fast-forward), no error.
+        src.try_seek(Duration::from_millis(50)).expect("midi should seek");
+        // Seeking past the end ends the stream cleanly rather than looping.
+        src.try_seek(Duration::from_secs(60)).expect("seek past end ok");
+        assert!(src.next().is_none(), "past-end seek should end the stream");
         let _ = std::fs::remove_file(&p);
     }
 
