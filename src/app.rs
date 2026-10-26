@@ -553,6 +553,15 @@ pub struct LinAmpApp {
     on_top_last: Option<bool>,
     pl_menu_press: Option<classic::PlRegion>,
     prefs: Prefs,
+    /// System-tray icon (kept alive for its lifetime) and the channel its clicks
+    /// arrive on, drained once per frame (#40). `hidden_to_tray` tracks whether
+    /// the window is currently hidden so a tray left-click toggles it.
+    _tray: crate::tray::Tray,
+    tray_rx: std::sync::mpsc::Receiver<crate::tray::TrayAction>,
+    hidden_to_tray: bool,
+    /// Visibility of the (eq, playlist, library) windows before hiding to the
+    /// tray, so restoring brings back exactly the windows that were open.
+    tray_prev_vis: (bool, bool, bool),
     /// Path of the currently loaded skin (persisted as `last_skin`).
     skin_path: Option<PathBuf>,
     scale: f32,
@@ -652,6 +661,7 @@ impl LinAmpApp {
         let fft = FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE);
         let prefs = Prefs::load();
         let scale = prefs.scale();
+        let (tray, tray_rx) = crate::tray::Tray::spawn(&cc.egui_ctx, prefs.tray_enabled);
 
         let mut app = Self {
             player,
@@ -760,6 +770,10 @@ impl LinAmpApp {
             on_top_last: None,
             pl_menu_press: None,
             prefs,
+            _tray: tray,
+            tray_rx,
+            hidden_to_tray: false,
+            tray_prev_vis: (false, false, false),
             skin_path: None,
             scale,
             prefs_open: false,
@@ -1010,6 +1024,61 @@ impl LinAmpApp {
         if let Some(i) = self.playlist.prev_index(self.shuffle, self.repeat_all) {
             self.play_index(i);
         }
+    }
+
+    /// Act on a click from the system-tray icon (#40).
+    fn handle_tray_action(&mut self, ctx: &egui::Context, action: crate::tray::TrayAction) {
+        use crate::tray::TrayAction;
+        match action {
+            TrayAction::PlayPause => self.play_pause(),
+            TrayAction::Stop => self.stop_playback(),
+            TrayAction::Prev => self.prev(),
+            TrayAction::Next => self.next(),
+            TrayAction::Toggle => {
+                if self.hidden_to_tray {
+                    self.show_from_tray(ctx);
+                } else {
+                    self.hide_to_tray(ctx);
+                }
+            }
+            TrayAction::Restore => self.show_from_tray(ctx),
+            TrayAction::Quit => {
+                // Bring the window back first so the graceful teardown can render
+                // its closing frames, then request a normal close.
+                self.show_from_tray(ctx);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    /// Hide every LinAmp window and keep running in the tray. The child windows
+    /// go with the main one so none are left floating, and their state is saved
+    /// so a later restore reopens exactly what was showing.
+    fn hide_to_tray(&mut self, ctx: &egui::Context) {
+        if self.hidden_to_tray {
+            return;
+        }
+        self.tray_prev_vis = (self.eq_visible, self.pl_visible, self.lib_visible);
+        self.eq_visible = false;
+        self.pl_visible = false;
+        self.lib_visible = false;
+        self.hidden_to_tray = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+    }
+
+    /// Bring LinAmp back from the tray: restore the windows that were open and
+    /// focus the main one. A no-op visibility restore when it is already shown.
+    fn show_from_tray(&mut self, ctx: &egui::Context) {
+        if self.hidden_to_tray {
+            let (eq, pl, lib) = self.tray_prev_vis;
+            self.eq_visible = eq;
+            self.pl_visible = pl;
+            self.lib_visible = lib;
+            self.hidden_to_tray = false;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        ctx.request_repaint();
     }
 
     /// Push the crossfade length (or 0 = off) from Preferences to the player.
@@ -3491,6 +3560,13 @@ impl eframe::App for LinAmpApp {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
+
+        // Tray clicks (#40): act on whatever the notification-area icon reported
+        // since the last frame. Collected first so each dispatch can take &mut self.
+        let tray_actions: Vec<_> = self.tray_rx.try_iter().collect();
+        for action in tray_actions {
+            self.handle_tray_action(ctx, action);
+        }
 
         // Persist the session (playlist, window layout, EQ) whenever it changes,
         // so it survives exit without relying on eframe's save-on-exit.

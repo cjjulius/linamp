@@ -877,3 +877,36 @@ code plus a working/not-working binary): visual and behavior changes.
   (note.xm, placed in qa-music). Manual check: drop a few real .mod/.xm/.s3m/.it files
   in qa-music and confirm they play and sound right through the EQ/analyzer, and that
   the track ends (auto-advances) rather than looping forever.
+
+## 2026-10-26 (#40 system-tray icon, Windows side, needs manual + Linux QA)
+
+- System-tray icon added (#40), on by default (Prefs field tray_enabled). The
+  native tray runs on its own thread and reports clicks over a channel the app
+  drains each frame (src/tray.rs). Windows uses Shell_NotifyIcon on a message-only
+  window (hand-rolled FFI, no new crate); left-click toggles all LinAmp windows
+  (hide to tray / restore), right-click opens a transport menu (Play/Pause, Stop,
+  Previous, Next, Restore LinAmp, Exit LinAmp). Hiding to tray saves which of the
+  eq/playlist/library windows were open and restores exactly those. The menu
+  command ids map to actions in a pure, unit-tested helper; a disabled tray still
+  returns a working (empty) receiver.
+- Manual check (Windows): launch LinAmp and confirm the LinAmp icon appears in the
+  notification area. Left-click it: the window (and any EQ/playlist/library windows)
+  should disappear with no taskbar button, then a second left-click should bring
+  back exactly those windows, focused. Right-click: each menu item should drive the
+  matching transport action, Restore should bring the window back, Exit should quit
+  cleanly. Confirm the icon disappears when the app exits (no stale ghost icon).
+- Linux side implemented with ksni 0.3.7 (features = ["blocking"], pure-Rust zbus,
+  no GTK or libdbus C dependency). LinAmp registers a StatusNotifierItem that ships
+  its own ARGB pixmap (from assets/linamp_logo_32.png), so the icon shows without a
+  matching icon theme. Left-click (activate) sends Toggle, the menu mirrors the
+  Windows one. The service runs on ksni's own background thread; the Handle is held
+  for the app's lifetime. This path could not be compiled here (Windows box, and
+  cross-checking fails on the C deps rusqlite/alsa), so it needs a build + run on
+  Pop!_OS. Manual check (Linux): confirm the icon appears in the tray, left-click
+  hides/restores the windows, the right-click menu drives transport, Exit quits. If
+  the desktop has no StatusNotifierItem host, spawn fails and LinAmp just runs
+  without a tray (no crash), which is the intended fallback.
+- Open question for review: minimize-to-tray is currently only the tray left-click.
+  The classic Minimize button still minimizes to the taskbar as before. Decide
+  whether the Close/Minimize buttons should hide to tray too (and whether that
+  should be a preference).

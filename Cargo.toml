@@ -49,6 +49,11 @@ x11-dl = "2"
 # off the GPL libcdio path. Not pulled in on Windows or macOS.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+# Linux only: a StatusNotifierItem (system-tray icon) over D-Bus for #40. ksni
+# talks D-Bus through pure-Rust zbus, so there's no GTK or libdbus C dependency.
+# The "blocking" feature exposes a synchronous spawn, which suits our non-async
+# egui loop; it runs the service on its own background thread.
+ksni = { version = "0.3.7", features = ["blocking"] }
 
 # Windows only: embed the application icon into linamp.exe as a resource so the
 # file and taskbar show the LinAmp icon (the in-app window icon is set from the

@@ -22,6 +22,7 @@ mod stream;
 mod tags;
 mod text;
 mod tracker;
+mod tray;
 mod viz;
 #[cfg(windows)]
 mod wincursor;
