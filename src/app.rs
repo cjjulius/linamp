@@ -33,7 +33,7 @@ mod platform_win;
 mod window;
 mod render;
 pub(crate) use platform_win::*;
-use theme::apply_theme;
+use theme::{apply_theme, menu_palette};
 use menu::Popup;
 
 const FFT_SIZE: usize = 2048;
@@ -945,6 +945,7 @@ impl LinAmpApp {
         }
 
         apply_theme(&cc.egui_ctx, &app.theme);
+        app.push_tray_theme();
         app
     }
 
@@ -1077,11 +1078,21 @@ impl LinAmpApp {
         self._tray = tray;
         self.tray_rx = rx;
         self.tray_mode = enabled && self._tray.is_active();
+        // The fresh tray starts on default colours; push the current skin's.
+        self.push_tray_theme();
         set_taskbar_button("LinAmp", !self.tray_mode);
         // Leaving tray mode while the window is hidden would strand it; bring it back.
         if !self.tray_mode && self.hidden_to_tray {
             self.show_from_tray(ctx);
         }
+    }
+
+    /// Push the current skin's menu palette to the tray so its native menu matches
+    /// LinAmp's own menus (#40). Cheap, and a no-op in effect off Windows.
+    fn push_tray_theme(&self) {
+        let (bg, text, hover_bg, hover_text, border) = menu_palette(&self.theme);
+        self._tray
+            .set_menu_colors(bg, text, hover_bg, hover_text, border);
     }
 
     /// Genuinely quit the app (main-menu Exit or the tray's Exit). Marks the quit
@@ -1447,6 +1458,7 @@ impl LinAmpApp {
             Ok(t) => {
                 self.theme = t;
                 apply_theme(ctx, &self.theme);
+                self.push_tray_theme();
                 self.status = format!("Loaded skin: {}", self.theme.name);
             }
             Err(e) => self.status = format!("Skin error: {e}"),
@@ -3465,6 +3477,7 @@ impl LinAmpApp {
                     if ui.button("Default").clicked() {
                         self.theme = Theme::default();
                         apply_theme(ui.ctx(), &self.theme);
+                        self.push_tray_theme();
                         self.status = "Theme: default".to_string();
                     }
                     if ui.button("Load .wsz...").clicked() {
