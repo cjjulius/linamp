@@ -623,9 +623,10 @@ mod windows_impl {
             std::ptr::null(),
             &mut count,
         );
-        // Match egui's ~14px body text, scaled to the system DPI (96 = 100%).
-        let dpi = GetDpiForSystem().max(96) as i32;
-        let height = -(14 * dpi / 96);
+        // The shared menu point size, scaled to the system DPI (96 = 100%), so the
+        // tray menu renders at the same size as LinAmp's own menus.
+        let dpi = GetDpiForSystem().max(96) as f32;
+        let height = -((crate::app::MENU_FONT_PT * dpi / 96.0).round() as i32);
         let face = wide("Noto Sans");
         CreateFontW(
             height,
@@ -713,9 +714,10 @@ mod windows_impl {
         GetTextExtentPoint32W(dc, text.as_ptr(), label.chars().count() as i32, &mut sz);
         SelectObject(dc, prev);
         ReleaseDC(0, dc);
-        // Room for the text plus left/right padding; a comfortable row height.
+        // Room for the text plus left/right padding; a row height close to the
+        // egui menus' rows so the two read the same.
         mis.item_width = (sz.cx + 34) as u32;
-        mis.item_height = (sz.cy + 10).max(22) as u32;
+        mis.item_height = (sz.cy + 6).max(20) as u32;
     }
 
     /// WM_DRAWITEM: paint one row in the skin's colours, highlighting the hovered

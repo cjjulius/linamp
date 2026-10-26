@@ -83,7 +83,8 @@ pub(super) fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool 
         .override_text_color
         .unwrap_or_else(|| vis.text_color());
     let weak = ui.visuals().weak_text_color();
-    let font = egui::TextStyle::Button.resolve(ui.style());
+    // One shared size for every menu, including the native tray menu.
+    let font = egui::FontId::proportional(crate::app::MENU_FONT_PT);
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, vis.rounding, vis.weak_bg_fill);
