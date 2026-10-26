@@ -3,6 +3,20 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-26 (tracker length)
+
+- Tracker modules played past the time the playlist showed (confirmed on a looping
+  .mod: shown 1:57, clock ran to 2:02+ while "time remaining" sat at 0). Cause: a
+  module reports its song length (duration_seconds) but xmrsplayer follows the
+  module's loop/jump effects a little past that before set_max_loop_count(1) halts
+  it, so audio outran the shown length. Linear modules (e.g. sample_scale.mod) are
+  unaffected, which is why it reproduced only on looping ones. TrackerSource now caps
+  output at the reported duration, so playback stops at the shown length (the natural
+  pattern end, where a loop would restart) and the seek/time display stay in sync. A
+  test asserts actual playback == reported length (never over). Verify by ear with a
+  looping module: the clock should reach the shown length and the track should end /
+  advance there, not keep playing.
+
 ## 2026-10-26
 
 - Audio CD playback (Linux), native drive reads (#160). The stutter where a CD
