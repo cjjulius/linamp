@@ -116,7 +116,7 @@ impl super::LinAmpApp {
             if k.shift {
                 // Stop with a fade-out.
                 if self.player.state() != PlayState::Stopped {
-                    self.fade = Some(FADE_SECS);
+                    self.fade = Some(self.prefs.fade_on_stop_secs);
                     self.status = "Fading out…".into();
                 }
             } else if k.ctrl {

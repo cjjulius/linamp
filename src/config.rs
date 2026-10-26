@@ -15,6 +15,8 @@ pub struct Prefs {
     pub last_skin: Option<String>,
     /// true = the Stop action fades out instead of cutting off immediately.
     pub fade_on_stop: bool,
+    /// Fade-out length in seconds when `fade_on_stop` is on.
+    pub fade_on_stop_secs: f32,
     /// true = keep the LinAmp windows above other applications.
     pub always_on_top: bool,
     /// true = ignore a skin's custom cursors and use the system cursor instead.
@@ -44,6 +46,7 @@ impl Default for Prefs {
             tag_on_load: true,
             last_skin: None,
             fade_on_stop: false,
+            fade_on_stop_secs: 2.0,
             always_on_top: false,
             disable_skin_cursors: false,
             minibrowser_url: "https://github.com/cjjulius/linamp".to_string(),
