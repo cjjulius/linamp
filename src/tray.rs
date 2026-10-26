@@ -248,10 +248,16 @@ mod windows_impl {
     const WM_LBUTTONDBLCLK: u32 = 0x0203;
     const WM_RBUTTONUP: u32 = 0x0205;
     const WM_NULL: u32 = 0x0000;
-    // A tool window never appears in the taskbar or Alt+Tab. We keep the tray
-    // window hidden anyway (never shown), but this makes doubly sure it stays
-    // invisible even while it owns the foreground for the popup menu.
+    // A tool window never appears in the taskbar or Alt+Tab, so the tray's helper
+    // window stays invisible even while it owns the foreground for the popup menu.
     const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+    // A borderless popup, created zero-sized and off-screen, then shown without
+    // activation (SW_SHOWNA). It must be shown (not merely created) for
+    // SetForegroundWindow to take, which the tray menu needs to highlight and
+    // dismiss. At zero size and off-screen it draws nothing.
+    const WS_POPUP: u32 = 0x8000_0000;
+    const SW_SHOWNA: i32 = 8;
+    const OFF_SCREEN: i32 = -32000;
 
     const NIM_ADD: u32 = 0;
     const NIM_DELETE: u32 = 2;
@@ -339,6 +345,7 @@ mod windows_impl {
         ) -> Hwnd;
         fn DefWindowProcW(hwnd: Hwnd, msg: u32, w: Wparam, l: Lparam) -> Lresult;
         fn DestroyWindow(hwnd: Hwnd) -> i32;
+        fn ShowWindow(hwnd: Hwnd, cmd: i32) -> i32;
         fn GetMessageW(msg: *mut Msg, hwnd: Hwnd, min: u32, max: u32) -> i32;
         fn TranslateMessage(msg: *const Msg) -> i32;
         fn DispatchMessageW(msg: *const Msg) -> Lresult;
@@ -555,20 +562,22 @@ mod windows_impl {
         // create one tray window, so a zero return still lets CreateWindow work.
         RegisterClassW(&wc);
 
-        let window_name = wide("LinAmp");
-        // A normal top-level window, created hidden (no WS_VISIBLE) and never
-        // shown. It must be a real top-level window, not a message-only one
-        // (HWND_MESSAGE): only a real window can be brought to the foreground,
-        // which TrackPopupMenu needs for the menu to track the mouse (hover
-        // highlight) and dismiss when clicked away from. WS_EX_TOOLWINDOW keeps
-        // it out of the taskbar and Alt+Tab.
+        // A distinct title from the main window ("LinAmp"): FindWindowW("LinAmp")
+        // elsewhere (the live taskbar toggle, window grouping) must resolve to the
+        // real player window, not this helper, or it would act on the wrong one.
+        let window_name = wide("LinAmp Tray");
+        // A real top-level window (not message-only), zero-sized and off-screen so
+        // it draws nothing. It must be a real, shown window so SetForegroundWindow
+        // takes, which TrackPopupMenu needs for the menu to track the mouse (hover
+        // highlight) and dismiss on an outside click. WS_EX_TOOLWINDOW keeps it out
+        // of the taskbar and Alt+Tab.
         let hwnd = CreateWindowExW(
             WS_EX_TOOLWINDOW,
             class_name.as_ptr(),
             window_name.as_ptr(),
-            0,
-            0,
-            0,
+            WS_POPUP,
+            OFF_SCREEN,
+            OFF_SCREEN,
             0,
             0,
             0,
@@ -582,6 +591,11 @@ mod windows_impl {
 
         // Publish the window handle so Drop can post it a close message.
         hwnd_slot.store(hwnd, Ordering::Release);
+
+        // Show it without activating. It is zero-sized and off-screen, so nothing
+        // appears, but being shown lets SetForegroundWindow take so the popup menu
+        // highlights and dismisses correctly.
+        ShowWindow(hwnd, SW_SHOWNA);
 
         // Hand the WndProc its context. No tray messages arrive until the icon
         // is added just below, so setting this after CreateWindow is safe.
