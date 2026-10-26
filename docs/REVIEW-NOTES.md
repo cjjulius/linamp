@@ -3,7 +3,7 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
-## 2026-10-26 (crossfade, off by default — needs audio QA)
+## 2026-10-26 (crossfade, off by default, needs audio QA)
 
 - Crossfade between tracks added (#43), off by default. When on, the end of one
   track overlaps the start of the next: Preferences > Playback > Crossfade has the
@@ -35,7 +35,7 @@ code plus a working/not-working binary): visual and behavior changes.
   FFI (no new crate), routed through the Linux box's BufferedCdSource. The
   Options "Open Audio CD" item and open_audio_cd now build on Windows too. It
   COMPILES on Windows and the MSF-to-LBA conversion is unit-tested, but the raw
-  reads have NOT run on hardware (no optical drive on the dev box) — needs a
+  reads have NOT run on hardware (no optical drive on the dev box), needs a
   Windows machine with a drive + an audio CD to verify: the raw-read byte offset
   (set at the 2048 logical-sector size), the CDROM_TOC struct layout, and the
   default drive letter (assumed D:) are the likely things to check first. Linux CD
@@ -96,6 +96,21 @@ code plus a working/not-working binary): visual and behavior changes.
   track labels and lengths are still correct, and Open Audio CD lists them in disc
   order.
 
+- Audio CD, distro-portability hardening (Linux, #160). Three additive, guarded
+  changes, none of which alter the GNOME/GVfs path that Mint and Pop!_OS use, both
+  re-verified on a real Pop!_OS disc (native TOC read plus GVfs redirect resolve the
+  disc correctly): (1) the ioctl request is now cast with `as _` so it builds on musl
+  (Alpine, Void), a no-op on glibc; (2) `default_device` falls back to scanning
+  `/dev/sr0..7` when `/dev/cdrom` is absent, so a drive at sr1+ is found (the GVfs
+  redirect already reads the real device from the mount path); (3) a best-effort KDE
+  Plasma kio-fuse detector (`.../kio-fuse-*/audiocd/.../Track N.*`) so the auto
+  redirect can work on Plasma too. The KDE detector requires both a `kio-fuse` and an
+  `audiocd` path component plus a numeric file name, so it cannot fire on a GVfs or
+  ordinary path. KDE is UNVERIFIED (no Plasma box here), it needs a human check on a
+  real KDE desktop: insert a CD, Add file(s), pick the tracks, confirm native
+  playback. On any desktop where the redirect does not fire, Options to Open Audio CD
+  still plays the disc natively.
+
 - Single-instance guard: LinAmp now holds an advisory file lock
   (data dir / LinAmp / instance.lock) at startup, so a second launch exits instead
   of opening a second, conflicting set of classic windows. The headless flags
@@ -106,7 +121,7 @@ code plus a working/not-working binary): visual and behavior changes.
   LinAmp, launch it again, and confirm the second one does not open a second window
   set (it should just exit). Note: it does not yet forward a file passed to the
   second launch to the running instance (so "open with" while running is a no-op for
-  now, not a new window) — that arg-forwarding is a follow-up.
+  now, not a new window), that arg-forwarding is a follow-up.
 
 - MIDI seek felt laggy (a second or two) because every seek replayed the whole
   sequence from the top and re-synthesized up to the target. A forward seek now
