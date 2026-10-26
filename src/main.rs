@@ -97,6 +97,17 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Single-instance guard: hold an exclusive lock so a second launch exits instead
+    // of opening a rival set of classic windows (classic Winamp is single-instance,
+    // and two LinAmps fight over the audio device and window focus). The headless
+    // flags above are exempt (they may run alongside a GUI). The OS frees the lock on
+    // exit or crash, so a stale lock can never wedge startup.
+    let _instance_lock = match acquire_instance_lock() {
+        Instance::AlreadyRunning => return Ok(()),
+        Instance::Acquired(file) => Some(file),
+        Instance::Unavailable => None,
+    };
+
     // Start borderless at classic skin size (the app sets the real mode on the
     // first frame once it knows whether a skin loaded).
     let mut viewport = egui::ViewportBuilder::default()
@@ -135,4 +146,69 @@ fn load_icon() -> Option<egui::IconData> {
         width,
         height,
     })
+}
+
+/// Outcome of the single-instance check.
+enum Instance {
+    /// This process holds the lock; keep the file alive for its lifetime.
+    Acquired(std::fs::File),
+    /// Another LinAmp already holds the lock, so this launch should exit.
+    AlreadyRunning,
+    /// The lock couldn't be set up (e.g. the data dir isn't writable); start
+    /// anyway rather than refuse to launch over a locking problem.
+    Unavailable,
+}
+
+/// Try to acquire the single-instance lock at `path`. Uses an advisory file lock,
+/// which the OS releases automatically when the file is dropped or the process
+/// dies, so a crash never leaves a stale lock behind.
+fn acquire_instance_lock_at(path: &std::path::Path) -> Instance {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let file = match std::fs::OpenOptions::new().create(true).write(true).open(path) {
+        Ok(f) => f,
+        Err(_) => return Instance::Unavailable,
+    };
+    match file.try_lock() {
+        Ok(()) => Instance::Acquired(file),
+        Err(std::fs::TryLockError::WouldBlock) => Instance::AlreadyRunning,
+        Err(std::fs::TryLockError::Error(_)) => Instance::Unavailable,
+    }
+}
+
+/// The real single-instance lock, in LinAmp's data directory (next to config.json).
+fn acquire_instance_lock() -> Instance {
+    let path = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("LinAmp")
+        .join("instance.lock");
+    acquire_instance_lock_at(&path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_instance_lock_refuses_a_second_holder() {
+        let p = std::env::temp_dir().join("linamp_instance_guard_test.lock");
+        let _ = std::fs::remove_file(&p);
+        let held = match acquire_instance_lock_at(&p) {
+            Instance::Acquired(f) => f,
+            _ => panic!("the first launch should acquire the lock"),
+        };
+        // A second launch while the first holds it is told another instance runs.
+        assert!(
+            matches!(acquire_instance_lock_at(&p), Instance::AlreadyRunning),
+            "a second holder must be refused"
+        );
+        // Dropping the first (as on exit) frees it for the next launch.
+        drop(held);
+        assert!(
+            matches!(acquire_instance_lock_at(&p), Instance::Acquired(_)),
+            "the lock is free again after the first holder exits"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
 }
