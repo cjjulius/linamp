@@ -215,7 +215,9 @@ impl<D: CdDrive> Source for CdAudioSource<D> {
 // streaming (it touches the drive about once a second in steady state, so it never
 // idles long enough to spin down).
 
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError};
+use std::sync::Arc;
 use std::thread;
 
 /// Prefetch-buffer depth in 1-second batches. Deep enough to ride out the
@@ -250,6 +252,13 @@ pub struct BufferedCdSource {
     cur: Vec<f32>,
     pos: usize,
     total: Option<Duration>,
+    /// False until the first real batch is produced. While false, `next` returns
+    /// silence instead of blocking, so the drive's spin-up never stalls rodio's
+    /// mixer (which would freeze a concurrent crossfade's outgoing track).
+    started: bool,
+    /// Set true the moment real audio starts flowing, so a crossfade can wait for
+    /// the spin-up to finish before it begins the blend ([`ready_flag`]).
+    ready: Arc<AtomicBool>,
 }
 
 impl BufferedCdSource {
@@ -269,7 +278,16 @@ impl BufferedCdSource {
             cur: Vec::new(),
             pos: 0,
             total,
+            started: false,
+            ready: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// A handle to the "audio is flowing" flag: false while the drive spins up, true
+    /// once the first real samples are produced. The player waits on this to start a
+    /// crossfade into a CD only once there is something to fade in (#160).
+    pub fn ready_flag(&self) -> Arc<AtomicBool> {
+        self.ready.clone()
     }
 }
 
@@ -334,16 +352,35 @@ impl Iterator for BufferedCdSource {
                 self.pos += 1;
                 return Some(s);
             }
-            // Current batch drained: pull the next one, skipping any batch left over
-            // from before a seek (a stale generation).
-            match self.rx.recv() {
-                Ok(CdMsg::Batch(g, v)) if g == self.gen => {
-                    self.cur = v;
-                    self.pos = 0;
+            // Before the first real audio (drive spin-up), don't block: return
+            // silence so the audio mixer keeps running and a concurrent crossfade's
+            // outgoing track plays on. Once audio is flowing, wait on the deep buffer
+            // as usual (a transient underrun should pause, not insert a silent gap).
+            if !self.started {
+                match self.rx.try_recv() {
+                    Ok(CdMsg::Batch(g, v)) if g == self.gen => {
+                        self.started = true;
+                        self.ready.store(true, Ordering::Relaxed);
+                        self.cur = v;
+                        self.pos = 0;
+                    }
+                    Ok(CdMsg::End(g)) if g == self.gen => return None,
+                    Ok(_) => continue,                        // stale pre-seek message
+                    Err(TryRecvError::Empty) => return Some(0.0), // still spinning up
+                    Err(TryRecvError::Disconnected) => return None,
                 }
-                Ok(CdMsg::End(g)) if g == self.gen => return None,
-                Ok(_) => continue, // stale batch/end from before a seek: drop it
-                Err(_) => return None, // reader gone
+            } else {
+                // Current batch drained: pull the next, skipping any batch left over
+                // from before a seek (a stale generation).
+                match self.rx.recv() {
+                    Ok(CdMsg::Batch(g, v)) if g == self.gen => {
+                        self.cur = v;
+                        self.pos = 0;
+                    }
+                    Ok(CdMsg::End(g)) if g == self.gen => return None,
+                    Ok(_) => continue,     // stale batch/end from before a seek
+                    Err(_) => return None, // reader gone
+                }
             }
         }
     }
@@ -992,15 +1029,17 @@ mod tests {
         assert_eq!(pcm_s16le_to_f32(&sector).len(), CDDA_SAMPLES_PER_SECTOR);
     }
 
-    /// A drive whose sectors are all silence, enough to exercise the Source's
-    /// paging and seeking without real hardware.
+    /// A drive whose sectors carry a constant non-zero tone, enough to exercise the
+    /// Source's paging and seeking without real hardware. Non-zero so a test can tell
+    /// real track content from `BufferedCdSource`'s pre-roll silence (zeros emitted
+    /// while a real drive would be spinning up).
     struct FakeDrive;
     impl CdDrive for FakeDrive {
         fn read_toc(&mut self) -> Result<Vec<CdTrack>> {
             Ok(vec![])
         }
         fn read_sector(&mut self, _lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]> {
-            Ok([0u8; CDDA_SECTOR_BYTES])
+            Ok([0x08; CDDA_SECTOR_BYTES])
         }
     }
 
@@ -1037,7 +1076,12 @@ mod tests {
         assert_eq!(src.channels(), CDDA_CHANNELS);
         assert_eq!(src.sample_rate(), CDDA_SAMPLE_RATE);
         assert_eq!(src.total_duration(), Some(Duration::from_secs_f64(50.0 / 75.0)));
-        assert_eq!(src.count(), 50 * CDDA_SAMPLES_PER_SECTOR);
+        // Count the real (non-zero) content: the source may emit a few leading zeros
+        // of pre-roll silence before the first batch arrives (timing-dependent).
+        assert_eq!(
+            src.filter(|&s| s != 0.0).count(),
+            50 * CDDA_SAMPLES_PER_SECTOR
+        );
     }
 
     #[test]
@@ -1045,11 +1089,15 @@ mod tests {
         // A seek bumps the generation; batches the reader produced before it (any
         // interleaving, whether the reader had read ahead or even finished the
         // track) carry the old generation and are dropped, so only the post-seek
-        // sectors are played. From sector 60 of 100, 40 sectors remain.
+        // sectors are played. From sector 60 of 100, 40 sectors remain. Count the
+        // non-zero content (leading pre-roll silence is excluded).
         let track = CdTrack { number: 1, start_lba: 0, sectors: 100 };
         let mut src = BufferedCdSource::new(FakeDrive, &track);
         src.try_seek(Duration::from_secs_f64(60.0 / 75.0)).unwrap();
-        assert_eq!(src.count(), 40 * CDDA_SAMPLES_PER_SECTOR);
+        assert_eq!(
+            src.filter(|&s| s != 0.0).count(),
+            40 * CDDA_SAMPLES_PER_SECTOR
+        );
     }
 
     /// Records each read_sectors batch size so we can assert the source pages in

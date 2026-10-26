@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,6 +49,10 @@ pub struct Player {
     fade_out: f32,
     /// Incoming gain multiplier (0 to 1) for the current sink; 1.0 when not fading in.
     fade_in: f32,
+    /// While crossfading into a CD track, its "audio is flowing" flag. The ramp is
+    /// held (current track at full, CD silent) until this flips, so the CD's spin-up
+    /// doesn't blend against silence (#160). None for an ordinary crossfade.
+    incoming_ready: Option<Arc<AtomicBool>>,
 }
 
 impl Player {
@@ -71,6 +76,7 @@ impl Player {
             fading: None,
             fade_out: 1.0,
             fade_in: 1.0,
+            incoming_ready: None,
         })
     }
 
@@ -181,15 +187,26 @@ impl Player {
         self.crossfade_secs
     }
 
-    /// True while an outgoing track is still fading out under a crossfade.
+    /// True while a crossfade is in progress: an outgoing track still fading out, or
+    /// a pre-warm hold waiting for an incoming CD to start flowing.
     pub fn is_crossfading(&self) -> bool {
-        self.fading.is_some()
+        self.fading.is_some() || self.incoming_ready.is_some()
     }
 
     /// Advance an in-progress crossfade by `dt` seconds: ramp the incoming track up
     /// and the outgoing one down, dropping the outgoing sink once it's silent. A
     /// no-op when crossfade is off or nothing is fading.
     pub fn tick_crossfade(&mut self, dt: f32) {
+        // Pre-warm hold: when fading into a CD, keep the current track at full and
+        // the CD silent until its audio is flowing, so the spin-up doesn't blend
+        // against silence (#160). Release the hold once it's ready, or once the
+        // outgoing track has already ended (nothing left to hold against).
+        if let Some(flag) = &self.incoming_ready {
+            if self.fading.is_some() && !flag.load(Ordering::Relaxed) {
+                return; // still spinning up: hold both gains where they are
+            }
+            self.incoming_ready = None;
+        }
         // Only advance while actually playing: a paused crossfade must hold both
         // sinks and both gains where they are, not ramp on (and silently drop the
         // outgoing track) during the pause.
@@ -214,7 +231,7 @@ impl Player {
     /// Shape `source` through the EQ, the analyzer tap and the stereo balance, then
     /// start it on a fresh sink. Shared by file and stream playback so both apply
     /// the same pipeline (and so a new decode path only has to produce a `Source`).
-    fn append_source<S>(&mut self, source: S, allow_crossfade: bool) -> Result<()>
+    fn append_source<S>(&mut self, source: S, cd_ready: Option<Arc<AtomicBool>>) -> Result<()>
     where
         S: Source<Item = f32> + Send + 'static,
     {
@@ -230,21 +247,20 @@ impl Player {
         sink.append(balanced);
         // Crossfade: when enabled and a track is already playing, keep the outgoing
         // one on its own sink fading out while the new one fades in, instead of
-        // cutting it off. Otherwise (disabled, nothing playing, or this source opts
-        // out) swap as before. A CD track opts out: it needs a couple of seconds to
-        // spin up, so a crossfade would blend against silence and stutter (#160).
-        if allow_crossfade
-            && self.crossfade_secs > 0.0
-            && self.state == PlayState::Playing
-            && self.sink.is_some()
-        {
+        // cutting it off. Otherwise (disabled, or nothing playing) swap as before.
+        if self.crossfade_secs > 0.0 && self.state == PlayState::Playing && self.sink.is_some() {
             // At most one outgoing track; if one was already fading, carry its gain so
             // a rapid skip doesn't jump back to full volume.
             self.fade_out = self.fade_in;
             self.fading = self.sink.take();
             self.fade_in = 0.0;
+            // A CD can't fade in until it spins up; hold the ramp (outgoing stays at
+            // full) until its audio is flowing (#160). An ordinary source is ready
+            // now, so it ramps immediately.
+            self.incoming_ready = cd_ready;
         } else {
             self.fade_in = 1.0;
+            self.incoming_ready = None;
         }
         self.sink = Some(sink);
         self.apply_gain();
@@ -262,7 +278,10 @@ impl Player {
                 let (device, track) = crate::cdda::parse_track_path(s)
                     .ok_or_else(|| anyhow::anyhow!("bad CD track path: {s}"))?;
                 let source = crate::cdda::open_cd_source(&device, track)?;
-                self.append_source(source, false)?;
+                // Pass the CD's readiness flag so a crossfade into it waits for the
+                // drive to spin up before starting the blend (#160).
+                let ready = source.ready_flag();
+                self.append_source(source, Some(ready))?;
                 self.current_path = Some(path.to_path_buf());
                 self.current_url = None;
                 self.stream_title = None;
@@ -284,14 +303,14 @@ impl Player {
                 anyhow::anyhow!("MIDI playback needs a SoundFont (.sf2) in the soundfont/ folder")
             })?;
             let source = crate::midi::open_midi(path, &sf)?;
-            self.append_source(source, true)?;
+            self.append_source(source, None)?;
         } else if crate::tracker::is_tracker(path) {
             // Tracker modules (.mod/.xm/.s3m/.it) are rendered by xmrs (#158).
             let source = crate::tracker::open_tracker(path)?;
-            self.append_source(source, true)?;
+            self.append_source(source, None)?;
         } else {
             let source = crate::decode::open_file(path)?;
-            self.append_source(source, true)?;
+            self.append_source(source, None)?;
         }
         self.current_path = Some(path.to_path_buf());
         self.current_url = None;
@@ -310,7 +329,7 @@ impl Player {
         url: String,
     ) -> Result<()> {
         self.stream_title = Some(title);
-        self.append_source(source, true)?;
+        self.append_source(source, None)?;
         self.current_path = None;
         self.current_url = Some(url);
         self.state = PlayState::Playing;
@@ -364,6 +383,7 @@ impl Player {
         self.fade = 1.0; // reset so the next track isn't faded
         self.fade_in = 1.0;
         self.fade_out = 1.0;
+        self.incoming_ready = None; // cancel any pending pre-warm crossfade hold
         self.viz.clear(); // silence the analyzer so its bars fall to zero
     }
 
