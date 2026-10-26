@@ -6,7 +6,7 @@
 //! left-click `Toggle` against its own window state, so the platform code never
 //! has to track whether the window is currently hidden.
 //!
-//! Windows uses `Shell_NotifyIcon` on a message-only window. Linux will use a
+//! Windows uses `Shell_NotifyIcon` on a hidden top-level window. Linux will use a
 //! StatusNotifierItem (the `ksni` crate) in a follow-up commit. Every other
 //! target gets a no-op tray so the app still builds and runs without one.
 
@@ -232,8 +232,8 @@ mod windows_impl {
     use std::sync::mpsc::Sender;
     use std::sync::Arc;
 
-    // Minimal Win32 surface. We talk to the notification area through a
-    // message-only window so the icon has somewhere to deliver its clicks.
+    // Minimal Win32 surface. We talk to the notification area through a hidden
+    // top-level window so the icon has somewhere to deliver its clicks.
     type Hwnd = isize;
     type Hicon = isize;
     type Hinstance = isize;
@@ -248,6 +248,10 @@ mod windows_impl {
     const WM_LBUTTONDBLCLK: u32 = 0x0203;
     const WM_RBUTTONUP: u32 = 0x0205;
     const WM_NULL: u32 = 0x0000;
+    // A tool window never appears in the taskbar or Alt+Tab. We keep the tray
+    // window hidden anyway (never shown), but this makes doubly sure it stays
+    // invisible even while it owns the foreground for the popup menu.
+    const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
 
     const NIM_ADD: u32 = 0;
     const NIM_DELETE: u32 = 2;
@@ -552,9 +556,14 @@ mod windows_impl {
         RegisterClassW(&wc);
 
         let window_name = wide("LinAmp");
-        // HWND_MESSAGE = -3: a message-only window, never shown on screen.
+        // A normal top-level window, created hidden (no WS_VISIBLE) and never
+        // shown. It must be a real top-level window, not a message-only one
+        // (HWND_MESSAGE): only a real window can be brought to the foreground,
+        // which TrackPopupMenu needs for the menu to track the mouse (hover
+        // highlight) and dismiss when clicked away from. WS_EX_TOOLWINDOW keeps
+        // it out of the taskbar and Alt+Tab.
         let hwnd = CreateWindowExW(
-            0,
+            WS_EX_TOOLWINDOW,
             class_name.as_ptr(),
             window_name.as_ptr(),
             0,
@@ -562,7 +571,7 @@ mod windows_impl {
             0,
             0,
             0,
-            -3,
+            0,
             0,
             hinst,
             std::ptr::null(),
