@@ -44,9 +44,9 @@ pub struct Player {
     /// The outgoing track during a crossfade, still playing on its own sink while it
     /// fades out. Dropped (stopped) once its gain reaches zero.
     fading: Option<Sink>,
-    /// Outgoing gain multiplier (1 → 0) for `fading`.
+    /// Outgoing gain multiplier (1 to 0) for `fading`.
     fade_out: f32,
-    /// Incoming gain multiplier (0 → 1) for the current sink; 1.0 when not fading in.
+    /// Incoming gain multiplier (0 to 1) for the current sink; 1.0 when not fading in.
     fade_in: f32,
 }
 
