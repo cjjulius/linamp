@@ -968,3 +968,23 @@ code plus a working/not-working binary): visual and behavior changes.
   the taskbar button disappears and the tray icon appears at once; toggle back and
   the taskbar button returns. Then in tray mode, the close (X) hides to tray without
   a restart. Leaving tray mode while hidden should bring the window back.
+
+## 2026-10-26 (#40 fixes: tray freeze on hide, and tray-menu highlight)
+
+- Freeze fix: hiding to the tray now minimizes the window instead of hiding it
+  with Visible(false). A window hidden with Visible(false) stops receiving
+  WM_PAINT on Windows, so eframe never runs update() again and the tray's queued
+  clicks (Restore, Play/Pause, Exit) were never drained, the window froze. winit's
+  request_redraw uses RedrawWindow(RDW_INTERNALPAINT), which still posts WM_PAINT
+  to a minimized window (it keeps WS_VISIBLE) but not a hidden one, and eframe
+  keeps running update() while minimized, so the tray stays responsive. In tray
+  mode the taskbar button is already removed, so a minimized window shows nothing.
+- Tray-menu highlight fix: the tray's helper window was message-only (HWND_MESSAGE),
+  which can never be the foreground window, so SetForegroundWindow before
+  TrackPopupMenu failed and the menu never tracked the mouse (no hover highlight,
+  no click-away dismiss). It's now a normal top-level window, created hidden and
+  never shown (WS_EX_TOOLWINDOW keeps it out of the taskbar and Alt+Tab), so the
+  menu gets standard hover highlighting and dismissal.
+- Manual check (Windows): in tray mode, minimize or close to the tray, then
+  left-click the tray icon to restore, and use the right-click menu's Play/Pause
+  and Exit. All should work now, and the menu items should highlight on hover.

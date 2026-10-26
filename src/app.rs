@@ -1086,10 +1086,10 @@ impl LinAmpApp {
 
     /// Genuinely quit the app (main-menu Exit or the tray's Exit). Marks the quit
     /// so the close handler shuts down even in tray mode, then starts the normal
-    /// close. Shows the window first so the graceful teardown can render.
+    /// close. The window may be minimized to the tray, but eframe still runs the
+    /// teardown while minimized, so there's no need to restore it first.
     fn request_exit(&mut self, ctx: &egui::Context) {
         self.force_quit = true;
-        self.show_from_tray(ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
@@ -1105,7 +1105,12 @@ impl LinAmpApp {
         self.pl_visible = false;
         self.lib_visible = false;
         self.hidden_to_tray = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        // Minimize rather than hide: a window hidden with Visible(false) stops
+        // getting repaints on Windows, so eframe never runs update() again and the
+        // tray's clicks (Restore, Play/Pause, Exit) are never drained. eframe keeps
+        // running update() for a minimized window, so the tray stays responsive. In
+        // tray mode the taskbar button is already removed, so nothing shows.
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
     }
 
     /// Bring LinAmp back from the tray: restore the windows that were open and
@@ -1118,7 +1123,7 @@ impl LinAmpApp {
             self.lib_visible = lib;
             self.hidden_to_tray = false;
         }
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         ctx.request_repaint();
     }
