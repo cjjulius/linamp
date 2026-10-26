@@ -116,11 +116,11 @@ impl super::LinAmpApp {
         };
         let (w, h) = match kind {
             Popup::Options => {
-                // 12 fixed items + the optional Minibrowser toggle + the "Open Audio
+                // 11 fixed items + the optional Minibrowser toggle + the "Open Audio
                 // CD" item (Linux + Windows) (#160), 3 separators. Computed here (not
                 // in popup_dims) so the height tracks the conditional items instead of
                 // clipping the last row when one shows.
-                let buttons = 12
+                let buttons = 11
                     + i32::from(self.prefs.minibrowser_enabled)
                     + i32::from(cfg!(any(target_os = "linux", target_os = "windows")));
                 (182.0, popup_height(buttons, 3))
@@ -262,18 +262,9 @@ impl super::LinAmpApp {
                                 self.load_skin_dialog(ctx);
                                 close = true;
                             }
-                            // ASCII box: the bundled Noto Sans has no U+2713 check
-                            // glyph, so a literal checkmark renders as tofu here.
-                            let aot = if self.prefs.always_on_top {
-                                "[x] Always on top"
-                            } else {
-                                "[ ] Always on top"
-                            };
-                            if item(ui, aot) {
-                                self.prefs.always_on_top = !self.prefs.always_on_top;
-                                self.prefs.save();
-                                close = true;
-                            }
+                            // Always on top lives on the clutterbar "A" button, the
+                            // Ctrl+A shortcut and Preferences, so it isn't repeated
+                            // in this menu.
                             if item(ui, "Bookmarks…") {
                                 // Classic popups aren't nested; open the list once
                                 // this menu closes.
