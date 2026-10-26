@@ -18,6 +18,13 @@ code plus a working/not-working binary): visual and behavior changes.
   mid-crossfade doesn't jump to full volume, and that gapless-ish back-to-back
   tracks don't double-trigger. Suggested: set 4-6s and listen across two short
   tracks, then try skipping during the overlap.
+- Follow-up (2026-10-26): pausing mid-crossfade now holds both tracks. Earlier,
+  pause/resume only touched the incoming sink, so a pause during the overlap left
+  the outgoing track still playing, and the ramp kept advancing while paused (it
+  would reach the end and drop the outgoing track silently). Pause/resume now act
+  on both sinks and the ramp freezes while not playing. The freeze is unit-tested;
+  the audible part to confirm: start a crossfade, hit pause during the overlap, and
+  both tracks should stop together and resume together with the blend intact.
 
 ## 2026-10-26 (Windows CD, best-effort/untested)
 
