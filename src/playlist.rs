@@ -5,20 +5,29 @@ use walkdir::WalkDir;
 
 /// Supported audio file extensions.
 pub const SUPPORTED_EXTS: &[&str] = &[
-    "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "opus", "wv", "aiff", "aif",
+    "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "aiff", "aif",
+    // Not Opus or WavPack: symphonia 0.5 ships no decoder for either, so listing
+    // them would accept the file then fail at play time (decode::tests guards this).
+    // MPEG Layer I/II and the rest of the ISO-MP4 family, decoded via a symphonia
+    // hint in crate::decode (rodio 0.20 can't open these directly) (#157/#164).
+    "mp1", "mp2", "mpa", "mp4", "m4b",
+    // MIDI, synthesized via crate::midi (rustysynth + a bundled SoundFont) (#159).
+    "mid", "midi",
+    // Tracker modules, rendered via crate::tracker (xmrs/xmrsplayer, pure Rust) (#158).
+    "mod", "xm", "s3m", "it",
 ];
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
 /// happens with ID3v2 frames whose encoding byte says ISO-8859-1 while the bytes
-/// are actually UTF-8 (common in the wild, e.g. zing.vn MP3s), so an accented
+/// are actually UTF-8 (common in the wild, example: zing.vn MP3s), so an accented
 /// title like "Bằng Kiều" comes back as "Bá»±ng Kiá»u".
 ///
 /// When every char is U+00..=U+FF the original bytes are recoverable: map each
 /// char back to its byte and re-decode as UTF-8. Only used when that yields valid
 /// UTF-8 that actually changed, so correctly-tagged text (and plain ASCII/Latin-1
-/// that isn't disguised UTF-8) is left untouched. Idempotent — repaired text has
+/// that isn't disguised UTF-8) is left untouched. Idempotent, repaired text has
 /// chars above U+00FF, so a second pass is a no-op.
-fn repair_mojibake(s: &str) -> String {
+pub(crate) fn repair_mojibake(s: &str) -> String {
     if s.is_empty() || !s.chars().all(|c| (c as u32) <= 0xFF) {
         return s.to_string();
     }
@@ -96,6 +105,15 @@ impl Track {
                 }
             }
         }
+        // Formats lofty can't read (MIDI, tracker modules) still have a known
+        // length; fill it in so the playlist shows a time for them too. The
+        // symphonia probe is the last resort, it reads the length lofty misses on
+        // raw .aac and .mpa (and anything else lofty can't parse) without decoding.
+        if self.duration.is_none() {
+            self.duration = crate::midi::duration(&self.path)
+                .or_else(|| crate::tracker::duration(&self.path))
+                .or_else(|| crate::decode::probe_duration(&self.path));
+        }
     }
 
     /// Build a fully-loaded track (tags read immediately).
@@ -103,6 +121,27 @@ impl Track {
         let mut t = Track::new(path);
         t.load();
         t
+    }
+
+    /// A playlist entry for an audio-CD track (#160). There is no file on disk, so
+    /// the title and length come from the disc's table of contents and it is marked
+    /// loaded (nothing to read lazily). The path is the `cdda://<device>/<track>`
+    /// pseudo-path the player recognises. Built on Linux and Windows (the only
+    /// caller, the Open-Audio-CD action, runs on both).
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub fn cd_track(device: &str, t: &crate::cdda::CdTrack) -> Track {
+        Track {
+            path: PathBuf::from(crate::cdda::track_path(device, t.number)),
+            title: format!("Track {}", t.number),
+            artist: String::new(),
+            album: "Audio CD".to_string(),
+            duration: Some(t.duration()),
+            sample_rate: Some(crate::cdda::CDDA_SAMPLE_RATE),
+            // CDDA is a constant 1411 kbit/s (44100 × 16 × 2).
+            bitrate: Some(1411),
+            channels: Some(crate::cdda::CDDA_CHANNELS as u8),
+            loaded: true,
+        }
     }
 
     /// "Artist - Title" when an artist is known, otherwise just the title.
@@ -146,8 +185,16 @@ impl Playlist {
         self.current.and_then(|i| self.tracks.get(i))
     }
 
-    /// Add a single file if it has a supported extension (tags read lazily).
+    /// Add a single file if it has a supported extension (tags read lazily). An
+    /// audio CD the desktop mounted as slow FUSE WAV files (GVfs) is transparently
+    /// stored as a native `cdda://` entry instead, so it plays off the drive
+    /// directly rather than through the stuttering FUSE path (#160, Linux only).
     pub fn add_file(&mut self, path: PathBuf) {
+        #[cfg(target_os = "linux")]
+        if let Some((dev, t)) = crate::cdda::mounted_cd_track(&path) {
+            self.tracks.push(Track::cd_track(&dev, &t));
+            return;
+        }
         if is_supported(&path) {
             self.tracks.push(Track::new(path));
         }
@@ -178,8 +225,41 @@ impl Playlist {
             .collect();
         found.sort();
         for p in found {
+            // A GVfs audio-CD mount's WAV tracks become native cdda:// entries.
+            #[cfg(target_os = "linux")]
+            if let Some((dev, t)) = crate::cdda::mounted_cd_track(&p) {
+                self.tracks.push(Track::cd_track(&dev, &t));
+                continue;
+            }
             self.tracks.push(Track::new(p));
         }
+    }
+
+    /// After appending `count` tracks (now the last `count` in the list), move them
+    /// to position `at`, so a drag-drop lands where it was released instead of only
+    /// at the end. `at` is clamped to the pre-existing length; the now-playing cursor
+    /// is kept on the same track. Returns the effective insertion index when it
+    /// moved (so the caller can shift row-based state like the selection), or `None`
+    /// when `at` is already the end (plain append, nothing moved).
+    pub fn move_tail_to(&mut self, count: usize, at: usize) -> Option<usize> {
+        let len = self.tracks.len();
+        if count == 0 || count > len {
+            return None;
+        }
+        let before = len - count; // first index of the appended block
+        let at = at.min(before);
+        if at == before {
+            return None; // dropped at/after the end: it's already there
+        }
+        // Rotate the sub-slice [at..] right by `count` so the appended block (its
+        // last `count` elements) moves to `at` and the rest shifts down.
+        self.tracks[at..].rotate_right(count);
+        if let Some(cur) = self.current {
+            if cur >= at && cur < before {
+                self.current = Some(cur + count);
+            }
+        }
+        Some(at)
     }
 
     pub fn remove(&mut self, index: usize) {
@@ -212,7 +292,7 @@ impl Playlist {
         self.reselect(cur);
     }
 
-    /// Target index for a relative "jump N tracks" — classic Winamp's numpad
+    /// Target index for a relative "jump N tracks", classic Winamp's numpad
     /// 1 and 3, which skip 10 songs back and forward. Counts from the current
     /// track (or the top when nothing is playing), clamps at the list ends and
     /// does not wrap. `None` for an empty list.
@@ -229,7 +309,7 @@ impl Playlist {
     /// selected. The order is not reproducible (seeded from the clock).
     pub fn randomize(&mut self) {
         let cur = self.current_path();
-        // xorshift64 — a playlist shuffle needs no cryptographic quality.
+        // xorshift64, a playlist shuffle needs no cryptographic quality.
         let mut s = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -301,7 +381,7 @@ impl Playlist {
         }
     }
 
-    /// Next track from the shuffle bag — each track plays once per cycle; a new
+    /// Next track from the shuffle bag, each track plays once per cycle; a new
     /// shuffled cycle starts when the current one is exhausted, never repeating
     /// the just-played track back-to-back.
     fn next_shuffle(&mut self) -> Option<usize> {
@@ -467,7 +547,7 @@ fn resolve(base: Option<&Path>, value: &str) -> PathBuf {
         return p;
     }
     // Classic playlists are overwhelmingly Windows-authored, where relative
-    // entries use backslash separators (e.g. "Music\Song.mp3"). Treat those as
+    // entries use backslash separators (example: "Music\Song.mp3"). Treat those as
     // path separators so the playlist resolves on Linux too.
     let p = PathBuf::from(value.replace('\\', "/"));
     if p.is_absolute() {
@@ -509,6 +589,64 @@ mod tests {
     }
 
     #[test]
+    fn track_load_fills_midi_length_via_the_fallback() {
+        // lofty can't read MIDI, so Track::load must fall back to midi::duration
+        // and show a time in the playlist (no SoundFont needed for the length).
+        let track: [u8; 12] = [
+            0x00, 0x90, 0x3C, 0x64, 0x60, 0x80, 0x3C, 0x00, 0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let mut mid = Vec::new();
+        mid.extend_from_slice(b"MThd");
+        mid.extend_from_slice(&6u32.to_be_bytes());
+        mid.extend_from_slice(&0u16.to_be_bytes());
+        mid.extend_from_slice(&1u16.to_be_bytes());
+        mid.extend_from_slice(&96u16.to_be_bytes());
+        mid.extend_from_slice(b"MTrk");
+        mid.extend_from_slice(&(track.len() as u32).to_be_bytes());
+        mid.extend_from_slice(&track);
+        let p = std::env::temp_dir().join("linamp_playlist_midi_len.mid");
+        std::fs::write(&p, &mid).unwrap();
+
+        let t = Track::from_path(p.clone());
+        assert!(t.duration.is_some(), "MIDI track should have a length in the playlist");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    fn names(pl: &Playlist) -> Vec<String> {
+        pl.tracks.iter().map(|t| t.path.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn move_tail_to_inserts_dropped_block_at_the_row() {
+        // Drag-drop: files are appended, then moved to the drop row.
+        let mut pl = Playlist::default();
+        for n in ["a.mp3", "b.mp3", "c.mp3"] {
+            pl.add_file(PathBuf::from(n));
+        }
+        pl.current = Some(2); // playing "c"
+        pl.add_file(PathBuf::from("x.mp3"));
+        pl.add_file(PathBuf::from("y.mp3"));
+        assert_eq!(pl.move_tail_to(2, 1), Some(1)); // dropped between a and b
+        assert_eq!(names(&pl), ["a.mp3", "x.mp3", "y.mp3", "b.mp3", "c.mp3"]);
+        assert_eq!(pl.current, Some(4), "now-playing track stays the same one");
+    }
+
+    #[test]
+    fn move_tail_to_at_the_top_and_past_the_end() {
+        let mut pl = Playlist::default();
+        for n in ["a.mp3", "b.mp3"] {
+            pl.add_file(PathBuf::from(n));
+        }
+        pl.add_file(PathBuf::from("x.mp3"));
+        assert_eq!(pl.move_tail_to(1, 0), Some(0)); // drop at the very top
+        assert_eq!(names(&pl), ["x.mp3", "a.mp3", "b.mp3"]);
+        // Dropping past the end just appends (clamped, no move).
+        pl.add_file(PathBuf::from("z.mp3"));
+        assert_eq!(pl.move_tail_to(1, 99), None);
+        assert_eq!(names(&pl), ["x.mp3", "a.mp3", "b.mp3", "z.mp3"]);
+    }
+
+    #[test]
     fn repair_mojibake_fixes_utf8_read_as_latin1() {
         // "Bằng Kiều" / "Những Ngày Đẹp Trời" encoded UTF-8 then (wrongly)
         // decoded as Latin-1 is what lofty hands back for these tags.
@@ -520,7 +658,7 @@ mod tests {
 
     #[test]
     fn repair_mojibake_leaves_clean_text_alone() {
-        // Plain ASCII, already-correct Unicode, and real Latin-1 that doesn't
+        // Plain ASCII, already-correct Unicode and real Latin-1 that doesn't
         // happen to form valid UTF-8 must pass through unchanged.
         for s in ["Hello World", "Bằng Kiều", "café", "naïve", "Mötley Crüe"] {
             assert_eq!(repair_mojibake(s), s, "should not alter {s:?}");
@@ -676,7 +814,7 @@ mod tests {
         let first = pl.next_index(true, false).unwrap();
         assert_ne!(first, 2, "shuffle must not replay the current track immediately");
         // One cycle (the remaining 3) must cover every other index exactly once,
-        // i.e. all 4 tracks play once before any repeats.
+        // ex: all 4 tracks play once before any repeats.
         let mut seen = vec![first];
         for _ in 0..3 {
             let i = pl.next_index(true, false).unwrap();

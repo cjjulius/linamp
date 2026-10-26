@@ -75,7 +75,7 @@ impl super::LinAmpApp {
         });
     }
 
-    /// Open the tag editor for a file by path (e.g. a Media Library row that may
+    /// Open the tag editor for a file by path (example: a Media Library row that may
     /// not be in the playlist). `index` is a sentinel so saving doesn't touch a
     /// playlist row.
     pub(super) fn open_tag_editor_path(&mut self, path: std::path::PathBuf) {
@@ -166,7 +166,7 @@ impl super::LinAmpApp {
         }
         let screen = self.win_pos[0] + egui::vec2(32.0, 32.0);
         let builder = egui::ViewportBuilder::default()
-            .with_title("LinAmp — File Info")
+            .with_title("LinAmp, File Info")
             .with_position(screen)
             .with_inner_size(egui::vec2(660.0, 470.0))
             .with_resizable(false)
@@ -189,7 +189,7 @@ impl super::LinAmpApp {
                     close = true;
                 }
                 // While Alt is held the letters are menu shortcuts, not text, so
-                // drop the character events before a focused field types them (e.g.
+                // drop the character events before a focused field types them (example:
                 // Alt-U would otherwise insert a "u"). AltGr (Ctrl+Alt) is left
                 // alone so accented input still works.
                 ctx.input_mut(|i| {
@@ -216,7 +216,7 @@ impl super::LinAmpApp {
                     });
                 ui.add_space(4.0);
 
-                // Tab strip that sits on — and joins into — the content box below.
+                // Tab strip that sits on, and joins into, the content box below.
                 let top_round = egui::Rounding { nw: 4.0, ne: 4.0, sw: 0.0, se: 0.0 };
                 let tab_btn = |ui: &mut egui::Ui, label: &str, active: bool| {
                     let fill = if active { panel } else { idle_fill };
@@ -275,7 +275,7 @@ impl super::LinAmpApp {
                         TagTab::Id3 => {
                             let genre_combo = |ui: &mut egui::Ui, salt: &str, val: &mut String| {
                                 let combo = egui::ComboBox::from_id_salt(salt)
-                                    .selected_text(if val.is_empty() { "—".into() } else { val.clone() })
+                                    .selected_text(if val.is_empty() { ", ".into() } else { val.clone() })
                                     .width(140.0)
                                     .show_ui(ui, |ui| {
                                         let mut picked = false;
@@ -290,7 +290,7 @@ impl super::LinAmpApp {
                                 if combo.inner == Some(true) {
                                     // egui only auto-closes the popup on a mouse
                                     // click, so close it ourselves for keyboard
-                                    // selection — and keep focus on the combo so the
+                                    // selection, and keep focus on the combo so the
                                     // next Tab moves to the following field rather
                                     // than jumping back to the top.
                                     ui.memory_mut(|m| m.close_popup());
@@ -374,7 +374,7 @@ impl super::LinAmpApp {
                 ui.painter().rect_filled(seam, 0.0, panel);
                 ui.spacing_mut().item_spacing.y = prev_y;
 
-                // Only surface an error (e.g. a failed write) — no "changed"
+                // Only surface an error (example: a failed write), no "changed"
                 // chatter, the dialog is busy enough.
                 ui.add_space(6.0);
                 if !ed.status.is_empty() {
@@ -494,7 +494,7 @@ impl super::LinAmpApp {
                     cp(&mut ed.v2.comment, &ed.v1.comment);
                 }
             });
-            self.apply_base_cursor(ctx, "LinAmp — File Info");
+            self.apply_base_cursor(ctx, "LinAmp, File Info");
             // Window-close (the title-bar X): discard without saving. Escape is
             // handled at the top of the panel, before the fields can swallow it.
             if ctx.input(|i| i.viewport().close_requested()) {

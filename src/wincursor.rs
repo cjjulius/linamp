@@ -2,8 +2,8 @@
 //!
 //! egui 0.29 only exposes the fixed `CursorIcon` enum (no custom-image cursor),
 //! and winit sets the arrow on every `WM_SETCURSOR`. So we create a native
-//! `HCURSOR` from each decoded cursor and **subclass** the window to answer
-//! `WM_SETCURSOR` ourselves — the subclass runs before winit and returns TRUE,
+//! `HCURSOR` from each decoded cursor and subclass the window to answer
+//! `WM_SETCURSOR` ourselves, the subclass runs before winit and returns TRUE,
 //! so winit never overrides it. The X11 side does the equivalent with
 //! `XDefineCursor` (see `x11util::set_cursor`). All state is thread-local; every
 //! entry point and the subclass proc run on the UI thread that pumps messages.
@@ -81,7 +81,7 @@ struct ICONINFO {
 }
 
 thread_local! {
-    /// HCURSOR by cache key (e.g. "skin:posbar").
+    /// HCURSOR by cache key (example: "skin:posbar").
     static CACHE: RefCell<HashMap<String, Handle>> = RefCell::new(HashMap::new());
     /// The cursor each window should currently show.
     static DESIRED: RefCell<HashMap<Hwnd, Handle>> = RefCell::new(HashMap::new());

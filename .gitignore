@@ -3,6 +3,7 @@
 /scratch_brand
 /preview
 /qa-tools
+/qa-music
 /skins/backup
 *.output
 __pycache__/

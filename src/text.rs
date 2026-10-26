@@ -27,7 +27,7 @@ pub(crate) fn marquee(text: &str, offset: f32) -> String {
 }
 
 /// Scroll `text` within a fixed character `width` (classic-view marquee). Short
-/// strings pass through; longer ones wrap with a `"   *** "` separator.
+/// strings pass through; longer ones wrap with a `"   * "` separator.
 pub(crate) fn scroll_text(text: &str, offset: f32, width: usize) -> String {
     let chars: Vec<char> = text.chars().collect();
     if chars.len() <= width {

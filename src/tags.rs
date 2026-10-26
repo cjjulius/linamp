@@ -94,18 +94,23 @@ pub fn read_id3(path: &Path) -> (Option<Id3Fields>, Option<Id3Fields>) {
 
 fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
     use lofty::tag::Accessor;
-    let key = |k: &ItemKey| tag.get_string(k).map(|s| s.to_string()).unwrap_or_default();
+    // Some taggers (example: zing.vn) write UTF-8 bytes into a frame flagged
+    // Latin-1, so a spec-correct read yields mojibake. repair_mojibake recovers the
+    // intended text when the bytes are disguised UTF-8, and is a no-op otherwise, so
+    // the editor shows the real characters (matching the playlist display).
+    use crate::playlist::repair_mojibake as fix;
+    let text = |k: &ItemKey| fix(&tag.get_string(k).map(|s| s.to_string()).unwrap_or_default());
     Id3Fields {
         track: tag.track().map(|t| t.to_string()).unwrap_or_default(),
-        title: tag.title().map(|s| s.to_string()).unwrap_or_default(),
-        artist: tag.artist().map(|s| s.to_string()).unwrap_or_default(),
-        album: tag.album().map(|s| s.to_string()).unwrap_or_default(),
+        title: fix(&tag.title().map(|s| s.to_string()).unwrap_or_default()),
+        artist: fix(&tag.artist().map(|s| s.to_string()).unwrap_or_default()),
+        album: fix(&tag.album().map(|s| s.to_string()).unwrap_or_default()),
         year: tag.year().map(|y| y.to_string()).unwrap_or_default(),
-        genre: tag.genre().map(|s| s.to_string()).unwrap_or_default(),
-        comment: tag.comment().map(|s| s.to_string()).unwrap_or_default(),
-        composer: key(&ItemKey::Composer),
-        orig_artist: key(&ItemKey::OriginalArtist),
-        copyright: key(&ItemKey::CopyrightMessage),
+        genre: fix(&tag.genre().map(|s| s.to_string()).unwrap_or_default()),
+        comment: fix(&tag.comment().map(|s| s.to_string()).unwrap_or_default()),
+        composer: text(&ItemKey::Composer),
+        orig_artist: text(&ItemKey::OriginalArtist),
+        copyright: text(&ItemKey::CopyrightMessage),
         // URL lives in a WOAS locator frame, not a text frame.
         url: tag
             .get(&ItemKey::AudioSourceUrl)
@@ -115,8 +120,9 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
                 }
                 _ => None,
             })
+            .map(|s| fix(&s))
             .unwrap_or_default(),
-        encoded_by: key(&ItemKey::EncodedBy),
+        encoded_by: text(&ItemKey::EncodedBy),
     }
 }
 
@@ -131,7 +137,16 @@ pub fn read_info(path: &Path) -> FileInfo {
         size_bytes: std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
         ..Default::default()
     };
-    if let Ok(mut f) = std::fs::File::open(path) {
+    // The MPEG parser only populates this for MPEG audio, but on any other file it
+    // scans the whole thing looking for frames before failing, seconds of freeze on
+    // a large .wav/.aiff when the tag editor opens. Only run it for MPEG extensions.
+    let is_mpeg = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "mp3" | "mp2" | "mp1" | "mpa"))
+        .unwrap_or(false);
+    if is_mpeg {
+        if let Ok(mut f) = std::fs::File::open(path) {
         if let Ok(mpeg) = MpegFile::read_from(&mut f, ParseOptions::new()) {
             let p = mpeg.properties();
             info.length_secs = p.duration().as_secs();
@@ -165,21 +180,22 @@ pub fn read_info(path: &Path) -> FileInfo {
                 Some(Emphasis::CCIT_J17) => "CCIT J.17",
             }
             .to_string();
+            }
         }
     }
     info
 }
 
-/// Prepare an ID3v1 text field: trim, drop if empty, and cap to `max` bytes on a
+/// Prepare an ID3v1 text field: trim, drop if empty and cap to `max` bytes on a
 /// UTF-8 char boundary. ID3v1 fields are fixed-width; lofty truncates to the cap
 /// by byte index and panics if a multibyte character straddles it (#115), which
 /// aborts the save mid-write and corrupts the file. Capping here avoids that.
 fn v1_text(s: &str, max: usize) -> Option<String> {
     // ID3v1 predates Unicode and carries no encoding flag, and the writer emits
-    // these bytes as UTF-8 — which a pre-Unicode ("circa 2001") player decodes as
+    // these bytes as UTF-8, which a pre-Unicode ("circa 2001") player decodes as
     // Latin-1, turning any multi-byte character into mojibake. To stay in spec and
     // readable everywhere, keep ID3v1 to pure ASCII: fold accents to their base
-    // letter (é -> e, Ğ -> g) and replace anything with no ASCII equivalent with
+    // letter (é to e, Ğ to g) and replace anything with no ASCII equivalent with
     // '?'. The full Unicode text is preserved in ID3v2.
     let ascii: String = s
         .chars()
@@ -229,7 +245,7 @@ pub fn write_id3(path: &Path, v1: Option<&Id3Fields>, v2: Option<&Id3Fields>) ->
             let _ = TagType::Id3v2.remove_from_path(path);
         }
     }
-    // ID3v1 is positional (not frame-keyed), so build the concrete tag — the
+    // ID3v1 is positional (not frame-keyed), so build the concrete tag, the
     // generic Tag's set_year doesn't persist for ID3v1.
     match v1 {
         Some(f) => {
@@ -240,7 +256,7 @@ pub fn write_id3(path: &Path, v1: Option<&Id3Fields>, v2: Option<&Id3Fields>) ->
                 album: v1_text(&f.album, V1_MAX_TEXT),
                 year: v1_text(&f.year, 4),
                 // ID3v1.1 reserves the last 2 bytes of the 30-byte comment for the
-                // track number, so lofty caps comment at 28 — match it here.
+                // track number, so lofty caps comment at 28, match it here.
                 comment: v1_text(&f.comment, V1_MAX_TEXT - 2),
                 track_number: f.track.trim().parse::<u8>().ok(),
                 genre: GENRES
@@ -329,7 +345,7 @@ mod tests {
         assert_eq!(v1_text("Café ñandú", V1_MAX_TEXT), Some("Cafe nandu".to_string()));
         // Characters with no ASCII equivalent become '?'.
         assert_eq!(v1_text("A\u{65E5}B", V1_MAX_TEXT), Some("A?B".to_string()));
-        // The result is always pure ASCII; plain text is unchanged; blank -> None.
+        // The result is always pure ASCII; plain text is unchanged; blank to None.
         let out = v1_text("Hello", V1_MAX_TEXT).unwrap();
         assert!(out.is_ascii() && out == "Hello");
         assert_eq!(v1_text("   ", V1_MAX_TEXT), None);
@@ -436,7 +452,7 @@ mod tests {
         std::fs::copy(src, &tmp).unwrap();
         let before = read_info(&tmp).length_secs;
 
-        let long = "Trường Sơn Đông, Trường Sơn Tây — ".repeat(2); // >30 bytes, multibyte
+        let long = "Trường Sơn Đông, Trường Sơn Tây, ".repeat(2); // >30 bytes, multibyte
         let v1 = Id3Fields {
             track: "5".into(),
             title: long.clone(),

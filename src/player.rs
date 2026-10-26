@@ -1,11 +1,10 @@
-use std::fs::File;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 
 use crate::balance::{self, BalanceShared};
 use crate::eq::{self, EqShared};
@@ -40,6 +39,20 @@ pub struct Player {
     eq: Arc<EqShared>,
     balance: Arc<BalanceShared>,
     device_name: Option<String>,
+    /// Crossfade length in seconds; 0 disables it (then track changes cut over as
+    /// before). Set from Preferences.
+    crossfade_secs: f32,
+    /// The outgoing track during a crossfade, still playing on its own sink while it
+    /// fades out. Dropped (stopped) once its gain reaches zero.
+    fading: Option<Sink>,
+    /// Outgoing gain multiplier (1 to 0) for `fading`.
+    fade_out: f32,
+    /// Incoming gain multiplier (0 to 1) for the current sink; 1.0 when not fading in.
+    fade_in: f32,
+    /// While crossfading into a CD track, its "audio is flowing" flag. The ramp is
+    /// held (current track at full, CD silent) until this flips, so the CD's spin-up
+    /// doesn't blend against silence (#160). None for an ordinary crossfade.
+    incoming_ready: Option<Arc<AtomicBool>>,
 }
 
 impl Player {
@@ -59,6 +72,11 @@ impl Player {
             eq: EqShared::new(),
             balance: BalanceShared::new(),
             device_name: Self::default_device_name(),
+            crossfade_secs: 0.0,
+            fading: None,
+            fade_out: 1.0,
+            fade_in: 1.0,
+            incoming_ready: None,
         })
     }
 
@@ -69,7 +87,7 @@ impl Player {
             .and_then(|d| d.name().ok())
     }
 
-    /// If the system default output device changed (e.g. headphones plugged in),
+    /// If the system default output device changed (example: headphones plugged in),
     /// rebuild the output stream on the new device and resume playback in place.
     pub fn poll_device(&mut self) {
         let current = Self::default_device_name();
@@ -151,33 +169,177 @@ impl Player {
 
     fn apply_gain(&self) {
         if let Some(sink) = &self.sink {
-            // Preamp now lives in the EQ DSP; the sink carries volume × fade.
-            sink.set_volume(self.volume * self.fade);
+            // Preamp now lives in the EQ DSP; the sink carries volume × fade, times
+            // the crossfade fade-in while a new track is ramping up.
+            sink.set_volume(self.volume * self.fade * self.fade_in);
+        }
+        if let Some(f) = &self.fading {
+            f.set_volume(self.volume * self.fade * self.fade_out);
         }
     }
 
-    /// Load and immediately start playing a file.
-    pub fn play_file(&mut self, path: &Path) -> Result<()> {
-        let file = File::open(path)?;
-        let source = Decoder::new(BufReader::new(file))?.convert_samples::<f32>();
+    /// Crossfade length in seconds (0 = disabled). Set from Preferences.
+    pub fn set_crossfade(&mut self, secs: f32) {
+        self.crossfade_secs = secs.max(0.0);
+    }
 
+    pub fn crossfade_secs(&self) -> f32 {
+        self.crossfade_secs
+    }
+
+    /// True while a crossfade is in progress: an outgoing track still fading out, or
+    /// a pre-warm hold waiting for an incoming CD to start flowing.
+    pub fn is_crossfading(&self) -> bool {
+        self.fading.is_some() || self.incoming_ready.is_some()
+    }
+
+    /// Advance an in-progress crossfade by `dt` seconds: ramp the incoming track up
+    /// and the outgoing one down, dropping the outgoing sink once it's silent. A
+    /// no-op when crossfade is off or nothing is fading.
+    pub fn tick_crossfade(&mut self, dt: f32) {
+        // Pre-warm hold: when fading into a CD, keep the current track at full and
+        // the CD silent until its audio is flowing, so the spin-up doesn't blend
+        // against silence (#160). Release the hold once it's ready, or once the
+        // outgoing track has already ended (nothing left to hold against).
+        if let Some(flag) = &self.incoming_ready {
+            if self.fading.is_some() && !flag.load(Ordering::Relaxed) {
+                return; // still spinning up: hold both gains where they are
+            }
+            self.incoming_ready = None;
+        }
+        // Only advance while actually playing: a paused crossfade must hold both
+        // sinks and both gains where they are, not ramp on (and silently drop the
+        // outgoing track) during the pause.
+        let (fade_in, fade_out, still_fading, changed) = crossfade_step(
+            self.state == PlayState::Playing,
+            self.crossfade_secs,
+            dt,
+            self.fade_in,
+            self.fade_out,
+            self.fading.is_some(),
+        );
+        self.fade_in = fade_in;
+        self.fade_out = fade_out;
+        if !still_fading {
+            self.fading = None; // drop = stop the outgoing track once silent
+        }
+        if changed {
+            self.apply_gain();
+        }
+    }
+
+    /// Shape `source` through the EQ, the analyzer tap and the stereo balance, then
+    /// start it on a fresh sink. Shared by file and stream playback so both apply
+    /// the same pipeline (and so a new decode path only has to produce a `Source`).
+    fn append_source<S>(
+        &mut self,
+        source: S,
+        cd_ready: Option<Arc<AtomicBool>>,
+        allow_crossfade: bool,
+    ) -> Result<()>
+    where
+        S: Source<Item = f32> + Send + 'static,
+    {
         self.viz.clear();
         self.viz.set_rate(source.sample_rate());
-        // Shape the audio with the EQ, then tap for visualization so the
-        // analyzer reflects what you actually hear.
+        // Shape with the EQ, then tap for visualization so the analyzer reflects
+        // what you hear, and apply stereo balance last.
         let equalized = eq::eq(source, self.eq.clone());
         let tapped = viz::tap(equalized, self.viz.clone());
-        // Apply stereo balance last, after the viz tap.
         let balanced = balance::balance(tapped, self.balance.clone());
 
         let sink = Sink::try_new(&self.handle)?;
         sink.append(balanced);
+        // Crossfade: when enabled and a track is already playing, keep the outgoing
+        // one on its own sink fading out while the new one fades in, instead of
+        // cutting it off. Otherwise (disabled, nothing playing, or crossfade not
+        // allowed for this transition) swap as before. `allow_crossfade` is false for
+        // a CD-to-CD move on the same drive: one optical drive can't serve two read
+        // streams at once, so overlapping them makes the head seek between the tracks
+        // and stutter (worse the further apart they sit), so that case cuts cleanly.
+        if allow_crossfade
+            && self.crossfade_secs > 0.0
+            && self.state == PlayState::Playing
+            && self.sink.is_some()
+        {
+            // At most one outgoing track; if one was already fading, carry its gain so
+            // a rapid skip doesn't jump back to full volume.
+            self.fade_out = self.fade_in;
+            self.fading = self.sink.take();
+            self.fade_in = 0.0;
+            // A CD can't fade in until it spins up; hold the ramp (outgoing stays at
+            // full) until its audio is flowing (#160). An ordinary source is ready
+            // now, so it ramps immediately.
+            self.incoming_ready = cd_ready;
+        } else {
+            self.fade_in = 1.0;
+            self.incoming_ready = None;
+        }
         self.sink = Some(sink);
+        self.apply_gain();
+        Ok(())
+    }
+
+    /// Load and immediately start playing a file.
+    pub fn play_file(&mut self, path: &Path) -> Result<()> {
+        // Audio-CD tracks are a `cdda://<device>/<track>` pseudo-path, not a file:
+        // read them straight off the drive on a background thread (#160). This is a
+        // no-op error on non-Linux builds (handled by skip-unplayable), so the rest
+        // of the dispatch is unchanged.
+        if let Some(s) = path.to_str() {
+            if crate::cdda::is_cdda_path(s) {
+                let (device, track) = crate::cdda::parse_track_path(s)
+                    .ok_or_else(|| anyhow::anyhow!("bad CD track path: {s}"))?;
+                let source = crate::cdda::open_cd_source(&device, track)?;
+                // Pass the CD's readiness flag so a crossfade into it waits for the
+                // drive to spin up before starting the blend (#160).
+                let ready = source.ready_flag();
+                // Suppress the crossfade when moving from one track to another on the
+                // same CD: a single drive can't read both at once without seeking
+                // between them, which stutters. A move from a file into the CD (or out
+                // of it) still crossfades, since only one stream touches the drive.
+                let from_same_cd = self
+                    .current_path
+                    .as_ref()
+                    .and_then(|p| p.to_str())
+                    .and_then(crate::cdda::parse_track_path)
+                    .map(|(d, _)| d == device)
+                    .unwrap_or(false);
+                self.append_source(source, Some(ready), !from_same_cd)?;
+                self.current_path = Some(path.to_path_buf());
+                self.current_url = None;
+                self.stream_title = None;
+                self.state = PlayState::Playing;
+                return Ok(());
+            }
+        }
+
+        // MIDI is synthesized (rustysynth + a bundled SoundFont), not decoded (#159);
+        // everything else goes through the single symphonia decode path (#163). Both
+        // produce a rodio `Source` fed into the shared EQ / analyzer / balance chain.
+        let is_midi = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| matches!(e.to_ascii_lowercase().as_str(), "mid" | "midi"))
+            .unwrap_or(false);
+        if is_midi {
+            let sf = crate::midi::soundfont_path().ok_or_else(|| {
+                anyhow::anyhow!("MIDI playback needs a SoundFont (.sf2) in the soundfont/ folder")
+            })?;
+            let source = crate::midi::open_midi(path, &sf)?;
+            self.append_source(source, None, true)?;
+        } else if crate::tracker::is_tracker(path) {
+            // Tracker modules (.mod/.xm/.s3m/.it) are rendered by xmrs (#158).
+            let source = crate::tracker::open_tracker(path)?;
+            self.append_source(source, None, true)?;
+        } else {
+            let source = crate::decode::open_file(path)?;
+            self.append_source(source, None, true)?;
+        }
         self.current_path = Some(path.to_path_buf());
         self.current_url = None;
         self.stream_title = None;
         self.state = PlayState::Playing;
-        self.apply_gain();
         Ok(())
     }
 
@@ -191,38 +353,36 @@ impl Player {
         url: String,
     ) -> Result<()> {
         self.stream_title = Some(title);
-        self.viz.clear();
-        self.viz.set_rate(source.sample_rate());
-        // Same shaping as local playback, so EQ / analyzer / balance all apply.
-        let equalized = eq::eq(source, self.eq.clone());
-        let tapped = viz::tap(equalized, self.viz.clone());
-        let balanced = balance::balance(tapped, self.balance.clone());
-
-        let sink = Sink::try_new(&self.handle)?;
-        sink.append(balanced);
-        self.sink = Some(sink);
+        self.append_source(source, None, true)?;
         self.current_path = None;
         self.current_url = Some(url);
         self.state = PlayState::Playing;
-        self.apply_gain();
         Ok(())
     }
 
     pub fn pause(&mut self) {
-        if let Some(sink) = &self.sink {
-            if self.state == PlayState::Playing {
+        if self.state == PlayState::Playing {
+            if let Some(sink) = &self.sink {
                 sink.pause();
-                self.state = PlayState::Paused;
             }
+            // Freeze the outgoing track too, or a pause mid-crossfade would leave
+            // it playing on while the incoming one is held.
+            if let Some(f) = &self.fading {
+                f.pause();
+            }
+            self.state = PlayState::Paused;
         }
     }
 
     pub fn resume(&mut self) {
-        if let Some(sink) = &self.sink {
-            if self.state == PlayState::Paused {
+        if self.state == PlayState::Paused {
+            if let Some(sink) = &self.sink {
                 sink.play();
-                self.state = PlayState::Playing;
             }
+            if let Some(f) = &self.fading {
+                f.play();
+            }
+            self.state = PlayState::Playing;
         }
     }
 
@@ -238,10 +398,16 @@ impl Player {
         if let Some(sink) = self.sink.take() {
             sink.stop();
         }
+        if let Some(f) = self.fading.take() {
+            f.stop(); // also stop any outgoing crossfade track
+        }
         self.state = PlayState::Stopped;
         self.current_url = None;
         self.stream_title = None;
         self.fade = 1.0; // reset so the next track isn't faded
+        self.fade_in = 1.0;
+        self.fade_out = 1.0;
+        self.incoming_ready = None; // cancel any pending pre-warm crossfade hold
         self.viz.clear(); // silence the analyzer so its bars fall to zero
     }
 
@@ -255,6 +421,18 @@ impl Player {
 
     /// Seek to an absolute position. Not all formats support seeking.
     pub fn seek(&mut self, pos: Duration) {
+        // A seek is an explicit jump to one spot in the current track. Cancel any
+        // crossfade overlap first, otherwise the outgoing track keeps playing under
+        // the seeked one (audible double playback), and bring the incoming track to
+        // full gain since it is no longer fading in.
+        if self.fading.is_some() || self.fade_in < 1.0 {
+            if let Some(f) = self.fading.take() {
+                f.stop();
+            }
+            self.fade_out = 1.0;
+            self.fade_in = 1.0;
+            self.apply_gain();
+        }
         if let Some(sink) = &self.sink {
             let _ = sink.try_seek(pos);
         }
@@ -265,5 +443,100 @@ impl Player {
     pub fn finished(&self) -> bool {
         matches!(self.state, PlayState::Playing | PlayState::Paused)
             && self.sink.as_ref().map(|s| s.empty()).unwrap_or(false)
+    }
+}
+
+/// Pure ramp step for one crossfade tick. Given the fade length and the `dt`
+/// elapsed since the last tick, advance the incoming gain toward 1 and (while a
+/// track is fading out) the outgoing gain toward 0. Returns the new incoming and
+/// outgoing gains, whether the outgoing track should keep playing, and whether
+/// anything moved. Split out from `tick_crossfade` so the ramp math can be tested
+/// without an audio device (a real `Player` needs an output stream).
+fn crossfade_step(
+    playing: bool,
+    crossfade_secs: f32,
+    dt: f32,
+    fade_in: f32,
+    fade_out: f32,
+    fading: bool,
+) -> (f32, f32, bool, bool) {
+    if !playing || crossfade_secs <= 0.0 {
+        return (fade_in, fade_out, fading, false);
+    }
+    let step = dt / crossfade_secs;
+    let mut new_in = fade_in;
+    let mut new_out = fade_out;
+    let mut still_fading = fading;
+    let mut changed = false;
+    if new_in < 1.0 {
+        new_in = (new_in + step).min(1.0);
+        changed = true;
+    }
+    if fading {
+        new_out -= step;
+        if new_out <= 0.0 {
+            still_fading = false; // outgoing track is silent: caller drops it
+            new_out = 1.0;
+        }
+        changed = true;
+    }
+    (new_in, new_out, still_fading, changed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::crossfade_step;
+
+    #[test]
+    fn crossfade_off_is_a_noop() {
+        // Zero length means crossfade disabled: gains and state are untouched.
+        let (fin, fout, fading, changed) = crossfade_step(true, 0.0, 0.5, 0.3, 0.7, true);
+        assert_eq!((fin, fout, fading, changed), (0.3, 0.7, true, false));
+    }
+
+    #[test]
+    fn crossfade_ramps_in_and_out_over_its_length() {
+        // Half a 2s crossfade elapses in one 1s tick: incoming 0 -> 0.5, outgoing
+        // 1 -> 0.5, and the outgoing track is still playing.
+        let (fin, fout, fading, changed) = crossfade_step(true, 2.0, 1.0, 0.0, 1.0, true);
+        assert!((fin - 0.5).abs() < 1e-6, "fade_in {fin}");
+        assert!((fout - 0.5).abs() < 1e-6, "fade_out {fout}");
+        assert!(fading, "outgoing track should still be fading");
+        assert!(changed);
+    }
+
+    #[test]
+    fn crossfade_drops_the_outgoing_track_once_silent() {
+        // A tick long enough to finish the fade takes the outgoing gain to zero,
+        // so the caller is told to drop it and the incoming track reaches full gain.
+        let (fin, _fout, fading, changed) = crossfade_step(true, 2.0, 2.0, 0.0, 1.0, true);
+        assert!((fin - 1.0).abs() < 1e-6, "fade_in should reach 1.0, got {fin}");
+        assert!(!fading, "outgoing track should be dropped when silent");
+        assert!(changed);
+    }
+
+    #[test]
+    fn crossfade_without_an_outgoing_track_only_ramps_in() {
+        // Incoming track still fading up but nothing fading out: only fade_in moves.
+        let (fin, fout, fading, changed) = crossfade_step(true, 4.0, 1.0, 0.5, 1.0, false);
+        assert!((fin - 0.75).abs() < 1e-6, "fade_in {fin}");
+        assert_eq!(fout, 1.0);
+        assert!(!fading);
+        assert!(changed);
+    }
+
+    #[test]
+    fn crossfade_at_rest_reports_no_change() {
+        // Incoming already at full gain and nothing fading: a tick changes nothing.
+        let (_fin, _fout, _fading, changed) = crossfade_step(true, 3.0, 0.1, 1.0, 1.0, false);
+        assert!(!changed);
+    }
+
+    #[test]
+    fn crossfade_frozen_while_not_playing() {
+        // Paused mid-crossfade: the ramp must hold both gains and keep the outgoing
+        // track, not advance (which would silently drop it during the pause).
+        let (fin, fout, fading, changed) = crossfade_step(false, 2.0, 1.0, 0.4, 0.6, true);
+        assert_eq!((fin, fout, fading, changed), (0.4, 0.6, true, false));
     }
 }

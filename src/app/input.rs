@@ -48,6 +48,17 @@ struct KeyState {
 }
 
 impl super::LinAmpApp {
+    /// Flip the always-on-top preference and report it on the status line (shared by
+    /// the Options menu toggle and the Ctrl+A shortcut).
+    fn toggle_always_on_top(&mut self) {
+        self.prefs.always_on_top = !self.prefs.always_on_top;
+        self.prefs.save();
+        self.status = format!(
+            "Always on top: {}",
+            if self.prefs.always_on_top { "ON" } else { "off" }
+        );
+    }
+
     pub(super) fn handle_shortcuts(&mut self, ctx: &egui::Context, win: ClWin) {
         if ctx.wants_keyboard_input() {
             return; // a text field has focus
@@ -105,7 +116,7 @@ impl super::LinAmpApp {
             if k.shift {
                 // Stop with a fade-out.
                 if self.player.state() != PlayState::Stopped {
-                    self.fade = Some(FADE_SECS);
+                    self.fade = Some(self.prefs.fade_on_stop_secs);
                     self.status = "Fading out…".into();
                 }
             } else if k.ctrl {
@@ -124,7 +135,7 @@ impl super::LinAmpApp {
         }
         if k.prev {
             if k.ctrl {
-                // Ctrl+Z — jump to the start of the list.
+                // Ctrl+Z, jump to the start of the list.
                 if !self.playlist.is_empty() {
                     self.play_index(0);
                 }
@@ -143,12 +154,12 @@ impl super::LinAmpApp {
             }
         }
         if k.ctrl && k.open {
-            // Ctrl+L — open a stream location (URL).
+            // Ctrl+L, open a stream location (URL).
             self.open_location();
         }
         if k.repeat {
             if k.ctrl {
-                // Ctrl+R — reverse the playlist order.
+                // Ctrl+R, reverse the playlist order.
                 self.playlist.reverse();
                 self.pl_selection.clear();
             } else {
@@ -186,35 +197,35 @@ impl super::LinAmpApp {
             self.seek_relative(-5.0);
         }
         // Numeric-keypad transport (classic Winamp). Opt-in under Optional
-        // Features — egui's logical Key can't tell the keypad apart from the top
+        // Features, egui's logical Key can't tell the keypad apart from the top
         // number row, so these also fire for the top row; modifier combos (Alt+3
         // tag editor, Ctrl+digit) are excluded so they keep their own meanings.
         if self.prefs.numpad_transport && !k.ctrl && !k.alt {
             if k.num0 {
-                self.open_files(); // keypad 0 — open/play file(s)
+                self.open_files(); // keypad 0, open/play file(s)
             }
             if k.num5 {
-                self.play_pause(); // keypad 5 — play
+                self.play_pause(); // keypad 5, play
             }
             if k.num4 {
-                self.prev(); // keypad 4 — previous track
+                self.prev(); // keypad 4, previous track
             }
             if k.num6 {
-                self.next(); // keypad 6 — next track
+                self.next(); // keypad 6, next track
             }
             if k.num8 {
-                self.adjust_volume(0.05); // keypad 8 — volume up
+                self.adjust_volume(0.05); // keypad 8, volume up
             }
             if k.num2 {
-                self.adjust_volume(-0.05); // keypad 2 — volume down
+                self.adjust_volume(-0.05); // keypad 2, volume down
             }
             if k.num9 {
-                self.seek_relative(5.0); // keypad 9 — forward 5s
+                self.seek_relative(5.0); // keypad 9, forward 5s
             }
             if k.num7 {
-                self.seek_relative(-5.0); // keypad 7 — back 5s
+                self.seek_relative(-5.0); // keypad 7, back 5s
             }
-            // keypad 3 / 1 — skip forward / back 10 tracks (3 is `key_3`).
+            // keypad 3 / 1, skip forward / back 10 tracks (3 is `key_3`).
             let jump = if k.key_3 {
                 Some(10)
             } else if k.num1 {
@@ -267,9 +278,16 @@ impl super::LinAmpApp {
         if k.alt && k.open {
             self.toggle_library();
         }
-        // Playlist edit.
+        // Ctrl+A: select-all in the playlist window (the Winamp meaning), else
+        // toggle always-on-top. Each classic window is its own viewport, so key
+        // presses reach only the focused one, `win` here is effectively the window
+        // with focus.
         if k.ctrl && k.key_a {
-            self.pl_select_all();
+            if win == ClWin::Pl {
+                self.pl_select_all();
+            } else {
+                self.toggle_always_on_top();
+            }
         }
         if k.del {
             self.pl_remove(false);

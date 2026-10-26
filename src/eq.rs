@@ -15,7 +15,7 @@ pub const BAND_FREQS: [f32; 10] = [
     60.0, 170.0, 310.0, 600.0, 1000.0, 3000.0, 6000.0, 12000.0, 14000.0, 16000.0,
 ];
 
-/// Fixed filter Q — moderate, ~one-third-octave reach per band.
+/// Fixed filter Q, moderate, ~one-third-octave reach per band.
 const Q: f32 = 1.0;
 
 /// Built-in equalizer presets: `(name, preamp dB, 10 band gains in dB)` at
@@ -337,7 +337,7 @@ mod tests {
         let mut b = [0.0; 10];
         b[3] = 8.0;
         assert_eq!(auto_preamp(&b), -8.0);
-        assert_eq!(auto_preamp(&[-4.0; 10]), 0.0); // no boost → no cut
+        assert_eq!(auto_preamp(&[-4.0; 10]), 0.0); // no boost, no cut
     }
 
     #[test]

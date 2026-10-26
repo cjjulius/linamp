@@ -25,6 +25,12 @@ pub const EQ_BAND_X: [i32; 10] = [78, 96, 114, 132, 150, 168, 186, 204, 222, 240
 const EQ_PREAMP_X: i32 = 21;
 const EQ_SLIDER_TOP: f32 = 38.0;
 const EQ_SLIDER_TRAVEL: f32 = 52.0;
+/// Inset of the 11px slider thumb within its 14px band cell. The groove every
+/// skin draws is centred at local x ~6, so the thumb (visible centre at its own
+/// local x 5) is inset by 1 to sit on it. A `+2` inset left the thumb 1px right
+/// of the groove, invisible on wide grooves but obvious on crisp/narrow ones
+/// like MacOSXAqua and Osmosis (#149).
+const EQ_THUMB_INSET: i32 = 1;
 
 /// Clickable / draggable regions of the main window, in 275x116 space.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -199,7 +205,7 @@ pub struct MainState {
     pub duration: f32,
     /// Show time as remaining (−mm:ss) instead of elapsed.
     pub time_remaining: bool,
-    /// Blank the time readout this frame — the "off" half of the paused blink
+    /// Blank the time readout this frame, the "off" half of the paused blink
     /// (classic Winamp flashes the time while paused).
     pub time_hidden: bool,
     pub volume: f32,
@@ -213,7 +219,7 @@ pub struct MainState {
     /// Live visualization for the analyzer area (None = off).
     pub viz: Option<VizFrame>,
     /// Spectrum gradient from the skin (index 0 = top .. last = bottom); empty
-    /// falls back to a synthesized green→yellow→red gradient.
+    /// falls back to a synthesized green to yellow to red gradient.
     pub viz_spectrum: Vec<[u8; 3]>,
     /// Peak-marker colour from the skin.
     pub viz_peak: [u8; 3],
@@ -284,7 +290,7 @@ pub fn shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
     }
 }
 
-/// Hit-testing for the collapsed **main** window bar, which (unlike the EQ and
+/// Hit-testing for the collapsed main window bar, which (unlike the EQ and
 /// playlist shades) carries the wave/options button, mini-transport buttons, and
 /// a restore button. Anything not on a control is the draggable title bar.
 pub fn main_shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
@@ -325,7 +331,7 @@ pub struct ClassicSkin {
     /// Window-shape masks from REGION.TXT (empty = rectangular windows).
     pub regions: crate::region::SkinRegions,
     /// Custom cursors from the skin's `.cur` files, keyed by lowercased basename
-    /// without extension (e.g. "normal", "posbar").
+    /// without extension (example: "normal", "posbar").
     cursors: HashMap<String, crate::cursor::CursorImage>,
 }
 
@@ -670,7 +676,7 @@ fn gen_glyph(c: char) -> Option<(u32, u32)> {
 fn blit_keyed(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, sy: u32, w: u32, h: u32, key: [u8; 3]) {
     // Treat pixels *near* the key colour as transparent too, not just an exact
     // match. This drops faint anti-alias fringe pixels that were blended toward
-    // the key (e.g. the base skin's stray ~20%-blend cyan dot above the "Y") —
+    // the key (example: the base skin's stray ~20%-blend cyan dot above the "Y"), 
     // such fringing is an artifact once the glyph is composited onto the title
     // bar's own (non-key) background. The tolerance stays well below any real
     // glyph pixel (white/grey letters), so letters are untouched.
@@ -709,10 +715,10 @@ fn gen_title_width(title: &str) -> u32 {
 }
 
 /// Per-glyph `(src_x, width)` for A–Z on font row `fy`, measured from the BMP as
-/// runs of non-`key` columns. Returns `Some` only when exactly 26 glyphs are found
-/// — so a skin whose font layout differs from the base (e.g. Green Dimension's
+/// runs of non-`key` columns. Returns `Some` only when exactly 26 glyphs are found,
+/// so a skin whose font layout differs from the base (example: Green Dimension's
 /// fixed-width grid) renders from its own metrics, while anything unexpected
-/// (including the base skin, whose X and Y touch → 25 runs) falls back to the
+/// (including the base skin, whose X and Y touch, giving 25 runs) falls back to the
 /// fixed `GEN_FONT` table.
 fn gen_font_table(g: &RgbaImage, fy: u32, key: [u8; 3]) -> Option<Vec<(u32, u32)>> {
     if fy + GEN_FONT_H > g.height() {
@@ -759,7 +765,7 @@ fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool)
     let key = key_at(fy);
     // Measure glyph widths from the SELECTED row for both variants. The glyph
     // columns are identical in the selected and normal rows, but the normal
-    // (inactive) row has a stray pixel on some glyphs (e.g. Y) that would widen
+    // (inactive) row has a stray pixel on some glyphs (example: Y) that would widen
     // the measured run; using the clean selected widths excludes it and keeps
     // kerning identical between the two variants (#106).
     let table = gen_font_table(g, GEN_FONT_Y_SELECTED, key_at(GEN_FONT_Y_SELECTED));
@@ -839,7 +845,7 @@ impl ClassicSkin {
     }
 
     /// Inset (top, right, bottom, left) in native px that the gen frame occupies,
-    /// i.e. where the window content area begins.
+    /// ex: where the window content area begins.
     pub fn gen_insets() -> (u32, u32, u32, u32) {
         (GEN_TB_H, GEN_BORDER_R, GEN_BORDER_B, GEN_BORDER_L)
     }
@@ -860,9 +866,9 @@ impl ClassicSkin {
         }
         let ry = if active { 0 } else { 21 };
 
-        // --- Title bar (y 0..20). Winamp layout, left→right: corner, striped
+        // --- Title bar (y 0..20). Winamp layout, left to right: corner, striped
         // fill running inward, an end-cap, the title (its own centre fill with the
-        // caption), the other end-cap, striped fill, corner — so the bars run all
+        // caption), the other end-cap, striped fill, corner, so the bars run all
         // the way to the caption like the main window.
         let cap = GEN_CORNER_W; // end-cap / corner width (25)
         let tw = (gen_title_width(title) + 10).min(w.saturating_sub(4 * cap));
@@ -924,8 +930,8 @@ fn blit(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, sy: u32
 }
 
 /// Approximate an accented Latin character with its base ASCII letter, so the
-/// ASCII-only bitmap font renders it readably instead of as a blank (#97, e.g.
-/// Vietnamese "Trường" -> "Truong"). Returns the char unchanged when unmapped.
+/// ASCII-only bitmap font renders it readably instead of as a blank (#97, example:
+/// Vietnamese "Trường" to "Truong"). Returns the char unchanged when unmapped.
 /// This is a readability fallback; full non-Latin glyphs would need a font atlas.
 /// Also reused when writing ID3v1 (Latin-1 only) to fold characters outside
 /// Latin-1 to base ASCII instead of the "?" a lossy encode produces.
@@ -1150,7 +1156,7 @@ pub struct PlState<'a> {
     /// True when at least one track's length is unknown, so `total_secs` is a
     /// lower bound and the readout gets a trailing `+` (as in Winamp).
     pub total_partial: bool,
-    /// Blank the current-track time this frame — the "off" half of the paused
+    /// Blank the current-track time this frame, the "off" half of the paused
     /// blink (the running total stays put; only the current time flashes).
     pub time_hidden: bool,
 }
@@ -1230,6 +1236,22 @@ pub fn pl_visible_rows(height: u32) -> usize {
     ((height as i32 - PL_LIST_Y - 38 - 1).max(0) / PL_ROW_H) as usize
 }
 
+/// Smallest playlist height, in unscaled skin pixels (two title rows + a usable
+/// list area); mirrors the floor applied while resizing.
+pub const PL_MIN_H: f32 = 87.0;
+
+/// The tallest the playlist may grow (unscaled skin pixels) before its bottom
+/// edge would pass `desktop_bottom`, given the window top edge `top_y` and the UI
+/// `scale` (both in points; on-screen height is `pl_px_h * scale`). Returns `None`
+/// when there isn't even room for the minimum height, the caller then leaves the
+/// current height alone rather than shrinking it. Keeps a downward resize from
+/// running off the screen bottom, which the WM would otherwise answer by pushing
+/// the window's top edge upward (#156).
+pub fn pl_max_height(desktop_bottom: f32, top_y: f32, scale: f32) -> Option<f32> {
+    let max_h = (desktop_bottom - top_y) / scale.max(0.01);
+    (max_h >= PL_MIN_H).then_some(max_h)
+}
+
 impl ClassicSkin {
     pub fn compose_eq(&self, st: &EqState) -> RgbaImage {
         let mut c = RgbaImage::new(275, EQ_H);
@@ -1282,7 +1304,7 @@ impl ClassicSkin {
                         + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t
                         + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t * t * t)
                 };
-                // value (−1..1, bottom..top) -> graph row 0..=18 (top..bottom).
+                // value (−1..1, bottom..top) to graph row 0..=18 (top..bottom).
                 let row_of = |v: f32| -> i32 {
                     (((1.0 - v) * 0.5) * (GH - 1) as f32)
                         .round()
@@ -1326,7 +1348,7 @@ impl ClassicSkin {
                 }
                 let ty = EQ_SLIDER_TOP as i32 + (frac * EQ_SLIDER_TRAVEL) as i32;
                 let sy = if sel { 176 } else { 164 };
-                blit(c, e, colx + 2, ty, 0, sy, 11, 11);
+                blit(c, e, colx + EQ_THUMB_INSET, ty, 0, sy, 11, 11);
             };
             draw_thumb(&mut c, e, EQ_PREAMP_X, st.preamp, st.pressed == Some(EqRegion::Preamp));
             for (i, &bx) in EQ_BAND_X.iter().enumerate() {
@@ -1406,7 +1428,7 @@ impl ClassicSkin {
                     if st.total_partial { "+" } else { "" },
                 );
                 // Left-aligned and vertically centred in the top bar. The summary
-                // line does NOT blink — only the standalone current-time box below.
+                // line does NOT blink, only the standalone current-time box below.
                 self.draw_text_tinted(&mut c, &summary, sx0 + 7, by + 10, 89, st.colors.normal);
                 // Current time in the small box, its colon aligned onto the one
                 // baked into the sprite. Blanked on the paused-blink "off" half.
@@ -1492,7 +1514,7 @@ impl ClassicSkin {
             // shade-bar graphics. Draw a minimal but usable bar from the skin's
             // colours: a solid background plus synthesized volume/balance thumbs and
             // a close marker, in a tone that contrasts the background so it never
-            // renders unreadable (e.g. black-on-black) (#18).
+            // renders unreadable (example: black-on-black) (#18).
             let bg = self.text_bg;
             fill_rect(&mut c, 0, 0, 275, 14, bg);
             // Light controls on a dark bar, dark controls on a light bar.
@@ -1583,7 +1605,7 @@ impl ClassicSkin {
 /// Which of the 28 EQ slider sprites (two rows of 14 in EQMAIN.BMP, 14×63 at
 /// x=13+col*15, y=164+row*65) a skin ships, index 0..28 (0=boost, 27=cut). Skins
 /// differ wildly, so a sprite counts as present on colour OR light/dark variation.
-/// Bounds-checked: a short EQMAIN (e.g. Alita, no slider bank) yields an empty list.
+/// Bounds-checked: a short EQMAIN (example: Alita, no slider bank) yields an empty list.
 fn eq_valid_sprites(e: &RgbaImage) -> Vec<i32> {
     let (ew, eh) = e.dimensions();
     let present = |col: i32, row: i32| -> bool {
@@ -1666,13 +1688,13 @@ fn viz_gradient(f: f32) -> [u8; 3] {
 }
 
 /// Draw the main-window visualizer (spectrum bars or oscilloscope) into the
-/// rect (x,y,w,h). Bars use a green→yellow→red gradient by height; the
+/// rect (x,y,w,h). Bars use a green to yellow to red gradient by height; the
 /// oscilloscope uses the LCD colour.
 fn draw_viz(c: &mut RgbaImage, st: &MainState, x: i32, y: i32, w: i32, h: i32) {
     let peak_col = st.viz_peak;
     let hf = (h as f32 - 1.0).max(1.0);
     // Colour at vertical fraction f (0=bottom, 1=top): the skin's spectrum
-    // gradient if present, else a synthesized green→yellow→red gradient.
+    // gradient if present, else a synthesized green to yellow to red gradient.
     let grad = |f: f32| -> [u8; 3] {
         if st.viz_spectrum.is_empty() {
             viz_gradient(f)
@@ -1781,7 +1803,7 @@ fn draw_fallback_slider(c: &mut RgbaImage, x: i32, w: i32, frac: f32) {
 }
 
 /// Blit a glyph, recolouring its lit pixels to `color` (transparent elsewhere).
-/// Most common colour in an image — used as the bitmap font's background.
+/// Most common colour in an image, used as the bitmap font's background.
 fn dominant_color(img: &RgbaImage) -> [u8; 3] {
     let mut counts: HashMap<[u8; 3], u32> = HashMap::new();
     for p in img.pixels() {
@@ -2047,21 +2069,21 @@ mod tests {
     #[test]
     fn eq_sprite_index_maps_and_snaps() {
         let full: Vec<i32> = (0..28).collect();
-        assert_eq!(eq_sprite_index(1.0, &full), Some(0)); // boost -> top
-        assert_eq!(eq_sprite_index(-1.0, &full), Some(27)); // cut -> bottom
+        assert_eq!(eq_sprite_index(1.0, &full), Some(0)); // boost to top
+        assert_eq!(eq_sprite_index(-1.0, &full), Some(27)); // cut to bottom
         assert_eq!(eq_sprite_index(0.0, &full), Some(14)); // centre
         assert_eq!(eq_sprite_index(2.0, &full), Some(0)); // clamps high
         assert_eq!(eq_sprite_index(-2.0, &full), Some(27)); // clamps low
         assert_eq!(eq_sprite_index(0.5, &[0, 27]), Some(0)); // snap to nearer
         assert_eq!(eq_sprite_index(-0.5, &[0, 27]), Some(27));
-        assert_eq!(eq_sprite_index(0.0, &[]), None); // no bank -> thumb only
+        assert_eq!(eq_sprite_index(0.0, &[]), None); // no bank, so thumb only
     }
 
     #[test]
     fn signed_time_elapsed_and_remaining() {
         assert_eq!(fmt_pl_time_signed(71.0, 200.0, false), "1:11");
         assert_eq!(fmt_pl_time_signed(71.0, 200.0, true), "-2:09");
-        assert_eq!(fmt_pl_time_signed(71.0, 0.0, true), "1:11"); // no duration -> elapsed
+        assert_eq!(fmt_pl_time_signed(71.0, 0.0, true), "1:11"); // no duration, so elapsed
         assert_eq!(fmt_pl_time_signed(250.0, 200.0, true), "-0:00"); // past end clamps
     }
 
@@ -2254,15 +2276,15 @@ mod tests {
             viz_spectrum: Vec::new(),
             viz_peak: [0, 0, 0],
         };
-        // Elapsed: 71s -> 1:11, not flagged remaining.
+        // Elapsed: 71s to 1:11, not flagged remaining.
         assert_eq!(st(71.0, 200.0, false).lcd_mmss(), (1, 11, false));
-        // Remaining: 200 - 71 = 129s -> 2:09, flagged remaining.
+        // Remaining: 200 - 71 = 129s to 2:09, flagged remaining.
         assert_eq!(st(71.0, 200.0, true).lcd_mmss(), (2, 9, true));
         // Remaining is suppressed when the duration is unknown.
         assert_eq!(st(71.0, 0.0, true).lcd_mmss(), (1, 11, false));
         // Past the end never shows a negative; it clamps to 0:00.
         assert_eq!(st(250.0, 200.0, true).lcd_mmss(), (0, 0, true));
-        // Minutes are capped at 99 for the two-digit LCD (100:40 -> 99:40).
+        // Minutes are capped at 99 for the two-digit LCD (100:40 to 99:40).
         assert_eq!(st(6040.0, 0.0, false).lcd_mmss(), (99, 40, false));
     }
 
@@ -2288,6 +2310,19 @@ mod tests {
         assert!(text_px(&shown) > 0, "shaded bar should draw the track and time");
         let empty = skin.compose_pl_shade(true, "", "", color);
         assert_eq!(text_px(&empty), 0, "no current track -> no text on the bar");
+    }
+
+    #[test]
+    fn pl_max_height_caps_at_desktop_bottom() {
+        // Desktop 1000px tall, window top at 200, scale 1: room is 800px.
+        assert_eq!(pl_max_height(1000.0, 200.0, 1.0), Some(800.0));
+        // Double-size (scale 2): the same 800pt of room is 400 skin px.
+        assert_eq!(pl_max_height(1000.0, 200.0, 2.0), Some(400.0));
+        // No room for even the minimum height, so None (leave the size alone), so a
+        // window already near the bottom isn't forcibly shrunk mid-drag.
+        assert_eq!(pl_max_height(1000.0, 950.0, 1.0), None);
+        // Exactly the minimum is allowed.
+        assert_eq!(pl_max_height(200.0 + PL_MIN_H, 200.0, 1.0), Some(PL_MIN_H));
     }
 
     #[test]
@@ -2479,6 +2514,44 @@ mod tests {
     }
 
     #[test]
+    fn eq_thumb_centres_on_the_groove() {
+        // Regression for #149: the 11px slider thumb must sit on the groove every
+        // skin draws in its EQMAIN fill sprites. The groove is centred at local
+        // x ~6, and the thumb's visible centre lands at EQ_THUMB_INSET + 5, so
+        // that must land within a pixel of the groove, otherwise the handle
+        // drifts off the bar (obvious on crisp skins like MacOSXAqua / Osmosis).
+        let lum = |p: &image::Rgba<u8>| {
+            0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32
+        };
+        // Weighted centre of the groove within a 14px fill-sprite cell, measured
+        // as each column's deviation from the cell's edge luminance.
+        let groove_centre = |e: &RgbaImage, col: u32| -> f32 {
+            let (sx, sy) = (13 + col * 15, 164u32);
+            let cols: Vec<f32> = (0..14)
+                .map(|lx| {
+                    let s: f32 = (8..55).map(|y| lum(e.get_pixel(sx + lx, sy + y))).sum();
+                    s / 47.0
+                })
+                .collect();
+            let edge = (cols[0] + cols[1] + cols[12] + cols[13]) / 4.0;
+            let dev: Vec<f32> = cols.iter().map(|c| (c - edge).abs()).collect();
+            let tot: f32 = dev.iter().sum::<f32>().max(1.0);
+            dev.iter().enumerate().map(|(i, d)| i as f32 * d).sum::<f32>() / tot
+        };
+        let thumb_centre = EQ_THUMB_INSET as f32 + 5.0; // 11px thumb, visible centre at local 5
+        for name in ["linamp_base_skin.wsz", "MacOSXAqua1-5.wsz", "Osmosis_2.wsz"] {
+            let skin = load_skin(name);
+            let e = skin.bmp("eqmain.bmp").unwrap();
+            // Average a few fill levels so one noisy sprite can't skew it.
+            let g = [3u32, 7, 11].iter().map(|&c| groove_centre(e, c)).sum::<f32>() / 3.0;
+            assert!(
+                (g - thumb_centre).abs() <= 1.0,
+                "{name}: groove centre {g:.1} vs thumb centre {thumb_centre:.1}, thumb off the bar"
+            );
+        }
+    }
+
+    #[test]
     fn eq_shade_fallback_is_readable_with_visible_bars() {
         // A skin missing BOTH eq_ex.bmp and EQMAIN.BMP must still render the
         // collapsed EQ as a readable bar: a solid background plus contrasting
@@ -2521,7 +2594,7 @@ mod tests {
     #[test]
     fn fallback_slider_tracks_value_without_a_sprite() {
         // VOLUME.BMP / BALANCE.BMP absent: the synthesized slider still shows the
-        // level — the bright thumb sits at the left for 0 and the right for 1,
+        // level, the bright thumb sits at the left for 0 and the right for 1,
         // with only the dim groove elsewhere (#18).
         let thumb = 200u8;
         let groove = 72u8;
@@ -2540,7 +2613,7 @@ mod tests {
 
     #[test]
     fn topaz_segmented_meters_are_detected() {
-        // Regression: segmented teal meters once read as blank -> synthesized.
+        // Regression: segmented teal meters once read as blank, so synthesized.
         // The empty bottom-of-travel sprite may legitimately not count, so allow
         // a little slack but require nearly the whole bank.
         assert!(valid_count("TopazAmp1-2.wsz") >= 25);

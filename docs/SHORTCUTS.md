@@ -29,7 +29,7 @@ window has focus and no text field is active.
 
 ## Numeric keypad
 
-Off by default — enable "Numeric keypad" under Preferences > Optional Features.
+Off by default, enable "Numeric keypad" under Preferences > Optional Features.
 When on, the keypad mirrors Winamp's transport controls (note: these also fire
 for the top number row).
 
@@ -64,6 +64,7 @@ for the top number row).
 | Ctrl+D | Toggle double size (1x / 2x) |
 | Ctrl+P | Open Preferences |
 | Ctrl+T | Toggle elapsed / remaining time |
+| Ctrl+A | Toggle always on top (selects all when the playlist has focus) |
 
 ## Playlist window
 
@@ -72,7 +73,7 @@ for the top number row).
 | Up / Down | Move the selection (Ctrl adds rows, Shift extends the range) |
 | Home / End | Select the first / last track |
 | Enter | Play the selected track |
-| Ctrl+A | Select all |
+| Ctrl+A | Select all (toggles always on top from the other windows) |
 | Insert | Add file(s) |
 | Delete | Remove the selected tracks |
 
@@ -81,6 +82,6 @@ for the top number row).
 | Gesture | Action |
 | --- | --- |
 | Mouse wheel over the main window | Adjust volume |
-| Double-click an EQ band, the preamp, or the balance slider | Reset it to centre |
+| Double-click an EQ band, the preamp or the balance slider | Reset it to centre |
 | Right-click the Stop button | Stop options (stop, stop after current, stop with fade) |
 | Right-click elsewhere on the main window | Options menu |

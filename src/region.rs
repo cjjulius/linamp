@@ -1,9 +1,9 @@
-//! Parser for a classic skin's `REGION.TXT` — the window-shape masks. Each
+//! Parser for a classic skin's `REGION.TXT`, the window-shape masks. Each
 //! section defines one or more polygons (outside-edge pixel coordinates, listed
 //! clockwise); the window's visible/clickable area is the union of its polygons.
 //! Anything outside every polygon is cut away. Coordinates are in native skin
 //! pixels. Sections we care about: the main window (normal + window-shade), the
-//! equalizer (normal + window-shade), and the playlist. The video and
+//! equalizer (normal + window-shade) and the playlist. The video and
 //! mini-browser sections are ignored (LinAmp has neither).
 
 /// A polygon as a flat list of (x, y) vertices in native skin pixels.
