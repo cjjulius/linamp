@@ -33,6 +33,13 @@ code plus a working/not-working binary): visual and behavior changes.
   (crossfade_due); to confirm by ear with crossfade on: start a track, let it reach
   the final few seconds, hit Stop, and it should fade out and stop rather than cross
   into the next track.
+- Follow-up (2026-10-26): seeking during a crossfade now cancels the overlap. A seek
+  only moved the incoming track, so the outgoing one kept playing underneath for the
+  rest of the fade (two tracks at once). A seek now stops the outgoing track and
+  brings the incoming one to full gain. This path touches live audio sinks, so it is
+  not unit-tested; to confirm by ear with crossfade on: let a track reach its final
+  few seconds so the next one starts fading in, then drag the seek bar, and you should
+  hear only the one (now full-volume) track, not both.
 
 ## 2026-10-26 (Windows CD, best-effort/untested)
 

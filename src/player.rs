@@ -397,6 +397,18 @@ impl Player {
 
     /// Seek to an absolute position. Not all formats support seeking.
     pub fn seek(&mut self, pos: Duration) {
+        // A seek is an explicit jump to one spot in the current track. Cancel any
+        // crossfade overlap first, otherwise the outgoing track keeps playing under
+        // the seeked one (audible double playback), and bring the incoming track to
+        // full gain since it is no longer fading in.
+        if self.fading.is_some() || self.fade_in < 1.0 {
+            if let Some(f) = self.fading.take() {
+                f.stop();
+            }
+            self.fade_out = 1.0;
+            self.fade_in = 1.0;
+            self.apply_gain();
+        }
         if let Some(sink) = &self.sink {
             let _ = sink.try_seek(pos);
         }
