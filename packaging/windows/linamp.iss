@@ -56,6 +56,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#RepoRoot}\target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 ; Skins must sit next to the exe — the app discovers them relative to itself.
 Source: "{#RepoRoot}\skins\*"; DestDir: "{app}\skins"; Excludes: "backup\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The MIDI SoundFont also sits next to the exe (the app finds soundfont/ relative
+; to itself). Without it, MIDI files won't play in the installed build.
+Source: "{#RepoRoot}\soundfont\*"; DestDir: "{app}\soundfont"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Optional bundled demo music.
 Source: "{#RepoRoot}\music\*"; DestDir: "{app}\music"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
