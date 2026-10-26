@@ -30,7 +30,9 @@ pub enum TrayAction {
 }
 
 /// Menu-command ids shared between the platform code and its tests. They double
-/// as the Win32 `TrackPopupMenu` command ids.
+/// as the Win32 `TrackPopupMenu` command ids. Used by the Windows backend and the
+/// tests; a plain Linux build (ksni names its own actions) doesn't touch them.
+#[allow(dead_code)]
 mod cmd {
     pub const PLAY_PAUSE: u32 = 1;
     pub const STOP: u32 = 2;
@@ -41,7 +43,9 @@ mod cmd {
 }
 
 /// Map a tray menu-command id to its action. Returns `None` for ids that are
-/// not menu commands (separators never report, and 0 means "dismissed").
+/// not menu commands (separators never report, and 0 means "dismissed"). Used by
+/// the Windows backend and the tests; unused on a plain Linux build.
+#[allow(dead_code)]
 fn action_for_command(id: u32) -> Option<TrayAction> {
     match id {
         cmd::PLAY_PAUSE => Some(TrayAction::PlayPause),
@@ -56,7 +60,9 @@ fn action_for_command(id: u32) -> Option<TrayAction> {
 
 /// The tray menu's rows, in order. A `0` id marks a separator. The owner-draw
 /// handlers index this by position (passed as each item's data), so the builder,
-/// the measure pass and the draw pass all read the same labels.
+/// the measure pass and the draw pass all read the same labels. Windows-only
+/// (ksni builds its own menu), so unused on a plain Linux build.
+#[allow(dead_code)]
 const MENU_ITEMS: &[(u32, &str)] = &[
     (cmd::PLAY_PAUSE, "Play/Pause"),
     (cmd::STOP, "Stop"),
