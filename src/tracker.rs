@@ -43,17 +43,35 @@ self_cell::self_cell!(
 pub struct TrackerSource {
     cell: ModuleCell,
     total: Option<Duration>,
+    /// Interleaved samples emitted since the start (2 per frame).
+    samples_out: u64,
+    /// Hard stop at the reported length (interleaved samples). xmrsplayer plays a
+    /// module's song length but then follows its loop/jump effects a little further
+    /// before `set_max_loop_count(1)` halts it, so the audio ran past the time the
+    /// playlist shows. Capping at the reported duration keeps playback == the shown
+    /// length (and stops at the natural pattern end, where a loop would restart).
+    cap_samples: Option<u64>,
 }
 
 impl Iterator for TrackerSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<f32> {
-        // xmrsplayer yields interleaved stereo i16 one sample per call; the song
-        // ends (returns None) after one pass (set_max_loop_count(1) below).
-        self.cell
+        // Stop once we've emitted the reported duration, so a looping module doesn't
+        // play past the time shown in the playlist.
+        if let Some(cap) = self.cap_samples {
+            if self.samples_out >= cap {
+                return None;
+            }
+        }
+        // xmrsplayer yields interleaved stereo i16 one sample per call; it also ends
+        // (returns None) after one pass via set_max_loop_count(1) below.
+        let s = self
+            .cell
             .with_dependent_mut(|_owner, player| player.next())
-            .map(|s| s as f32 / 32768.0)
+            .map(|s| s as f32 / 32768.0)?;
+        self.samples_out += 1;
+        Some(s)
     }
 }
 
@@ -75,6 +93,8 @@ impl Source for TrackerSource {
             .cell
             .with_dependent_mut(|_owner, player| player.seek_seconds(pos.as_secs_f64()));
         if ok {
+            // Keep the cap relative to the new position (2 samples per frame).
+            self.samples_out = (pos.as_secs_f64() * SAMPLE_RATE as f64 * 2.0) as u64;
             Ok(())
         } else {
             Err(SeekError::NotSupported {
@@ -118,7 +138,10 @@ pub fn open_tracker(path: &Path) -> Result<TrackerSource> {
     });
     let secs = cell.with_dependent(|_owner, player| player.duration_seconds());
     let total = (secs > 0.0).then(|| Duration::from_secs_f64(secs));
-    Ok(TrackerSource { cell, total })
+    // Interleaved-sample cap at the reported length (2 samples per frame). None when
+    // the module reports no length, so it just plays to its natural end.
+    let cap_samples = total.map(|d| (d.as_secs_f64() * SAMPLE_RATE as f64 * 2.0) as u64);
+    Ok(TrackerSource { cell, total, samples_out: 0, cap_samples })
 }
 
 #[cfg(test)]
@@ -156,5 +179,28 @@ mod tests {
         assert_eq!(src.sample_rate(), SAMPLE_RATE);
         let out: Vec<f32> = (&mut src).take(8192).collect();
         assert!(!out.is_empty(), "tracker render produced no samples");
+    }
+
+    #[test]
+    fn playback_stops_at_the_reported_duration() {
+        // The user-facing guarantee: a module plays for exactly the time the playlist
+        // shows, never past it (looping modules used to run on past the reported
+        // length). Uses the local sample when present.
+        let p = Path::new("qa-music/Generated_tests/sample_scale.mod");
+        if !p.exists() {
+            return;
+        }
+        let mut src = open_tracker(p).expect("should load the .mod");
+        let reported = src.total_duration().expect("has a duration");
+        let frames: usize = (&mut src).count() / 2; // emitted stereo frames
+        let played = frames as f64 / SAMPLE_RATE as f64;
+        // Actual playback matches the reported length within a few milliseconds
+        // (never longer — that was the bug).
+        let diff = played - reported.as_secs_f64();
+        assert!(
+            diff <= 0.05 && diff >= -0.05,
+            "played {played:.3}s vs reported {:.3}s (must match, never over)",
+            reported.as_secs_f64()
+        );
     }
 }
