@@ -35,6 +35,10 @@ pub struct Prefs {
     pub crossfade: bool,
     /// Crossfade length in seconds when `crossfade` is on.
     pub crossfade_secs: f32,
+    /// true = show an icon in the system notification area (tray). Left-click
+    /// toggles the window, right-click opens a transport menu (#40). On by
+    /// default, matching classic Winamp.
+    pub tray_enabled: bool,
 }
 
 impl Default for Prefs {
@@ -54,6 +58,7 @@ impl Default for Prefs {
             numpad_transport: false,
             crossfade: false,
             crossfade_secs: 3.0,
+            tray_enabled: true,
         }
     }
 }
