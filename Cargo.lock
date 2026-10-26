@@ -2145,6 +2145,7 @@ dependencies = [
  "eframe",
  "egui",
  "image",
+ "libc",
  "lofty",
  "open",
  "rfd",

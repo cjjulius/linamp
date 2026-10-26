@@ -116,10 +116,13 @@ impl super::LinAmpApp {
         };
         let (w, h) = match kind {
             Popup::Options => {
-                // 12 fixed items + the optional Minibrowser toggle, 3 separators.
-                // Computed here (not in popup_dims) so the height tracks the
-                // conditional item instead of clipping the last row when it shows.
-                let buttons = 12 + i32::from(self.prefs.minibrowser_enabled);
+                // 12 fixed items + the optional Minibrowser toggle + the Linux-only
+                // "Open Audio CD" item (#160), 3 separators. Computed here (not in
+                // popup_dims) so the height tracks the conditional items instead of
+                // clipping the last row when one shows.
+                let buttons = 12
+                    + i32::from(self.prefs.minibrowser_enabled)
+                    + i32::from(cfg!(target_os = "linux"));
                 (182.0, popup_height(buttons, 3))
             }
             Popup::Bookmarks => {
@@ -219,6 +222,12 @@ impl super::LinAmpApp {
                             }
                             if item(ui, "Open location… (Ctrl+L)") {
                                 self.open_location();
+                                close = true;
+                            }
+                            // Audio-CD reading is Linux-only in this build (#160).
+                            #[cfg(target_os = "linux")]
+                            if item(ui, "Open Audio CD") {
+                                self.open_audio_cd();
                                 close = true;
                             }
                             ui.separator();

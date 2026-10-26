@@ -5,6 +5,30 @@ code plus a working/not-working binary): visual and behavior changes.
 
 ## 2026-10-26
 
+- Audio CD playback (Linux), native drive reads (#160). The stutter where a CD
+  played a few seconds, stopped, then respun was diagnosed on the Linux box: it was
+  not LinAmp's CDDA code (that device layer was unwritten), it was the disc being
+  played through the desktop's GVfs cdda:// mount as WAV files. That FUSE path
+  delivers around 164 kB/s in bursts, at or below the 176 kB/s real-time need, so
+  the output starved, the drive spun down then seeked and spun up to resume. The fix
+  is a real Linux device layer: raw CDROMREADTOCHDR / CDROMREADTOCENTRY /
+  CDROMREADAUDIO ioctls on /dev/sr0 (no libcdio, so the licence stays clean), feeding
+  the shared CdAudioSource groundwork. Reads run on a background thread into a
+  32-batch (about 32 second) prefetch buffer, so the multi-second read spikes the
+  drive produces are absorbed instead of starving playback. Verified on real hardware
+  (10-track disc, /dev/sr0): a real-time consumer saw zero underruns across a run
+  where the drive spiked to 2.6s on one batch and 1.5s on the next, the buffer rode
+  both out. All Linux-gated (cfg(target_os = "linux") plus a Linux-only libc dep), so
+  the Windows and macOS builds are unchanged, their Open-Audio-CD entry is absent and
+  the cdda:// play path returns a clean "Linux only" error. Needs a human check on
+  Pop!_OS: insert an audio CD, Options menu to Open Audio CD, confirm the tracks load
+  and the first plays through without the stop/respin stutter, and that seeking within
+  a track lands and keeps playing. Known artifact, not the bug: about 2 seconds of
+  silence at the very start of a track while the drive spins up (physically
+  unavoidable, the reader has no buffer yet at t=0); playback is smooth after that.
+  Also note: the user must be in the "cdrom" group (or have the session ACL on the
+  device) to read /dev/sr0.
+
 - Single-instance guard: LinAmp now holds an advisory file lock
   (data dir / LinAmp / instance.lock) at startup, so a second launch exits instead
   of opening a second, conflicting set of classic windows. The headless flags

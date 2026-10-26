@@ -41,6 +41,12 @@ self_cell = "1.3.0"
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 x11-dl = "2"
 
+# Linux only: raw CD-ROM ioctls (CDROMREADTOCHDR / CDROMREADAUDIO) for native
+# audio-CD reading (#160). libc is MIT/Apache-2.0, so it keeps the drive layer
+# off the GPL libcdio path. Not pulled in on Windows or macOS.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 # Windows only: embed the application icon into linamp.exe as a resource so the
 # file and taskbar show the LinAmp icon (the in-app window icon is set from the
 # embedded PNG at runtime). Build-time only.

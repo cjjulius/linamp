@@ -178,6 +178,24 @@ impl Player {
 
     /// Load and immediately start playing a file.
     pub fn play_file(&mut self, path: &Path) -> Result<()> {
+        // Audio-CD tracks are a `cdda://<device>/<track>` pseudo-path, not a file:
+        // read them straight off the drive on a background thread (#160). This is a
+        // no-op error on non-Linux builds (handled by skip-unplayable), so the rest
+        // of the dispatch is unchanged.
+        if let Some(s) = path.to_str() {
+            if crate::cdda::is_cdda_path(s) {
+                let (device, track) = crate::cdda::parse_track_path(s)
+                    .ok_or_else(|| anyhow::anyhow!("bad CD track path: {s}"))?;
+                let source = crate::cdda::open_cd_source(&device, track)?;
+                self.append_source(source)?;
+                self.current_path = Some(path.to_path_buf());
+                self.current_url = None;
+                self.stream_title = None;
+                self.state = PlayState::Playing;
+                return Ok(());
+            }
+        }
+
         // MIDI is synthesized (rustysynth + a bundled SoundFont), not decoded (#159);
         // everything else goes through the single symphonia decode path (#163). Both
         // produce a rodio `Source` fed into the shared EQ / analyzer / balance chain.
