@@ -1036,7 +1036,16 @@ impl LinAmpApp {
         // Move the just-appended block to the drop row (no-op when appending).
         if let Some(row) = drop_row {
             let added = self.playlist.len() - before;
-            self.playlist.move_tail_to(added, row);
+            if let Some(at) = self.playlist.move_tail_to(added, row) {
+                // Rows at/after the insertion point shifted down by `added`; keep the
+                // selection pointing at the same tracks (the dropped ones stay
+                // unselected).
+                self.pl_selection = self
+                    .pl_selection
+                    .iter()
+                    .map(|&i| if i >= at { i + added } else { i })
+                    .collect();
+            }
         }
         self.maybe_scan_tags();
         if was_empty && !self.playlist.is_empty() {

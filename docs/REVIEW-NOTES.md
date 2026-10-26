@@ -3,6 +3,15 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-25 (later 9)
+
+- Drag-drop insert follow-up: inserting dropped tracks mid-list shifts the rows
+  below the drop, but the playlist selection wasn't shifted with them, so selected
+  rows would highlight the wrong tracks after a drop. move_tail_to now returns the
+  insertion index and handle_dropped shifts the selection to match. Covered by the
+  move_tail_to tests; verify by hand: select a few rows, drop a file above them, and
+  confirm the same tracks stay selected.
+
 ## 2026-10-25 (later 8)
 
 - Drag-and-drop now inserts at the drop point. Dropping files or folders onto the

@@ -200,16 +200,18 @@ impl Playlist {
     /// After appending `count` tracks (now the last `count` in the list), move them
     /// to position `at`, so a drag-drop lands where it was released instead of only
     /// at the end. `at` is clamped to the pre-existing length; the now-playing cursor
-    /// is kept on the same track. A no-op when `at` is already the end (plain append).
-    pub fn move_tail_to(&mut self, count: usize, at: usize) {
+    /// is kept on the same track. Returns the effective insertion index when it
+    /// moved (so the caller can shift row-based state like the selection), or `None`
+    /// when `at` is already the end (plain append, nothing moved).
+    pub fn move_tail_to(&mut self, count: usize, at: usize) -> Option<usize> {
         let len = self.tracks.len();
         if count == 0 || count > len {
-            return;
+            return None;
         }
         let before = len - count; // first index of the appended block
         let at = at.min(before);
         if at == before {
-            return; // dropped at/after the end: it's already there
+            return None; // dropped at/after the end: it's already there
         }
         // Rotate the sub-slice [at..] right by `count` so the appended block (its
         // last `count` elements) moves to `at` and the rest shifts down.
@@ -219,6 +221,7 @@ impl Playlist {
                 self.current = Some(cur + count);
             }
         }
+        Some(at)
     }
 
     pub fn remove(&mut self, index: usize) {
@@ -585,7 +588,7 @@ mod tests {
         pl.current = Some(2); // playing "c"
         pl.add_file(PathBuf::from("x.mp3"));
         pl.add_file(PathBuf::from("y.mp3"));
-        pl.move_tail_to(2, 1); // dropped between a and b
+        assert_eq!(pl.move_tail_to(2, 1), Some(1)); // dropped between a and b
         assert_eq!(names(&pl), ["a.mp3", "x.mp3", "y.mp3", "b.mp3", "c.mp3"]);
         assert_eq!(pl.current, Some(4), "now-playing track stays the same one");
     }
@@ -597,11 +600,11 @@ mod tests {
             pl.add_file(PathBuf::from(n));
         }
         pl.add_file(PathBuf::from("x.mp3"));
-        pl.move_tail_to(1, 0); // drop at the very top
+        assert_eq!(pl.move_tail_to(1, 0), Some(0)); // drop at the very top
         assert_eq!(names(&pl), ["x.mp3", "a.mp3", "b.mp3"]);
         // Dropping past the end just appends (clamped, no move).
         pl.add_file(PathBuf::from("z.mp3"));
-        pl.move_tail_to(1, 99);
+        assert_eq!(pl.move_tail_to(1, 99), None);
         assert_eq!(names(&pl), ["x.mp3", "a.mp3", "b.mp3", "z.mp3"]);
     }
 
