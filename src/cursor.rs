@@ -1,7 +1,7 @@
 //! Decode a classic skin's `.cur` files (Windows cursors). A `.cur` is an ICO
 //! container (type 2) holding a DIB (bottom-up BITMAPINFOHEADER bitmap) plus the
 //! cursor hotspot. The classic Winamp cursors are 32×32 4-bit paletted DIBs with
-//! a 1-bit AND transparency mask — a form `image`'s ICO decoder does not handle —
+//! a 1-bit AND transparency mask, a form `image`'s ICO decoder does not handle, 
 //! so we decode the DIB ourselves (1/4/8-bit paletted and 24/32-bit direct), and
 //! fall back to `image` only for the rare PNG-compressed entry. The result is
 //! premultiplied ARGB ready for `XcursorImage`.
@@ -22,7 +22,7 @@ pub struct CursorImage {
 
 /// The hotspot (xhot, yhot) from a `.cur` directory entry, or `None` if the
 /// header is too short. First ICONDIRENTRY is at offset 6; for cursors its bytes
-/// 4..8 are the hotspot as u16 little-endian — i.e. file offsets 10..14.
+/// 4..8 are the hotspot as u16 little-endian, ex: file offsets 10..14.
 fn hotspot(bytes: &[u8]) -> Option<(u16, u16)> {
     if bytes.len() < 14 {
         return None;

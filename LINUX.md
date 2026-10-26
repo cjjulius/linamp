@@ -1,26 +1,26 @@
-# LinAmp on Linux — build & testing notes
+# LinAmp on Linux, build & testing notes
 
-This document briefs a contributor (human or AI assistant) picking up **Linux
-build and runtime testing** for LinAmp. Development and testing have so far been
-done on **Windows**, which is the known-good platform. The code is written to be
-cross-platform and has **no OS-specific branches** yet, so most of the work here
+This document briefs a contributor (human or AI assistant) picking up Linux
+build and runtime testing for LinAmp. Development and testing have so far been
+done on Windows, which is the known-good platform. The code is written to be
+cross-platform and has no OS-specific branches yet, so most of the work here
 is making it build and run cleanly on Linux and fixing whatever platform gaps
-turn up — without regressing the working Windows build.
+turn up, without regressing the working Windows build.
 
 ## What LinAmp is
 
-A Winamp-inspired audio player in Rust that reproduces the **classic skin** look
+A Winamp-inspired audio player in Rust that reproduces the classic skin look
 and feel (main window, equalizer, playlist) and Winamp's keyboard-shortcut set.
 Key crates:
 
-- **eframe / egui 0.29** — borderless multi-viewport windows (main / EQ /
+- eframe / egui 0.29, borderless multi-viewport windows (main / EQ /
   playlist are separate OS windows drawn from composited skin bitmaps).
-- **rodio 0.20** (`symphonia-all`) — decoding + playback. Audio reaches the OS
-  through rodio → **cpal**.
-- **lofty 0.21** — tag read/write. **rustfft** — the analyzer. **image 0.25**,
-  **zip** — `.wsz` skin loading (skins are zipped Winamp BMP sets).
-- **rusqlite** (`bundled`) — the media library DB (compiles its own SQLite).
-- **rfd** — native file/folder dialogs.
+- rodio 0.20 (`symphonia-all`), decoding + playback. Audio reaches the OS
+  through rodio to cpal.
+- lofty 0.21, tag read/write. rustfft, the analyzer. image 0.25,
+  zip, `.wsz` skin loading (skins are zipped Winamp BMP sets).
+- rusqlite (`bundled`), the media library DB (compiles its own SQLite).
+- rfd, native file/folder dialogs.
 
 Skin compositing lives in `src/classic.rs` (blits sprites from `.wsz` BMPs into
 exact-geometry windows). Playback is in `src/player.rs`; the egui app and
@@ -28,26 +28,26 @@ keyboard shortcuts in `src/app.rs`.
 
 ## Audio on Linux
 
-cpal uses the **ALSA** backend on Linux. On the target distros audio is served
-by **PipeWire**, which exposes an ALSA-compatible device via `pipewire-alsa`, so
-cpal talks to PipeWire through that bridge — no LinAmp code change needed. If
+cpal uses the ALSA backend on Linux. On the target distros audio is served
+by PipeWire, which exposes an ALSA-compatible device via `pipewire-alsa`, so
+cpal talks to PipeWire through that bridge, no LinAmp code change needed. If
 there's no sound, check that `pipewire` and `pipewire-alsa` (or `wireplumber`)
 are running and that a default sink exists (`pactl info`, `pavucontrol`).
 
 `src/player.rs` rebuilds the output stream when the default device changes
 (`poll_device`). On PipeWire this is effectively a safety net: cpal's default
 device keeps the name `default`, so `poll_device` doesn't fire, but the
-`pipewire-alsa` stream *auto-follows* the default sink, so switching sinks still
+`pipewire-alsa` stream auto-follows the default sink, so switching sinks still
 moves playback seamlessly. `poll_device` remains the fallback for pure-ALSA
 systems where the default change needs a manual rebuild.
 
-**Verified on Pop!_OS (PipeWire 1.0.3, pipewire-alsa + WirePlumber):** playback
+Verified on Pop!_OS (PipeWire 1.0.3, pipewire-alsa + WirePlumber): playback
 reaches the hardware sink (a `linamp` ALSA sink-input appears, uncorked), and
 switching the default sink to another output moves the live stream to it (and
 back) with no gap. Linux Mint (same Ubuntu/PipeWire base) is expected to behave
 identically but is not yet verified on hardware.
 
-**Target distros:** Pop!_OS and Linux Mint, latest stock releases (both
+Target distros: Pop!_OS and Linux Mint, latest stock releases (both
 Ubuntu/Debian-based). Commands below assume `apt`.
 
 ## Build prerequisites
@@ -64,15 +64,15 @@ sudo apt install -y \
   libxkbcommon-dev libwayland-dev
 ```
 
-- `build-essential`, `pkg-config` — C toolchain for the `rusqlite` bundled
+- `build-essential`, `pkg-config`, C toolchain for the `rusqlite` bundled
   SQLite and `-sys` build scripts.
-- `libasound2-dev` — ALSA headers for cpal (audio).
-- `libgtk-3-dev` — native file dialogs (rfd).
-- `libxcb-*`, `libxkbcommon-dev`, `libwayland-dev` — winit/egui windowing on
+- `libasound2-dev`, ALSA headers for cpal (audio).
+- `libgtk-3-dev`, native file dialogs (rfd).
+- `libxcb-*`, `libxkbcommon-dev`, `libwayland-dev`, winit/egui windowing on
   X11 and Wayland.
 
 If a `cargo build` fails inside a `*-sys` crate, the error names the missing
-library — install its matching `-dev` package and retry. Record any additions
+library, install its matching `-dev` package and retry. Record any additions
 in this file.
 
 ## Build, run, verify
@@ -86,7 +86,7 @@ cargo test                     # unit tests (headless, no audio/display needed)
 `build.rs` copies `skins/` next to the built binary, so bundled skins are found
 at runtime.
 
-**Headless skin verification** (no display or audio required) — renders a skin's
+Headless skin verification (no display or audio required), renders a skin's
 windows to a PNG so you can check compositing over SSH or in CI:
 
 ```bash
@@ -98,42 +98,42 @@ cargo run --release -- --render-all skins/linamp_base_skin.wsz /tmp/out.png
 
 These are untested on Linux and the most likely sources of platform bugs:
 
-- **Borderless windows / docking** — the three windows are undecorated and
+- Borderless windows / docking, the three windows are undecorated and
   manually positioned/dragged, and snap/dock to each other (the main window
-  drags its docked group in tandem). This needs the **global cursor position**,
+  drags its docked group in tandem). This needs the global cursor position,
   which `global_cursor_points()` in `src/app.rs` reads per platform: `GetCursorPos`
-  on Windows, `XQueryPointer` on **X11** (via the `x11-dl` crate, dlopened — no
+  on Windows, `XQueryPointer` on X11 (via the `x11-dl` crate, dlopened, no
   new system package; libX11 is present on any X session). Verified working on
-  X11 (incl. XWayland). **Native Wayland cannot do this** — the compositor
+  X11 (incl. XWayland). Native Wayland cannot do this, the compositor
   forbids a client from reading the global cursor or positioning its own
   top-level windows, so docking falls back to a no-op there. Full Winamp-style
   docking on native Wayland would require compositing the three panes into a
   single top-level window (tracked separately). Until then, Wayland users get
   working docking via XWayland (`WINIT_UNIX_BACKEND=x11`).
-- **Window grouping** — the EQ/playlist windows ride the main window's z-order
+- Window grouping, the EQ/playlist windows ride the main window's z-order
   (raise and focus together, click any to bring all forward) and share one
   taskbar entry, like Winamp. `group_child_windows()` does this per platform:
   owner window (`GWLP_HWNDPARENT`) on Windows; `WM_TRANSIENT_FOR` plus
-  `_NET_WM_STATE_SKIP_TASKBAR` on **X11** (`x11util` in `src/app.rs`, applied
+  `_NET_WM_STATE_SKIP_TASKBAR` on X11 (`x11util` in `src/app.rs`, applied
   only until the links settle so steady state makes no X calls). Verified on
   X11; a no-op on native Wayland, which gives a client no z-order/stacking
   control (same single-window caveat as docking).
-- **File dialogs** (rfd) — opening files/folders, adding to the playlist.
-- **Audio** — playback, device switching, no-xruns under PipeWire.
-- **HiDPI / fractional scaling** — the skin is pixel-exact; check it isn't
+- File dialogs (rfd), opening files/folders, adding to the playlist.
+- Audio, playback, device switching, no-xruns under PipeWire.
+- HiDPI / fractional scaling, the skin is pixel-exact; check it isn't
   blurred or mis-scaled.
-- **Fonts/paths** — config/DB live under `dirs`-provided paths (XDG dirs on
+- Fonts/paths, config/DB live under `dirs`-provided paths (XDG dirs on
   Linux); confirm the library DB is created in the right place.
 
 ## Working conventions
 
-- **All Linux work stays on the `linux-testing` branch.** Keep it a single
+- All Linux work stays on the `linux-testing` branch. Keep it a single
   long-lived branch so the working Windows branches/`main` aren't disturbed.
   Prefer genuinely cross-platform fixes; when something must differ by OS, gate
   it with `#[cfg(...)]` rather than breaking Windows. Merge back to `main` only
   once a change is confirmed good on both platforms.
-- **Commits** match the existing history: a plain subject + body.
-- **GitHub Issues are the backlog** (repo `cjjulius/linamp`). File new
+- Commits match the existing history: a plain subject + body.
+- GitHub Issues are the backlog (repo `cjjulius/linamp`). File new
   Linux findings as issues; reference them from commits/PRs.
 - Don't commit build artifacts or local junk; `skins/` is bundled automatically.
 

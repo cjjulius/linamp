@@ -59,7 +59,7 @@ pub(crate) fn snap_rect(
         consider(&mut best_dy, m.y - r.bottom());
     }
     for o in others {
-        // Stacked (same column): the windows overlap horizontally -> snap the nearer
+        // Stacked (same column): the windows overlap horizontally, so snap the nearer
         // horizontal edge to edge and align the column's left side.
         let xover = r.left() < o.right() + s && r.right() > o.left() - s;
         if xover {
@@ -67,9 +67,9 @@ pub(crate) fn snap_rect(
             consider(&mut best_dy, o.top() - r.bottom());
             consider(&mut best_dx, o.left() - r.left());
         }
-        // Side by side (same row): the windows overlap vertically -> snap the nearer
+        // Side by side (same row): the windows overlap vertically, so snap the nearer
         // vertical edge to edge, and align the tops so a window docked to the side
-        // (e.g. the library right of main) lines up flush with the other's top.
+        // (example: the library right of main) lines up flush with the other's top.
         // Top-align only when actually side-docked (a vertical edge is flush), not
         // when merely stacked: a thin window dropped just above/below another is
         // within top-alignment range, and aligning its top would drag it onto the
@@ -144,7 +144,7 @@ pub(crate) fn dock_group_from_main(rects: &[egui::Rect], visible: &[bool]) -> Ve
 /// When window `grown` changes height, the other windows that should move with
 /// it: the docked sub-group hanging below it. Seeds with the windows docked
 /// directly below `grown`'s bottom edge, then transitively pulls in any window
-/// docked to one already moving — so a window docked to the *side* of a pushed
+/// docked to one already moving, so a window docked to the *side* of a pushed
 /// window rides along and stays docked. The grown window itself, and anything
 /// reachable only through it (above or beside it), stay put.
 pub(crate) fn docked_group_below(rects: &[Option<egui::Rect>; 3], grown: usize) -> [bool; 3] {
@@ -224,14 +224,14 @@ mod tests {
 
     #[test]
     fn a_gap_ends_the_chain() {
-        // EQ flush below main, but PL has a gap below EQ -> PL not pushed.
+        // EQ flush below main, but PL has a gap below EQ, so PL not pushed.
         let rects = [Some(r(0.0, 0.0, 275.0, 14.0)), Some(r(0.0, 14.0, 275.0, 14.0)), Some(r(0.0, 60.0, 275.0, 14.0))];
         assert_eq!(docked_group_below(&rects, 0), [false, true, false]);
     }
 
     #[test]
     fn a_floating_sidebyside_window_is_not_pushed() {
-        // EQ sits beside main (no x overlap with main's column) -> not in the chain.
+        // EQ sits beside main (no x overlap with main's column), so not in the chain.
         let rects = [Some(r(0.0, 0.0, 275.0, 14.0)), Some(r(400.0, 14.0, 275.0, 14.0)), None];
         assert_eq!(docked_group_below(&rects, 0), [false, false, false]);
     }
@@ -263,23 +263,23 @@ mod tests {
     #[test]
     fn push_off_main_keeps_it_uncovered() {
         let main = r(100.0, 100.0, 200.0, 100.0); // x 100..300, y 100..200
-        // Flush below -> not overlapping, no push.
+        // Flush below to not overlapping, no push.
         assert_eq!(push_off(r(100.0, 200.0, 200.0, 100.0), main), None);
-        // Overlapping mainly on main's left edge -> pushed out to the left.
+        // Overlapping mainly on main's left edge to pushed out to the left.
         let w = r(60.0, 120.0, 60.0, 40.0);
         let p = push_off(w, main).unwrap();
         assert!((p.x + 60.0 - main.left()).abs() < 0.01, "pushed flush to the left edge");
-        // Fully inside -> pushed to the nearest edge; result no longer overlaps.
+        // Fully inside to pushed to the nearest edge; result no longer overlaps.
         let inside = r(150.0, 130.0, 50.0, 40.0);
         let p = push_off(inside, main).unwrap();
         let moved = Rect::from_min_size(p, vec2(50.0, 40.0));
         assert!(push_off(moved, main).is_none(), "result still overlaps main");
-        // Dropped mostly ABOVE main (only a sliver overlaps its top edge) -> it is
+        // Dropped mostly ABOVE main (only a sliver overlaps its top edge) to it is
         // allowed above: pushed up so its bottom meets main's top.
         let above = r(150.0, 70.0, 50.0, 40.0); // y 70..110, overlaps main's top 100..110
         let p = push_off(above, main).unwrap();
         assert!((p.y + 40.0 - main.top()).abs() < 0.01, "clearly-above window snaps above");
-        // Centred vertically -> favours below over above despite similar distance.
+        // Centred vertically to favours below over above despite similar distance.
         let centred = r(150.0, 150.0, 50.0, 100.0); // y150..250 around main 100..200
         let p = push_off(centred, main).unwrap();
         assert!(p.y >= main.top(), "centred window favours below, not above");
@@ -287,13 +287,13 @@ mod tests {
 
     #[test]
     fn nudge_onto_pushes_offscreen_spans_back() {
-        // Already inside -> no move.
+        // Already inside to no move.
         assert_eq!(nudge_onto(10.0, 90.0, 0.0, 100.0), 0.0);
-        // Hanging off the right edge -> shift left just enough.
+        // Hanging off the right edge to shift left just enough.
         assert_eq!(nudge_onto(60.0, 140.0, 0.0, 100.0), -40.0);
-        // Off the left edge -> shift right.
+        // Off the left edge to shift right.
         assert_eq!(nudge_onto(-30.0, 50.0, 0.0, 100.0), 30.0);
-        // Span wider than the bounds -> keep the low edge visible (start at bmin).
+        // Span wider than the bounds to keep the low edge visible (start at bmin).
         assert_eq!(nudge_onto(50.0, 250.0, 0.0, 100.0), -50.0);
         // Works with a non-zero origin (second monitor / negative virtual origin).
         assert_eq!(nudge_onto(-900.0, -820.0, -1000.0, -200.0), 0.0);
@@ -431,7 +431,7 @@ mod tests {
             r(0.0, 116.0, 275.0, 116.0),
             r(0.0, 232.0, 275.0, 180.0),
         ];
-        // eq hidden -> it can't be in the group, and can't bridge to pl.
+        // eq hidden to it can't be in the group, and can't bridge to pl.
         assert_eq!(dock_group_from_main(&rects, &[true, false, true]), vec![true, false, false]);
     }
 

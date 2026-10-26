@@ -1,5 +1,6 @@
 //! The classic window render pipeline: a per-window fingerprint gates a
 //! sprite re-composite and GPU re-upload, so windows only redraw on change.
+//! See docs/ARCHITECTURE.md (Render pipeline).
 
 use super::*;
 
@@ -86,7 +87,7 @@ impl super::LinAmpApp {
                 self.playlist.current.hash(&mut h);
                 // The bottom-bar / shade time advances once a second while playing.
                 self.player.position().as_secs().hash(&mut h);
-                // Visible rows' identity + text — catches selection, current-row
+                // Visible rows' identity + text, catches selection, current-row
                 // and lazy tag loads without hashing the whole playlist. (Tags only
                 // load for visible rows, so off-screen rows can't change unseen.)
                 let vis = if self.pl_shade {
@@ -118,7 +119,7 @@ impl super::LinAmpApp {
 
     pub(super) fn render_window(&mut self, ctx: &egui::Context, win: ClWin) {
         self.handle_window_input(ctx, win);
-        self.handle_dropped(ctx);
+        self.handle_dropped(ctx, Some(win));
 
         // Refresh the analyzer data for the main window.
         if win == ClWin::Main && !self.main_shade {

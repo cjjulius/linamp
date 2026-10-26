@@ -15,11 +15,13 @@ pub struct Prefs {
     pub last_skin: Option<String>,
     /// true = the Stop action fades out instead of cutting off immediately.
     pub fade_on_stop: bool,
+    /// Fade-out length in seconds when `fade_on_stop` is on.
+    pub fade_on_stop_secs: f32,
     /// true = keep the LinAmp windows above other applications.
     pub always_on_top: bool,
     /// true = ignore a skin's custom cursors and use the system cursor instead.
     pub disable_skin_cursors: bool,
-    /// The Minibrowser's address — a nod to Winamp's SHOUTcast pane. Persisted so
+    /// The Minibrowser's address, a nod to Winamp's SHOUTcast pane. Persisted so
     /// the user can point it anywhere; defaults to the project repository.
     pub minibrowser_url: String,
     /// "Optional Features" opt-ins (obsolete / incomplete parity extras, off by
@@ -27,6 +29,12 @@ pub struct Prefs {
     /// binds the numeric keypad to transport controls.
     pub minibrowser_enabled: bool,
     pub numpad_transport: bool,
+    /// true = blend one track into the next over `crossfade_secs` instead of a hard
+    /// cut. Off by default (a classic Winamp output-plugin extra), so normal
+    /// playback is unchanged unless the user turns it on.
+    pub crossfade: bool,
+    /// Crossfade length in seconds when `crossfade` is on.
+    pub crossfade_secs: f32,
 }
 
 impl Default for Prefs {
@@ -38,11 +46,14 @@ impl Default for Prefs {
             tag_on_load: true,
             last_skin: None,
             fade_on_stop: false,
+            fade_on_stop_secs: 2.0,
             always_on_top: false,
             disable_skin_cursors: false,
             minibrowser_url: "https://github.com/cjjulius/linamp".to_string(),
             minibrowser_enabled: false,
             numpad_transport: false,
+            crossfade: false,
+            crossfade_secs: 3.0,
         }
     }
 }
@@ -131,7 +142,7 @@ impl Session {
     /// A content signature over everything the session persists, used to detect
     /// changes worth re-saving. Hashing the serialized form (rather than a
     /// hand-listed set of fields) means the dirty check can never drift from what
-    /// `save` actually writes — the root cause of volume not persisting (#105).
+    /// `save` actually writes, the root cause of volume not persisting (#105).
     pub fn sig(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -139,7 +150,7 @@ impl Session {
         h.finish()
     }
 
-    /// Whether a saved session exists — false on a truly first launch.
+    /// Whether a saved session exists, false on a truly first launch.
     pub fn exists() -> bool {
         Self::path().exists()
     }
@@ -217,7 +228,7 @@ impl Bookmarks {
     }
 }
 
-/// A user-named equalizer preset (LinAmp's in-app preset library — the classic
+/// A user-named equalizer preset (LinAmp's in-app preset library, the classic
 /// Winamp "Presets > Load/Save" list). Stored losslessly as JSON; the separate
 /// .EQF import/export covers Winamp-format interop.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -362,12 +373,16 @@ mod tests {
             double_size: false,
             tag_on_load: true,
             last_skin: Some("C:/skins/x.wsz".into()),
+            crossfade: true,
+            crossfade_secs: 5.0,
             ..Prefs::default()
         };
         let s = serde_json::to_string(&p).unwrap();
         let q: Prefs = serde_json::from_str(&s).unwrap();
         assert!(!q.double_size && q.tag_on_load);
         assert_eq!(q.last_skin.as_deref(), Some("C:/skins/x.wsz"));
+        assert!(q.crossfade);
+        assert_eq!(q.crossfade_secs, 5.0);
     }
 
     #[test]

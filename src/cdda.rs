@@ -1,0 +1,1262 @@
+//! Audio CD (CDDA) support, the device-agnostic groundwork (#160).
+//!
+//! CD audio is uncompressed 16-bit stereo PCM at 44.1 kHz, so no codec or license
+//! is needed to decode it. The work is CD-ROM access: read the table of contents,
+//! then read raw CDDA sectors, which is per-OS (DeviceIoControl on Windows, the
+//! CDROM ioctls on Linux) and needs a real optical drive to develop and verify.
+//! `libcdio` is GPL and incompatible with this app's Apache-2.0 licence, so the
+//! device layer uses raw OS reads instead.
+//!
+//! This module holds the parts that are OS- and hardware-independent (the track
+//! model, CDDA timing and the playlist pseudo-path) so both platforms' device
+//! code and the playback source can build on one shared representation.
+
+// The Linux device layer ([`linux`]) and the background-buffered playback source
+// ([`BufferedCdSource`]) are wired into playback on Linux (#160); on Windows and
+// macOS the public entry points below return a clean "Linux only" error, so some
+// items here are unused in those builds. Keep them without dead-code noise.
+#![allow(dead_code)]
+
+use std::path::Path;
+use std::time::Duration;
+
+use anyhow::{anyhow, Result};
+use rodio::source::SeekError;
+use rodio::Source;
+
+/// CDDA is 16-bit stereo PCM at 44.1 kHz: 2352 bytes per sector, 75 sectors/sec.
+pub const CDDA_SECTOR_BYTES: usize = 2352;
+pub const CDDA_SECTORS_PER_SEC: u32 = 75;
+pub const CDDA_SAMPLE_RATE: u32 = 44_100;
+pub const CDDA_CHANNELS: u16 = 2;
+
+/// One audio track from a disc's table of contents. Positions are in sectors
+/// (logical block addresses), the native CDDA unit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CdTrack {
+    /// 1-based track number, as printed on the disc.
+    pub number: u8,
+    /// First sector of the track.
+    pub start_lba: u32,
+    /// Track length in sectors.
+    pub sectors: u32,
+}
+
+impl CdTrack {
+    /// Playing time, derived from the sector count (75 sectors = 1 second).
+    pub fn duration(&self) -> Duration {
+        Duration::from_secs_f64(self.sectors as f64 / CDDA_SECTORS_PER_SEC as f64)
+    }
+}
+
+/// The pseudo-path the playlist uses to refer to a CD audio track, which has no
+/// file on disk: `cdda://<device>/<track>`, where `<device>` is the OS drive id
+/// (example: `D:` on Windows, `/dev/sr0` on Linux) and `<track>` is the track number.
+pub fn track_path(device: &str, track: u8) -> String {
+    format!("cdda://{device}/{track}")
+}
+
+/// Parse a [`track_path`] back into `(device, track)`.
+pub fn parse_track_path(s: &str) -> Option<(String, u8)> {
+    let rest = s.strip_prefix("cdda://")?;
+    // The track number is the final `/<n>`; everything before it is the device,
+    // which itself may contain `/` (example: `/dev/sr0`).
+    let (device, track) = rest.rsplit_once('/')?;
+    if device.is_empty() {
+        return None;
+    }
+    Some((device.to_string(), track.parse().ok()?))
+}
+
+/// True for a CD-track pseudo-path (not a real file on disk).
+pub fn is_cdda_path(s: &str) -> bool {
+    s.starts_with("cdda://")
+}
+
+/// Interleaved f32 samples per CDDA sector (2352 bytes / 2 bytes per 16-bit sample).
+pub const CDDA_SAMPLES_PER_SECTOR: usize = CDDA_SECTOR_BYTES / 2;
+
+/// Convert raw CDDA sector bytes (16-bit little-endian stereo PCM, the on-disc
+/// form) to interleaved f32 in roughly -1.0..=1.0, which is what the rodio
+/// pipeline consumes. The per-OS device layer reads whole 2352-byte sectors; this
+/// turns them into audio, so it can share one playback source across platforms.
+/// A trailing odd byte (which a correct 2352-byte sector never has) is ignored.
+pub fn pcm_s16le_to_f32(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+        .collect()
+}
+
+/// What the per-OS device layer must provide for CD playback. Implementations do
+/// the raw device I/O (DeviceIoControl on Windows, the CDROM ioctls on Linux);
+/// everything above this trait is platform-independent and already tested.
+pub trait CdDrive: Send {
+    /// Read the disc's table of contents (the audio tracks, in order).
+    fn read_toc(&mut self) -> Result<Vec<CdTrack>>;
+    /// Read one 2352-byte CDDA audio sector at logical block address `lba`.
+    fn read_sector(&mut self, lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]>;
+    /// Read `count` consecutive sectors from `lba`, returned as one byte run.
+    ///
+    /// The default loops `read_sector`, but a device layer should override this to
+    /// read the whole run in a single request. Playback reads ~1 second at a time
+    /// (see `CdAudioSource`); one request per second keeps the drive streaming,
+    /// whereas one request per 2352-byte sector makes it re-seek/spin constantly
+    /// and stutter (#160).
+    fn read_sectors(&mut self, lba: u32, count: u32) -> Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(count as usize * CDDA_SECTOR_BYTES);
+        for i in 0..count {
+            out.extend_from_slice(&self.read_sector(lba + i)?);
+        }
+        Ok(out)
+    }
+}
+
+/// Sectors read per drive access during playback (~1 second of audio). Reading a
+/// batch instead of a single 2352-byte sector per audio refill is what keeps CD
+/// playback from stuttering (#160).
+const READAHEAD_SECTORS: u32 = CDDA_SECTORS_PER_SEC;
+
+/// A rodio `Source` that plays one CD track by reading its sectors through a
+/// [`CdDrive`] and converting each to f32. Platform-independent: it works against
+/// any drive implementation, so only the device I/O is left per-OS.
+pub struct CdAudioSource<D: CdDrive> {
+    drive: D,
+    start_lba: u32,
+    next_lba: u32,
+    end_lba: u32,
+    samples: Vec<f32>,
+    pos: usize,
+}
+
+impl<D: CdDrive> CdAudioSource<D> {
+    /// Play `track` from `drive`.
+    pub fn new(drive: D, track: &CdTrack) -> Self {
+        Self {
+            drive,
+            start_lba: track.start_lba,
+            next_lba: track.start_lba,
+            end_lba: track.start_lba + track.sectors,
+            samples: Vec::new(),
+            pos: 0,
+        }
+    }
+
+    /// Read the next batch of sectors into `samples`; false at end of track / on a
+    /// read error. Reads up to `READAHEAD_SECTORS` at once so the audio thread hits
+    /// the drive about once a second in a streaming burst, not once per 2352-byte
+    /// sector (which stutters as the drive re-seeks and spins up) (#160).
+    fn fill(&mut self) -> bool {
+        if self.next_lba >= self.end_lba {
+            return false;
+        }
+        let count = (self.end_lba - self.next_lba).min(READAHEAD_SECTORS);
+        match self.drive.read_sectors(self.next_lba, count) {
+            Ok(bytes) if !bytes.is_empty() => {
+                self.samples = pcm_s16le_to_f32(&bytes);
+                self.pos = 0;
+                self.next_lba += count;
+                !self.samples.is_empty()
+            }
+            _ => false,
+        }
+    }
+}
+
+impl<D: CdDrive> Iterator for CdAudioSource<D> {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        if self.pos >= self.samples.len() && !self.fill() {
+            return None;
+        }
+        let s = self.samples[self.pos];
+        self.pos += 1;
+        Some(s)
+    }
+}
+
+impl<D: CdDrive> Source for CdAudioSource<D> {
+    fn current_frame_len(&self) -> Option<usize> {
+        let rem = self.samples.len() - self.pos;
+        (rem > 0).then_some(rem)
+    }
+    fn channels(&self) -> u16 {
+        CDDA_CHANNELS
+    }
+    fn sample_rate(&self) -> u32 {
+        CDDA_SAMPLE_RATE
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs_f64(
+            (self.end_lba - self.start_lba) as f64 / CDDA_SECTORS_PER_SEC as f64,
+        ))
+    }
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        // Seek to the sector that holds `pos` (75 sectors = 1 second), clamped to
+        // the track, then re-read from there.
+        let sector = (pos.as_secs_f64() * CDDA_SECTORS_PER_SEC as f64) as u32;
+        self.next_lba = (self.start_lba + sector).min(self.end_lba);
+        self.samples.clear();
+        self.pos = 0;
+        Ok(())
+    }
+}
+
+// --- Background-buffered playback source -----------------------------------
+//
+// Reading CDDA sectors synchronously on the audio thread stutters: an optical
+// drive's reads are bursty, and a single ~1-second batch can spike to 2-3 seconds
+// when the drive re-reads or renegotiates speed (measured on real hardware). That
+// starves the output, the drive idles and spins down, then seeks and spins up to
+// resume, the audible "stop, then surprised respin" (#160). The fix is to read on
+// a background thread into a deep prefetch buffer, so the audio thread pulls at a
+// steady real-time rate while the reader absorbs the spikes and keeps the drive
+// streaming (it touches the drive about once a second in steady state, so it never
+// idles long enough to spin down).
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError};
+use std::sync::Arc;
+use std::thread;
+
+/// Prefetch-buffer depth in 1-second batches. Deep enough to ride out the
+/// multi-second read spikes a drive produces, while the bounded channel's
+/// back-pressure keeps the reader touching the drive roughly once a second so it
+/// stays spun up rather than spinning down between reads (#160).
+const PREFETCH_BATCHES: usize = 32;
+
+/// Messages the reader thread sends to the playback source. Each carries the seek
+/// generation it was produced under, so audio queued before a seek is recognised
+/// as stale and dropped instead of played.
+enum CdMsg {
+    /// A batch of interleaved f32 samples for the given generation.
+    Batch(u64, Vec<f32>),
+    /// The track played out (reader reached the end) for the given generation.
+    End(u64),
+}
+
+/// A rodio `Source` that plays one CD track by reading its sectors on a background
+/// thread into a bounded prefetch buffer, decoupling the drive's bursty reads from
+/// the steady real-time pull of the audio output (#160). Platform-independent: it
+/// drives any [`CdDrive`], so only the device I/O stays per-OS.
+pub struct BufferedCdSource {
+    rx: Receiver<CdMsg>,
+    /// Target sector (relative to the track start) for a seek, tagged with the new
+    /// generation. The reader jumps there and stamps later batches with that
+    /// generation.
+    seek_tx: SyncSender<(u64, u32)>,
+    /// The generation the source currently accepts. A seek bumps it; batches with
+    /// an older generation are dropped as stale.
+    gen: u64,
+    cur: Vec<f32>,
+    pos: usize,
+    total: Option<Duration>,
+    /// False until the first real batch is produced. While false, `next` returns
+    /// silence instead of blocking, so the drive's spin-up never stalls rodio's
+    /// mixer (which would freeze a concurrent crossfade's outgoing track).
+    started: bool,
+    /// Set true the moment real audio starts flowing, so a crossfade can wait for
+    /// the spin-up to finish before it begins the blend ([`ready_flag`]).
+    ready: Arc<AtomicBool>,
+}
+
+impl BufferedCdSource {
+    /// Start playing `track` from `drive` on a background reader thread.
+    pub fn new<D: CdDrive + 'static>(drive: D, track: &CdTrack) -> Self {
+        let (tx, rx) = sync_channel::<CdMsg>(PREFETCH_BATCHES);
+        let (seek_tx, seek_rx) = sync_channel::<(u64, u32)>(8);
+        let total = Some(Duration::from_secs_f64(
+            track.sectors as f64 / CDDA_SECTORS_PER_SEC as f64,
+        ));
+        let t = track.clone();
+        thread::spawn(move || reader_loop(drive, t, tx, seek_rx));
+        Self {
+            rx,
+            seek_tx,
+            gen: 0,
+            cur: Vec::new(),
+            pos: 0,
+            total,
+            started: false,
+            ready: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// A handle to the "audio is flowing" flag: false while the drive spins up, true
+    /// once the first real samples are produced. The player waits on this to start a
+    /// crossfade into a CD only once there is something to fade in (#160).
+    pub fn ready_flag(&self) -> Arc<AtomicBool> {
+        self.ready.clone()
+    }
+}
+
+/// The reader thread: read sectors in ~1-second batches and send them, honouring
+/// seek requests. Exits when the track ends with no pending seek, on a read error,
+/// or once the source is dropped (the channels close).
+fn reader_loop<D: CdDrive>(
+    mut drive: D,
+    track: CdTrack,
+    tx: SyncSender<CdMsg>,
+    seek_rx: Receiver<(u64, u32)>,
+) {
+    let start = track.start_lba;
+    let end = track.start_lba + track.sectors;
+    let mut gen = 0u64;
+    let mut next_lba = start;
+    loop {
+        // Apply any pending seeks, collapsing a burst to the most recent.
+        while let Ok((g, sector)) = seek_rx.try_recv() {
+            gen = g;
+            next_lba = (start + sector).min(end);
+        }
+        if next_lba >= end {
+            if tx.send(CdMsg::End(gen)).is_err() {
+                return; // source dropped
+            }
+            // Block for a backward seek; exit when the source is gone.
+            match seek_rx.recv() {
+                Ok((g, sector)) => {
+                    gen = g;
+                    next_lba = (start + sector).min(end);
+                    continue;
+                }
+                Err(_) => return,
+            }
+        }
+        let count = (end - next_lba).min(READAHEAD_SECTORS);
+        match drive.read_sectors(next_lba, count) {
+            Ok(bytes) if !bytes.is_empty() => {
+                let samples = pcm_s16le_to_f32(&bytes);
+                next_lba += count;
+                if tx.send(CdMsg::Batch(gen, samples)).is_err() {
+                    return; // source dropped
+                }
+            }
+            _ => {
+                // A read error ends the track cleanly rather than looping on it.
+                let _ = tx.send(CdMsg::End(gen));
+                return;
+            }
+        }
+    }
+}
+
+impl Iterator for BufferedCdSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        loop {
+            if self.pos < self.cur.len() {
+                let s = self.cur[self.pos];
+                self.pos += 1;
+                return Some(s);
+            }
+            // Before the first real audio (drive spin-up), don't block: return
+            // silence so the audio mixer keeps running and a concurrent crossfade's
+            // outgoing track plays on. Once audio is flowing, wait on the deep buffer
+            // as usual (a transient underrun should pause, not insert a silent gap).
+            if !self.started {
+                match self.rx.try_recv() {
+                    Ok(CdMsg::Batch(g, v)) if g == self.gen => {
+                        self.started = true;
+                        self.ready.store(true, Ordering::Relaxed);
+                        self.cur = v;
+                        self.pos = 0;
+                    }
+                    Ok(CdMsg::End(g)) if g == self.gen => return None,
+                    Ok(_) => continue,                        // stale pre-seek message
+                    Err(TryRecvError::Empty) => return Some(0.0), // still spinning up
+                    Err(TryRecvError::Disconnected) => return None,
+                }
+            } else {
+                // Current batch drained: pull the next, skipping any batch left over
+                // from before a seek (a stale generation).
+                match self.rx.recv() {
+                    Ok(CdMsg::Batch(g, v)) if g == self.gen => {
+                        self.cur = v;
+                        self.pos = 0;
+                    }
+                    Ok(CdMsg::End(g)) if g == self.gen => return None,
+                    Ok(_) => continue,     // stale batch/end from before a seek
+                    Err(_) => return None, // reader gone
+                }
+            }
+        }
+    }
+}
+
+impl Source for BufferedCdSource {
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> u16 {
+        CDDA_CHANNELS
+    }
+    fn sample_rate(&self) -> u32 {
+        CDDA_SAMPLE_RATE
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.total
+    }
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        // Bump the generation, drop the buffered pre-seek audio, and tell the
+        // reader to jump. Batches already queued are discarded by generation in
+        // `next`. Treated as always seekable (it's a CD); if the reader has already
+        // exited (track over), the request is simply a no-op.
+        let sector = (pos.as_secs_f64() * CDDA_SECTORS_PER_SEC as f64) as u32;
+        self.gen += 1;
+        self.cur.clear();
+        self.pos = 0;
+        let _ = self.seek_tx.send((self.gen, sector));
+        Ok(())
+    }
+}
+
+// --- Cross-platform entry points ------------------------------------------
+
+/// Read the audio tracks from the disc in `device` (example: `/dev/sr0`). Audio-CD
+/// access is Linux-only in this build; other platforms return a clean error.
+pub fn read_cd_toc(device: &str) -> Result<Vec<CdTrack>> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut drive = linux::LinuxCdDrive::open(device)?;
+        drive.read_toc()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let mut drive = windows::WindowsCdDrive::open(device)?;
+        drive.read_toc()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = device;
+        Err(anyhow!("audio CD support isn't available on this platform in this build"))
+    }
+}
+
+/// Open a background-buffered playback source for `track` on `device`. Audio-CD
+/// access is Linux-only in this build; other platforms return a clean error.
+pub fn open_cd_source(device: &str, track: u8) -> Result<BufferedCdSource> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut drive = linux::LinuxCdDrive::open(device)?;
+        let toc = drive.read_toc()?;
+        let t = toc
+            .into_iter()
+            .find(|t| t.number == track)
+            .ok_or_else(|| anyhow!("track {track} not found on the disc"))?;
+        Ok(BufferedCdSource::new(drive, &t))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let mut drive = windows::WindowsCdDrive::open(device)?;
+        let toc = drive.read_toc()?;
+        let t = toc
+            .into_iter()
+            .find(|t| t.number == track)
+            .ok_or_else(|| anyhow!("track {track} not found on the disc"))?;
+        Ok(BufferedCdSource::new(drive, &t))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = (device, track);
+        Err(anyhow!("audio CD support isn't available on this platform in this build"))
+    }
+}
+
+// --- GVfs audio-CD redirect -----------------------------------------------
+//
+// When the desktop mounts an audio CD, it exposes the tracks as slow FUSE WAV
+// files under `.../gvfs/cdda:host=<dev>/Track N.wav`. Adding those to the playlist
+// the obvious way plays them through that FUSE path, the exact slow transport that
+// stutters. These helpers recognise such a path so the playlist can transparently
+// store a native `cdda://` entry instead and read the drive directly (#160).
+
+/// If `path` points inside a GVfs audio-CD mount (`.../gvfs/cdda:host=<dev>/...`),
+/// return the backing device (`/dev/<dev>`). Pure path inspection.
+pub fn gvfs_cdda_device(path: &Path) -> Option<String> {
+    for comp in path.components() {
+        if let Some(s) = comp.as_os_str().to_str() {
+            if let Some(rest) = s.strip_prefix("cdda:host=") {
+                // The mount component can carry extra params (cdda:host=sr0,...).
+                let host = rest.split([',', '/']).next().unwrap_or(rest);
+                if !host.is_empty() {
+                    return Some(format!("/dev/{host}"));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parse a GVfs audio-CD track path into its device and 1-based track number, or
+/// `None` when `path` is not a GVfs CD track.
+pub fn parse_gvfs_cdda_path(path: &Path) -> Option<(String, u8)> {
+    let device = gvfs_cdda_device(path)?;
+    // GVfs names tracks "Track N.wav"; take the number from the file stem.
+    let stem = path.file_stem()?.to_str()?;
+    let digits: String = stem.chars().filter(|c| c.is_ascii_digit()).collect();
+    let track: u8 = digits.parse().ok()?;
+    Some((device, track))
+}
+
+/// Parse a KDE Plasma kio-fuse audio-CD track path into its 1-based track number,
+/// or `None` when `path` is not one. KDE exposes a mounted CD under a `kio-fuse`
+/// mount with an `audiocd` component (example:
+/// `.../kio-fuse-XXXX/audiocd/Wav/Track 03.wav`). Unlike GVfs the device is not in
+/// the path, so the caller uses the default drive. Conservative on purpose (both
+/// components plus a numeric file name required), so it never matches a GVfs or
+/// ordinary path. Best-effort, verified only against the documented layout.
+pub fn parse_kio_cdda_path(path: &Path) -> Option<u8> {
+    let (mut kio_fuse, mut audiocd) = (false, false);
+    for comp in path.components() {
+        if let Some(s) = comp.as_os_str().to_str() {
+            if s.starts_with("kio-fuse") {
+                kio_fuse = true;
+            }
+            if s.eq_ignore_ascii_case("audiocd") {
+                audiocd = true;
+            }
+        }
+    }
+    if !(kio_fuse && audiocd) {
+        return None;
+    }
+    let stem = path.file_stem()?.to_str()?;
+    let digits: String = stem.chars().filter(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// Resolve a desktop-mounted audio-CD track path to its native device and
+/// [`CdTrack`] (length from the disc TOC), so a playlist can store a `cdda://`
+/// entry instead of the slow FUSE WAV. Handles GVfs (GNOME / Cinnamon / XFCE,
+/// device from the mount path) and, best-effort, KDE kio-fuse (device from the
+/// default drive). Linux only; `None` elsewhere, off a disc, or when the drive
+/// can't be read.
+pub fn mounted_cd_track(path: &Path) -> Option<(String, CdTrack)> {
+    #[cfg(target_os = "linux")]
+    {
+        let (device, track) = match parse_gvfs_cdda_path(path) {
+            Some(dt) => dt,
+            None => (default_cd_device(), parse_kio_cdda_path(path)?),
+        };
+        let toc = linux::cached_toc(&device)?;
+        let t = toc.into_iter().find(|t| t.number == track)?;
+        Some((device, t))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// The platform's default optical device, used when the UI opens a CD.
+pub fn default_cd_device() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        linux::default_device()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::default_device()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        "/dev/cdrom".to_string()
+    }
+}
+
+/// Linux CD-ROM device layer: raw `CDROMREADTOCHDR` / `CDROMREADTOCENTRY` /
+/// `CDROMREADAUDIO` ioctls on an optical device, no libcdio (keeps the licence
+/// clean). Reads whole 2352-byte CDDA sectors, which the shared source turns into
+/// audio (#160).
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::*;
+    use std::fs::File;
+    use std::os::fd::AsRawFd;
+
+    const CDROMREADTOCHDR: libc::c_ulong = 0x5305;
+    const CDROMREADTOCENTRY: libc::c_ulong = 0x5306;
+    const CDROMREADAUDIO: libc::c_ulong = 0x530e;
+    const CDROM_LBA: u8 = 0x01; // address format: logical block address
+    const CDROM_LEADOUT: u8 = 0xAA; // pseudo-track: the disc lead-out (end)
+    const CDROM_DATA_TRACK: u8 = 0x04; // ctrl bit set on data (non-audio) tracks
+
+    // These mirror the C structs in <linux/cdrom.h>. `#[repr(C)]` reproduces the
+    // same field order and padding the kernel copies into/out of.
+    #[repr(C)]
+    struct TocHdr {
+        trk0: u8,
+        trk1: u8,
+    }
+    #[repr(C)]
+    struct TocEntry {
+        track: u8,
+        adr_ctrl: u8, // adr:4 (high), ctrl:4 (low) packed in one byte
+        format: u8,
+        addr_lba: i32, // union cdrom_addr, read as the LBA (format = CDROM_LBA)
+        datamode: u8,
+    }
+    #[repr(C)]
+    struct ReadAudio {
+        addr_lba: i32, // union cdrom_addr: start LBA
+        addr_format: u8,
+        nframes: i32, // number of 2352-byte frames to read
+        buf: *mut u8, // caller-provided buffer, nframes * 2352 bytes
+    }
+
+    /// An opened optical device, used read-only through the CD-ROM ioctls.
+    pub struct LinuxCdDrive {
+        file: File,
+    }
+
+    impl LinuxCdDrive {
+        /// Open `device` (example: `/dev/sr0`) read-only.
+        pub fn open(device: &str) -> Result<Self> {
+            let file = File::options()
+                .read(true)
+                .open(device)
+                .map_err(|e| anyhow!("open {device}: {e}"))?;
+            Ok(Self { file })
+        }
+
+        fn fd(&self) -> libc::c_int {
+            self.file.as_raw_fd()
+        }
+
+        fn toc_entry(&self, track: u8) -> Option<TocEntry> {
+            let mut e = TocEntry {
+                track,
+                adr_ctrl: 0,
+                format: CDROM_LBA,
+                addr_lba: 0,
+                datamode: 0,
+            };
+            let r = unsafe {
+                // `as _` on the request: glibc's ioctl takes c_ulong, musl's c_int.
+                libc::ioctl(self.fd(), CDROMREADTOCENTRY as _, &mut e as *mut _ as *mut libc::c_void)
+            };
+            (r == 0).then_some(e)
+        }
+    }
+
+    impl CdDrive for LinuxCdDrive {
+        fn read_toc(&mut self) -> Result<Vec<CdTrack>> {
+            let mut hdr = TocHdr { trk0: 0, trk1: 0 };
+            let r = unsafe {
+                libc::ioctl(self.fd(), CDROMREADTOCHDR as _, &mut hdr as *mut _ as *mut libc::c_void)
+            };
+            if r != 0 {
+                return Err(anyhow!(
+                    "read TOC header: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            // The lead-out marks the end of the last track.
+            let leadout = self.toc_entry(CDROM_LEADOUT).map(|e| e.addr_lba).unwrap_or(0);
+            let mut entries = Vec::new();
+            for t in hdr.trk0..=hdr.trk1 {
+                if let Some(e) = self.toc_entry(t) {
+                    let is_data = e.adr_ctrl & CDROM_DATA_TRACK != 0;
+                    entries.push((t, e.addr_lba, is_data));
+                }
+            }
+            let mut out = Vec::new();
+            for i in 0..entries.len() {
+                let (num, lba, is_data) = entries[i];
+                if is_data {
+                    continue; // CDDA playback: audio tracks only
+                }
+                let next = entries.get(i + 1).map(|x| x.1).unwrap_or(leadout);
+                if next > lba {
+                    out.push(CdTrack {
+                        number: num,
+                        start_lba: lba as u32,
+                        sectors: (next - lba) as u32,
+                    });
+                }
+            }
+            if out.is_empty() {
+                return Err(anyhow!("no audio tracks on the disc"));
+            }
+            Ok(out)
+        }
+
+        fn read_sector(&mut self, lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]> {
+            let v = self.read_sectors(lba, 1)?;
+            let mut out = [0u8; CDDA_SECTOR_BYTES];
+            let n = v.len().min(CDDA_SECTOR_BYTES);
+            out[..n].copy_from_slice(&v[..n]);
+            Ok(out)
+        }
+
+        fn read_sectors(&mut self, lba: u32, count: u32) -> Result<Vec<u8>> {
+            let mut buf = vec![0u8; count as usize * CDDA_SECTOR_BYTES];
+            let mut ra = ReadAudio {
+                addr_lba: lba as i32,
+                addr_format: CDROM_LBA,
+                nframes: count as i32,
+                buf: buf.as_mut_ptr(),
+            };
+            let r = unsafe {
+                libc::ioctl(self.fd(), CDROMREADAUDIO as _, &mut ra as *mut _ as *mut libc::c_void)
+            };
+            if r != 0 {
+                return Err(anyhow!(
+                    "read audio at lba {lba}: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            Ok(buf)
+        }
+    }
+
+    /// The disc TOC, cached briefly per device so adding a whole folder of GVfs CD
+    /// tracks reads the disc once instead of once per file.
+    pub fn cached_toc(device: &str) -> Option<Vec<CdTrack>> {
+        use std::sync::Mutex;
+        use std::time::Instant;
+        static CACHE: Mutex<Option<(String, Instant, Vec<CdTrack>)>> = Mutex::new(None);
+        let mut guard = CACHE.lock().ok()?;
+        if let Some((dev, at, toc)) = guard.as_ref() {
+            if dev == device && at.elapsed().as_secs() < 10 {
+                return Some(toc.clone());
+            }
+        }
+        let toc = super::read_cd_toc(device).ok()?;
+        *guard = Some((device.to_string(), Instant::now(), toc.clone()));
+        Some(toc)
+    }
+
+    /// The default optical device. Prefer the `/dev/cdrom` symlink (udev points it
+    /// at the first drive on most distros), then fall back to the first raw
+    /// `/dev/srN` that exists, so a drive at sr1+ or a distro without the symlink is
+    /// still found.
+    pub fn default_device() -> String {
+        if std::path::Path::new("/dev/cdrom").exists() {
+            return "/dev/cdrom".to_string();
+        }
+        for n in 0..8 {
+            let d = format!("/dev/sr{n}");
+            if std::path::Path::new(&d).exists() {
+                return d;
+            }
+        }
+        "/dev/cdrom".to_string()
+    }
+}
+
+/// Windows CD-ROM device layer via `DeviceIoControl`: `IOCTL_CDROM_READ_TOC` for
+/// the track list and `IOCTL_CDROM_RAW_READ` for raw 2352-byte CDDA sectors, with
+/// hand-declared Win32 FFI so no extra crate is needed (mirroring the Linux ioctl
+/// path). Reads go through the same `BufferedCdSource`.
+///
+/// UNTESTED ON HARDWARE: the machine this was written on has no optical drive, so
+/// the raw reads have never run against a real disc. The layout follows the
+/// documented ntddcdrm.h structs and the (verified) Linux path, but the IOCTL
+/// details (notably the raw-read byte offset at the 2048 logical-sector size) need a
+/// Windows machine with a drive + an audio CD to confirm (#160).
+#[cfg(target_os = "windows")]
+mod windows {
+    use super::*;
+    use std::ffi::c_void;
+
+    type Handle = *mut c_void;
+    const INVALID_HANDLE_VALUE: Handle = -1isize as Handle;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const FILE_SHARE_READ: u32 = 0x1;
+    const FILE_SHARE_WRITE: u32 = 0x2;
+    const OPEN_EXISTING: u32 = 3;
+    const IOCTL_CDROM_READ_TOC: u32 = 0x0002_4000;
+    const IOCTL_CDROM_RAW_READ: u32 = 0x0002_403E;
+    const TRACK_MODE_CDDA: u32 = 2;
+    const MAX_TRACKS: usize = 100;
+    const CONTROL_DATA_TRACK: u8 = 0x04;
+    /// Windows gives the raw-read start as a byte offset at the 2048 logical-sector
+    /// size, not the 2352-byte raw size.
+    const LOGICAL_SECTOR_BYTES: i64 = 2048;
+    /// IOCTL_CDROM_RAW_READ transfers through a bounded buffer (about 64 KB), so it
+    /// rejects a request for more than 27 raw 2352-byte sectors (27 * 2352 = 63504
+    /// bytes fits, 28 does not, which fails with ERROR_INVALID_PARAMETER). Larger
+    /// runs are read in chunks of this many and concatenated.
+    const MAX_RAW_SECTORS: u32 = 27;
+
+    extern "system" {
+        fn CreateFileW(
+            name: *const u16,
+            access: u32,
+            share: u32,
+            security: *mut c_void,
+            disposition: u32,
+            flags: u32,
+            template: Handle,
+        ) -> Handle;
+        fn DeviceIoControl(
+            device: Handle,
+            code: u32,
+            in_buf: *const c_void,
+            in_size: u32,
+            out_buf: *mut c_void,
+            out_size: u32,
+            returned: *mut u32,
+            overlapped: *mut c_void,
+        ) -> i32;
+        fn CloseHandle(h: Handle) -> i32;
+    }
+
+    // Mirror ntddcdrm.h. The Control:4 / Adr:4 C bitfield packs into one byte with
+    // Control in the low nibble (declared first).
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct TrackData {
+        reserved: u8,
+        control_adr: u8,
+        track_number: u8,
+        reserved1: u8,
+        address: [u8; 4], // 0, minute, second, frame (MSF)
+    }
+    #[repr(C)]
+    struct CdromToc {
+        length: [u8; 2],
+        first_track: u8,
+        last_track: u8,
+        track_data: [TrackData; MAX_TRACKS],
+    }
+    #[repr(C)]
+    struct RawReadInfo {
+        disk_offset: i64, // LARGE_INTEGER: start sector * 2048 bytes
+        sector_count: u32,
+        track_mode: u32, // TRACK_MODE_TYPE, CDDA = 2
+    }
+
+    /// MSF (minute/second/frame) address to a logical block address (150-frame
+    /// lead-in offset).
+    fn msf_to_lba(m: u8, s: u8, f: u8) -> u32 {
+        ((m as u32 * 60 + s as u32) * 75 + f as u32).saturating_sub(150)
+    }
+
+    /// An opened optical device handle (`\\.\D:`).
+    pub struct WindowsCdDrive {
+        handle: Handle,
+    }
+    // The handle is only ever used from `&mut self` on whichever thread owns the
+    // drive (BufferedCdSource moves it to its reader thread), so sending it is sound.
+    unsafe impl Send for WindowsCdDrive {}
+
+    impl WindowsCdDrive {
+        /// Open the optical drive named `device` (example: `D:`) as `\\.\D:`.
+        pub fn open(device: &str) -> Result<Self> {
+            let dev = device.trim_end_matches('\\');
+            let path = format!(r"\\.\{dev}");
+            let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+            let handle = unsafe {
+                CreateFileW(
+                    wide.as_ptr(),
+                    GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    std::ptr::null_mut(),
+                    OPEN_EXISTING,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+                return Err(anyhow!("open {path}: {}", std::io::Error::last_os_error()));
+            }
+            Ok(Self { handle })
+        }
+    }
+
+    impl Drop for WindowsCdDrive {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+
+    impl CdDrive for WindowsCdDrive {
+        fn read_toc(&mut self) -> Result<Vec<CdTrack>> {
+            let blank = TrackData {
+                reserved: 0,
+                control_adr: 0,
+                track_number: 0,
+                reserved1: 0,
+                address: [0; 4],
+            };
+            let mut toc = CdromToc {
+                length: [0; 2],
+                first_track: 0,
+                last_track: 0,
+                track_data: [blank; MAX_TRACKS],
+            };
+            let mut returned = 0u32;
+            let ok = unsafe {
+                DeviceIoControl(
+                    self.handle,
+                    IOCTL_CDROM_READ_TOC,
+                    std::ptr::null(),
+                    0,
+                    &mut toc as *mut _ as *mut c_void,
+                    std::mem::size_of::<CdromToc>() as u32,
+                    &mut returned,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                return Err(anyhow!("read TOC: {}", std::io::Error::last_os_error()));
+            }
+            let (first, last) = (toc.first_track, toc.last_track);
+            if last < first {
+                return Err(anyhow!("empty disc TOC"));
+            }
+            let lba = |td: &TrackData| msf_to_lba(td.address[1], td.address[2], td.address[3]);
+            let count = (last - first + 1) as usize;
+            // The lead-out entry (pseudo-track) sits just past the real tracks.
+            let leadout = toc.track_data.get(count).map(lba).unwrap_or(0);
+            let mut out = Vec::new();
+            for i in 0..count {
+                let td = &toc.track_data[i];
+                if td.control_adr & CONTROL_DATA_TRACK != 0 {
+                    continue; // audio tracks only
+                }
+                let start = lba(td);
+                let next = toc.track_data.get(i + 1).map(lba).unwrap_or(leadout);
+                if next > start {
+                    out.push(CdTrack {
+                        number: first + i as u8,
+                        start_lba: start,
+                        sectors: next - start,
+                    });
+                }
+            }
+            if out.is_empty() {
+                return Err(anyhow!("no audio tracks on the disc"));
+            }
+            Ok(out)
+        }
+
+        fn read_sector(&mut self, lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]> {
+            let v = self.read_sectors(lba, 1)?;
+            let mut out = [0u8; CDDA_SECTOR_BYTES];
+            let n = v.len().min(CDDA_SECTOR_BYTES);
+            out[..n].copy_from_slice(&v[..n]);
+            Ok(out)
+        }
+
+        fn read_sectors(&mut self, lba: u32, count: u32) -> Result<Vec<u8>> {
+            // IOCTL_CDROM_RAW_READ caps at MAX_RAW_SECTORS per call, so read a larger
+            // run (the playback batch is 75 sectors) in chunks and concatenate. A
+            // single DeviceIoControl for the whole batch fails with error 87, which
+            // is why a CD read the track's TOC fine but played only silence.
+            let mut out = Vec::with_capacity(count as usize * CDDA_SECTOR_BYTES);
+            let mut done = 0u32;
+            while done < count {
+                let chunk = (count - done).min(MAX_RAW_SECTORS);
+                let mut buf = vec![0u8; chunk as usize * CDDA_SECTOR_BYTES];
+                let info = RawReadInfo {
+                    disk_offset: (lba + done) as i64 * LOGICAL_SECTOR_BYTES,
+                    sector_count: chunk,
+                    track_mode: TRACK_MODE_CDDA,
+                };
+                let mut returned = 0u32;
+                let ok = unsafe {
+                    DeviceIoControl(
+                        self.handle,
+                        IOCTL_CDROM_RAW_READ,
+                        &info as *const _ as *const c_void,
+                        std::mem::size_of::<RawReadInfo>() as u32,
+                        buf.as_mut_ptr() as *mut c_void,
+                        buf.len() as u32,
+                        &mut returned,
+                        std::ptr::null_mut(),
+                    )
+                };
+                if ok == 0 {
+                    return Err(anyhow!(
+                        "raw read at lba {}: {}",
+                        lba + done,
+                        std::io::Error::last_os_error()
+                    ));
+                }
+                buf.truncate(returned as usize);
+                let got = buf.len();
+                out.extend_from_slice(&buf);
+                // A short read (fewer bytes than asked) means stop rather than spin.
+                if got < chunk as usize * CDDA_SECTOR_BYTES {
+                    break;
+                }
+                done += chunk;
+            }
+            Ok(out)
+        }
+    }
+
+    /// The conventional optical drive letter. Without enumerating drive types, `D:`
+    /// is the usual optical drive on Windows.
+    pub fn default_device() -> String {
+        "D:".to_string()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn msf_to_lba_matches_the_redbook_offset() {
+            // 00:02:00 is LBA 0 (the 150-frame lead-in), then it counts up by frames.
+            assert_eq!(msf_to_lba(0, 2, 0), 0);
+            assert_eq!(msf_to_lba(0, 2, 1), 1);
+            assert_eq!(msf_to_lba(1, 0, 0), 60 * 75 - 150);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn track_duration_is_sectors_over_75() {
+        // 75 sectors = 1 second; a 3-minute track is 3*60*75 sectors.
+        assert_eq!(CdTrack { number: 1, start_lba: 0, sectors: 75 }.duration(),
+                   Duration::from_secs(1));
+        let three_min = CdTrack { number: 2, start_lba: 0, sectors: 3 * 60 * 75 };
+        assert_eq!(three_min.duration(), Duration::from_secs(180));
+    }
+
+    #[test]
+    fn track_path_roundtrips_for_both_platforms() {
+        for (dev, n) in [("D:", 3u8), ("/dev/sr0", 12), ("E:", 1)] {
+            let p = track_path(dev, n);
+            assert!(is_cdda_path(&p));
+            assert_eq!(parse_track_path(&p), Some((dev.to_string(), n)));
+        }
+    }
+
+    #[test]
+    fn pcm_s16le_converts_to_normalized_f32() {
+        // 0 to 0.0, max to ~+1, min to -1; little-endian byte order.
+        let bytes = [
+            0x00, 0x00, // 0
+            0xff, 0x7f, // i16::MAX = 32767
+            0x00, 0x80, // i16::MIN = -32768
+        ];
+        let out = pcm_s16le_to_f32(&bytes);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0], 0.0);
+        assert!((out[1] - 0.99997).abs() < 1e-4);
+        assert_eq!(out[2], -1.0);
+        // A whole sector yields exactly CDDA_SAMPLES_PER_SECTOR samples.
+        let sector = vec![0u8; CDDA_SECTOR_BYTES];
+        assert_eq!(pcm_s16le_to_f32(&sector).len(), CDDA_SAMPLES_PER_SECTOR);
+    }
+
+    /// A drive whose sectors carry a constant non-zero tone, enough to exercise the
+    /// Source's paging and seeking without real hardware. Non-zero so a test can tell
+    /// real track content from `BufferedCdSource`'s pre-roll silence (zeros emitted
+    /// while a real drive would be spinning up).
+    struct FakeDrive;
+    impl CdDrive for FakeDrive {
+        fn read_toc(&mut self) -> Result<Vec<CdTrack>> {
+            Ok(vec![])
+        }
+        fn read_sector(&mut self, _lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]> {
+            Ok([0x08; CDDA_SECTOR_BYTES])
+        }
+    }
+
+    #[test]
+    fn cd_audio_source_plays_whole_track_then_ends() {
+        let track = CdTrack { number: 1, start_lba: 100, sectors: 10 };
+        let src = CdAudioSource::new(FakeDrive, &track);
+        assert_eq!(src.channels(), CDDA_CHANNELS);
+        assert_eq!(src.sample_rate(), CDDA_SAMPLE_RATE);
+        assert_eq!(src.total_duration(), Some(Duration::from_secs_f64(10.0 / 75.0)));
+        // Exactly 10 sectors of audio, then the iterator ends.
+        assert_eq!(src.count(), 10 * CDDA_SAMPLES_PER_SECTOR);
+    }
+
+    #[test]
+    fn cd_audio_source_seeks_to_a_sector() {
+        let track = CdTrack { number: 1, start_lba: 100, sectors: 10 };
+        // Seek to sector 8 of 10: sectors 8 and 9 remain.
+        let mut src = CdAudioSource::new(FakeDrive, &track);
+        src.try_seek(Duration::from_secs_f64(8.0 / 75.0)).unwrap();
+        assert_eq!(src.count(), 2 * CDDA_SAMPLES_PER_SECTOR);
+        // Seeking past the end yields nothing (clamped to the track end).
+        let mut past = CdAudioSource::new(FakeDrive, &track);
+        past.try_seek(Duration::from_secs(60)).unwrap();
+        assert_eq!(past.count(), 0);
+    }
+
+    #[test]
+    fn buffered_source_plays_whole_track_then_ends() {
+        // The background reader produces every sector of the track exactly once,
+        // across the deep prefetch buffer, then the iterator ends (End message).
+        let track = CdTrack { number: 1, start_lba: 0, sectors: 50 };
+        let src = BufferedCdSource::new(FakeDrive, &track);
+        assert_eq!(src.channels(), CDDA_CHANNELS);
+        assert_eq!(src.sample_rate(), CDDA_SAMPLE_RATE);
+        assert_eq!(src.total_duration(), Some(Duration::from_secs_f64(50.0 / 75.0)));
+        // Count the real (non-zero) content: the source may emit a few leading zeros
+        // of pre-roll silence before the first batch arrives (timing-dependent).
+        assert_eq!(
+            src.filter(|&s| s != 0.0).count(),
+            50 * CDDA_SAMPLES_PER_SECTOR
+        );
+    }
+
+    #[test]
+    fn buffered_source_seek_drops_pre_seek_audio() {
+        // A seek bumps the generation; batches the reader produced before it (any
+        // interleaving, whether the reader had read ahead or even finished the
+        // track) carry the old generation and are dropped, so only the post-seek
+        // sectors are played. From sector 60 of 100, 40 sectors remain. Count the
+        // non-zero content (leading pre-roll silence is excluded).
+        let track = CdTrack { number: 1, start_lba: 0, sectors: 100 };
+        let mut src = BufferedCdSource::new(FakeDrive, &track);
+        src.try_seek(Duration::from_secs_f64(60.0 / 75.0)).unwrap();
+        assert_eq!(
+            src.filter(|&s| s != 0.0).count(),
+            40 * CDDA_SAMPLES_PER_SECTOR
+        );
+    }
+
+    /// Records each read_sectors batch size so we can assert the source pages in
+    /// ~1-second runs instead of one sector at a time.
+    struct CountingDrive {
+        batches: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    }
+    impl CdDrive for CountingDrive {
+        fn read_toc(&mut self) -> Result<Vec<CdTrack>> {
+            Ok(vec![])
+        }
+        fn read_sector(&mut self, _lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]> {
+            Ok([0u8; CDDA_SECTOR_BYTES])
+        }
+        fn read_sectors(&mut self, _lba: u32, count: u32) -> Result<Vec<u8>> {
+            self.batches.lock().unwrap().push(count);
+            Ok(vec![0u8; count as usize * CDDA_SECTOR_BYTES])
+        }
+    }
+
+    #[test]
+    fn cd_audio_source_reads_sectors_in_batches() {
+        // A 200-sector track must be read through read_sectors in ~1-second batches
+        // (READAHEAD_SECTORS each), not one sector per read, so the drive streams
+        // rather than re-seeking and stuttering (#160).
+        let batches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let drive = CountingDrive { batches: batches.clone() };
+        let track = CdTrack { number: 1, start_lba: 0, sectors: 200 };
+        let src = CdAudioSource::new(drive, &track);
+        assert_eq!(src.count(), 200 * CDDA_SAMPLES_PER_SECTOR);
+        let calls = batches.lock().unwrap();
+        assert_eq!(
+            calls.as_slice(),
+            &[READAHEAD_SECTORS, READAHEAD_SECTORS, 200 - 2 * READAHEAD_SECTORS],
+            "should read in batches, not per-sector"
+        );
+    }
+
+    #[test]
+    fn gvfs_cdda_paths_resolve_to_device_and_track() {
+        // A real GVfs audio-CD mount path maps to the backing device and track.
+        let p = Path::new("/run/user/1000/gvfs/cdda:host=sr0/Track 3.wav");
+        assert_eq!(gvfs_cdda_device(p), Some("/dev/sr0".to_string()));
+        assert_eq!(parse_gvfs_cdda_path(p), Some(("/dev/sr0".to_string(), 3)));
+        // Two-digit track, and a device with extra mount params.
+        let p10 = Path::new("/run/user/1000/gvfs/cdda:host=sr1,foo=bar/Track 10.wav");
+        assert_eq!(parse_gvfs_cdda_path(p10), Some(("/dev/sr1".to_string(), 10)));
+        // A normal WAV on disk is not a GVfs CD track.
+        assert_eq!(gvfs_cdda_device(Path::new("/home/me/music/Track 3.wav")), None);
+        assert_eq!(parse_gvfs_cdda_path(Path::new("/home/me/music/song.wav")), None);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn reads_real_disc_when_present() {
+        // Hardware check: only runs when a readable optical drive holds an audio
+        // disc (skips on CI, no drive, or no disc, like the tracker render test).
+        // Guards the native read path and the GVfs redirect end to end on real
+        // hardware after the distro-portability hardening. Linux only: it exercises
+        // the GVfs redirect (mounted_cd_track), which is a no-op off Linux, so the
+        // GVfs assertion below can never hold on another platform.
+        let dev = default_cd_device();
+        let Ok(toc) = read_cd_toc(&dev) else {
+            return;
+        };
+        if toc.is_empty() {
+            return;
+        }
+        // The GVfs redirect must resolve track 1 to the same CdTrack as the TOC.
+        let host = dev.strip_prefix("/dev/").unwrap_or("sr0");
+        let p = std::path::PathBuf::from(format!(
+            "/run/user/1000/gvfs/cdda:host={host}/Track 1.wav"
+        ));
+        let (_d, t) = mounted_cd_track(&p).expect("GVfs path should resolve to a CD track");
+        assert_eq!(t.number, toc[0].number);
+        assert_eq!(t.sectors, toc[0].sectors);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn reads_real_disc_sectors_when_present() {
+        // Hardware check (Windows): only runs when an optical drive holds an audio
+        // CD. Exercises the Windows device path end to end, open, TOC, and raw CDDA
+        // sector reads, against a real disc. Skips on no drive, no disc, or a
+        // data-only disc (the TOC read returns Err or no audio tracks).
+        let dev = default_cd_device();
+        let Ok(toc) = read_cd_toc(&dev) else {
+            return;
+        };
+        let Some(track) = toc.first() else {
+            return;
+        };
+        let mut drive = match windows::WindowsCdDrive::open(&dev) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        // Two raw sectors a little into the first track. Each is a full 2352-byte
+        // CDDA sector, and two different music sectors never come back byte-identical,
+        // so matching reads would mean the raw read returned nothing real.
+        let a = drive.read_sectors(track.start_lba + 100, 1).expect("raw CDDA read (a)");
+        let b = drive.read_sectors(track.start_lba + 200, 1).expect("raw CDDA read (b)");
+        assert_eq!(a.len(), CDDA_SECTOR_BYTES, "a CDDA sector is 2352 bytes");
+        assert_eq!(b.len(), CDDA_SECTOR_BYTES);
+        assert_ne!(a, b, "distinct audio sectors should differ (read returned real data)");
+        // A full playback-sized batch (READAHEAD_SECTORS) must read back whole. This
+        // exceeds the IOCTL_CDROM_RAW_READ per-call limit, so it only works via the
+        // chunking in read_sectors; a single IOCTL for the batch fails with error 87
+        // and is why a disc read its TOC but played only silence.
+        let batch = READAHEAD_SECTORS;
+        let run = drive
+            .read_sectors(track.start_lba + 100, batch)
+            .expect("a full READAHEAD_SECTORS batch should read (chunked)");
+        assert_eq!(run.len(), batch as usize * CDDA_SECTOR_BYTES, "batch read must be whole");
+    }
+
+    #[test]
+    fn kio_fuse_cdda_paths_parse_track_and_ignore_others() {
+        // KDE kio-fuse audio-CD track: both kio-fuse and audiocd components present.
+        let p = Path::new("/run/user/1000/kio-fuse-AbCdEf/audiocd/Wav/Track 03.wav");
+        assert_eq!(parse_kio_cdda_path(p), Some(3));
+        // Non-numeric file name (info file) is ignored.
+        let info = Path::new("/run/user/1000/kio-fuse-AbCdEf/audiocd/Information/CDDB Info.txt");
+        assert_eq!(parse_kio_cdda_path(info), None);
+        // A GVfs path is not a kio-fuse path (handled by the GVfs parser instead).
+        assert_eq!(parse_kio_cdda_path(Path::new("/run/user/1000/gvfs/cdda:host=sr0/Track 3.wav")), None);
+        // An ordinary path never matches.
+        assert_eq!(parse_kio_cdda_path(Path::new("/home/me/audiocd/Track 3.wav")), None);
+    }
+
+    #[test]
+    fn parse_rejects_non_cdda_and_malformed() {
+        assert!(!is_cdda_path("/music/song.mp3"));
+        assert_eq!(parse_track_path("/music/song.mp3"), None);
+        assert_eq!(parse_track_path("cdda://D:/notanumber"), None);
+        assert_eq!(parse_track_path("cdda:///3"), None); // empty device
+    }
+}

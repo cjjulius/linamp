@@ -4,7 +4,7 @@
 use super::*;
 
 /// Popup menus in classic mode (options + the playlist bottom-bar fly-outs).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Popup {
     Options,
     PlAdd,
@@ -25,7 +25,24 @@ pub(super) enum Popup {
     EqDelete,
 }
 
-/// Window size (points) for a popup menu, from its item/separator count.
+/// Height (points) one item row costs in a popup menu: the 18px item (see
+/// `menu_item`) plus the 2px inter-row spacing set on the popup.
+const MENU_ROW_H: f32 = 20.0;
+/// Height one separator row costs: egui's 6px separator plus the 2px spacing.
+const MENU_SEP_H: f32 = 8.0;
+/// Inner padding (points) on each edge of a popup menu's content frame.
+const MENU_MARGIN: f32 = 6.0;
+
+/// Window height for a popup with `buttons` item rows and `seps` separators. The
+/// rows/seps already include one inter-row gap each, so the fixed term is the
+/// two margins (2 × MENU_MARGIN) minus the one gap that the last row doesn't have.
+fn popup_height(buttons: i32, seps: i32) -> f32 {
+    buttons as f32 * MENU_ROW_H + seps as f32 * MENU_SEP_H + (2.0 * MENU_MARGIN - 2.0)
+}
+
+/// Window size (points) for a popup menu, from its item/separator count. The
+/// counts must match what the matching arm in `draw_popup_viewport` draws, or the
+/// window leaves an empty band (too many) or clips the last rows (too few) (#154).
 pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
     let (buttons, seps, width) = match kind {
         // Height is computed dynamically in draw_popup_viewport (it counts the
@@ -34,24 +51,26 @@ pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
         Popup::PlAdd => (2, 0, 182.0),
         Popup::PlRem => (4, 0, 182.0),
         Popup::PlSel => (3, 0, 182.0),
-        Popup::PlMisc => (6, 0, 182.0),
+        // 6 sort rows + Randomize + Reverse.
+        Popup::PlMisc => (8, 0, 182.0),
         Popup::PlList => (3, 0, 182.0),
         // Right-click context menus: wider to fit the shortcut column.
         Popup::PlTrack => (6, 2, 210.0),
-        Popup::PlVoid => (12, 4, 210.0),
+        // Add×2, Select×3, Sort×6, Remove all, Save/Load list = 14 items, 5 seps.
+        Popup::PlVoid => (14, 5, 210.0),
         Popup::EqPresets => (crate::eq::PRESETS.len() as i32 + 2, 1, 182.0),
         Popup::StopMenu => (3, 0, 200.0),
         // Heights overridden per item count in draw_popup_viewport.
         Popup::Bookmarks => (2, 1, 240.0),
         Popup::EqDelete => (1, 0, 200.0),
     };
-    (width, buttons as f32 * 24.0 + seps as f32 * 9.0 + 16.0)
+    (width, popup_height(buttons, seps))
 }
 
 /// A context-menu row: `label` on the left, dimmed `shortcut` on the right, full
 /// width so shortcuts align to the menu's right edge. Returns true when clicked.
-/// Colours match an egui `Button` (and so the Media Library's context menus) —
-/// the themed override text colour and the standard hover highlight — so every
+/// Colours match an egui `Button` (and so the Media Library's context menus), 
+/// the themed override text colour and the standard hover highlight, so every
 /// menu shares one look across skins.
 pub(super) fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
     let w = ui.available_width();
@@ -97,34 +116,37 @@ impl super::LinAmpApp {
         };
         let (w, h) = match kind {
             Popup::Options => {
-                // 12 fixed items + the optional Minibrowser toggle, 3 separators.
-                // Computed here (not in popup_dims) so the height tracks the
-                // conditional item instead of clipping the last row when it shows.
-                let buttons = 12 + i32::from(self.prefs.minibrowser_enabled);
-                (182.0, buttons as f32 * 24.0 + 3.0 * 9.0 + 16.0)
+                // 11 fixed items + the optional Minibrowser toggle + the "Open Audio
+                // CD" item (Linux + Windows) (#160), 3 separators. Computed here (not
+                // in popup_dims) so the height tracks the conditional items instead of
+                // clipping the last row when one shows.
+                let buttons = 11
+                    + i32::from(self.prefs.minibrowser_enabled)
+                    + i32::from(cfg!(any(target_os = "linux", target_os = "windows")));
+                (182.0, popup_height(buttons, 3))
             }
             Popup::Bookmarks => {
                 // Grows with the bookmark count (capped so a long list scrolls rather
                 // than running off-screen): the list, a separator, then Add + Clear.
-                let rows = self.bookmarks.items.len().clamp(1, 12) as f32;
-                (240.0, (rows + 2.0) * 24.0 + 9.0 + 16.0)
+                let rows = self.bookmarks.items.len().clamp(1, 12) as i32;
+                (240.0, popup_height(rows + 2, 1))
             }
             Popup::EqPresets => {
                 // Built-in presets + the saved library + up to 4 actions (Save,
                 // optional Delete, Import, Export). Capped height; the arm scrolls.
                 let actions = if self.eq_presets.items.is_empty() { 3 } else { 4 };
-                let rows = (crate::eq::PRESETS.len() + self.eq_presets.items.len() + actions) as f32;
-                let seps = if self.eq_presets.items.is_empty() { 1.0 } else { 2.0 };
-                (182.0, (rows * 24.0 + seps * 9.0 + 16.0).min(420.0))
+                let rows = (crate::eq::PRESETS.len() + self.eq_presets.items.len()) as i32 + actions;
+                let seps = if self.eq_presets.items.is_empty() { 1 } else { 2 };
+                (182.0, popup_height(rows, seps).min(420.0))
             }
             Popup::EqDelete => {
-                let rows = self.eq_presets.items.len().clamp(1, 12) as f32;
-                (200.0, rows * 24.0 + 16.0)
+                let rows = self.eq_presets.items.len().clamp(1, 12) as i32;
+                (200.0, popup_height(rows, 0))
             }
             _ => popup_dims(kind),
         };
         let mut screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
-        // Keep the menu fully on the desktop: a tall menu (e.g. the empty-area
+        // Keep the menu fully on the desktop: a tall menu (example: the empty-area
         // menu) opened near the bottom/right edge would otherwise spill off-screen
         // with its lower entries unreachable.
         if let Some(vr) = virtual_desktop_rect(ctx) {
@@ -135,7 +157,7 @@ impl super::LinAmpApp {
         // Corner radius (logical px) for the fill, border and window region. A hair
         // larger than egui's default 6 because the window's corners are cut by a
         // hard-edged (non-antialiased) GDI region, which reads tighter than the
-        // Media Library menu's smooth 6px round — 8 makes them match visually.
+        // Media Library menu's smooth 6px round, 8 makes them match visually.
         let corner = 8.0_f32;
         // Border that matches the Media Library menu: the same themed window
         // stroke colour (set in apply_theme), a crisp 1px line painted just inside
@@ -159,26 +181,31 @@ impl super::LinAmpApp {
             .with_visible(!self.popup_fresh)
             // Always on top: the EQ/playlist/library windows are *owned* by the main
             // window (group_child_windows), which keeps them above sibling windows,
-            // and clicking one re-raises it — so only a system-topmost popup stays
+            // and clicking one re-raises it, so only a system-topmost popup stays
             // reliably above them. A modal dialog opened from a menu item would then
             // sit under the menu, so dialog actions hide the menu first (see
             // `hide_popup_window`).
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
-        let id = egui::ViewportId::from_hash_of("linamp_popup");
+        let id = egui::ViewportId::from_hash_of(("linamp_popup", self.popup_serial));
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
             egui::CentralPanel::default()
                 .frame(
                     // Rounded fill lining up with the window's rounded region (see
-                    // `round_popup_window`). No stroke here — a frame stroke sits on
+                    // `round_popup_window`). No stroke here, a frame stroke sits on
                     // the window edge and gets clipped by the region, so the border
                     // is painted just inside the edge below instead.
                     egui::Frame::popup(&style)
                         .stroke(egui::Stroke::NONE)
                         .rounding(corner)
-                        .shadow(egui::epaint::Shadow::NONE),
+                        .shadow(egui::epaint::Shadow::NONE)
+                        .inner_margin(egui::Margin::same(MENU_MARGIN)),
                 )
                 .show(ctx, |ui| {
+                    // Tighten the gap between rows so the menu hugs its items like the
+                    // Media Library's menus, instead of reading a little long (#154).
+                    // Keep this in step with MENU_ROW_H (18px item + this spacing).
+                    ui.spacing_mut().item_spacing.y = 2.0;
                     // Route every classic menu through the shared `menu_item` look
                     // (frameless, themed) so the options/fly-out menus match the
                     // playlist and library context menus.
@@ -195,6 +222,13 @@ impl super::LinAmpApp {
                             }
                             if item(ui, "Open location… (Ctrl+L)") {
                                 self.open_location();
+                                close = true;
+                            }
+                            // Audio-CD reading: Linux (verified) and Windows
+                            // (best-effort, pending hardware verification) (#160).
+                            #[cfg(any(target_os = "linux", target_os = "windows"))]
+                            if item(ui, "Open Audio CD") {
+                                self.open_audio_cd();
                                 close = true;
                             }
                             ui.separator();
@@ -228,18 +262,9 @@ impl super::LinAmpApp {
                                 self.load_skin_dialog(ctx);
                                 close = true;
                             }
-                            // ASCII box: the bundled Noto Sans has no U+2713 check
-                            // glyph, so a literal ✓ renders as tofu here.
-                            let aot = if self.prefs.always_on_top {
-                                "[x] Always on top"
-                            } else {
-                                "[ ] Always on top"
-                            };
-                            if item(ui, aot) {
-                                self.prefs.always_on_top = !self.prefs.always_on_top;
-                                self.prefs.save();
-                                close = true;
-                            }
+                            // Always on top lives on the clutterbar "A" button, the
+                            // Ctrl+A shortcut and Preferences, so it isn't repeated
+                            // in this menu.
                             if item(ui, "Bookmarks…") {
                                 // Classic popups aren't nested; open the list once
                                 // this menu closes.
@@ -559,7 +584,7 @@ impl super::LinAmpApp {
                             }
                             if item(ui, "Stop with fade out") {
                                 if self.player.state() != PlayState::Stopped {
-                                    self.fade = Some(FADE_SECS);
+                                    self.fade = Some(self.prefs.fade_on_stop_secs);
                                     self.status = "Fading out…".into();
                                 }
                                 close = true;
@@ -617,7 +642,7 @@ impl super::LinAmpApp {
                         }
                     }
                 });
-            // Outline just inside the window edge — a stroke centred on the edge
+            // Outline just inside the window edge, a stroke centred on the edge
             // has its inner half render invisibly on low-contrast skins once the
             // rounded region clips the outer half, so inset the whole 1px line one
             // point in (rounding one less than the region's) where it can't be
@@ -631,7 +656,7 @@ impl super::LinAmpApp {
             self.apply_base_cursor(ctx, "LinAmp Menu");
             // Escape closes the menu. The popup is a separate always-on-top OS
             // window that can hold focus, in which case `handle_window_input`
-            // (which only runs for the classic windows) never sees the key — so
+            // (which only runs for the classic windows) never sees the key, so
             // the popup viewport must handle Escape itself.
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
@@ -639,11 +664,15 @@ impl super::LinAmpApp {
         });
 
         // Round the window's corners to match the frame's rounding (scaled to
-        // physical pixels for the current DPI). Applied once per popup — retried
-        // each frame only until it succeeds — rather than rebuilt every frame.
+        // physical pixels for the current DPI). Applied once per popup, retried
+        // each frame only until it succeeds, rather than rebuilt every frame.
         let radius = (corner * ctx.pixels_per_point()).round() as i32;
-        if !self.popup_rounded && round_popup_window(radius, self.popup_fresh) {
+        // Rebuild the region when first opened, and if a different-sized menu opens
+        // into the same serial, so the rounded corners track the window size.
+        let size_changed = self.popup_rounded_h != Some(h);
+        if (!self.popup_rounded || size_changed) && round_popup_window(radius, self.popup_fresh || size_changed) {
             self.popup_rounded = true;
+            self.popup_rounded_h = Some(h);
         }
         // On X11 the popup window is reused and resized between menus (and, when the
         // menu is switched rapidly, destroyed and recreated), while XGetGeometry can
@@ -668,7 +697,7 @@ impl super::LinAmpApp {
         self.popup_fresh = false;
         if close {
             self.popup = None;
-            // Chain to a queued popup (e.g. Options → Bookmarks) now this one is gone.
+            // Chain to a queued popup (example: Options then Bookmarks) now this one is gone.
             if let Some((k, w, p)) = self.pending_popup.take() {
                 self.open_popup_in(k, w, p);
             }
@@ -678,11 +707,49 @@ impl super::LinAmpApp {
     pub(super) fn open_popup_in(&mut self, kind: Popup, win: ClWin, local: egui::Pos2) {
         self.popup = Some((kind, win, local));
         self.popup_fresh = true;
-        // New popup window (or a resize to a different menu): re-apply the rounded
-        // region on the next frame.
+        // New popup window: re-apply the rounded region on the next frame.
         self.popup_rounded = false;
+        self.popup_rounded_h = None;
+        // Fresh viewport id per open, so the menu never inherits a reused window's
+        // size on a re-right-click (#154).
+        self.popup_serial = self.popup_serial.wrapping_add(1);
         // Opening a classic popup dismisses an open Media Library menu, so the two
         // menu systems are never up at once.
         self.classic_clicked = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn popup_height_formula() {
+        // Row = 18px item + 2px gap; separator = 6px + 2px gap; plus the two 6px
+        // margins minus the one trailing gap the last row doesn't have.
+        assert_eq!(popup_height(1, 0), 20.0 + 10.0);
+        assert_eq!(popup_height(0, 1), 8.0 + 10.0);
+        assert_eq!(popup_height(14, 5), 14.0 * 20.0 + 5.0 * 8.0 + 10.0);
+    }
+
+    #[test]
+    fn fixed_menu_sizes_match_their_draw_arms() {
+        // (items, separators) for each fixed menu must match what
+        // draw_popup_viewport actually draws, or the window clips the last rows
+        // (too few) or leaves an empty band (too many), the #154 regression.
+        // Update these counts and the matching arm together.
+        for (kind, items, seps) in [
+            (Popup::PlAdd, 2, 0),
+            (Popup::PlRem, 4, 0),
+            (Popup::PlSel, 3, 0),
+            (Popup::PlMisc, 8, 0),
+            (Popup::PlList, 3, 0),
+            (Popup::PlTrack, 6, 2),
+            (Popup::PlVoid, 14, 5),
+            (Popup::StopMenu, 3, 0),
+        ] {
+            let (_, h) = popup_dims(kind);
+            assert_eq!(h, popup_height(items, seps), "{kind:?} height mismatch");
+        }
     }
 }
