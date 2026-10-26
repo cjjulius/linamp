@@ -1006,3 +1006,26 @@ code plus a working/not-working binary): visual and behavior changes.
 - Manual check (Windows): switch Normal/System tray in Preferences and confirm the
   taskbar button appears/disappears both ways; right-click the tray icon and
   confirm the menu items highlight as the mouse moves over them.
+
+## 2026-10-26 (#40 tray menu: skin-themed and owner-drawn, with working highlight)
+
+- The native tray menu is now owner-drawn in the current skin's colours, from the
+  same source as LinAmp's egui menus: theme.rs menu_palette gives (bg, text,
+  hover_bg, hover_text, border), where bg/text/border match window_fill /
+  override_text_color / window_stroke, and the hovered row uses the skin's
+  selection colour. The app pushes this palette to the tray whenever the skin
+  changes (apply_theme sites) and when the tray respawns, via Tray::set_menu_colors
+  (shared atomics read by the tray thread). Off Windows it's a no-op (the Linux
+  ksni menu follows the desktop theme).
+- Mechanism (Windows): MF_OWNERDRAW items + SetMenuInfo (MNS_NOCHECK, skin bg
+  brush); WM_MEASUREITEM sizes rows from the label, WM_DRAWITEM paints bg/hover,
+  text and a thin themed border down the sides and across the top/bottom. Separators
+  are disabled owner-draw rows drawn as a line.
+- The hover highlight now works because the menu is forced to the foreground with
+  AttachThreadInput before TrackPopupMenu (SetForegroundWindow alone is blocked
+  from a background thread by the foreground lock, which is why hover did nothing
+  before). Owner-draw then highlights the hovered row in the skin colours.
+- Manual check (Windows): right-click the tray icon; the menu should be dark/skin-
+  coloured with a themed border, and moving the mouse over items should highlight
+  them in the skin's selection colour. Load a different skin and confirm the menu
+  colours follow it.
