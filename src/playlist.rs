@@ -188,7 +188,7 @@ impl Playlist {
     /// directly rather than through the stuttering FUSE path (#160, Linux only).
     pub fn add_file(&mut self, path: PathBuf) {
         #[cfg(target_os = "linux")]
-        if let Some((dev, t)) = crate::cdda::gvfs_cd_track(&path) {
+        if let Some((dev, t)) = crate::cdda::mounted_cd_track(&path) {
             self.tracks.push(Track::cd_track(&dev, &t));
             return;
         }
@@ -224,7 +224,7 @@ impl Playlist {
         for p in found {
             // A GVfs audio-CD mount's WAV tracks become native cdda:// entries.
             #[cfg(target_os = "linux")]
-            if let Some((dev, t)) = crate::cdda::gvfs_cd_track(&p) {
+            if let Some((dev, t)) = crate::cdda::mounted_cd_track(&p) {
                 self.tracks.push(Track::cd_track(&dev, &t));
                 continue;
             }

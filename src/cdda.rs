@@ -464,14 +464,46 @@ pub fn parse_gvfs_cdda_path(path: &Path) -> Option<(String, u8)> {
     Some((device, track))
 }
 
-/// Resolve a GVfs audio-CD track path to its native device and [`CdTrack`] (length
-/// from the disc TOC), so a playlist can store a `cdda://` entry instead of the
-/// slow FUSE WAV. Linux only; `None` elsewhere, off a disc, or when the drive
+/// Parse a KDE Plasma kio-fuse audio-CD track path into its 1-based track number,
+/// or `None` when `path` is not one. KDE exposes a mounted CD under a `kio-fuse`
+/// mount with an `audiocd` component (example:
+/// `.../kio-fuse-XXXX/audiocd/Wav/Track 03.wav`). Unlike GVfs the device is not in
+/// the path, so the caller uses the default drive. Conservative on purpose (both
+/// components plus a numeric file name required), so it never matches a GVfs or
+/// ordinary path. Best-effort, verified only against the documented layout.
+pub fn parse_kio_cdda_path(path: &Path) -> Option<u8> {
+    let (mut kio_fuse, mut audiocd) = (false, false);
+    for comp in path.components() {
+        if let Some(s) = comp.as_os_str().to_str() {
+            if s.starts_with("kio-fuse") {
+                kio_fuse = true;
+            }
+            if s.eq_ignore_ascii_case("audiocd") {
+                audiocd = true;
+            }
+        }
+    }
+    if !(kio_fuse && audiocd) {
+        return None;
+    }
+    let stem = path.file_stem()?.to_str()?;
+    let digits: String = stem.chars().filter(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// Resolve a desktop-mounted audio-CD track path to its native device and
+/// [`CdTrack`] (length from the disc TOC), so a playlist can store a `cdda://`
+/// entry instead of the slow FUSE WAV. Handles GVfs (GNOME / Cinnamon / XFCE,
+/// device from the mount path) and, best-effort, KDE kio-fuse (device from the
+/// default drive). Linux only; `None` elsewhere, off a disc, or when the drive
 /// can't be read.
-pub fn gvfs_cd_track(path: &Path) -> Option<(String, CdTrack)> {
+pub fn mounted_cd_track(path: &Path) -> Option<(String, CdTrack)> {
     #[cfg(target_os = "linux")]
     {
-        let (device, track) = parse_gvfs_cdda_path(path)?;
+        let (device, track) = match parse_gvfs_cdda_path(path) {
+            Some(dt) => dt,
+            None => (default_cd_device(), parse_kio_cdda_path(path)?),
+        };
         let toc = linux::cached_toc(&device)?;
         let t = toc.into_iter().find(|t| t.number == track)?;
         Some((device, t))
@@ -567,7 +599,8 @@ mod linux {
                 datamode: 0,
             };
             let r = unsafe {
-                libc::ioctl(self.fd(), CDROMREADTOCENTRY, &mut e as *mut _ as *mut libc::c_void)
+                // `as _` on the request: glibc's ioctl takes c_ulong, musl's c_int.
+                libc::ioctl(self.fd(), CDROMREADTOCENTRY as _, &mut e as *mut _ as *mut libc::c_void)
             };
             (r == 0).then_some(e)
         }
@@ -577,7 +610,7 @@ mod linux {
         fn read_toc(&mut self) -> Result<Vec<CdTrack>> {
             let mut hdr = TocHdr { trk0: 0, trk1: 0 };
             let r = unsafe {
-                libc::ioctl(self.fd(), CDROMREADTOCHDR, &mut hdr as *mut _ as *mut libc::c_void)
+                libc::ioctl(self.fd(), CDROMREADTOCHDR as _, &mut hdr as *mut _ as *mut libc::c_void)
             };
             if r != 0 {
                 return Err(anyhow!(
@@ -632,7 +665,7 @@ mod linux {
                 buf: buf.as_mut_ptr(),
             };
             let r = unsafe {
-                libc::ioctl(self.fd(), CDROMREADAUDIO, &mut ra as *mut _ as *mut libc::c_void)
+                libc::ioctl(self.fd(), CDROMREADAUDIO as _, &mut ra as *mut _ as *mut libc::c_void)
             };
             if r != 0 {
                 return Err(anyhow!(
@@ -661,11 +694,18 @@ mod linux {
         Some(toc)
     }
 
-    /// Prefer the `/dev/cdrom` symlink, falling back to `/dev/sr0`.
+    /// The default optical device. Prefer the `/dev/cdrom` symlink (udev points it
+    /// at the first drive on most distros), then fall back to the first raw
+    /// `/dev/srN` that exists, so a drive at sr1+ or a distro without the symlink is
+    /// still found.
     pub fn default_device() -> String {
-        for d in ["/dev/cdrom", "/dev/sr0"] {
-            if std::path::Path::new(d).exists() {
-                return d.to_string();
+        if std::path::Path::new("/dev/cdrom").exists() {
+            return "/dev/cdrom".to_string();
+        }
+        for n in 0..8 {
+            let d = format!("/dev/sr{n}");
+            if std::path::Path::new(&d).exists() {
+                return d;
             }
         }
         "/dev/cdrom".to_string()
@@ -1060,6 +1100,43 @@ mod tests {
         // A normal WAV on disk is not a GVfs CD track.
         assert_eq!(gvfs_cdda_device(Path::new("/home/me/music/Track 3.wav")), None);
         assert_eq!(parse_gvfs_cdda_path(Path::new("/home/me/music/song.wav")), None);
+    }
+
+    #[test]
+    fn reads_real_disc_when_present() {
+        // Hardware check: only runs when a readable optical drive holds an audio
+        // disc (skips on CI, no drive, or no disc, like the tracker render test).
+        // Guards the native read path and the GVfs redirect end to end on real
+        // hardware after the distro-portability hardening.
+        let dev = default_cd_device();
+        let Ok(toc) = read_cd_toc(&dev) else {
+            return;
+        };
+        if toc.is_empty() {
+            return;
+        }
+        // The GVfs redirect must resolve track 1 to the same CdTrack as the TOC.
+        let host = dev.strip_prefix("/dev/").unwrap_or("sr0");
+        let p = std::path::PathBuf::from(format!(
+            "/run/user/1000/gvfs/cdda:host={host}/Track 1.wav"
+        ));
+        let (_d, t) = mounted_cd_track(&p).expect("GVfs path should resolve to a CD track");
+        assert_eq!(t.number, toc[0].number);
+        assert_eq!(t.sectors, toc[0].sectors);
+    }
+
+    #[test]
+    fn kio_fuse_cdda_paths_parse_track_and_ignore_others() {
+        // KDE kio-fuse audio-CD track: both kio-fuse and audiocd components present.
+        let p = Path::new("/run/user/1000/kio-fuse-AbCdEf/audiocd/Wav/Track 03.wav");
+        assert_eq!(parse_kio_cdda_path(p), Some(3));
+        // Non-numeric file name (info file) is ignored.
+        let info = Path::new("/run/user/1000/kio-fuse-AbCdEf/audiocd/Information/CDDB Info.txt");
+        assert_eq!(parse_kio_cdda_path(info), None);
+        // A GVfs path is not a kio-fuse path (handled by the GVfs parser instead).
+        assert_eq!(parse_kio_cdda_path(Path::new("/run/user/1000/gvfs/cdda:host=sr0/Track 3.wav")), None);
+        // An ordinary path never matches.
+        assert_eq!(parse_kio_cdda_path(Path::new("/home/me/audiocd/Track 3.wav")), None);
     }
 
     #[test]
