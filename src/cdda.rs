@@ -1151,11 +1151,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn reads_real_disc_when_present() {
         // Hardware check: only runs when a readable optical drive holds an audio
         // disc (skips on CI, no drive, or no disc, like the tracker render test).
         // Guards the native read path and the GVfs redirect end to end on real
-        // hardware after the distro-portability hardening.
+        // hardware after the distro-portability hardening. Linux only: it exercises
+        // the GVfs redirect (mounted_cd_track), which is a no-op off Linux, so the
+        // GVfs assertion below can never hold on another platform.
         let dev = default_cd_device();
         let Ok(toc) = read_cd_toc(&dev) else {
             return;
