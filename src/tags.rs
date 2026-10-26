@@ -94,18 +94,23 @@ pub fn read_id3(path: &Path) -> (Option<Id3Fields>, Option<Id3Fields>) {
 
 fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
     use lofty::tag::Accessor;
-    let key = |k: &ItemKey| tag.get_string(k).map(|s| s.to_string()).unwrap_or_default();
+    // Some taggers (example: zing.vn) write UTF-8 bytes into a frame flagged
+    // Latin-1, so a spec-correct read yields mojibake. repair_mojibake recovers the
+    // intended text when the bytes are disguised UTF-8, and is a no-op otherwise, so
+    // the editor shows the real characters (matching the playlist display).
+    use crate::playlist::repair_mojibake as fix;
+    let text = |k: &ItemKey| fix(&tag.get_string(k).map(|s| s.to_string()).unwrap_or_default());
     Id3Fields {
         track: tag.track().map(|t| t.to_string()).unwrap_or_default(),
-        title: tag.title().map(|s| s.to_string()).unwrap_or_default(),
-        artist: tag.artist().map(|s| s.to_string()).unwrap_or_default(),
-        album: tag.album().map(|s| s.to_string()).unwrap_or_default(),
+        title: fix(&tag.title().map(|s| s.to_string()).unwrap_or_default()),
+        artist: fix(&tag.artist().map(|s| s.to_string()).unwrap_or_default()),
+        album: fix(&tag.album().map(|s| s.to_string()).unwrap_or_default()),
         year: tag.year().map(|y| y.to_string()).unwrap_or_default(),
-        genre: tag.genre().map(|s| s.to_string()).unwrap_or_default(),
-        comment: tag.comment().map(|s| s.to_string()).unwrap_or_default(),
-        composer: key(&ItemKey::Composer),
-        orig_artist: key(&ItemKey::OriginalArtist),
-        copyright: key(&ItemKey::CopyrightMessage),
+        genre: fix(&tag.genre().map(|s| s.to_string()).unwrap_or_default()),
+        comment: fix(&tag.comment().map(|s| s.to_string()).unwrap_or_default()),
+        composer: text(&ItemKey::Composer),
+        orig_artist: text(&ItemKey::OriginalArtist),
+        copyright: text(&ItemKey::CopyrightMessage),
         // URL lives in a WOAS locator frame, not a text frame.
         url: tag
             .get(&ItemKey::AudioSourceUrl)
@@ -115,8 +120,9 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
                 }
                 _ => None,
             })
+            .map(|s| fix(&s))
             .unwrap_or_default(),
-        encoded_by: key(&ItemKey::EncodedBy),
+        encoded_by: text(&ItemKey::EncodedBy),
     }
 }
 
