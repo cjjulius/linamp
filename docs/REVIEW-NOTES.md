@@ -3,6 +3,22 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-26 (crossfade, off by default — needs audio QA)
+
+- Crossfade between tracks added (#43), off by default. When on, the end of one
+  track overlaps the start of the next: Preferences > Playback > Crossfade has the
+  toggle and a 1-12s length slider. Mechanism: the player keeps the outgoing track
+  on its own sink fading out while the new one fades in; the app triggers it when
+  the current track reaches (length - crossfade seconds), advancing the playlist
+  early, and the normal end-of-track auto-advance covers the last track. Only finite
+  local tracks crossfade; streams, "stop after current", and "repeat one" are
+  excluded, and the hard-cut path is unchanged when the pref is off. The ramp math
+  (crossfade_step) is unit-tested, but the actual blend needs an ear: verify it
+  sounds smooth (no click, pop, or volume dip at the handoff), that a manual skip
+  mid-crossfade doesn't jump to full volume, and that gapless-ish back-to-back
+  tracks don't double-trigger. Suggested: set 4-6s and listen across two short
+  tracks, then try skipping during the overlap.
+
 ## 2026-10-26 (Windows CD, best-effort/untested)
 
 - Windows audio-CD device layer added (#160), per the maintainer's "write it
