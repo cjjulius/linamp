@@ -41,6 +41,79 @@ const VIZ_BANDS: usize = 28;
 /// Fewer, wider bars for the small classic analyzer (Winamp-like).
 const CLASSIC_BANDS: usize = 19;
 
+/// A right-click Cut / Copy / Paste / Select all menu for a single-line text
+/// buffer, attached to a `TextEdit`'s response. egui has no built-in text context
+/// menu and no API to read the clipboard on demand, and not everyone uses Ctrl+C/V.
+/// Clipboard access goes through arboard (the crate eframe already uses); the
+/// cut/paste position comes from the field's own cursor state.
+fn text_edit_context_menu(resp: &egui::Response, ctx: &egui::Context, buf: &mut String) {
+    use egui::text::{CCursor, CCursorRange};
+    use egui::text_edit::TextEditState;
+
+    // The current selection as a sorted char range, if the field has focus/state.
+    let sel = TextEditState::load(ctx, resp.id)
+        .and_then(|s| s.cursor.char_range())
+        .map(|r| {
+            let [a, b] = r.sorted();
+            (a.index, b.index)
+        });
+    let has_sel = sel.map(|(a, b)| a != b).unwrap_or(false);
+    // Char index to byte offset into `buf` (cursor indices are chars, not bytes).
+    let byte_at = |s: &str, chars: usize| {
+        s.char_indices().nth(chars).map(|(i, _)| i).unwrap_or(s.len())
+    };
+    let set_cursor = |ctx: &egui::Context, idx: usize| {
+        if let Some(mut st) = TextEditState::load(ctx, resp.id) {
+            st.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(idx))));
+            st.store(ctx, resp.id);
+        }
+    };
+
+    resp.context_menu(|ui| {
+        if ui.add_enabled(has_sel, egui::Button::new("Cut")).clicked() {
+            if let Some((a, b)) = sel {
+                let (ba, bb) = (byte_at(buf, a), byte_at(buf, b));
+                // Copy via eframe's clipboard (persists reliably, unlike a one-shot
+                // arboard owner on X11); arboard is only used to read on Paste.
+                ui.ctx().copy_text(buf[ba..bb].to_string());
+                buf.replace_range(ba..bb, "");
+                set_cursor(ui.ctx(), a);
+            }
+            ui.close_menu();
+        }
+        if ui.add_enabled(has_sel, egui::Button::new("Copy")).clicked() {
+            if let Some((a, b)) = sel {
+                let (ba, bb) = (byte_at(buf, a), byte_at(buf, b));
+                ui.ctx().copy_text(buf[ba..bb].to_string());
+            }
+            ui.close_menu();
+        }
+        if ui.button("Paste").clicked() {
+            if let Ok(text) = arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+                // Single-line field: drop any newlines a pasted value carries.
+                let text: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+                let count = buf.chars().count();
+                let (a, b) = sel.unwrap_or((count, count));
+                let (ba, bb) = (byte_at(buf, a), byte_at(buf, b));
+                buf.replace_range(ba..bb, &text);
+                set_cursor(ui.ctx(), a + text.chars().count());
+            }
+            ui.close_menu();
+        }
+        if ui.button("Select all").clicked() {
+            let count = buf.chars().count();
+            if let Some(mut st) = TextEditState::load(ui.ctx(), resp.id) {
+                st.cursor.set_char_range(Some(CCursorRange::two(
+                    CCursor::new(0),
+                    CCursor::new(count),
+                )));
+                st.store(ui.ctx(), resp.id);
+            }
+            ui.close_menu();
+        }
+    });
+}
+
 /// Register a broad-Unicode fallback font so egui-rendered text (the Media
 /// Library, the modern UI, dialogs) can display scripts the default font lacks, 
 /// example: Vietnamese. It is appended as a fallback, so the default look is kept for
@@ -2669,6 +2742,9 @@ impl LinAmpApp {
                             .hint_text("http://stream.example.com/radio"),
                     );
                     resp.request_focus();
+                    // Right-click Cut/Copy/Paste/Select all, so pasting a URL doesn't
+                    // require Ctrl+V.
+                    text_edit_context_menu(&resp, ctx, buf);
                     buf.clone()
                 };
                 let valid = !url.trim().is_empty();
