@@ -1855,6 +1855,13 @@ impl LinAmpApp {
         if self.quit_countdown.is_some() {
             return;
         }
+        // Likewise while hidden to the tray: hide_to_tray closes the EQ/playlist/
+        // library windows and minimizes the main one, which must not be saved as
+        // the layout. Skipping keeps the last on-screen layout, so exiting from the
+        // tray (and reopening) restores the windows and positions that were open.
+        if self.hidden_to_tray {
+            return;
+        }
         // Don't churn the file every 300ms during a drag; the final resting
         // position is saved on the next cycle after the button is released.
         if self.drag.is_some() || self.lib_drag.is_some() {

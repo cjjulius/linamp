@@ -1029,3 +1029,22 @@ code plus a working/not-working binary): visual and behavior changes.
   coloured with a themed border, and moving the mouse over items should highlight
   them in the skin's selection colour. Load a different skin and confirm the menu
   colours follow it.
+
+## 2026-10-26 (#40 fixes: layout forgotten on tray exit, and tray-menu font)
+
+- Window layout was lost when exiting from the tray: hide_to_tray closes the
+  EQ/playlist/library windows (sets their visible flags false) and minimizes the
+  main one, and persist_session_if_changed kept saving that hidden state, so the
+  exit wrote "only the main window" as the layout. Now persistence is skipped while
+  hidden_to_tray (as it already was during shutdown), so the last saved layout is
+  the real on-screen one, and exiting from the tray then reopening restores the
+  windows and positions that were open.
+- Tray-menu font: the owner-drawn menu now uses LinAmp's bundled UI font (Noto
+  Sans, the same assets/fonts/NotoSans-Regular.ttf the egui menus use), loaded via
+  AddFontMemResourceEx and sized to the system DPI, so the menu matches the app's
+  own menus instead of the system font. Falls back to the system menu font if the
+  font can't be created.
+- Manual check (Windows): open the EQ and playlist, position the windows, hide to
+  the tray, then Exit from the tray menu. Reopen and confirm the same windows come
+  back in the same places. Also confirm the tray menu's text now matches LinAmp's
+  own menus.
