@@ -988,3 +988,21 @@ code plus a working/not-working binary): visual and behavior changes.
 - Manual check (Windows): in tray mode, minimize or close to the tray, then
   left-click the tray icon to restore, and use the right-click menu's Play/Pause
   and Exit. All should work now, and the menu items should highlight on hover.
+
+## 2026-10-26 (#40 follow-up: taskbar button not removed, and still no menu highlight)
+
+- Root cause of both: when the tray helper window became a normal top-level
+  window, it was titled "LinAmp", the same as the main player window. So
+  FindWindowW("LinAmp") used by the live taskbar toggle (and window grouping)
+  could resolve to the helper window instead of the player, and DeleteTab then
+  ran on the wrong window, leaving the real taskbar button in place (bar->tray
+  looked broken; tray->bar only looked fine because the button was never actually
+  removed). Fixed by titling the helper window "LinAmp Tray".
+- Menu highlight: a tray popup menu only highlights and dismisses when its owner
+  window is the foreground window, and SetForegroundWindow won't take on a window
+  that has never been shown. The helper window is now shown with SW_SHOWNA (zero
+  size, off-screen, WS_EX_TOOLWINDOW), so it draws nothing but can take the
+  foreground, and the menu gets the standard hover highlight.
+- Manual check (Windows): switch Normal/System tray in Preferences and confirm the
+  taskbar button appears/disappears both ways; right-click the tray icon and
+  confirm the menu items highlight as the mouse moves over them.
