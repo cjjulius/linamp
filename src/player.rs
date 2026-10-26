@@ -214,7 +214,7 @@ impl Player {
     /// Shape `source` through the EQ, the analyzer tap and the stereo balance, then
     /// start it on a fresh sink. Shared by file and stream playback so both apply
     /// the same pipeline (and so a new decode path only has to produce a `Source`).
-    fn append_source<S>(&mut self, source: S) -> Result<()>
+    fn append_source<S>(&mut self, source: S, allow_crossfade: bool) -> Result<()>
     where
         S: Source<Item = f32> + Send + 'static,
     {
@@ -230,8 +230,14 @@ impl Player {
         sink.append(balanced);
         // Crossfade: when enabled and a track is already playing, keep the outgoing
         // one on its own sink fading out while the new one fades in, instead of
-        // cutting it off. Otherwise (disabled, or nothing playing) swap as before.
-        if self.crossfade_secs > 0.0 && self.state == PlayState::Playing && self.sink.is_some() {
+        // cutting it off. Otherwise (disabled, nothing playing, or this source opts
+        // out) swap as before. A CD track opts out: it needs a couple of seconds to
+        // spin up, so a crossfade would blend against silence and stutter (#160).
+        if allow_crossfade
+            && self.crossfade_secs > 0.0
+            && self.state == PlayState::Playing
+            && self.sink.is_some()
+        {
             // At most one outgoing track; if one was already fading, carry its gain so
             // a rapid skip doesn't jump back to full volume.
             self.fade_out = self.fade_in;
@@ -256,7 +262,7 @@ impl Player {
                 let (device, track) = crate::cdda::parse_track_path(s)
                     .ok_or_else(|| anyhow::anyhow!("bad CD track path: {s}"))?;
                 let source = crate::cdda::open_cd_source(&device, track)?;
-                self.append_source(source)?;
+                self.append_source(source, false)?;
                 self.current_path = Some(path.to_path_buf());
                 self.current_url = None;
                 self.stream_title = None;
@@ -278,14 +284,14 @@ impl Player {
                 anyhow::anyhow!("MIDI playback needs a SoundFont (.sf2) in the soundfont/ folder")
             })?;
             let source = crate::midi::open_midi(path, &sf)?;
-            self.append_source(source)?;
+            self.append_source(source, true)?;
         } else if crate::tracker::is_tracker(path) {
             // Tracker modules (.mod/.xm/.s3m/.it) are rendered by xmrs (#158).
             let source = crate::tracker::open_tracker(path)?;
-            self.append_source(source)?;
+            self.append_source(source, true)?;
         } else {
             let source = crate::decode::open_file(path)?;
-            self.append_source(source)?;
+            self.append_source(source, true)?;
         }
         self.current_path = Some(path.to_path_buf());
         self.current_url = None;
@@ -304,7 +310,7 @@ impl Player {
         url: String,
     ) -> Result<()> {
         self.stream_title = Some(title);
-        self.append_source(source)?;
+        self.append_source(source, true)?;
         self.current_path = None;
         self.current_url = Some(url);
         self.state = PlayState::Playing;
