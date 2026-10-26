@@ -189,6 +189,35 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
     })
 }
 
+/// The track length from the container alone (frames x time-base), without
+/// decoding. A fast fallback for the playlist when lofty can't read a format's
+/// length (example: raw `.aac` or `.mpa`, which lofty rejects). Returns `None` when
+/// the container reports no frame count.
+pub fn probe_duration(path: &Path) -> Option<Duration> {
+    let file = File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .ok()?;
+    let track = probed.format.default_track()?;
+    match (track.codec_params.time_base, track.codec_params.n_frames) {
+        (Some(tb), Some(n)) => {
+            let t = tb.calc_time(n);
+            Some(Duration::new(t.seconds, (t.frac * 1e9) as u32))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,5 +324,22 @@ mod tests {
         // Seeking resets cleanly and keeps producing audio (no panic).
         src.try_seek(Duration::from_secs(1)).expect("seek should succeed");
         assert!(src.next().is_some(), "should still decode after a seek");
+    }
+
+    #[test]
+    fn probe_duration_reads_lengths_lofty_cannot() {
+        // Raw .aac and .mpa are the cases lofty can't measure; the symphonia probe
+        // fills them in. qa-music is local/gitignored, so skip on a bare checkout.
+        for (f, secs) in [("qa-music/scale.aac", 59.7), ("qa-music/scale.mpa", 60.0)] {
+            let p = Path::new(f);
+            if !p.exists() {
+                continue;
+            }
+            let d = probe_duration(p).unwrap_or_else(|| panic!("{f}: no duration"));
+            assert!(
+                (d.as_secs_f64() - secs).abs() < 1.0,
+                "{f}: expected ~{secs}s, got {d:?}"
+            );
+        }
     }
 }

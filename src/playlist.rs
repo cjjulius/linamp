@@ -27,7 +27,7 @@ pub const SUPPORTED_EXTS: &[&str] = &[
 /// UTF-8 that actually changed, so correctly-tagged text (and plain ASCII/Latin-1
 /// that isn't disguised UTF-8) is left untouched. Idempotent, repaired text has
 /// chars above U+00FF, so a second pass is a no-op.
-fn repair_mojibake(s: &str) -> String {
+pub(crate) fn repair_mojibake(s: &str) -> String {
     if s.is_empty() || !s.chars().all(|c| (c as u32) <= 0xFF) {
         return s.to_string();
     }
@@ -106,10 +106,13 @@ impl Track {
             }
         }
         // Formats lofty can't read (MIDI, tracker modules) still have a known
-        // length; fill it in so the playlist shows a time for them too.
+        // length; fill it in so the playlist shows a time for them too. The
+        // symphonia probe is the last resort, it reads the length lofty misses on
+        // raw .aac and .mpa (and anything else lofty can't parse) without decoding.
         if self.duration.is_none() {
             self.duration = crate::midi::duration(&self.path)
-                .or_else(|| crate::tracker::duration(&self.path));
+                .or_else(|| crate::tracker::duration(&self.path))
+                .or_else(|| crate::decode::probe_duration(&self.path));
         }
     }
 
