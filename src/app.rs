@@ -40,8 +40,6 @@ const FFT_SIZE: usize = 2048;
 const VIZ_BANDS: usize = 28;
 /// Fewer, wider bars for the small classic analyzer (Winamp-like).
 const CLASSIC_BANDS: usize = 19;
-/// Duration of the stop-with-fade (Shift+V) fade-out, in seconds.
-const FADE_SECS: f32 = 2.0;
 
 /// Register a broad-Unicode fallback font so egui-rendered text (the Media
 /// Library, the modern UI, dialogs) can display scripts the default font lacks, 
@@ -1524,7 +1522,7 @@ impl LinAmpApp {
     /// on (otherwise an immediate cut). Shift+V always forces a fade regardless.
     fn stop_playback(&mut self) {
         if self.prefs.fade_on_stop && self.player.state() != PlayState::Stopped {
-            self.fade = Some(FADE_SECS);
+            self.fade = Some(self.prefs.fade_on_stop_secs);
             self.status = "Fading out…".into();
         } else {
             self.player.stop();
@@ -2296,11 +2294,21 @@ impl LinAmpApp {
             // remaining", Ctrl+T) keep their shortcuts but are deliberately not
             // shown here, a settings checkbox implies it sticks, and they don't.
             let mut fade = self.prefs.fade_on_stop;
-            if ui
+            let mut changed = ui
                 .checkbox(&mut fade, "Fade out when stopping (Shift+V)")
-                .changed()
-            {
+                .changed();
+            let mut secs = self.prefs.fade_on_stop_secs;
+            ui.add_enabled_ui(fade, |ui| {
+                if ui
+                    .add(egui::Slider::new(&mut secs, 1.0..=12.0).suffix(" s"))
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+            if changed {
                 self.prefs.fade_on_stop = fade;
+                self.prefs.fade_on_stop_secs = secs;
                 self.prefs.save();
             }
         });
@@ -3465,7 +3473,7 @@ impl eframe::App for LinAmpApp {
                 self.player.set_fade(1.0);
                 self.fade = None;
             } else {
-                self.player.set_fade(t / FADE_SECS);
+                self.player.set_fade(t / self.prefs.fade_on_stop_secs.max(0.1));
                 self.fade = Some(t);
             }
         }
