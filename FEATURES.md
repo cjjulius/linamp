@@ -36,7 +36,8 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 - Double-click / right-click to play; current-track highlight
 - Per-track duration column
 - Save/Load M3U, M3U8 and PLS
-- Drag-and-drop files/folders/playlists from the OS onto the window (appended)
+- Drag-and-drop files/folders/playlists from the OS onto the window (dropped on
+  the playlist, they insert at the row under the cursor; elsewhere they append)
 - Drag-and-drop reorder (grip handle)
 - Sort by title / artist / album / duration (+ manual order)
 - Search box to filter the playlist
@@ -78,6 +79,8 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 - Accented / Vietnamese track text is ASCII-folded in the classic bitmap font
   (example: "Trường Sơn" becomes "Truong Son") instead of showing blank gaps
 - Always on top (options menu + Preferences)
+- Single-instance, launching LinAmp a second time just exits instead of opening a
+  rival set of windows
 - Minibrowser, "Open in browser" opens the system browser (xdg-open on
   Linux); the SHOUTcast directory pane is still planned (#146)
 
