@@ -60,6 +60,15 @@ code plus a working/not-working binary): visual and behavior changes.
   layout, and the D: default are confirmed. What is still unconfirmed is playback by
   ear: open an audio CD from Options to Open Audio CD and confirm it plays cleanly
   through the buffer without stutter, and that seeking and track changes behave.
+- Fix (2026-10-26): on Windows the CD loaded its tracks and times but played only
+  silence. Cause: IOCTL_CDROM_RAW_READ rejects more than 27 raw sectors per call
+  (error 87), but playback reads 75-sector (one second) batches, so every read on
+  the background thread failed and the reader ended the track at once. The single
+  sector reads the earlier hardware test used stayed under the limit, so it hid.
+  WindowsCdDrive::read_sectors now splits a request into chunks of 27 and
+  concatenates, and the hardware test now also reads a full 75-sector batch so the
+  limit can not regress unnoticed. Needs a by-ear recheck on Windows: open an audio
+  CD and confirm it now plays.
 
 ## 2026-10-26 (tracker length)
 
