@@ -577,6 +577,13 @@ pub struct LinAmpApp {
     /// the tray instead of their usual behaviour. Set at launch and updated live
     /// by `set_window_mode` when the pref changes.
     tray_mode: bool,
+    /// Startup deadline for re-applying the X11 taskbar-skip hint (Linux). winit's
+    /// `with_taskbar(false)` doesn't set `_NET_WM_STATE_SKIP_TASKBAR` on X11, so in
+    /// tray mode we send the EWMH hint ourselves. The window isn't in the WM's client
+    /// list the instant we launch, so we re-send (keeping the event loop awake) until
+    /// this deadline, which reliably beats the race. `None` once done or in Normal mode.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    tray_taskbar_deadline: Option<Instant>,
     /// Set by a genuine quit (main-menu Exit or the tray's Exit) so the close
     /// handler really quits instead of hiding to the tray in System tray mode.
     force_quit: bool,
@@ -796,6 +803,11 @@ impl LinAmpApp {
             hidden_to_tray: false,
             tray_prev_vis: (false, false, false),
             tray_mode,
+            // Re-apply the taskbar-skip hint for a few seconds after launch (Linux),
+            // until the window is in the WM's client list. Only when starting hidden
+            // from the taskbar; a plain window needs nothing.
+            tray_taskbar_deadline: tray_mode
+                .then(|| Instant::now() + std::time::Duration::from_secs(3)),
             force_quit: false,
             skin_path: None,
             scale,
@@ -3675,6 +3687,22 @@ impl eframe::App for LinAmpApp {
         let tray_actions: Vec<_> = self.tray_rx.try_iter().collect();
         for action in tray_actions {
             self.handle_tray_action(ctx, action);
+        }
+
+        // Startup taskbar suppression (Linux): winit's with_taskbar(false) doesn't
+        // set _NET_WM_STATE_SKIP_TASKBAR on X11, so in tray mode send the EWMH hint
+        // ourselves. The window isn't in the WM's client list the instant we launch,
+        // so re-send (keeping the loop awake) until the deadline, then stop (steady
+        // state makes no X calls). Windows handles this at window creation, so this
+        // is Linux-only.
+        #[cfg(target_os = "linux")]
+        if let Some(deadline) = self.tray_taskbar_deadline {
+            if self.tray_mode && Instant::now() < deadline {
+                set_taskbar_button("LinAmp", false);
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            } else {
+                self.tray_taskbar_deadline = None;
+            }
         }
 
         // Persist the session (playlist, window layout, EQ) whenever it changes,
