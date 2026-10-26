@@ -947,3 +947,24 @@ code plus a working/not-working binary): visual and behavior changes.
   release build loads the demo track (the demo loader can rewrite its ID3 tags).
   The installer already bundles music/, so shipped builds are unaffected. No
   behavior change for users; purely protects the source tree during testing.
+
+## 2026-10-26 (#40 window mode now applies live, no restart)
+
+- Supersedes the "applied at launch, not live" note above. Switching the mode in
+  Preferences > Display > System tray now takes effect immediately: the tray icon
+  appears or disappears, the taskbar button flips, and the close/minimize behaviour
+  changes, with no restart. The Preferences hint no longer mentions restarting.
+- Mechanism: set_window_mode re-spawns the tray to match and calls
+  platform_win::set_taskbar_button. On Windows that drives ITaskbarList
+  (AddTab / DeleteTab) on the main window found by title "LinAmp", the same COM
+  interface winit uses for its taskbar option, so a live toggle matches the startup
+  state cleanly. The window is still created with the saved mode at launch
+  (main.rs with_taskbar), so first paint is already correct.
+- Linux: the tray icon and behaviour toggle live too. The taskbar-button toggle is
+  a best-effort X11 _NET_WM_STATE_SKIP_TASKBAR message (reused from the child-window
+  grouping code); it will not work under Wayland or on a WM that ignores the hint,
+  where the taskbar aspect then effectively needs a relaunch. Needs Pop!_OS QA.
+- Manual check (Windows): with the window shown, toggle to System tray and confirm
+  the taskbar button disappears and the tray icon appears at once; toggle back and
+  the taskbar button returns. Then in tray mode, the close (X) hides to tray without
+  a restart. Leaving tray mode while hidden should bring the window back.

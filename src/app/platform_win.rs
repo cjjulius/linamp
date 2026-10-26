@@ -228,11 +228,12 @@ mod x11util {
 
     /// Drop `win` from the taskbar via `_NET_WM_STATE_SKIP_TASKBAR`, sent as an
     /// EWMH client message so only the main window represents the group.
-    unsafe fn skip_taskbar(xlib: &xlib::Xlib, d: *mut xlib::Display, win: xlib::Window) {
+    unsafe fn skip_taskbar(xlib: &xlib::Xlib, d: *mut xlib::Display, win: xlib::Window, add: bool) {
         let root = (xlib.XDefaultRootWindow)(d);
         let net_wm_state = intern(xlib, d, "_NET_WM_STATE");
         let skip = intern(xlib, d, "_NET_WM_STATE_SKIP_TASKBAR");
-        const NET_WM_STATE_ADD: c_long = 1;
+        // _NET_WM_STATE_ADD = 1 (hide from taskbar), _NET_WM_STATE_REMOVE = 0 (show).
+        let action: c_long = if add { 1 } else { 0 };
         let mut ev: xlib::XEvent = std::mem::zeroed();
         {
             let cm = &mut ev.client_message;
@@ -242,7 +243,7 @@ mod x11util {
             cm.window = win;
             cm.message_type = net_wm_state;
             cm.format = 32;
-            cm.data.set_long(0, NET_WM_STATE_ADD);
+            cm.data.set_long(0, action);
             cm.data.set_long(1, skip as c_long);
             cm.data.set_long(2, 0);
             cm.data.set_long(3, 1); // source indication: normal application
@@ -250,6 +251,23 @@ mod x11util {
         }
         let mask = xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask;
         (xlib.XSendEvent)(d, root, 0, mask, &mut ev);
+    }
+
+    /// Add or remove `_NET_WM_STATE_SKIP_TASKBAR` on the top-level window named
+    /// `title`, so the main window's taskbar button can be toggled live for the
+    /// System tray mode (#40). Best-effort: a no-op if the window isn't found.
+    pub fn set_skip_taskbar(title: &str, skip: bool) {
+        with_conn(|xlib, d| unsafe {
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            for &w in &client_list(xlib, d) {
+                if wm_name(xlib, d, w).as_str() == title {
+                    skip_taskbar(xlib, d, w, skip);
+                    break;
+                }
+            }
+            (xlib.XSync)(d, 0); // deliver any errors to ignore_err before restoring
+            (xlib.XSetErrorHandler)(prev);
+        });
     }
 
     /// Link EQ/playlist to the main window via `WM_TRANSIENT_FOR`. Acts only when
@@ -293,7 +311,7 @@ mod x11util {
                 if eq_visible {
                     if eq != 0 {
                         (xlib.XSetTransientForHint)(d, eq, main);
-                        skip_taskbar(xlib, d, eq);
+                        skip_taskbar(xlib, d, eq, true);
                     } else {
                         ok = false;
                     }
@@ -301,7 +319,7 @@ mod x11util {
                 if pl_visible {
                     if pl != 0 {
                         (xlib.XSetTransientForHint)(d, pl, main);
-                        skip_taskbar(xlib, d, pl);
+                        skip_taskbar(xlib, d, pl, true);
                     } else {
                         ok = false;
                     }
@@ -309,7 +327,7 @@ mod x11util {
                 if lib_visible {
                     if lib != 0 {
                         (xlib.XSetTransientForHint)(d, lib, main);
-                        skip_taskbar(xlib, d, lib);
+                        skip_taskbar(xlib, d, lib, true);
                     } else {
                         ok = false;
                     }
@@ -844,6 +862,103 @@ pub(crate) fn find_window(title: &str) -> isize {
         fn FindWindowW(class: *const u16, title: *const u16) -> isize;
     }
     unsafe { FindWindowW(std::ptr::null(), wide(title).as_ptr()) }
+}
+
+/// Show or hide the taskbar button for the top-level window titled `title`, at
+/// runtime, so the System tray mode (#40) can be toggled without a restart.
+/// Windows drives ITaskbarList (AddTab / DeleteTab), the same interface winit
+/// uses for its taskbar option, so a live toggle matches the startup state.
+/// X11 sends a _NET_WM_STATE_SKIP_TASKBAR hint (best-effort). A no-op elsewhere.
+pub(crate) fn set_taskbar_button(title: &str, show: bool) {
+    #[cfg(windows)]
+    unsafe {
+        use core::ffi::c_void;
+        #[repr(C)]
+        struct Guid {
+            d1: u32,
+            d2: u16,
+            d3: u16,
+            d4: [u8; 8],
+        }
+        #[repr(C)]
+        struct Vtbl {
+            query_interface:
+                unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32,
+            add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+            release: unsafe extern "system" fn(*mut c_void) -> u32,
+            hr_init: unsafe extern "system" fn(*mut c_void) -> i32,
+            add_tab: unsafe extern "system" fn(*mut c_void, isize) -> i32,
+            delete_tab: unsafe extern "system" fn(*mut c_void, isize) -> i32,
+        }
+        #[repr(C)]
+        struct Obj {
+            vtbl: *const Vtbl,
+        }
+        #[allow(non_snake_case)]
+        #[link(name = "ole32")]
+        extern "system" {
+            fn CoInitializeEx(reserved: *mut c_void, co_init: u32) -> i32;
+            fn CoCreateInstance(
+                clsid: *const Guid,
+                outer: *mut c_void,
+                ctx: u32,
+                iid: *const Guid,
+                out: *mut *mut c_void,
+            ) -> i32;
+        }
+        // CLSID_TaskbarList and IID_ITaskbarList.
+        const CLSID: Guid = Guid {
+            d1: 0x56FD_F344,
+            d2: 0xFD6D,
+            d3: 0x11d0,
+            d4: [0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90],
+        };
+        const IID: Guid = Guid {
+            d1: 0x56FD_F342,
+            d2: 0xFD6D,
+            d3: 0x11d0,
+            d4: [0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90],
+        };
+        const COINIT_APARTMENTTHREADED: u32 = 0x2;
+        const CLSCTX_INPROC_SERVER: u32 = 0x1;
+
+        let hwnd = find_window(title);
+        if hwnd == 0 {
+            return;
+        }
+        // winit's main thread is already COM-initialized (STA); this returns
+        // S_FALSE then and is harmless. We never CoUninitialize, so winit's
+        // apartment stays intact.
+        CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED);
+        let mut obj: *mut c_void = std::ptr::null_mut();
+        if CoCreateInstance(
+            &CLSID,
+            std::ptr::null_mut(),
+            CLSCTX_INPROC_SERVER,
+            &IID,
+            &mut obj,
+        ) < 0
+            || obj.is_null()
+        {
+            return;
+        }
+        let vtbl = (*(obj as *mut Obj)).vtbl;
+        ((*vtbl).hr_init)(obj);
+        if show {
+            ((*vtbl).add_tab)(obj, hwnd);
+        } else {
+            ((*vtbl).delete_tab)(obj, hwnd);
+        }
+        ((*vtbl).release)(obj);
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::set_skip_taskbar(title, !show);
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+    {
+        let _ = (title, show);
+    }
 }
 
 /// Clip the borderless context-menu window to a rounded rectangle (corner radius
