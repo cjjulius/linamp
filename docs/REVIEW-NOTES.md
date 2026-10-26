@@ -1048,3 +1048,27 @@ code plus a working/not-working binary): visual and behavior changes.
   the tray, then Exit from the tray menu. Reopen and confirm the same windows come
   back in the same places. Also confirm the tray menu's text now matches LinAmp's
   own menus.
+
+## 2026-10-26 (#40 Linux parity checklist, for work on the Linux machine)
+
+The tray / window-mode work is verified on Windows. None of the Linux side has
+been compiled or run (developed on Windows; cross-check fails on the C deps). The
+two other #40 parts are split out: media keys (#165) and file associations (#166).
+To bring Linux to parity, verify on Pop!_OS (and Mint):
+- Compiles: cargo build with the ksni 0.3.7 dep (blocking feature, zbus 5).
+- Tray icon shows: stock GNOME (Pop!_OS) needs the AppIndicator / KStatusNotifier
+  extension for StatusNotifierItems; Mint Cinnamon has a tray by default. With no
+  tray host, tray_mode stays off and the window behaves normally (no stranding).
+- Left-click toggles the window; the right-click menu drives transport; Exit quits.
+- RISK, hide-to-tray freeze: the Windows fix minimizes instead of hiding, relying
+  on winit posting WM_PAINT to a minimized window (RDW_INTERNALPAINT). That is
+  Windows-specific; on X11/Wayland a minimized window may not keep repainting, so
+  eframe could stop running update() and the tray would go unresponsive like it
+  did on Windows before the fix. Test minimize-to-tray then a tray click; if it
+  freezes, the Linux path likely needs a different hide (e.g. keep the window
+  mapped but off-screen) so the event loop keeps running.
+- Taskbar button: Windows toggles it live via ITaskbarList. Linux is a best-effort
+  X11 _NET_WM_STATE_SKIP_TASKBAR message (no effect under Wayland or a WM that
+  ignores it), so the no-taskbar-button aspect may need a relaunch or more work.
+- Tray menu theming: the skin-coloured owner-drawn menu is Windows-only. The Linux
+  ksni menu follows the desktop theme (SNI menus are host-drawn), which is expected.
