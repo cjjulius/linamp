@@ -17,6 +17,7 @@
 // items here are unused in those builds. Keep them without dead-code noise.
 #![allow(dead_code)]
 
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -412,6 +413,61 @@ pub fn open_cd_source(device: &str, track: u8) -> Result<BufferedCdSource> {
     }
 }
 
+// --- GVfs audio-CD redirect -----------------------------------------------
+//
+// When the desktop mounts an audio CD, it exposes the tracks as slow FUSE WAV
+// files under `.../gvfs/cdda:host=<dev>/Track N.wav`. Adding those to the playlist
+// the obvious way plays them through that FUSE path, the exact slow transport that
+// stutters. These helpers recognise such a path so the playlist can transparently
+// store a native `cdda://` entry instead and read the drive directly (#160).
+
+/// If `path` points inside a GVfs audio-CD mount (`.../gvfs/cdda:host=<dev>/...`),
+/// return the backing device (`/dev/<dev>`). Pure path inspection.
+pub fn gvfs_cdda_device(path: &Path) -> Option<String> {
+    for comp in path.components() {
+        if let Some(s) = comp.as_os_str().to_str() {
+            if let Some(rest) = s.strip_prefix("cdda:host=") {
+                // The mount component can carry extra params (cdda:host=sr0,...).
+                let host = rest.split([',', '/']).next().unwrap_or(rest);
+                if !host.is_empty() {
+                    return Some(format!("/dev/{host}"));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parse a GVfs audio-CD track path into its device and 1-based track number, or
+/// `None` when `path` is not a GVfs CD track.
+pub fn parse_gvfs_cdda_path(path: &Path) -> Option<(String, u8)> {
+    let device = gvfs_cdda_device(path)?;
+    // GVfs names tracks "Track N.wav"; take the number from the file stem.
+    let stem = path.file_stem()?.to_str()?;
+    let digits: String = stem.chars().filter(|c| c.is_ascii_digit()).collect();
+    let track: u8 = digits.parse().ok()?;
+    Some((device, track))
+}
+
+/// Resolve a GVfs audio-CD track path to its native device and [`CdTrack`] (length
+/// from the disc TOC), so a playlist can store a `cdda://` entry instead of the
+/// slow FUSE WAV. Linux only; `None` elsewhere, off a disc, or when the drive
+/// can't be read.
+pub fn gvfs_cd_track(path: &Path) -> Option<(String, CdTrack)> {
+    #[cfg(target_os = "linux")]
+    {
+        let (device, track) = parse_gvfs_cdda_path(path)?;
+        let toc = linux::cached_toc(&device)?;
+        let t = toc.into_iter().find(|t| t.number == track)?;
+        Some((device, t))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 /// The platform's default optical device, used when the UI opens a CD.
 pub fn default_cd_device() -> String {
     #[cfg(target_os = "linux")]
@@ -569,6 +625,23 @@ mod linux {
         }
     }
 
+    /// The disc TOC, cached briefly per device so adding a whole folder of GVfs CD
+    /// tracks reads the disc once instead of once per file.
+    pub fn cached_toc(device: &str) -> Option<Vec<CdTrack>> {
+        use std::sync::Mutex;
+        use std::time::Instant;
+        static CACHE: Mutex<Option<(String, Instant, Vec<CdTrack>)>> = Mutex::new(None);
+        let mut guard = CACHE.lock().ok()?;
+        if let Some((dev, at, toc)) = guard.as_ref() {
+            if dev == device && at.elapsed().as_secs() < 10 {
+                return Some(toc.clone());
+            }
+        }
+        let toc = super::read_cd_toc(device).ok()?;
+        *guard = Some((device.to_string(), Instant::now(), toc.clone()));
+        Some(toc)
+    }
+
     /// Prefer the `/dev/cdrom` symlink, falling back to `/dev/sr0`.
     pub fn default_device() -> String {
         for d in ["/dev/cdrom", "/dev/sr0"] {
@@ -714,6 +787,20 @@ mod tests {
             &[READAHEAD_SECTORS, READAHEAD_SECTORS, 200 - 2 * READAHEAD_SECTORS],
             "should read in batches, not per-sector"
         );
+    }
+
+    #[test]
+    fn gvfs_cdda_paths_resolve_to_device_and_track() {
+        // A real GVfs audio-CD mount path maps to the backing device and track.
+        let p = Path::new("/run/user/1000/gvfs/cdda:host=sr0/Track 3.wav");
+        assert_eq!(gvfs_cdda_device(p), Some("/dev/sr0".to_string()));
+        assert_eq!(parse_gvfs_cdda_path(p), Some(("/dev/sr0".to_string(), 3)));
+        // Two-digit track, and a device with extra mount params.
+        let p10 = Path::new("/run/user/1000/gvfs/cdda:host=sr1,foo=bar/Track 10.wav");
+        assert_eq!(parse_gvfs_cdda_path(p10), Some(("/dev/sr1".to_string(), 10)));
+        // A normal WAV on disk is not a GVfs CD track.
+        assert_eq!(gvfs_cdda_device(Path::new("/home/me/music/Track 3.wav")), None);
+        assert_eq!(parse_gvfs_cdda_path(Path::new("/home/me/music/song.wav")), None);
     }
 
     #[test]
