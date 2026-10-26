@@ -43,6 +43,21 @@ code plus a working/not-working binary): visual and behavior changes.
   Also note: the user must be in the "cdrom" group (or have the session ACL on the
   device) to read /dev/sr0.
 
+- Audio CD, transparent GVfs redirect (Linux, #160). Following on from the native
+  CDDA reads: the natural way to reach a CD is to Add file(s) and pick the tracks
+  the desktop shows, which are slow FUSE WAV files under
+  /run/user/<uid>/gvfs/cdda:host=sr0/Track N.wav. Adding those now transparently
+  stores a native cdda:// entry instead (detected in playlist add_file / add_folder,
+  so every entry point is covered: Add file(s), Add folder, Open, drag-drop). The
+  disc TOC is cached about 10s per device so adding a folder reads the disc once, not
+  per file. So the user does not need the Options to Open Audio CD item, the ordinary
+  add flow plays natively. Needs a human check on Pop!_OS: with a CD in, Add file(s),
+  pick the GVfs Track N.wav files, confirm they play gaplessly off the drive (not the
+  stuttering FUSE path) and show as Track N with the right length. Known cosmetic
+  edge: adding the whole GVfs folder orders tracks lexically (1, 10, 2, ...), the
+  track labels and lengths are still correct, and Open Audio CD lists them in disc
+  order.
+
 - Single-instance guard: LinAmp now holds an advisory file lock
   (data dir / LinAmp / instance.lock) at startup, so a second launch exits instead
   of opening a second, conflicting set of classic windows. The headless flags

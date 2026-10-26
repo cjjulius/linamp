@@ -182,8 +182,16 @@ impl Playlist {
         self.current.and_then(|i| self.tracks.get(i))
     }
 
-    /// Add a single file if it has a supported extension (tags read lazily).
+    /// Add a single file if it has a supported extension (tags read lazily). An
+    /// audio CD the desktop mounted as slow FUSE WAV files (GVfs) is transparently
+    /// stored as a native `cdda://` entry instead, so it plays off the drive
+    /// directly rather than through the stuttering FUSE path (#160, Linux only).
     pub fn add_file(&mut self, path: PathBuf) {
+        #[cfg(target_os = "linux")]
+        if let Some((dev, t)) = crate::cdda::gvfs_cd_track(&path) {
+            self.tracks.push(Track::cd_track(&dev, &t));
+            return;
+        }
         if is_supported(&path) {
             self.tracks.push(Track::new(path));
         }
@@ -214,6 +222,12 @@ impl Playlist {
             .collect();
         found.sort();
         for p in found {
+            // A GVfs audio-CD mount's WAV tracks become native cdda:// entries.
+            #[cfg(target_os = "linux")]
+            if let Some((dev, t)) = crate::cdda::gvfs_cd_track(&p) {
+                self.tracks.push(Track::cd_track(&dev, &t));
+                continue;
+            }
             self.tracks.push(Track::new(p));
         }
     }
