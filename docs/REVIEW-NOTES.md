@@ -38,11 +38,11 @@ code plus a working/not-working binary): visual and behavior changes.
 
 - MP2 (MPEG Layer II) didn't actually decode. The symphonia dependency enabled
   only the "mp3" (Layer III) feature, so a real .mp2/.mpa failed with "unsupported
-  codec" (confirmed against qa-music/Generated_tests/sample_scale.mp2) — #157's
+  codec" (confirmed against qa-music/Generated_tests/sample_scale.mp2), #157's
   Layer I/II support was never wired up. Enabled symphonia's "mp1" and "mp2"
   features; a test now decodes and seeks the sample. With the format decoding, the
   existing seek path works, so the requested MP2 seeking works too. Verify in-app
-  on Windows and Linux: play an .mp2 and drag the seek bar — it should jump and
+  on Windows and Linux: play an .mp2 and drag the seek bar, it should jump and
   keep playing. (Layer I .mp1 is enabled too but untested for lack of a sample.)
 
 ## 2026-10-25 (later 5)
@@ -58,7 +58,7 @@ code plus a working/not-working binary): visual and behavior changes.
 ## 2026-10-25 (later 4)
 
 - CD playback stutter (#160): on the first real-hardware test, CD audio played but
-  stuttered — the drive audibly spun up again mid-track and track changes were slow.
+  stuttered, the drive audibly spun up again mid-track and track changes were slow.
   Cause: CdAudioSource read one 2352-byte sector (~13ms of audio) per audio refill,
   so it hit the drive constantly and any re-seek/spin-up became a gap. It now reads
   ~1 second of sectors per access (READAHEAD_SECTORS) through a new batched
@@ -67,7 +67,7 @@ code plus a working/not-working binary): visual and behavior changes.
   in one request for the real win. Needs a human ear on the drive to confirm the
   stutter is gone. Two items for the Linux box, which owns the device + TOC/playlist
   code: (1) implement a true batched read_sectors (single ioctl/DeviceIoControl per
-  run); (2) the CD tracks show up labelled as WAV — set a sensible per-track title/
+  run); (2) the CD tracks show up labelled as WAV, set a sensible per-track title/
   format where the TOC is turned into playlist entries.
 
 ## 2026-10-25 (later 3)

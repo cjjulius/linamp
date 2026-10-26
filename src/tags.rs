@@ -132,7 +132,7 @@ pub fn read_info(path: &Path) -> FileInfo {
         ..Default::default()
     };
     // The MPEG parser only populates this for MPEG audio, but on any other file it
-    // scans the whole thing looking for frames before failing — seconds of freeze on
+    // scans the whole thing looking for frames before failing, seconds of freeze on
     // a large .wav/.aiff when the tag editor opens. Only run it for MPEG extensions.
     let is_mpeg = path
         .extension()
