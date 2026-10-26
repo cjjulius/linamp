@@ -195,7 +195,7 @@ mod tests {
         let frames: usize = (&mut src).count() / 2; // emitted stereo frames
         let played = frames as f64 / SAMPLE_RATE as f64;
         // Actual playback matches the reported length within a few milliseconds
-        // (never longer — that was the bug).
+        // (never longer, that was the bug).
         let diff = played - reported.as_secs_f64();
         assert!(
             diff <= 0.05 && diff >= -0.05,
