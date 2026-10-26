@@ -524,6 +524,7 @@ mod windows_impl {
         fn GetForegroundWindow() -> Hwnd;
         fn GetWindowThreadProcessId(hwnd: Hwnd, pid: *mut u32) -> u32;
         fn AttachThreadInput(attach: u32, attach_to: u32, attach_flag: i32) -> i32;
+        fn GetDpiForSystem() -> u32;
     }
 
     #[link(name = "gdi32")]
@@ -535,6 +536,29 @@ mod windows_impl {
         fn SetTextColor(h_dc: isize, color: u32) -> u32;
         fn SetBkMode(h_dc: isize, mode: i32) -> i32;
         fn GetTextExtentPoint32W(h_dc: isize, text: *const u16, count: i32, sz: *mut SizeW) -> i32;
+        fn AddFontMemResourceEx(
+            data: *const core::ffi::c_void,
+            size: u32,
+            reserved: *const core::ffi::c_void,
+            count: *mut u32,
+        ) -> isize;
+        #[allow(clippy::too_many_arguments)]
+        fn CreateFontW(
+            height: i32,
+            width: i32,
+            escapement: i32,
+            orientation: i32,
+            weight: i32,
+            italic: u32,
+            underline: u32,
+            strike_out: u32,
+            char_set: u32,
+            out_precision: u32,
+            clip_precision: u32,
+            quality: u32,
+            pitch_and_family: u32,
+            face: *const u16,
+        ) -> isize;
     }
 
     #[link(name = "kernel32")]
@@ -566,6 +590,9 @@ mod windows_impl {
         tx: Sender<TrayAction>,
         egui: egui::Context,
         colors: Arc<MenuColors>,
+        /// The menu font (Noto Sans, LinAmp's UI font), or 0 to fall back to the
+        /// system menu font.
+        font: isize,
     }
 
     impl TrayCtx {
@@ -579,6 +606,52 @@ mod windows_impl {
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// Load LinAmp's bundled UI font (Noto Sans) as a GDI font so the tray menu
+    /// matches the app's own menus, sized to the system DPI. Returns 0 if the font
+    /// can't be created, so the caller falls back to the system menu font.
+    unsafe fn load_menu_font() -> isize {
+        const FW_NORMAL: i32 = 400;
+        const DEFAULT_CHARSET: u32 = 1;
+        const CLEARTYPE_QUALITY: u32 = 5;
+        let bytes = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
+        let mut count = 0u32;
+        AddFontMemResourceEx(
+            bytes.as_ptr() as *const core::ffi::c_void,
+            bytes.len() as u32,
+            std::ptr::null(),
+            &mut count,
+        );
+        // Match egui's ~14px body text, scaled to the system DPI (96 = 100%).
+        let dpi = GetDpiForSystem().max(96) as i32;
+        let height = -(14 * dpi / 96);
+        let face = wide("Noto Sans");
+        CreateFontW(
+            height,
+            0,
+            0,
+            0,
+            FW_NORMAL,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            0,
+            0,
+            CLEARTYPE_QUALITY,
+            0,
+            face.as_ptr(),
+        )
+    }
+
+    /// The menu font to draw with: the loaded Noto Sans, or the system menu font.
+    unsafe fn menu_font(font: isize) -> isize {
+        if font != 0 {
+            font
+        } else {
+            GetStockObject(DEFAULT_GUI_FONT)
+        }
     }
 
     /// Load the executable's embedded application icon at tray size, falling
@@ -625,8 +698,8 @@ mod windows_impl {
         (menu, brush)
     }
 
-    /// WM_MEASUREITEM: size one row from its label, using the default menu font.
-    unsafe fn measure_item(mis: &mut MeasureItemStruct) {
+    /// WM_MEASUREITEM: size one row from its label, using the menu font.
+    unsafe fn measure_item(mis: &mut MeasureItemStruct, font: isize) {
         let (_, label) = MENU_ITEMS[mis.item_data.min(MENU_ITEMS.len() - 1)];
         if label.is_empty() {
             mis.item_width = 0;
@@ -635,8 +708,7 @@ mod windows_impl {
         }
         let text = wide(label);
         let dc = GetDC(0);
-        let font = GetStockObject(DEFAULT_GUI_FONT);
-        let prev = SelectObject(dc, font);
+        let prev = SelectObject(dc, menu_font(font));
         let mut sz = SizeW { cx: 0, cy: 0 };
         GetTextExtentPoint32W(dc, text.as_ptr(), label.chars().count() as i32, &mut sz);
         SelectObject(dc, prev);
@@ -648,7 +720,7 @@ mod windows_impl {
 
     /// WM_DRAWITEM: paint one row in the skin's colours, highlighting the hovered
     /// one and drawing a thin themed border down the sides (and across the ends).
-    unsafe fn draw_item(dis: &DrawItemStruct, colors: &MenuColors) {
+    unsafe fn draw_item(dis: &DrawItemStruct, colors: &MenuColors, font: isize) {
         let (_, label) = MENU_ITEMS[dis.item_data.min(MENU_ITEMS.len() - 1)];
         let selected = dis.item_state & ODS_SELECTED != 0 && !label.is_empty();
         let bg = if selected {
@@ -723,8 +795,7 @@ mod windows_impl {
         };
         SetBkMode(dis.h_dc, TRANSPARENT);
         SetTextColor(dis.h_dc, text_color);
-        let font = GetStockObject(DEFAULT_GUI_FONT);
-        let prev = SelectObject(dis.h_dc, font);
+        let prev = SelectObject(dis.h_dc, menu_font(font));
         let text = wide(label);
         let mut tr = Rect {
             left: rc.left + 12,
@@ -761,13 +832,16 @@ mod windows_impl {
 
     unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, w: Wparam, l: Lparam) -> Lresult {
         if msg == WM_MEASUREITEM {
-            measure_item(&mut *(l as *mut MeasureItemStruct));
+            let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const TrayCtx;
+            let font = if ctx_ptr.is_null() { 0 } else { (*ctx_ptr).font };
+            measure_item(&mut *(l as *mut MeasureItemStruct), font);
             return 1;
         }
         if msg == WM_DRAWITEM {
             let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const TrayCtx;
             if !ctx_ptr.is_null() {
-                draw_item(&*(l as *const DrawItemStruct), &(*ctx_ptr).colors);
+                let ctx = &*ctx_ptr;
+                draw_item(&*(l as *const DrawItemStruct), &ctx.colors, ctx.font);
             }
             return 1;
         }
@@ -931,7 +1005,13 @@ mod windows_impl {
 
         // Hand the WndProc its context. No tray messages arrive until the icon
         // is added just below, so setting this after CreateWindow is safe.
-        let ctx = Box::into_raw(Box::new(TrayCtx { tx, egui, colors }));
+        let font = load_menu_font();
+        let ctx = Box::into_raw(Box::new(TrayCtx {
+            tx,
+            egui,
+            colors,
+            font,
+        }));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, ctx as isize);
 
         let mut tip = [0u16; 128];
@@ -971,6 +1051,9 @@ mod windows_impl {
 
         // Tear down: remove the icon, drop the context, destroy the window.
         Shell_NotifyIconW(NIM_DELETE, &mut nid);
+        if font != 0 {
+            DeleteObject(font);
+        }
         let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayCtx;
         if !ctx_ptr.is_null() {
             drop(Box::from_raw(ctx_ptr));
