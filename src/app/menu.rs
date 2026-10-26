@@ -292,6 +292,9 @@ impl super::LinAmpApp {
                                 // This runs inside the popup's own viewport, so a
                                 // plain Close would only dismiss the menu. Target
                                 // the root viewport to actually quit the app.
+                                // force_quit makes the close handler quit even in
+                                // tray mode (where an X would otherwise hide).
+                                self.force_quit = true;
                                 ctx.send_viewport_cmd_to(
                                     egui::ViewportId::ROOT,
                                     egui::ViewportCommand::Close,

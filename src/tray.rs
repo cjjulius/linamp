@@ -96,6 +96,25 @@ impl Tray {
             (Tray { _noop: () }, rx)
         }
     }
+
+    /// Whether a tray icon is actually running. False when the tray is disabled
+    /// or its backend failed to start (for example a Linux desktop with no
+    /// StatusNotifierItem host). The app uses this to avoid hiding the window to
+    /// a tray that isn't there, so a close always has somewhere to go.
+    pub fn is_active(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self._win.is_some()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self._linux.is_some()
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            false
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

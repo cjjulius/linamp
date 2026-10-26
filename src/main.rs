@@ -119,6 +119,12 @@ fn main() -> eframe::Result<()> {
     if let Some(icon) = load_icon() {
         viewport = viewport.with_icon(icon);
     }
+    // System tray mode (#40) hides the taskbar button, so the tray icon is the
+    // app's only presence. egui can only set this at window creation, which is why
+    // the window mode applies at launch. A missing/false pref keeps the taskbar.
+    if config::Prefs::load().tray_enabled {
+        viewport = viewport.with_taskbar(false);
+    }
     let options = eframe::NativeOptions {
         viewport,
         // The classic UI uses several borderless child windows rendered as

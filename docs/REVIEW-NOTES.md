@@ -910,3 +910,40 @@ code plus a working/not-working binary): visual and behavior changes.
   The classic Minimize button still minimizes to the taskbar as before. Decide
   whether the Close/Minimize buttons should hide to tray too (and whether that
   should be a preference).
+
+## 2026-10-26 (#40 tray reworked into two window modes, needs manual + Linux QA)
+
+- The tray is now a two-mode window setting (Preferences > Display > System tray),
+  and it supersedes the "on by default" note above. Default is Normal mode.
+  - Normal mode: a taskbar button, no tray icon. Minimize iconifies to the taskbar.
+    The close (X) button and an OS close (Alt+F4 / taskbar Close) exit. Main-menu
+    Exit exits.
+  - System tray mode: a tray icon, no taskbar button. Minimize and the close (X)
+    button hide to the tray (saving/restoring exactly the windows that were open).
+    An OS close (Alt+F4) also hides. The only ways to quit are main-menu Exit and
+    the tray's Exit.
+- Applied at launch, not live: egui can only set the taskbar-button visibility at
+  window creation, so the mode is read once at startup (main.rs sets with_taskbar,
+  and the app snapshots tray_mode). Changing the pref shows "Takes effect when you
+  restart LinAmp." A genuine Exit sets force_quit so it quits even in tray mode.
+- Safety: tray_mode is only active when the tray actually started. If the tray
+  backend fails (for example a Linux desktop with no StatusNotifierItem host), the
+  app behaves as Normal so a close still exits rather than hiding to nothing.
+- Manual check (Windows): set System tray mode, restart. Confirm there is no
+  taskbar button, the X and Minimize both hide to the tray, left-click restores,
+  the tray menu's Exit and the main menu's Exit both quit, and switching back to
+  Normal (after a restart) brings the taskbar button back with no tray icon.
+- Linux QA (Pop!_OS): confirm the same on the ksni tray. Note: stock GNOME shows
+  StatusNotifierItems only with the AppIndicator/KStatusNotifier extension. Without
+  a tray host the icon won't appear; the app stays in Normal-like behavior (no
+  stranded window), but the taskbar button was still suppressed at launch, so on
+  such a desktop prefer Normal mode. Mint Cinnamon has a tray by default.
+
+## 2026-10-26 (build hygiene: mirror music/ next to the exe)
+
+- build.rs now mirrors music/ into target/<profile>/music (like skins/ and
+  soundfont/), and first_run_music_dir prefers the copy next to the executable.
+  This keeps the pristine repo music/ folder from being written to when a dev or
+  release build loads the demo track (the demo loader can rewrite its ID3 tags).
+  The installer already bundles music/, so shipped builds are unaffected. No
+  behavior change for users; purely protects the source tree during testing.
