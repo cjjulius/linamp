@@ -778,6 +778,11 @@ mod windows {
     /// Windows gives the raw-read start as a byte offset at the 2048 logical-sector
     /// size, not the 2352-byte raw size.
     const LOGICAL_SECTOR_BYTES: i64 = 2048;
+    /// IOCTL_CDROM_RAW_READ transfers through a bounded buffer (about 64 KB), so it
+    /// rejects a request for more than 27 raw 2352-byte sectors (27 * 2352 = 63504
+    /// bytes fits, 28 does not, which fails with ERROR_INVALID_PARAMETER). Larger
+    /// runs are read in chunks of this many and concatenated.
+    const MAX_RAW_SECTORS: u32 = 27;
 
     extern "system" {
         fn CreateFileW(
@@ -943,30 +948,50 @@ mod windows {
         }
 
         fn read_sectors(&mut self, lba: u32, count: u32) -> Result<Vec<u8>> {
-            let mut buf = vec![0u8; count as usize * CDDA_SECTOR_BYTES];
-            let info = RawReadInfo {
-                disk_offset: lba as i64 * LOGICAL_SECTOR_BYTES,
-                sector_count: count,
-                track_mode: TRACK_MODE_CDDA,
-            };
-            let mut returned = 0u32;
-            let ok = unsafe {
-                DeviceIoControl(
-                    self.handle,
-                    IOCTL_CDROM_RAW_READ,
-                    &info as *const _ as *const c_void,
-                    std::mem::size_of::<RawReadInfo>() as u32,
-                    buf.as_mut_ptr() as *mut c_void,
-                    buf.len() as u32,
-                    &mut returned,
-                    std::ptr::null_mut(),
-                )
-            };
-            if ok == 0 {
-                return Err(anyhow!("raw read at lba {lba}: {}", std::io::Error::last_os_error()));
+            // IOCTL_CDROM_RAW_READ caps at MAX_RAW_SECTORS per call, so read a larger
+            // run (the playback batch is 75 sectors) in chunks and concatenate. A
+            // single DeviceIoControl for the whole batch fails with error 87, which
+            // is why a CD read the track's TOC fine but played only silence.
+            let mut out = Vec::with_capacity(count as usize * CDDA_SECTOR_BYTES);
+            let mut done = 0u32;
+            while done < count {
+                let chunk = (count - done).min(MAX_RAW_SECTORS);
+                let mut buf = vec![0u8; chunk as usize * CDDA_SECTOR_BYTES];
+                let info = RawReadInfo {
+                    disk_offset: (lba + done) as i64 * LOGICAL_SECTOR_BYTES,
+                    sector_count: chunk,
+                    track_mode: TRACK_MODE_CDDA,
+                };
+                let mut returned = 0u32;
+                let ok = unsafe {
+                    DeviceIoControl(
+                        self.handle,
+                        IOCTL_CDROM_RAW_READ,
+                        &info as *const _ as *const c_void,
+                        std::mem::size_of::<RawReadInfo>() as u32,
+                        buf.as_mut_ptr() as *mut c_void,
+                        buf.len() as u32,
+                        &mut returned,
+                        std::ptr::null_mut(),
+                    )
+                };
+                if ok == 0 {
+                    return Err(anyhow!(
+                        "raw read at lba {}: {}",
+                        lba + done,
+                        std::io::Error::last_os_error()
+                    ));
+                }
+                buf.truncate(returned as usize);
+                let got = buf.len();
+                out.extend_from_slice(&buf);
+                // A short read (fewer bytes than asked) means stop rather than spin.
+                if got < chunk as usize * CDDA_SECTOR_BYTES {
+                    break;
+                }
+                done += chunk;
             }
-            buf.truncate(returned as usize);
-            Ok(buf)
+            Ok(out)
         }
     }
 
@@ -1202,6 +1227,15 @@ mod tests {
         assert_eq!(a.len(), CDDA_SECTOR_BYTES, "a CDDA sector is 2352 bytes");
         assert_eq!(b.len(), CDDA_SECTOR_BYTES);
         assert_ne!(a, b, "distinct audio sectors should differ (read returned real data)");
+        // A full playback-sized batch (READAHEAD_SECTORS) must read back whole. This
+        // exceeds the IOCTL_CDROM_RAW_READ per-call limit, so it only works via the
+        // chunking in read_sectors; a single IOCTL for the batch fails with error 87
+        // and is why a disc read its TOC but played only silence.
+        let batch = READAHEAD_SECTORS;
+        let run = drive
+            .read_sectors(track.start_lba + 100, batch)
+            .expect("a full READAHEAD_SECTORS batch should read (chunked)");
+        assert_eq!(run.len(), batch as usize * CDDA_SECTOR_BYTES, "batch read must be whole");
     }
 
     #[test]
