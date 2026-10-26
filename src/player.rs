@@ -190,7 +190,11 @@ impl Player {
     /// and the outgoing one down, dropping the outgoing sink once it's silent. A
     /// no-op when crossfade is off or nothing is fading.
     pub fn tick_crossfade(&mut self, dt: f32) {
+        // Only advance while actually playing: a paused crossfade must hold both
+        // sinks and both gains where they are, not ramp on (and silently drop the
+        // outgoing track) during the pause.
         let (fade_in, fade_out, still_fading, changed) = crossfade_step(
+            self.state == PlayState::Playing,
             self.crossfade_secs,
             dt,
             self.fade_in,
@@ -308,20 +312,28 @@ impl Player {
     }
 
     pub fn pause(&mut self) {
-        if let Some(sink) = &self.sink {
-            if self.state == PlayState::Playing {
+        if self.state == PlayState::Playing {
+            if let Some(sink) = &self.sink {
                 sink.pause();
-                self.state = PlayState::Paused;
             }
+            // Freeze the outgoing track too, or a pause mid-crossfade would leave
+            // it playing on while the incoming one is held.
+            if let Some(f) = &self.fading {
+                f.pause();
+            }
+            self.state = PlayState::Paused;
         }
     }
 
     pub fn resume(&mut self) {
-        if let Some(sink) = &self.sink {
-            if self.state == PlayState::Paused {
+        if self.state == PlayState::Paused {
+            if let Some(sink) = &self.sink {
                 sink.play();
-                self.state = PlayState::Playing;
             }
+            if let Some(f) = &self.fading {
+                f.play();
+            }
+            self.state = PlayState::Playing;
         }
     }
 
@@ -379,13 +391,14 @@ impl Player {
 /// anything moved. Split out from `tick_crossfade` so the ramp math can be tested
 /// without an audio device (a real `Player` needs an output stream).
 fn crossfade_step(
+    playing: bool,
     crossfade_secs: f32,
     dt: f32,
     fade_in: f32,
     fade_out: f32,
     fading: bool,
 ) -> (f32, f32, bool, bool) {
-    if crossfade_secs <= 0.0 {
+    if !playing || crossfade_secs <= 0.0 {
         return (fade_in, fade_out, fading, false);
     }
     let step = dt / crossfade_secs;
@@ -415,7 +428,7 @@ mod tests {
     #[test]
     fn crossfade_off_is_a_noop() {
         // Zero length means crossfade disabled: gains and state are untouched.
-        let (fin, fout, fading, changed) = crossfade_step(0.0, 0.5, 0.3, 0.7, true);
+        let (fin, fout, fading, changed) = crossfade_step(true, 0.0, 0.5, 0.3, 0.7, true);
         assert_eq!((fin, fout, fading, changed), (0.3, 0.7, true, false));
     }
 
@@ -423,7 +436,7 @@ mod tests {
     fn crossfade_ramps_in_and_out_over_its_length() {
         // Half a 2s crossfade elapses in one 1s tick: incoming 0 -> 0.5, outgoing
         // 1 -> 0.5, and the outgoing track is still playing.
-        let (fin, fout, fading, changed) = crossfade_step(2.0, 1.0, 0.0, 1.0, true);
+        let (fin, fout, fading, changed) = crossfade_step(true, 2.0, 1.0, 0.0, 1.0, true);
         assert!((fin - 0.5).abs() < 1e-6, "fade_in {fin}");
         assert!((fout - 0.5).abs() < 1e-6, "fade_out {fout}");
         assert!(fading, "outgoing track should still be fading");
@@ -434,7 +447,7 @@ mod tests {
     fn crossfade_drops_the_outgoing_track_once_silent() {
         // A tick long enough to finish the fade takes the outgoing gain to zero,
         // so the caller is told to drop it and the incoming track reaches full gain.
-        let (fin, _fout, fading, changed) = crossfade_step(2.0, 2.0, 0.0, 1.0, true);
+        let (fin, _fout, fading, changed) = crossfade_step(true, 2.0, 2.0, 0.0, 1.0, true);
         assert!((fin - 1.0).abs() < 1e-6, "fade_in should reach 1.0, got {fin}");
         assert!(!fading, "outgoing track should be dropped when silent");
         assert!(changed);
@@ -443,7 +456,7 @@ mod tests {
     #[test]
     fn crossfade_without_an_outgoing_track_only_ramps_in() {
         // Incoming track still fading up but nothing fading out: only fade_in moves.
-        let (fin, fout, fading, changed) = crossfade_step(4.0, 1.0, 0.5, 1.0, false);
+        let (fin, fout, fading, changed) = crossfade_step(true, 4.0, 1.0, 0.5, 1.0, false);
         assert!((fin - 0.75).abs() < 1e-6, "fade_in {fin}");
         assert_eq!(fout, 1.0);
         assert!(!fading);
@@ -453,7 +466,15 @@ mod tests {
     #[test]
     fn crossfade_at_rest_reports_no_change() {
         // Incoming already at full gain and nothing fading: a tick changes nothing.
-        let (_fin, _fout, _fading, changed) = crossfade_step(3.0, 0.1, 1.0, 1.0, false);
+        let (_fin, _fout, _fading, changed) = crossfade_step(true, 3.0, 0.1, 1.0, 1.0, false);
         assert!(!changed);
+    }
+
+    #[test]
+    fn crossfade_frozen_while_not_playing() {
+        // Paused mid-crossfade: the ramp must hold both gains and keep the outgoing
+        // track, not advance (which would silently drop it during the pause).
+        let (fin, fout, fading, changed) = crossfade_step(false, 2.0, 1.0, 0.4, 0.6, true);
+        assert_eq!((fin, fout, fading, changed), (0.4, 0.6, true, false));
     }
 }
