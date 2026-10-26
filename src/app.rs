@@ -567,10 +567,10 @@ pub struct LinAmpApp {
     /// Visibility of the (eq, playlist, library) windows before hiding to the
     /// tray, so restoring brings back exactly the windows that were open.
     tray_prev_vis: (bool, bool, bool),
-    /// Whether this session runs in System tray mode (snapshot of the pref at
-    /// launch, and only true when the tray actually started). Drives whether
-    /// minimize and the close (X) button hide to the tray instead of their usual
-    /// behaviour. A pref change takes effect on the next launch.
+    /// Whether this session runs in System tray mode: the pref, gated on the tray
+    /// actually running. Drives whether minimize and the close (X) button hide to
+    /// the tray instead of their usual behaviour. Set at launch and updated live
+    /// by `set_window_mode` when the pref changes.
     tray_mode: bool,
     /// Set by a genuine quit (main-menu Exit or the tray's Exit) so the close
     /// handler really quits instead of hiding to the tray in System tray mode.
@@ -1061,6 +1061,26 @@ impl LinAmpApp {
             }
             TrayAction::Restore => self.show_from_tray(ctx),
             TrayAction::Quit => self.request_exit(ctx),
+        }
+    }
+
+    /// Switch window mode live (#40): add or remove the tray icon, flip the
+    /// taskbar button, and update the behaviour, so the choice applies without a
+    /// restart. Windows toggles the taskbar button through ITaskbarList; X11 is
+    /// best-effort.
+    fn set_window_mode(&mut self, ctx: &egui::Context, enabled: bool) {
+        self.prefs.tray_enabled = enabled;
+        self.prefs.save();
+        // Re-create the tray to match: spawning disabled drops the icon, enabled
+        // adds it, and the old tray's Drop removes the previous icon.
+        let (tray, rx) = crate::tray::Tray::spawn(ctx, enabled);
+        self._tray = tray;
+        self.tray_rx = rx;
+        self.tray_mode = enabled && self._tray.is_active();
+        set_taskbar_button("LinAmp", !self.tray_mode);
+        // Leaving tray mode while the window is hidden would strand it; bring it back.
+        if !self.tray_mode && self.hidden_to_tray {
+            self.show_from_tray(ctx);
         }
     }
 
@@ -2440,11 +2460,10 @@ impl LinAmpApp {
                 "System tray: tray icon, no taskbar button, hide to tray on minimize and close",
             );
             if tray != self.prefs.tray_enabled {
-                self.prefs.tray_enabled = tray;
-                self.prefs.save();
+                self.set_window_mode(ctx, tray);
             }
             ui.add_space(4.0);
-            ui.weak("Takes effect when you restart LinAmp. In either mode, Exit from the main menu quits.");
+            ui.weak("Minimize and the close button hide to the tray. Exit from the main menu always quits.");
         });
     }
 
