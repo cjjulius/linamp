@@ -3,6 +3,22 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-26
+
+- MIDI seek felt laggy (a second or two) because every seek replayed the whole
+  sequence from the top and re-synthesized up to the target. A forward seek now
+  continues from the current position (tracked as seq_pos) and only renders the
+  delta; a backward seek still restarts then fast-forwards. Dragging the seek bar
+  ahead is now quick; a long backward jump still pays for the re-render (rustysynth
+  can't seek directly). Verify by ear: drag the MIDI seek bar forward in small and
+  large steps and confirm it responds quickly, and that a jump back still lands and
+  plays correctly.
+- .mod length report (plays past the shown time): could not reproduce. Measured on
+  the qa sample, the shown length, the tracker's reported duration and the actual
+  rendered length all agree (1:32 / 92.16s). Most likely Repeat was on (which
+  replays the track) or an older build. No code change; needs the maintainer to
+  confirm the build commit (Preferences) and whether Repeat was enabled.
+
 ## 2026-10-25 (later 9)
 
 - Drag-drop insert follow-up: inserting dropped tracks mid-list shifts the rows

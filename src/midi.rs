@@ -69,6 +69,9 @@ pub struct MidiSource {
     /// Blocks rendered after the sequence ended, while the release/reverb tail
     /// decays; capped by `MAX_TAIL_BLOCKS`.
     tail_blocks: u32,
+    /// Frames the sequencer has rendered so far, so a forward seek can continue
+    /// from here instead of replaying from the top (a backward seek still restarts).
+    seq_pos: u64,
 }
 
 impl MidiSource {
@@ -78,6 +81,7 @@ impl MidiSource {
             return false;
         }
         self.sequencer.render(&mut self.left, &mut self.right);
+        self.seq_pos += self.left.len() as u64;
         self.buf.clear();
         for (l, r) in self.left.iter().zip(self.right.iter()) {
             self.buf.push(*l);
@@ -129,24 +133,29 @@ impl Source for MidiSource {
     fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
         // rustysynth's sequencer has no seek, and MIDI state is cumulative (the
         // instruments and controllers at a point depend on every event before it),
-        // so the correct way to seek is to restart and fast-forward: replay from the
-        // top, rendering and discarding up to the target. Synthesis is far faster
-        // than realtime, so even a far seek completes quickly, and the voice state we
-        // land on is exactly what normal playback to that point would produce.
-        self.sequencer.play(&self.midi, false);
-        self.done = false;
-        self.tail_blocks = 0;
+        // so a seek fast-forwards by rendering and discarding up to the target. A
+        // forward seek continues from where we are (cheap when dragging ahead); a
+        // backward seek restarts from the top first. Synthesis is faster than
+        // realtime, and the voice state we land on is exactly what normal playback to
+        // that point would produce.
+        let target = (pos.as_secs_f64() * SAMPLE_RATE as f64) as u64;
+        if target < self.seq_pos {
+            // Backward: replay from the start, then fast-forward to the target.
+            self.sequencer.play(&self.midi, false);
+            self.done = false;
+            self.tail_blocks = 0;
+            self.seq_pos = 0;
+        }
         self.buf.clear();
         self.pos = 0;
-        let mut remaining = (pos.as_secs_f64() * SAMPLE_RATE as f64) as u64;
-        // Discard in ~1-second chunks for speed.
+        // Discard from the current position to the target in ~1-second chunks.
         let chunk = SAMPLE_RATE as usize;
         let mut dl = vec![0.0f32; chunk];
         let mut dr = vec![0.0f32; chunk];
-        while remaining > 0 && !self.sequencer.end_of_sequence() {
-            let n = remaining.min(chunk as u64) as usize;
+        while self.seq_pos < target && !self.sequencer.end_of_sequence() {
+            let n = (target - self.seq_pos).min(chunk as u64) as usize;
             self.sequencer.render(&mut dl[..n], &mut dr[..n]);
-            remaining -= n as u64;
+            self.seq_pos += n as u64;
         }
         // Seeking at or past the end just ends the track.
         if self.sequencer.end_of_sequence() {
@@ -198,6 +207,7 @@ pub fn open_midi(midi_path: &Path, soundfont_path: &Path) -> Result<MidiSource> 
         right: vec![0.0; BLOCK],
         done: false,
         tail_blocks: 0,
+        seq_pos: 0,
     })
 }
 
@@ -275,8 +285,13 @@ mod tests {
         }
         let p = one_note_midi("seek");
         let mut src = open_midi(&p, sf).expect("should open the MIDI");
-        // Seeking is now supported (replay-and-fast-forward), no error.
-        src.try_seek(Duration::from_millis(50)).expect("midi should seek");
+        // Play a little so seq_pos advances, then seek forward (the cheap path) and
+        // back to the start (the restart path); both must keep producing audio.
+        let _ = (&mut src).take(BLOCK * 2).count();
+        src.try_seek(Duration::from_millis(80)).expect("forward seek"); // >= seq_pos
+        assert!(src.next().is_some(), "should decode after a forward seek");
+        src.try_seek(Duration::from_millis(0)).expect("backward seek"); // restart
+        assert!(src.next().is_some(), "should decode after a backward seek");
         // Seeking past the end ends the stream cleanly rather than looping.
         src.try_seek(Duration::from_secs(60)).expect("seek past end ok");
         assert!(src.next().is_none(), "past-end seek should end the stream");
