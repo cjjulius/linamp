@@ -995,8 +995,9 @@ impl LinAmpApp {
     /// Read the audio CD in the default optical drive and play it: append its
     /// tracks to the playlist (as `cdda://` entries) and start the first one. The
     /// native drive reads keep the audio gapless, unlike playing the desktop's
-    /// `cdda://` GVfs mount as WAV files (#160). Linux-only in this build.
-    #[cfg(target_os = "linux")]
+    /// `cdda://` GVfs mount as WAV files (#160). Linux (verified) and Windows
+    /// (best-effort, pending hardware verification).
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn open_audio_cd(&mut self) {
         hide_popup_window();
         let device = crate::cdda::default_cd_device();

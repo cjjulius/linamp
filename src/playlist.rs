@@ -123,9 +123,9 @@ impl Track {
     /// A playlist entry for an audio-CD track (#160). There is no file on disk, so
     /// the title and length come from the disc's table of contents and it is marked
     /// loaded (nothing to read lazily). The path is the `cdda://<device>/<track>`
-    /// pseudo-path the player recognises. Linux-only in this build (the only caller,
-    /// the Open-Audio-CD action, is Linux-gated).
-    #[cfg(target_os = "linux")]
+    /// pseudo-path the player recognises. Built on Linux and Windows (the only
+    /// caller, the Open-Audio-CD action, runs on both).
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn cd_track(device: &str, t: &crate::cdda::CdTrack) -> Track {
         Track {
             path: PathBuf::from(crate::cdda::track_path(device, t.number)),

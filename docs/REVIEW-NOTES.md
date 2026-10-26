@@ -3,6 +3,21 @@
 Items needing a human eye or interaction to verify (not fully validatable by
 code plus a working/not-working binary): visual and behavior changes.
 
+## 2026-10-26 (Windows CD, best-effort/untested)
+
+- Windows audio-CD device layer added (#160), per the maintainer's "write it
+  best-effort, verify later." A new WindowsCdDrive in src/cdda.rs implements the
+  shared CdDrive trait with DeviceIoControl (IOCTL_CDROM_READ_TOC for the track
+  list, IOCTL_CDROM_RAW_READ for raw 2352-byte CDDA sectors), hand-declared Win32
+  FFI (no new crate), routed through the Linux box's BufferedCdSource. The
+  Options "Open Audio CD" item and open_audio_cd now build on Windows too. It
+  COMPILES on Windows and the MSF-to-LBA conversion is unit-tested, but the raw
+  reads have NOT run on hardware (no optical drive on the dev box) — needs a
+  Windows machine with a drive + an audio CD to verify: the raw-read byte offset
+  (set at the 2048 logical-sector size), the CDROM_TOC struct layout, and the
+  default drive letter (assumed D:) are the likely things to check first. Linux CD
+  is unchanged.
+
 ## 2026-10-26 (tracker length)
 
 - Tracker modules played past the time the playlist showed (confirmed on a looping
