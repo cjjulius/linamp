@@ -40,6 +40,13 @@ code plus a working/not-working binary): visual and behavior changes.
   not unit-tested; to confirm by ear with crossfade on: let a track reach its final
   few seconds so the next one starts fading in, then drag the seek bar, and you should
   hear only the one (now full-volume) track, not both.
+- Follow-up (2026-10-26): crossfade between two tracks on the same CD now cuts cleanly
+  instead of overlapping. A single optical drive can't serve two read streams at once,
+  so overlapping an outgoing and incoming track made the head seek back and forth
+  between them and stutter, worse the further apart the tracks sit on the disc. A move
+  between a file and the CD (either direction) still crossfades, since only one stream
+  touches the drive. Confirm by ear: with crossfade on, moving from one CD track to
+  another is a clean cut (no stutter), while CD to file and file to CD still blend.
 
 ## 2026-10-26 (Windows CD, best-effort/untested)
 
