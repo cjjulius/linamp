@@ -770,6 +770,7 @@ impl LinAmpApp {
         }
         app.refresh_library();
         app.discover_skins();
+        app.apply_crossfade_pref();
 
         // Restore equalizer state from the last session and push it to the DSP.
         let eq_session = Session::load();
@@ -904,6 +905,35 @@ impl LinAmpApp {
     fn prev(&mut self) {
         if let Some(i) = self.playlist.prev_index(self.shuffle, self.repeat_all) {
             self.play_index(i);
+        }
+    }
+
+    /// Push the crossfade length (or 0 = off) from Preferences to the player.
+    fn apply_crossfade_pref(&mut self) {
+        let secs = if self.prefs.crossfade { self.prefs.crossfade_secs } else { 0.0 };
+        self.player.set_crossfade(secs);
+    }
+
+    /// True when the current track has reached its crossfade window and the next one
+    /// should start overlapping it. Only for finite-length local tracks (streams have
+    /// no length to fade from), and not while already crossfading or in a one-shot
+    /// mode (stop-after / repeat-one).
+    fn should_start_crossfade(&self) -> bool {
+        let secs = self.player.crossfade_secs();
+        if secs <= 0.0
+            || self.player.state() != PlayState::Playing
+            || self.player.is_crossfading()
+            || self.stop_after_current
+            || self.repeat_one
+        {
+            return false;
+        }
+        match self.playlist.current_track().and_then(|t| t.duration) {
+            // Skip very short tracks (shorter than the fade) so they still play.
+            Some(d) if d.as_secs_f32() > secs => {
+                self.player.position().as_secs_f32() >= d.as_secs_f32() - secs
+            }
+            _ => false,
         }
     }
 
@@ -2247,6 +2277,30 @@ impl LinAmpApp {
                 self.prefs.save();
             }
         });
+
+        Self::pref_section(ui, "Crossfade", |ui| {
+            // Overlaps the end of one track with the start of the next. Off by
+            // default (classic Winamp's default is a gapless cut).
+            let mut on = self.prefs.crossfade;
+            let mut changed = ui
+                .checkbox(&mut on, "Crossfade between tracks")
+                .changed();
+            let mut secs = self.prefs.crossfade_secs;
+            ui.add_enabled_ui(on, |ui| {
+                if ui
+                    .add(egui::Slider::new(&mut secs, 1.0..=12.0).suffix(" s"))
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+            if changed {
+                self.prefs.crossfade = on;
+                self.prefs.crossfade_secs = secs;
+                self.prefs.save();
+                self.apply_crossfade_pref();
+            }
+        });
     }
 
     fn prefs_page_playlist(&mut self, ui: &mut egui::Ui) {
@@ -3386,6 +3440,17 @@ impl eframe::App for LinAmpApp {
             } else {
                 self.player.set_fade(t / FADE_SECS);
                 self.fade = Some(t);
+            }
+        }
+
+        // Advance any in-progress crossfade, then start one when the current track
+        // nears its end (begins the next track overlapping this one's tail).
+        self.player.tick_crossfade(dt);
+        if self.should_start_crossfade() {
+            if let Some(i) = self.playlist.next_index(self.shuffle, self.repeat_all) {
+                // A track is playing, so play_index crossfades into it (the old sink
+                // keeps fading out). No next track: let it play out and advance below.
+                self.play_index(i);
             }
         }
 
