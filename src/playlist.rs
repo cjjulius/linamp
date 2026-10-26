@@ -120,6 +120,27 @@ impl Track {
         t
     }
 
+    /// A playlist entry for an audio-CD track (#160). There is no file on disk, so
+    /// the title and length come from the disc's table of contents and it is marked
+    /// loaded (nothing to read lazily). The path is the `cdda://<device>/<track>`
+    /// pseudo-path the player recognises. Linux-only in this build (the only caller,
+    /// the Open-Audio-CD action, is Linux-gated).
+    #[cfg(target_os = "linux")]
+    pub fn cd_track(device: &str, t: &crate::cdda::CdTrack) -> Track {
+        Track {
+            path: PathBuf::from(crate::cdda::track_path(device, t.number)),
+            title: format!("Track {}", t.number),
+            artist: String::new(),
+            album: "Audio CD".to_string(),
+            duration: Some(t.duration()),
+            sample_rate: Some(crate::cdda::CDDA_SAMPLE_RATE),
+            // CDDA is a constant 1411 kbit/s (44100 × 16 × 2).
+            bitrate: Some(1411),
+            channels: Some(crate::cdda::CDDA_CHANNELS as u8),
+            loaded: true,
+        }
+    }
+
     /// "Artist - Title" when an artist is known, otherwise just the title.
     pub fn display_name(&self) -> String {
         if self.artist.trim().is_empty() {

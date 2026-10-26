@@ -10,10 +10,11 @@ keyboard and mouse reference, see [SHORTCUTS.md](SHORTCUTS.md).
 ## Finish line
 
 As of feat/winamp-parity-3, LinAmp meets the Winamp 2.666 functional feature set.
-The only in-scope item not fully landed here is the audio-CD device layer (#160),
-which needs a real optical drive to write and verify and so is being built on the
-Linux box. A few completed changes are also waiting on a quick visual sign-off (see
-below), those are confirmations, not missing features.
+The only in-scope item not fully landed on every platform is the audio-CD device
+layer (#160): the Linux reads are implemented and verified on real hardware, the
+Windows device layer still needs a real optical drive to write and verify and so is
+being built on the Windows box. A few completed changes are also waiting on a quick
+visual sign-off (see below), those are confirmations, not missing features.
 
 Everything else still open in the tracker is either later-line work (Winamp 3/5+)
 or an internal refactor, listed under Deferred.
@@ -81,9 +82,13 @@ close, not further work:
 
 - #160, Audio CD (CDDA). The device-independent half is complete and tested, the
   CD model, timing, the `cdda://` pseudo-path, PCM conversion, the `CdAudioSource`
-  rodio source and the `CdDrive` contract (read_toc / read_sector). What remains is
-  the per-OS raw TOC and sector reads, which need a real drive and disc to write
-  and verify; that work is on the Linux box.
+  rodio source and the `CdDrive` contract (read_toc / read_sector). The Linux device
+  layer is now implemented and verified on real hardware: raw `CDROMREADTOCHDR` /
+  `CDROMREADTOCENTRY` / `CDROMREADAUDIO` ioctls on `/dev/sr0`, read on a background
+  thread into a deep prefetch buffer so the drive streams without the stutter-respin
+  (see REVIEW-NOTES). Opened from Options to Open Audio CD, Linux only. What remains
+  is the Windows device layer (DeviceIoControl TOC and raw sector reads), which needs
+  a real drive and disc to write and verify, that work is on the Windows box.
 
 ## Resolved on feat/winamp-parity-3
 
