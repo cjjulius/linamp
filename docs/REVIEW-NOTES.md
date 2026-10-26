@@ -5,6 +5,18 @@ code plus a working/not-working binary): visual and behavior changes.
 
 ## 2026-10-26
 
+- Single-instance guard: LinAmp now holds an advisory file lock
+  (data dir / LinAmp / instance.lock) at startup, so a second launch exits instead
+  of opening a second, conflicting set of classic windows. The headless flags
+  (--check-cur, --render-*, etc.) are exempt. The OS releases the lock on exit or
+  crash, so a stale lock can't wedge startup; a failure to create the lock lets the
+  app start anyway. The lock refuse/release logic is unit-tested, but the actual
+  "second launch exits" behaviour needs a human check on Windows AND Pop!_OS: launch
+  LinAmp, launch it again, and confirm the second one does not open a second window
+  set (it should just exit). Note: it does not yet forward a file passed to the
+  second launch to the running instance (so "open with" while running is a no-op for
+  now, not a new window) — that arg-forwarding is a follow-up.
+
 - MIDI seek felt laggy (a second or two) because every seek replayed the whole
   sequence from the top and re-synthesized up to the target. A forward seek now
   continues from the current position (tracked as seq_pos) and only renders the
