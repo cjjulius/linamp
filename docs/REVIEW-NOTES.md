@@ -25,6 +25,14 @@ code plus a working/not-working binary): visual and behavior changes.
   on both sinks and the ramp freezes while not playing. The freeze is unit-tested;
   the audible part to confirm: start a crossfade, hit pause during the overlap, and
   both tracks should stop together and resume together with the blend intact.
+- Follow-up (2026-10-26): stopping with fade-out near a track's end no longer jumps
+  to the next track. The near-end crossfade trigger did not check for an in-progress
+  stop-fade, so hitting Stop (with "fade out when stopping" on, or Shift+V) inside
+  the last few seconds of a track would start the next one instead of stopping. The
+  gate now also holds back while a stop-fade is running. The gate is unit-tested
+  (crossfade_due); to confirm by ear with crossfade on: start a track, let it reach
+  the final few seconds, hit Stop, and it should fade out and stop rather than cross
+  into the next track.
 
 ## 2026-10-26 (Windows CD, best-effort/untested)
 

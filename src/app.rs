@@ -539,6 +539,39 @@ fn parse_time(s: &str) -> Option<f32> {
     }
 }
 
+/// Whether a near-end crossfade should begin this frame. Pure, so the gate is
+/// unit-tested without a live Player. It holds back when crossfade is off, the
+/// player is not playing, a crossfade is already running, a one-shot mode is set
+/// (stop-after-current or repeat-one), or a stop-fade is in progress (the user is
+/// stopping, so it must not start the next track). Otherwise it fires once the
+/// position reaches the crossfade window before the end, and skips tracks shorter
+/// than the fade so they still play in full.
+#[allow(clippy::too_many_arguments)]
+fn crossfade_due(
+    secs: f32,
+    playing: bool,
+    is_crossfading: bool,
+    stop_after_current: bool,
+    repeat_one: bool,
+    stop_fading: bool,
+    duration: Option<f32>,
+    position: f32,
+) -> bool {
+    if secs <= 0.0
+        || !playing
+        || is_crossfading
+        || stop_after_current
+        || repeat_one
+        || stop_fading
+    {
+        return false;
+    }
+    match duration {
+        Some(d) if d > secs => position >= d - secs,
+        _ => false,
+    }
+}
+
 impl LinAmpApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&cc.egui_ctx);
@@ -919,22 +952,16 @@ impl LinAmpApp {
     /// no length to fade from), and not while already crossfading or in a one-shot
     /// mode (stop-after / repeat-one).
     fn should_start_crossfade(&self) -> bool {
-        let secs = self.player.crossfade_secs();
-        if secs <= 0.0
-            || self.player.state() != PlayState::Playing
-            || self.player.is_crossfading()
-            || self.stop_after_current
-            || self.repeat_one
-        {
-            return false;
-        }
-        match self.playlist.current_track().and_then(|t| t.duration) {
-            // Skip very short tracks (shorter than the fade) so they still play.
-            Some(d) if d.as_secs_f32() > secs => {
-                self.player.position().as_secs_f32() >= d.as_secs_f32() - secs
-            }
-            _ => false,
-        }
+        crossfade_due(
+            self.player.crossfade_secs(),
+            self.player.state() == PlayState::Playing,
+            self.player.is_crossfading(),
+            self.stop_after_current,
+            self.repeat_one,
+            self.fade.is_some(),
+            self.playlist.current_track().and_then(|t| t.duration).map(|d| d.as_secs_f32()),
+            self.player.position().as_secs_f32(),
+        )
     }
 
     fn adjust_volume(&mut self, delta: f32) {
@@ -3599,7 +3626,40 @@ fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_name_key, parse_time, reorder_play_next};
+    use super::{crossfade_due, file_name_key, parse_time, reorder_play_next};
+
+    #[test]
+    fn crossfade_due_fires_in_the_end_window() {
+        // A 100s track with a 5s crossfade: due from 95s on, not before.
+        assert!(!crossfade_due(5.0, true, false, false, false, false, Some(100.0), 94.9));
+        assert!(crossfade_due(5.0, true, false, false, false, false, Some(100.0), 95.0));
+        assert!(crossfade_due(5.0, true, false, false, false, false, Some(100.0), 99.0));
+    }
+
+    #[test]
+    fn crossfade_due_held_back_by_every_gate() {
+        // In the window, but each gate on its own must suppress the start.
+        let in_window = |args: (bool, bool, bool, bool, bool)| {
+            let (playing, is_cf, stop_after, repeat_one, stop_fading) = args;
+            crossfade_due(5.0, playing, is_cf, stop_after, repeat_one, stop_fading, Some(100.0), 99.0)
+        };
+        assert!(in_window((true, false, false, false, false)), "baseline should fire");
+        assert!(!in_window((false, false, false, false, false)), "not playing");
+        assert!(!in_window((true, true, false, false, false)), "already crossfading");
+        assert!(!in_window((true, false, true, false, false)), "stop after current");
+        assert!(!in_window((true, false, false, true, false)), "repeat one");
+        assert!(!in_window((true, false, false, false, true)), "stop-fade in progress");
+    }
+
+    #[test]
+    fn crossfade_due_skips_streams_and_short_tracks() {
+        // No known duration (a stream) never crossfades.
+        assert!(!crossfade_due(5.0, true, false, false, false, false, None, 999.0));
+        // A track shorter than the fade plays in full instead of fading early.
+        assert!(!crossfade_due(5.0, true, false, false, false, false, Some(4.0), 3.9));
+        // Crossfade disabled (zero length) is always off.
+        assert!(!crossfade_due(0.0, true, false, false, false, false, Some(100.0), 99.0));
+    }
 
     #[test]
     fn file_name_key_is_lowercased_basename() {
