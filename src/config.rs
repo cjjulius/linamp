@@ -35,9 +35,11 @@ pub struct Prefs {
     pub crossfade: bool,
     /// Crossfade length in seconds when `crossfade` is on.
     pub crossfade_secs: f32,
-    /// true = show an icon in the system notification area (tray). Left-click
-    /// toggles the window, right-click opens a transport menu (#40). On by
-    /// default, matching classic Winamp.
+    /// Window mode (#40). false = Normal: a taskbar button, no tray icon, and the
+    /// close/minimize buttons behave as usual. true = System tray: a tray icon,
+    /// no taskbar button, minimize and the close (X) button hide to the tray, and
+    /// only the main-menu Exit or the tray's Exit quit. Applied at launch, so a
+    /// change takes effect on the next start.
     pub tray_enabled: bool,
 }
 
@@ -58,7 +60,9 @@ impl Default for Prefs {
             numpad_transport: false,
             crossfade: false,
             crossfade_secs: 3.0,
-            tray_enabled: true,
+            // Normal window mode by default (taskbar button, no tray icon); the
+            // user opts into System tray mode in Preferences.
+            tray_enabled: false,
         }
     }
 }

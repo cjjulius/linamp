@@ -1,7 +1,9 @@
-//! Copy the bundled asset folders (`skins/`, `soundfont/`) next to the built
-//! executable so files edited in the repo are picked up by
+//! Copy the bundled asset folders (`skins/`, `soundfont/`, `music/`) next to the
+//! built executable so files edited in the repo are picked up by
 //! `target/<profile>/linamp.exe` (which discovers them relative to itself),
-//! keeping the two in sync.
+//! keeping the two in sync. The `music/` mirror also means a dev or release run
+//! reads its own copy of the demo tracks, so the pristine repo `music/` folder is
+//! never written to (the demo loader can rewrite tags on the copy it uses).
 
 use std::{
     env, fs,
@@ -20,6 +22,7 @@ fn main() {
     };
     copy_asset_dir(&manifest, &target_dir, "skins");
     copy_asset_dir(&manifest, &target_dir, "soundfont");
+    copy_asset_dir(&manifest, &target_dir, "music");
 }
 
 /// Mirror `manifest/<name>` into `target_dir/<name>` (top-level files only),

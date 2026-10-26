@@ -152,12 +152,17 @@ fn open_in_file_manager(path: &std::path::Path) {
 /// The bundled demo `music/` folder (next to the exe for an installed build, or
 /// in the working directory for a dev run), if present. Used only on first run.
 fn first_run_music_dir() -> Option<std::path::PathBuf> {
-    let mut dirs = vec![std::path::PathBuf::from("music")];
+    // Prefer the copy next to the executable (mirrored there at build time, or
+    // installed alongside it): a dev or release run then reads its own copy and
+    // never the pristine repo music/ folder. Fall back to a working-directory
+    // "music" only when there's no sibling copy.
+    let mut dirs = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(d) = exe.parent() {
             dirs.push(d.join("music"));
         }
     }
+    dirs.push(std::path::PathBuf::from("music"));
     dirs.into_iter().find(|d| d.is_dir())
 }
 
@@ -562,6 +567,14 @@ pub struct LinAmpApp {
     /// Visibility of the (eq, playlist, library) windows before hiding to the
     /// tray, so restoring brings back exactly the windows that were open.
     tray_prev_vis: (bool, bool, bool),
+    /// Whether this session runs in System tray mode (snapshot of the pref at
+    /// launch, and only true when the tray actually started). Drives whether
+    /// minimize and the close (X) button hide to the tray instead of their usual
+    /// behaviour. A pref change takes effect on the next launch.
+    tray_mode: bool,
+    /// Set by a genuine quit (main-menu Exit or the tray's Exit) so the close
+    /// handler really quits instead of hiding to the tray in System tray mode.
+    force_quit: bool,
     /// Path of the currently loaded skin (persisted as `last_skin`).
     skin_path: Option<PathBuf>,
     scale: f32,
@@ -662,6 +675,9 @@ impl LinAmpApp {
         let prefs = Prefs::load();
         let scale = prefs.scale();
         let (tray, tray_rx) = crate::tray::Tray::spawn(&cc.egui_ctx, prefs.tray_enabled);
+        // Run in tray mode only when the pref asks for it and the tray actually
+        // started, so we never hide the window to a tray that isn't there.
+        let tray_mode = prefs.tray_enabled && tray.is_active();
 
         let mut app = Self {
             player,
@@ -774,6 +790,8 @@ impl LinAmpApp {
             tray_rx,
             hidden_to_tray: false,
             tray_prev_vis: (false, false, false),
+            tray_mode,
+            force_quit: false,
             skin_path: None,
             scale,
             prefs_open: false,
@@ -1042,13 +1060,17 @@ impl LinAmpApp {
                 }
             }
             TrayAction::Restore => self.show_from_tray(ctx),
-            TrayAction::Quit => {
-                // Bring the window back first so the graceful teardown can render
-                // its closing frames, then request a normal close.
-                self.show_from_tray(ctx);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+            TrayAction::Quit => self.request_exit(ctx),
         }
+    }
+
+    /// Genuinely quit the app (main-menu Exit or the tray's Exit). Marks the quit
+    /// so the close handler shuts down even in tray mode, then starts the normal
+    /// close. Shows the window first so the graceful teardown can render.
+    fn request_exit(&mut self, ctx: &egui::Context) {
+        self.force_quit = true;
+        self.show_from_tray(ctx);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     /// Hide every LinAmp window and keep running in the tray. The child windows
@@ -1840,8 +1862,23 @@ impl LinAmpApp {
                     self.restack();
                 }
             }
-            Btn::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            Btn::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            Btn::Close => {
+                // Tray mode: the close (X) button hides to the tray; otherwise it
+                // quits.
+                if self.tray_mode {
+                    self.hide_to_tray(ctx);
+                } else {
+                    self.request_exit(ctx);
+                }
+            }
+            Btn::Minimize => {
+                // Tray mode: minimize hides to the tray; otherwise iconify normally.
+                if self.tray_mode {
+                    self.hide_to_tray(ctx);
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                }
+            }
             Btn::Time => self.time_remaining = !self.time_remaining,
             Btn::Viz => self.viz_mode = self.viz_mode.next(),
             // Clutterbar: A=always-on-top, I=file info, D=doublesize, V=viz mode.
@@ -2174,7 +2211,15 @@ impl LinAmpApp {
 
     fn close_window(&mut self, ctx: &egui::Context, win: ClWin) {
         match win {
-            ClWin::Main => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            // Closing the main window follows the window mode: hide to the tray in
+            // tray mode, quit otherwise.
+            ClWin::Main => {
+                if self.tray_mode {
+                    self.hide_to_tray(ctx);
+                } else {
+                    self.request_exit(ctx);
+                }
+            }
             ClWin::Eq => self.eq_visible = false,
             ClWin::Pl => self.pl_visible = false,
         }
@@ -2385,6 +2430,21 @@ impl LinAmpApp {
                     self.cur_cursor = [None; 3];
                 }
             }
+        });
+        Self::pref_section(ui, "System tray", |ui| {
+            let mut tray = self.prefs.tray_enabled;
+            ui.radio_value(&mut tray, false, "Normal: taskbar button, no tray icon");
+            ui.radio_value(
+                &mut tray,
+                true,
+                "System tray: tray icon, no taskbar button, hide to tray on minimize and close",
+            );
+            if tray != self.prefs.tray_enabled {
+                self.prefs.tray_enabled = tray;
+                self.prefs.save();
+            }
+            ui.add_space(4.0);
+            ui.weak("Takes effect when you restart LinAmp. In either mode, Exit from the main menu quits.");
         });
     }
 
@@ -3577,12 +3637,20 @@ impl eframe::App for LinAmpApp {
         // the root while children still exist crashes winit. Full rationale in
         // docs/ARCHITECTURE.md (Graceful shutdown).
         if self.quit_countdown.is_none() && ctx.input(|i| i.viewport().close_requested()) {
-            self.eq_visible = false;
-            self.pl_visible = false;
-            self.lib_visible = false;
-            self.popup = None;
-            self.quit_countdown = Some(2);
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if self.tray_mode && !self.force_quit {
+                // Tray mode: an OS close (Alt+F4, or the taskbar's Close) hides to
+                // the tray instead of quitting. Only Exit (which sets force_quit)
+                // gets through to the shutdown below.
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.hide_to_tray(ctx);
+            } else {
+                self.eq_visible = false;
+                self.pl_visible = false;
+                self.lib_visible = false;
+                self.popup = None;
+                self.quit_countdown = Some(2);
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            }
         }
         if let Some(n) = self.quit_countdown {
             ctx.request_repaint();
