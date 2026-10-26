@@ -11,10 +11,10 @@ keyboard and mouse reference, see [SHORTCUTS.md](SHORTCUTS.md).
 
 As of feat/winamp-parity-3, LinAmp meets the Winamp 2.666 functional feature set.
 The only in-scope item not fully landed on every platform is the audio-CD device
-layer (#160): the Linux reads are implemented and verified on real hardware, the
-Windows device layer still needs a real optical drive to write and verify and so is
-being built on the Windows box. A few completed changes are also waiting on a quick
-visual sign-off (see below), those are confirmations, not missing features.
+layer (#160): the Linux reads are implemented and verified on real hardware, and
+the Windows device layer is now written best-effort but still needs a real optical
+drive to verify. A few completed changes are also waiting on a quick visual or
+audio sign-off (see below), those are confirmations, not missing features.
 
 Everything else still open in the tracker is either later-line work (Winamp 3/5+)
 or an internal refactor, listed under Deferred.
@@ -86,12 +86,20 @@ close, not further work:
   layer is now implemented and verified on real hardware: raw `CDROMREADTOCHDR` /
   `CDROMREADTOCENTRY` / `CDROMREADAUDIO` ioctls on `/dev/sr0`, read on a background
   thread into a deep prefetch buffer so the drive streams without the stutter-respin
-  (see REVIEW-NOTES). Opened from Options to Open Audio CD, Linux only. What remains
-  is the Windows device layer (DeviceIoControl TOC and raw sector reads), which needs
-  a real drive and disc to write and verify, that work is on the Windows box.
+  (see REVIEW-NOTES). Opened from Options to Open Audio CD. The Windows device layer
+  (WindowsCdDrive, DeviceIoControl TOC and raw sector reads) is now written as a
+  best-effort: it compiles and the MSF-to-LBA conversion is unit-tested, but the raw
+  reads still need a real drive and disc to verify (see REVIEW-NOTES).
 
 ## Resolved on feat/winamp-parity-3
 
+- #43, crossfade between tracks (maintainer reversed the earlier "out of scope"
+  call and asked for it as a feature). Off by default; Preferences to Playback to
+  Crossfade toggles it with a 1 to 12 second length. The outgoing track fades out
+  on its own sink while the next fades in, held back for streams, stop-after-current,
+  repeat-one and while a stop-fade is running, and the hard cut is unchanged when it
+  is off. Ramp and gate logic are unit-tested; the blend itself needs an audio check
+  (REVIEW-NOTES).
 - #149, EQ slider thumb sat a pixel off the groove on crisp skins (MacOSXAqua,
   Osmosis): the 11px thumb was inset 2px into its 14px band cell; every skin draws
   its groove centred at local x ~6, so the inset is now 1 (regression-tested).
@@ -115,8 +123,7 @@ These are tracked but out of scope until 2.666 is signed off; several are later
 Winamp lines rather than 2.x behaviour at all.
 
 - Maintainer call, out of scope for this run: #40, system integration (global
-  media keys, tray icon, file associations); #43, crossfade (a 2.x output plugin,
-  not core).
+  media keys, tray icon, file associations).
 - Beyond 2.666 (post-2.x era), not stock 2.666 behaviour:
   - #89, broaden tag editing. The 2.666-relevant part (MP3 ID3v1/v2 text frames)
     is done; the remainder, writing FLAC/OGG/M4A tags, album art and the
