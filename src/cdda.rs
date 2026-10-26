@@ -386,10 +386,15 @@ pub fn read_cd_toc(device: &str) -> Result<Vec<CdTrack>> {
         let mut drive = linux::LinuxCdDrive::open(device)?;
         drive.read_toc()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        let mut drive = windows::WindowsCdDrive::open(device)?;
+        drive.read_toc()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = device;
-        Err(anyhow!("audio CD support is only available on Linux in this build"))
+        Err(anyhow!("audio CD support isn't available on this platform in this build"))
     }
 }
 
@@ -406,10 +411,20 @@ pub fn open_cd_source(device: &str, track: u8) -> Result<BufferedCdSource> {
             .ok_or_else(|| anyhow!("track {track} not found on the disc"))?;
         Ok(BufferedCdSource::new(drive, &t))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        let mut drive = windows::WindowsCdDrive::open(device)?;
+        let toc = drive.read_toc()?;
+        let t = toc
+            .into_iter()
+            .find(|t| t.number == track)
+            .ok_or_else(|| anyhow!("track {track} not found on the disc"))?;
+        Ok(BufferedCdSource::new(drive, &t))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = (device, track);
-        Err(anyhow!("audio CD support is only available on Linux in this build"))
+        Err(anyhow!("audio CD support isn't available on this platform in this build"))
     }
 }
 
@@ -474,7 +489,11 @@ pub fn default_cd_device() -> String {
     {
         linux::default_device()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::default_device()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         "/dev/cdrom".to_string()
     }
@@ -650,6 +669,246 @@ mod linux {
             }
         }
         "/dev/cdrom".to_string()
+    }
+}
+
+/// Windows CD-ROM device layer via `DeviceIoControl`: `IOCTL_CDROM_READ_TOC` for
+/// the track list and `IOCTL_CDROM_RAW_READ` for raw 2352-byte CDDA sectors, with
+/// hand-declared Win32 FFI so no extra crate is needed (mirroring the Linux ioctl
+/// path). Reads go through the same `BufferedCdSource`.
+///
+/// UNTESTED ON HARDWARE: the machine this was written on has no optical drive, so
+/// the raw reads have never run against a real disc. The layout follows the
+/// documented ntddcdrm.h structs and the (verified) Linux path, but the IOCTL
+/// details (notably the raw-read byte offset at the 2048 logical-sector size) need a
+/// Windows machine with a drive + an audio CD to confirm (#160).
+#[cfg(target_os = "windows")]
+mod windows {
+    use super::*;
+    use std::ffi::c_void;
+
+    type Handle = *mut c_void;
+    const INVALID_HANDLE_VALUE: Handle = -1isize as Handle;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const FILE_SHARE_READ: u32 = 0x1;
+    const FILE_SHARE_WRITE: u32 = 0x2;
+    const OPEN_EXISTING: u32 = 3;
+    const IOCTL_CDROM_READ_TOC: u32 = 0x0002_4000;
+    const IOCTL_CDROM_RAW_READ: u32 = 0x0002_403E;
+    const TRACK_MODE_CDDA: u32 = 2;
+    const MAX_TRACKS: usize = 100;
+    const CONTROL_DATA_TRACK: u8 = 0x04;
+    /// Windows gives the raw-read start as a byte offset at the 2048 logical-sector
+    /// size, not the 2352-byte raw size.
+    const LOGICAL_SECTOR_BYTES: i64 = 2048;
+
+    extern "system" {
+        fn CreateFileW(
+            name: *const u16,
+            access: u32,
+            share: u32,
+            security: *mut c_void,
+            disposition: u32,
+            flags: u32,
+            template: Handle,
+        ) -> Handle;
+        fn DeviceIoControl(
+            device: Handle,
+            code: u32,
+            in_buf: *const c_void,
+            in_size: u32,
+            out_buf: *mut c_void,
+            out_size: u32,
+            returned: *mut u32,
+            overlapped: *mut c_void,
+        ) -> i32;
+        fn CloseHandle(h: Handle) -> i32;
+    }
+
+    // Mirror ntddcdrm.h. The Control:4 / Adr:4 C bitfield packs into one byte with
+    // Control in the low nibble (declared first).
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct TrackData {
+        reserved: u8,
+        control_adr: u8,
+        track_number: u8,
+        reserved1: u8,
+        address: [u8; 4], // 0, minute, second, frame (MSF)
+    }
+    #[repr(C)]
+    struct CdromToc {
+        length: [u8; 2],
+        first_track: u8,
+        last_track: u8,
+        track_data: [TrackData; MAX_TRACKS],
+    }
+    #[repr(C)]
+    struct RawReadInfo {
+        disk_offset: i64, // LARGE_INTEGER: start sector * 2048 bytes
+        sector_count: u32,
+        track_mode: u32, // TRACK_MODE_TYPE, CDDA = 2
+    }
+
+    /// MSF (minute/second/frame) address to a logical block address (150-frame
+    /// lead-in offset).
+    fn msf_to_lba(m: u8, s: u8, f: u8) -> u32 {
+        ((m as u32 * 60 + s as u32) * 75 + f as u32).saturating_sub(150)
+    }
+
+    /// An opened optical device handle (`\\.\D:`).
+    pub struct WindowsCdDrive {
+        handle: Handle,
+    }
+    // The handle is only ever used from `&mut self` on whichever thread owns the
+    // drive (BufferedCdSource moves it to its reader thread), so sending it is sound.
+    unsafe impl Send for WindowsCdDrive {}
+
+    impl WindowsCdDrive {
+        /// Open the optical drive named `device` (example: `D:`) as `\\.\D:`.
+        pub fn open(device: &str) -> Result<Self> {
+            let dev = device.trim_end_matches('\\');
+            let path = format!(r"\\.\{dev}");
+            let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+            let handle = unsafe {
+                CreateFileW(
+                    wide.as_ptr(),
+                    GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    std::ptr::null_mut(),
+                    OPEN_EXISTING,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+                return Err(anyhow!("open {path}: {}", std::io::Error::last_os_error()));
+            }
+            Ok(Self { handle })
+        }
+    }
+
+    impl Drop for WindowsCdDrive {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+
+    impl CdDrive for WindowsCdDrive {
+        fn read_toc(&mut self) -> Result<Vec<CdTrack>> {
+            let blank = TrackData {
+                reserved: 0,
+                control_adr: 0,
+                track_number: 0,
+                reserved1: 0,
+                address: [0; 4],
+            };
+            let mut toc = CdromToc {
+                length: [0; 2],
+                first_track: 0,
+                last_track: 0,
+                track_data: [blank; MAX_TRACKS],
+            };
+            let mut returned = 0u32;
+            let ok = unsafe {
+                DeviceIoControl(
+                    self.handle,
+                    IOCTL_CDROM_READ_TOC,
+                    std::ptr::null(),
+                    0,
+                    &mut toc as *mut _ as *mut c_void,
+                    std::mem::size_of::<CdromToc>() as u32,
+                    &mut returned,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                return Err(anyhow!("read TOC: {}", std::io::Error::last_os_error()));
+            }
+            let (first, last) = (toc.first_track, toc.last_track);
+            if last < first {
+                return Err(anyhow!("empty disc TOC"));
+            }
+            let lba = |td: &TrackData| msf_to_lba(td.address[1], td.address[2], td.address[3]);
+            let count = (last - first + 1) as usize;
+            // The lead-out entry (pseudo-track) sits just past the real tracks.
+            let leadout = toc.track_data.get(count).map(lba).unwrap_or(0);
+            let mut out = Vec::new();
+            for i in 0..count {
+                let td = &toc.track_data[i];
+                if td.control_adr & CONTROL_DATA_TRACK != 0 {
+                    continue; // audio tracks only
+                }
+                let start = lba(td);
+                let next = toc.track_data.get(i + 1).map(lba).unwrap_or(leadout);
+                if next > start {
+                    out.push(CdTrack {
+                        number: first + i as u8,
+                        start_lba: start,
+                        sectors: next - start,
+                    });
+                }
+            }
+            if out.is_empty() {
+                return Err(anyhow!("no audio tracks on the disc"));
+            }
+            Ok(out)
+        }
+
+        fn read_sector(&mut self, lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]> {
+            let v = self.read_sectors(lba, 1)?;
+            let mut out = [0u8; CDDA_SECTOR_BYTES];
+            let n = v.len().min(CDDA_SECTOR_BYTES);
+            out[..n].copy_from_slice(&v[..n]);
+            Ok(out)
+        }
+
+        fn read_sectors(&mut self, lba: u32, count: u32) -> Result<Vec<u8>> {
+            let mut buf = vec![0u8; count as usize * CDDA_SECTOR_BYTES];
+            let info = RawReadInfo {
+                disk_offset: lba as i64 * LOGICAL_SECTOR_BYTES,
+                sector_count: count,
+                track_mode: TRACK_MODE_CDDA,
+            };
+            let mut returned = 0u32;
+            let ok = unsafe {
+                DeviceIoControl(
+                    self.handle,
+                    IOCTL_CDROM_RAW_READ,
+                    &info as *const _ as *const c_void,
+                    std::mem::size_of::<RawReadInfo>() as u32,
+                    buf.as_mut_ptr() as *mut c_void,
+                    buf.len() as u32,
+                    &mut returned,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                return Err(anyhow!("raw read at lba {lba}: {}", std::io::Error::last_os_error()));
+            }
+            buf.truncate(returned as usize);
+            Ok(buf)
+        }
+    }
+
+    /// The conventional optical drive letter. Without enumerating drive types, `D:`
+    /// is the usual optical drive on Windows.
+    pub fn default_device() -> String {
+        "D:".to_string()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn msf_to_lba_matches_the_redbook_offset() {
+            // 00:02:00 is LBA 0 (the 150-frame lead-in), then it counts up by frames.
+            assert_eq!(msf_to_lba(0, 2, 0), 0);
+            assert_eq!(msf_to_lba(0, 2, 1), 1);
+            assert_eq!(msf_to_lba(1, 0, 0), 60 * 75 - 150);
+        }
     }
 }
 
