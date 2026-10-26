@@ -34,6 +34,11 @@ mod window;
 mod render;
 pub(crate) use platform_win::*;
 use theme::{apply_theme, menu_palette};
+
+/// Point size for menu text, shared by the egui classic menus and the native
+/// tray menu (#40) so every menu renders at the same size. This matches egui's
+/// default `Button` text style, so the classic menus look unchanged.
+pub(crate) const MENU_FONT_PT: f32 = 12.5;
 use menu::Popup;
 
 const FFT_SIZE: usize = 2048;
