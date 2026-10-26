@@ -22,7 +22,10 @@ fn main() {
     copy_asset_dir(&manifest, &target_dir, "soundfont");
 }
 
-/// Mirror `manifest/<name>` into `target_dir/<name>` (top-level files only).
+/// Mirror `manifest/<name>` into `target_dir/<name>` (top-level files only),
+/// pruning files that no longer exist in the source so stale or test-only assets
+/// can't linger in the shipped folder (example: test skins kept in qa-tools must
+/// never reach `target/<profile>/skins`).
 fn copy_asset_dir(manifest: &Path, target_dir: &Path, name: &str) {
     println!("cargo:rerun-if-changed={name}");
     let src = manifest.join(name);
@@ -31,11 +34,22 @@ fn copy_asset_dir(manifest: &Path, target_dir: &Path, name: &str) {
     }
     let dst = target_dir.join(name);
     let _ = fs::create_dir_all(&dst);
+    let mut want = std::collections::HashSet::new();
     if let Ok(entries) = fs::read_dir(&src) {
         for e in entries.flatten() {
             let p = e.path();
             if p.is_file() {
                 let _ = fs::copy(&p, dst.join(e.file_name()));
+                want.insert(e.file_name());
+            }
+        }
+    }
+    // Delete any file in the target that isn't a current source asset.
+    if let Ok(entries) = fs::read_dir(&dst) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_file() && !want.contains(&e.file_name()) {
+                let _ = fs::remove_file(&p);
             }
         }
     }
