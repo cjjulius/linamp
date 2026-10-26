@@ -1177,6 +1177,34 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
+    fn reads_real_disc_sectors_when_present() {
+        // Hardware check (Windows): only runs when an optical drive holds an audio
+        // CD. Exercises the Windows device path end to end, open, TOC, and raw CDDA
+        // sector reads, against a real disc. Skips on no drive, no disc, or a
+        // data-only disc (the TOC read returns Err or no audio tracks).
+        let dev = default_cd_device();
+        let Ok(toc) = read_cd_toc(&dev) else {
+            return;
+        };
+        let Some(track) = toc.first() else {
+            return;
+        };
+        let mut drive = match windows::WindowsCdDrive::open(&dev) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        // Two raw sectors a little into the first track. Each is a full 2352-byte
+        // CDDA sector, and two different music sectors never come back byte-identical,
+        // so matching reads would mean the raw read returned nothing real.
+        let a = drive.read_sectors(track.start_lba + 100, 1).expect("raw CDDA read (a)");
+        let b = drive.read_sectors(track.start_lba + 200, 1).expect("raw CDDA read (b)");
+        assert_eq!(a.len(), CDDA_SECTOR_BYTES, "a CDDA sector is 2352 bytes");
+        assert_eq!(b.len(), CDDA_SECTOR_BYTES);
+        assert_ne!(a, b, "distinct audio sectors should differ (read returned real data)");
+    }
+
+    #[test]
     fn kio_fuse_cdda_paths_parse_track_and_ignore_others() {
         // KDE kio-fuse audio-CD track: both kio-fuse and audiocd components present.
         let p = Path::new("/run/user/1000/kio-fuse-AbCdEf/audiocd/Wav/Track 03.wav");

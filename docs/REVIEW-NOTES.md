@@ -49,12 +49,17 @@ code plus a working/not-working binary): visual and behavior changes.
   list, IOCTL_CDROM_RAW_READ for raw 2352-byte CDDA sectors), hand-declared Win32
   FFI (no new crate), routed through the Linux box's BufferedCdSource. The
   Options "Open Audio CD" item and open_audio_cd now build on Windows too. It
-  COMPILES on Windows and the MSF-to-LBA conversion is unit-tested, but the raw
-  reads have NOT run on hardware (no optical drive on the dev box), needs a
-  Windows machine with a drive + an audio CD to verify: the raw-read byte offset
-  (set at the 2048 logical-sector size), the CDROM_TOC struct layout, and the
-  default drive letter (assumed D:) are the likely things to check first. Linux CD
-  is unchanged.
+  COMPILES on Windows and the MSF-to-LBA conversion is unit-tested. Linux CD is
+  unchanged.
+- Update (2026-10-26): verified on real Windows hardware (a USB BD-RE at D: with an
+  audio CD). The device path works end to end at the read level: the drive opens,
+  the TOC read returns the audio tracks, and raw CDDA sector reads return real
+  2352-byte sectors (two distinct sectors read back with differing audio data). This
+  is covered by a hardware-guarded test, reads_real_disc_sectors_when_present, that
+  skips when no drive or disc is present. So the raw-read byte offset, the CDROM_TOC
+  layout, and the D: default are confirmed. What is still unconfirmed is playback by
+  ear: open an audio CD from Options to Open Audio CD and confirm it plays cleanly
+  through the buffer without stutter, and that seeking and track changes behave.
 
 ## 2026-10-26 (tracker length)
 
