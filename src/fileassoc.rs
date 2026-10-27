@@ -11,9 +11,10 @@
 //!
 //! Windows writes under `HKCU\Software\Classes` (a ProgID, per-extension
 //! OpenWithProgids, an Applications entry, and a RegisteredApplications
-//! capability block). Linux will install a `~/.local/share/applications`
-//! desktop entry and register its MIME types with xdg-mime; see
-//! docs/REVIEW-NOTES.md. Other targets do nothing.
+//! capability block). Linux installs a `~/.local/share/applications` desktop
+//! entry listing the audio MIME types and refreshes the desktop database, and
+//! teaches the per-user MIME database the tracker types that standard
+//! shared-mime-info omits. Other targets do nothing.
 
 /// Register LinAmp as a handler for its audio types. Idempotent and best-effort:
 /// any failure is ignored so a registry/permissions hiccup never blocks startup.
@@ -22,6 +23,8 @@
 pub fn register() {
     #[cfg(windows)]
     windows_impl::register();
+    #[cfg(target_os = "linux")]
+    linux_impl::register();
 }
 
 /// Remove the registrations `register` created. Not called in normal operation
@@ -30,6 +33,8 @@ pub fn register() {
 pub fn unregister() {
     #[cfg(windows)]
     windows_impl::unregister();
+    #[cfg(target_os = "linux")]
+    linux_impl::unregister();
 }
 
 #[cfg(windows)]
@@ -230,5 +235,159 @@ mod windows_impl {
             // is harmless and ignored by the shell).
             SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, std::ptr::null(), std::ptr::null());
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux_impl {
+    use crate::playlist::SUPPORTED_EXTS;
+    use std::path::Path;
+
+    const DESKTOP_FILE: &str = "linamp.desktop";
+    const MIME_PACKAGE: &str = "linamp.xml";
+
+    // A small shared-mime-info package for the tracker formats. Standard
+    // shared-mime-info often does not define these, so without it the file manager
+    // gives a .mod/.xm/.s3m/.it file a generic type and never offers LinAmp.
+    // Installing this under ~/.local/share/mime teaches the types per-user.
+    const MIME_PACKAGE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="audio/x-mod">
+    <comment>Amiga SoundTracker module</comment>
+    <glob pattern="*.mod"/>
+  </mime-type>
+  <mime-type type="audio/x-xm">
+    <comment>FastTracker 2 module</comment>
+    <glob pattern="*.xm"/>
+  </mime-type>
+  <mime-type type="audio/x-s3m">
+    <comment>ScreamTracker 3 module</comment>
+    <glob pattern="*.s3m"/>
+  </mime-type>
+  <mime-type type="audio/x-it">
+    <comment>Impulse Tracker module</comment>
+    <glob pattern="*.it"/>
+  </mime-type>
+</mime-info>
+"#;
+
+    /// The MIME type for a supported extension, or None for one we do not map.
+    /// Several extensions share a type (all the MPEG audio layers are audio/mpeg),
+    /// so the desktop entry lists each type once.
+    fn mime_for_ext(ext: &str) -> Option<&'static str> {
+        Some(match ext {
+            "mp3" | "mp1" | "mp2" | "mpa" => "audio/mpeg",
+            "flac" => "audio/flac",
+            "ogg" | "oga" => "audio/ogg",
+            "wav" => "audio/x-wav",
+            "m4a" | "m4b" | "mp4" => "audio/mp4",
+            "aac" => "audio/aac",
+            "aiff" | "aif" => "audio/x-aiff",
+            "mid" | "midi" => "audio/midi",
+            // Tracker modules, taught to the MIME database by MIME_PACKAGE_XML.
+            "mod" => "audio/x-mod",
+            "xm" => "audio/x-xm",
+            "s3m" => "audio/x-s3m",
+            "it" => "audio/x-it",
+            _ => return None,
+        })
+    }
+
+    /// The distinct MIME types across all supported extensions, in first-seen
+    /// order, so the list tracks exactly what the player decodes.
+    fn supported_mime_types() -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = Vec::new();
+        for ext in SUPPORTED_EXTS {
+            if let Some(m) = mime_for_ext(ext) {
+                if !out.contains(&m) {
+                    out.push(m);
+                }
+            }
+        }
+        out
+    }
+
+    /// Write `contents` to `path` only when it differs from what is there,
+    /// creating parent directories. Returns whether the file was (re)written, so
+    /// the caller refreshes the system cache only on a real change.
+    fn write_if_changed(path: &Path, contents: &str) -> bool {
+        if std::fs::read_to_string(path).ok().as_deref() == Some(contents) {
+            return false;
+        }
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(path, contents).is_ok()
+    }
+
+    /// Best-effort run of an xdg cache-refresh command on a directory, output
+    /// discarded. A missing tool or a non-zero exit is ignored, matching the
+    /// installer's `|| true`.
+    fn run_quiet(program: &str, dir: &Path) {
+        use std::process::{Command, Stdio};
+        let _ = Command::new(program)
+            .arg(dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    pub(super) fn register() {
+        let Some(data) = dirs::data_local_dir() else {
+            return;
+        };
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+
+        // The desktop entry: a complete entry with the running executable as Exec
+        // and the full MIME list, so "Open with" and the Default Apps UI offer
+        // LinAmp for every type it decodes. %F passes the selected local files,
+        // which the desktop translates from file:// URIs, so LinAmp's path-based
+        // open logic receives plain paths. This is a candidate registration: it
+        // never runs `xdg-mime default`, so the user's chosen default is left
+        // alone, matching the Windows side not seizing the default. Rewriting each
+        // launch also keeps Exec current if the executable moves.
+        let exe = exe.to_string_lossy();
+        let mimes = supported_mime_types().join(";");
+        let desktop = format!(
+            "[Desktop Entry]\n\
+             Type=Application\n\
+             Name=LinAmp\n\
+             GenericName=Audio Player\n\
+             Comment=A Winamp-inspired audio player\n\
+             Exec=\"{exe}\" %F\n\
+             Icon=linamp\n\
+             Terminal=false\n\
+             Categories=AudioVideo;Audio;Player;\n\
+             MimeType={mimes};\n\
+             StartupNotify=true\n"
+        );
+        let app_dir = data.join("applications");
+        if write_if_changed(&app_dir.join(DESKTOP_FILE), &desktop) {
+            run_quiet("update-desktop-database", &app_dir);
+        }
+
+        // Teach the per-user MIME database the tracker types. Only refresh the
+        // cache when the package changed, since update-mime-database rebuilds the
+        // whole user cache and that is wasted work on a steady-state launch.
+        let mime_dir = data.join("mime");
+        if write_if_changed(&mime_dir.join("packages").join(MIME_PACKAGE), MIME_PACKAGE_XML) {
+            run_quiet("update-mime-database", &mime_dir);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn unregister() {
+        let Some(data) = dirs::data_local_dir() else {
+            return;
+        };
+        let app_dir = data.join("applications");
+        let _ = std::fs::remove_file(app_dir.join(DESKTOP_FILE));
+        run_quiet("update-desktop-database", &app_dir);
+
+        let mime_dir = data.join("mime");
+        let _ = std::fs::remove_file(mime_dir.join("packages").join(MIME_PACKAGE));
+        run_quiet("update-mime-database", &mime_dir);
     }
 }
