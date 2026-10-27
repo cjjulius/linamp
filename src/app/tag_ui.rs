@@ -164,7 +164,7 @@ impl super::LinAmpApp {
         if self.tag_editor.is_none() {
             return;
         }
-        let screen = self.win_pos[0] + egui::vec2(32.0, 32.0);
+        let screen = self.geom.win_pos[0] + egui::vec2(32.0, 32.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, File Info")
             .with_position(screen)

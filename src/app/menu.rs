@@ -146,7 +146,7 @@ impl super::LinAmpApp {
             }
             _ => popup_dims(kind),
         };
-        let mut screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
+        let mut screen = self.geom.win_pos[win_idx(owner)] + pos.to_vec2();
         // Keep the menu fully on the desktop: a tall menu (example: the empty-area
         // menu) opened near the bottom/right edge would otherwise spill off-screen
         // with its lower entries unreachable.

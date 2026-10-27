@@ -227,7 +227,7 @@ impl super::LinAmpApp {
         }
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Library")
-            .with_position(self.lib_pos)
+            .with_position(self.geom.lib_pos)
             .with_inner_size(self.lib_size())
             .with_decorations(false)
             .with_resizable(false)
@@ -264,10 +264,10 @@ impl super::LinAmpApp {
     /// Library window themed with the skin's GEN.BMP frame: composite the frame
     /// behind the content, draw the caption and inset the browser into the frame.
     fn ui_library_gen(&mut self, ctx: &egui::Context, close: &mut bool) {
-        self.foc_lib = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_lib);
+        self.geom.foc_lib = ctx.input(|i| i.viewport().focused).unwrap_or(self.geom.foc_lib);
         // Use the shared app-level focus so the library doesn't dim merely because
         // another LinAmp window was clicked.
-        let active = self.app_focused;
+        let active = self.geom.app_focused;
         // Compose the frame at the base (1x) size; it is drawn to the (possibly
         // scaled) window rect and upscaled like the classic windows.
         let base = self.lib_base_size();
@@ -339,11 +339,11 @@ impl super::LinAmpApp {
     fn handle_lib_drag(&mut self, ctx: &egui::Context, resp: &egui::Response) {
         if resp.drag_started() {
             if let Some(g) = global_cursor_points(ctx) {
-                self.lib_drag = Some(g - self.lib_pos);
+                self.geom.lib_drag = Some(g - self.geom.lib_pos);
             }
         }
         if resp.dragged() {
-            if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.lib_drag) {
+            if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.geom.lib_drag) {
                 let mut p = g - grab;
                 // Clamp to the whole virtual desktop so the library can be dragged
                 // onto another monitor but not off the desktop.
@@ -352,15 +352,15 @@ impl super::LinAmpApp {
                     p.x = p.x.clamp(vr.min.x, (vr.max.x - size.x).max(vr.min.x));
                     p.y = p.y.clamp(vr.min.y, (vr.max.y - size.y).max(vr.min.y));
                 }
-                self.lib_pos = p;
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.lib_pos));
+                self.geom.lib_pos = p;
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.geom.lib_pos));
             }
         }
         if resp.drag_stopped() {
-            self.lib_drag = None;
+            self.geom.lib_drag = None;
             let monitor = ctx.input(|i| i.viewport().monitor_size);
-            self.lib_pos = self.snap_lib_pos(self.lib_pos, monitor);
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.lib_pos));
+            self.geom.lib_pos = self.snap_lib_pos(self.geom.lib_pos, monitor);
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.geom.lib_pos));
         }
     }
 
@@ -400,20 +400,20 @@ impl super::LinAmpApp {
         // Drag the title bar to move + dock the window (skip when over the X).
         if bar_resp.drag_started() && !x_resp.hovered() {
             if let Some(g) = global_cursor_points(ctx) {
-                self.lib_drag = Some(g - self.lib_pos);
+                self.geom.lib_drag = Some(g - self.geom.lib_pos);
             }
         }
         if bar_resp.dragged() {
-            if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.lib_drag) {
-                self.lib_pos = g - grab;
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.lib_pos));
+            if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.geom.lib_drag) {
+                self.geom.lib_pos = g - grab;
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.geom.lib_pos));
             }
         }
         if bar_resp.drag_stopped() {
-            self.lib_drag = None;
+            self.geom.lib_drag = None;
             let monitor = ctx.input(|i| i.viewport().monitor_size);
-            self.lib_pos = self.snap_lib_pos(self.lib_pos, monitor);
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.lib_pos));
+            self.geom.lib_pos = self.snap_lib_pos(self.geom.lib_pos, monitor);
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.geom.lib_pos));
         }
         ui.add_space(2.0);
     }

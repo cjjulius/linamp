@@ -18,10 +18,10 @@ impl super::LinAmpApp {
         self.theme.name.hash(&mut h);
         ps.hash(&mut h);
         // Active/inactive title bar follows app focus (all windows together).
-        self.app_focused.hash(&mut h);
+        self.geom.app_focused.hash(&mut h);
         match win {
             ClWin::Main => {
-                self.main_shade.hash(&mut h);
+                self.geom.main_shade.hash(&mut h);
                 // Clutterbar lit indicators: A = always-on-top, D = double-size.
                 // Without these the cached texture wouldn't refresh when the toggle
                 // changes (from Preferences or the clutterbar), so the on-screen
@@ -61,8 +61,8 @@ impl super::LinAmpApp {
                 }
             }
             ClWin::Eq => {
-                self.eq_shade.hash(&mut h);
-                if self.eq_shade {
+                self.geom.eq_shade.hash(&mut h);
+                if self.geom.eq_shade {
                     // The collapsed EQ shows the (shared) volume + balance sliders.
                     self.player.volume().to_bits().hash(&mut h);
                     self.balance.to_bits().hash(&mut h);
@@ -76,7 +76,7 @@ impl super::LinAmpApp {
                 }
             }
             ClWin::Pl => {
-                self.pl_shade.hash(&mut h);
+                self.geom.pl_shade.hash(&mut h);
                 self.plview.px_w.to_bits().hash(&mut h);
                 self.plview.px_h.to_bits().hash(&mut h);
                 self.plview.first.hash(&mut h);
@@ -90,7 +90,7 @@ impl super::LinAmpApp {
                 // Visible rows' identity + text, catches selection, current-row
                 // and lazy tag loads without hashing the whole playlist. (Tags only
                 // load for visible rows, so off-screen rows can't change unseen.)
-                let vis = if self.pl_shade {
+                let vis = if self.geom.pl_shade {
                     0
                 } else {
                     classic::pl_visible_rows(self.plview.px_h as u32)
@@ -105,7 +105,7 @@ impl super::LinAmpApp {
                         t.duration.hash(&mut h);
                     }
                 }
-                if self.pl_shade {
+                if self.geom.pl_shade {
                     if let Some(t) = self.playlist.current_track() {
                         t.artist.hash(&mut h);
                         t.title.hash(&mut h);
@@ -122,12 +122,12 @@ impl super::LinAmpApp {
         self.handle_dropped(ctx, Some(win));
 
         // Refresh the analyzer data for the main window.
-        if win == ClWin::Main && !self.main_shade {
+        if win == ClWin::Main && !self.geom.main_shade {
             self.step_viz();
         }
 
         // Lazily read tags for the playlist rows about to be shown (on-view mode).
-        if win == ClWin::Pl && !self.pl_shade {
+        if win == ClWin::Pl && !self.geom.pl_shade {
             let vis = classic::pl_visible_rows(self.plview.px_h as u32);
             let end = (self.plview.first + vis).min(self.playlist.len());
             for i in self.plview.first..end {
@@ -166,7 +166,7 @@ impl super::LinAmpApp {
         }
         .expect("composed above");
         let nw = match win {
-            ClWin::Pl if !self.pl_shade => self.plview.px_w,
+            ClWin::Pl if !self.geom.pl_shade => self.plview.px_w,
             _ => classic::MAIN_W as f32,
         };
         let nh = self.win_native_h(win);
@@ -182,9 +182,9 @@ impl super::LinAmpApp {
                 // widgets, so they don't intercept the manual click/drag handling;
                 // skipped while a window is shaded (its buttons aren't shown).
                 let tips = match win {
-                    ClWin::Main if !self.main_shade => classic::main_tooltips(),
-                    ClWin::Eq if !self.eq_shade => classic::eq_tooltips(),
-                    ClWin::Pl if !self.pl_shade => {
+                    ClWin::Main if !self.geom.main_shade => classic::main_tooltips(),
+                    ClWin::Eq if !self.geom.eq_shade => classic::eq_tooltips(),
+                    ClWin::Pl if !self.geom.pl_shade => {
                         classic::pl_tooltips(self.plview.px_w as i32, self.plview.px_h as i32)
                     }
                     _ => Vec::new(),
@@ -208,21 +208,21 @@ impl super::LinAmpApp {
         match win {
             ClWin::Main => {
                 let st = self.make_main_state();
-                if self.main_shade {
+                if self.geom.main_shade {
                     cs.compose_main_shade(&st)
                 } else {
                     cs.compose_main(&st)
                 }
             }
             ClWin::Eq => {
-                if self.eq_shade {
-                    cs.compose_eq_shade(self.app_focused, self.player.volume(), self.balance)
+                if self.geom.eq_shade {
+                    cs.compose_eq_shade(self.geom.app_focused, self.player.volume(), self.balance)
                 } else {
                     cs.compose_eq(&self.make_eq_state())
                 }
             }
             ClWin::Pl => {
-                if self.pl_shade {
+                if self.geom.pl_shade {
                     let (text, time) = match self.playlist.current_track() {
                         Some(t) => {
                             let n = self.playlist.current.map(|i| i + 1).unwrap_or(0);
@@ -245,7 +245,7 @@ impl super::LinAmpApp {
                         }
                         None => (String::new(), String::new()),
                     };
-                    cs.compose_pl_shade(self.app_focused, &text, &time, self.pl_colors().normal)
+                    cs.compose_pl_shade(self.geom.app_focused, &text, &time, self.pl_colors().normal)
                 } else {
                     // Build only the visible window; compose skips `first` rows, so
                     // the slice starts at pl_first and we pass first: 0 below.
@@ -272,7 +272,7 @@ impl super::LinAmpApp {
                         }
                     }
                     let st = classic::PlState {
-                        focused: self.app_focused,
+                        focused: self.geom.app_focused,
                         colors,
                         rows: &rows,
                         first: 0,
