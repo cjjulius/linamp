@@ -406,6 +406,10 @@ pub struct LinAmpApp {
     /// Star rating (0–5) for each row in `lib_results`, parallel-indexed. Only
     /// populated for the Top Rated view, where the list shows the stars.
     lib_ratings: Vec<i64>,
+    /// Cached (path, rating) for the selected library row, so the bottom bar's
+    /// star display doesn't query SQLite every frame. Invalidated when the
+    /// selection path changes or the user re-rates.
+    lib_rating_cache: Option<(PathBuf, i64)>,
     /// User-resizable track-table column fractions of the flexible width:
     /// [artist, title]; the third column (album/rating) takes the remainder.
     lib_col_fr: [f32; 2],
@@ -724,6 +728,7 @@ impl LinAmpApp {
             lib_search_at: None,
             lib_results: Vec::new(),
             lib_ratings: Vec::new(),
+            lib_rating_cache: None,
             lib_col_fr: [0.28, 0.42],
             lib_sort: None,
             lib_pos: egui::Pos2::ZERO,
@@ -2044,12 +2049,13 @@ impl LinAmpApp {
         }
     }
 
-    fn build_pl_rows(&self) -> Vec<classic::PlRow> {
+    /// Build the playlist rows for the visible window `first..end` only (numbered
+    /// by absolute position), so a multi-thousand-track playlist doesn't format a
+    /// string per track every recomposite for rows that are never drawn.
+    fn build_pl_rows(&self, first: usize, end: usize) -> Vec<classic::PlRow> {
         let cur = self.playlist.current;
-        self.playlist
-            .tracks
-            .iter()
-            .enumerate()
+        (first..end)
+            .filter_map(|i| self.playlist.tracks.get(i).map(|t| (i, t)))
             .map(|(i, t)| {
                 (
                     format!("{}. {}", i + 1, t.display_name()),

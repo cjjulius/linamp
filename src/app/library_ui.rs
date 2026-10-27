@@ -563,9 +563,17 @@ impl super::LinAmpApp {
             .next()
             .and_then(|&i| self.lib_results.get(i))
             .map(|t| t.path.clone());
-        let cur_rating = match (&self.library, &rating_target) {
-            (Some(lib), Some(p)) => lib.rating(p),
-            _ => 0,
+        // Cache the rating keyed on the selected path, so the star display doesn't
+        // query SQLite on every repaint; recompute only when the selection changes.
+        let cur_rating = if let Some(p) = &rating_target {
+            let hit = self.lib_rating_cache.as_ref().is_some_and(|(cp, _)| cp == p);
+            if !hit {
+                let r = self.library.as_ref().map_or(0, |lib| lib.rating(p));
+                self.lib_rating_cache = Some((p.clone(), r));
+            }
+            self.lib_rating_cache.as_ref().map_or(0, |(_, r)| *r)
+        } else {
+            0
         };
         egui::TopBottomPanel::bottom("lib_bottom")
             .frame(panel_frame)
@@ -1098,6 +1106,7 @@ impl super::LinAmpApp {
                     }
                 }
             }
+            self.lib_rating_cache = None; // the selected track's rating changed
             if self.lib_nav == LibView::TopRated {
                 self.refresh_library();
             }
@@ -1154,6 +1163,7 @@ impl super::LinAmpApp {
                             }
                         }
                     }
+                    self.lib_rating_cache = None; // ratings changed
                     if self.lib_nav == LibView::TopRated {
                         self.refresh_library();
                     }
