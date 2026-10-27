@@ -246,6 +246,12 @@ mod linux_impl {
     const DESKTOP_FILE: &str = "linamp.desktop";
     const MIME_PACKAGE: &str = "linamp.xml";
 
+    // The icon the desktop entry refers to as `Icon=linamp`. Installed per-user so
+    // the name resolves however LinAmp was launched (run from a build tree, the
+    // installer never ran). Same bytes the app uses for its window/taskbar icon.
+    const ICON_PNG: &[u8] = include_bytes!("../assets/linamp_logo_256.png");
+    const ICON_SVG: &str = include_str!("../assets/linamp_logo.svg");
+
     // A small shared-mime-info package for the tracker formats. Standard
     // shared-mime-info often does not define these, so without it the file manager
     // gives a .mod/.xm/.s3m/.it file a generic type and never offers LinAmp.
@@ -320,6 +326,17 @@ mod linux_impl {
         std::fs::write(path, contents).is_ok()
     }
 
+    /// Byte equivalent of `write_if_changed`, for the binary icon.
+    fn write_bytes_if_changed(path: &Path, contents: &[u8]) -> bool {
+        if std::fs::read(path).ok().as_deref() == Some(contents) {
+            return false;
+        }
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(path, contents).is_ok()
+    }
+
     /// Best-effort run of an xdg cache-refresh command on a directory, output
     /// discarded. A missing tool or a non-zero exit is ignored, matching the
     /// installer's `|| true`.
@@ -327,6 +344,18 @@ mod linux_impl {
         use std::process::{Command, Stdio};
         let _ = Command::new(program)
             .arg(dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    /// Best-effort refresh of the hicolor icon cache so the desktop picks up the
+    /// icon without a relogin. Missing tool or non-zero exit is ignored.
+    fn refresh_icon_cache(theme_dir: &Path) {
+        use std::process::{Command, Stdio};
+        let _ = Command::new("gtk-update-icon-cache")
+            .args(["-f", "-t"])
+            .arg(theme_dir)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
@@ -340,6 +369,19 @@ mod linux_impl {
             return;
         };
 
+        // Install the icon per-user so `Icon=linamp` resolves however LinAmp was
+        // launched (run from a build tree, the installer never ran). Without this
+        // the "Open with" list shows a generic icon. Refresh the icon cache only
+        // when a file changed.
+        let icons = data.join("icons").join("hicolor");
+        let mut icon_changed =
+            write_bytes_if_changed(&icons.join("256x256").join("apps").join("linamp.png"), ICON_PNG);
+        icon_changed |=
+            write_if_changed(&icons.join("scalable").join("apps").join("linamp.svg"), ICON_SVG);
+        if icon_changed {
+            refresh_icon_cache(&icons);
+        }
+
         // The desktop entry: a complete entry with the running executable as Exec
         // and the full MIME list, so "Open with" and the Default Apps UI offer
         // LinAmp for every type it decodes. %F passes the selected local files,
@@ -348,6 +390,12 @@ mod linux_impl {
         // never runs `xdg-mime default`, so the user's chosen default is left
         // alone, matching the Windows side not seizing the default. Rewriting each
         // launch also keeps Exec current if the executable moves.
+        //
+        // StartupNotify is off: LinAmp is single-instance, so an "Open with" on an
+        // already-running LinAmp forwards the file and the launched process exits
+        // without mapping a window. With startup notification on, the launcher would
+        // then show a busy cursor until the notification timed out (5-10s). Off, the
+        // forward is instant with no stuck cursor.
         let exe = exe.to_string_lossy();
         let mimes = supported_mime_types().join(";");
         let desktop = format!(
@@ -361,7 +409,7 @@ mod linux_impl {
              Terminal=false\n\
              Categories=AudioVideo;Audio;Player;\n\
              MimeType={mimes};\n\
-             StartupNotify=true\n"
+             StartupNotify=false\n"
         );
         let app_dir = data.join("applications");
         if write_if_changed(&app_dir.join(DESKTOP_FILE), &desktop) {
@@ -385,6 +433,11 @@ mod linux_impl {
         let app_dir = data.join("applications");
         let _ = std::fs::remove_file(app_dir.join(DESKTOP_FILE));
         run_quiet("update-desktop-database", &app_dir);
+
+        let icons = data.join("icons").join("hicolor");
+        let _ = std::fs::remove_file(icons.join("256x256").join("apps").join("linamp.png"));
+        let _ = std::fs::remove_file(icons.join("scalable").join("apps").join("linamp.svg"));
+        refresh_icon_cache(&icons);
 
         let mime_dir = data.join("mime");
         let _ = std::fs::remove_file(mime_dir.join("packages").join(MIME_PACKAGE));
