@@ -115,9 +115,9 @@ impl ClassicSkin {
         if let Some(tb) = self.bmp("titlebar.bmp") {
             let sy = if st.focused { 0 } else { 15 };
             blit(&mut c, tb, 0, 0, 27, sy, 275, 14);
-            blit(&mut c, tb, 244, 3, 9, 0, 9, 9); // minimize
-            blit(&mut c, tb, 254, 3, 0, 18, 9, 9); // shade
-            blit(&mut c, tb, 264, 3, 18, 0, 9, 9); // close
+            blit_btn(&mut c, tb, Btn::Minimize, 9, 0); // minimize
+            blit(&mut c, tb, 254, 3, 0, 18, 9, 9); // shade (not a hit-tested Btn)
+            blit_btn(&mut c, tb, Btn::Close, 18, 0); // close
 
             // Clutterbar (O/A/I/D/V) column: the normal strip, then "lit" overlays
             // for the active toggles and whichever button is being pressed.
@@ -143,15 +143,15 @@ impl ClassicSkin {
             }
         }
 
-        // Transport buttons.
+        // Transport buttons. Dest + size come from the shared REGIONS rect; a
+        // pressed button shifts its source down one row (by its own height), so it
+        // draws the "down" sprite in place.
         if let Some(cb) = self.bmp("cbuttons.bmp") {
-            let dn = |b: Btn| if st.pressed == Some(b) { 1 } else { 0 };
-            blit(&mut c, cb, 16, 88, 0, dn(Btn::Prev) * 18, 23, 18);
-            blit(&mut c, cb, 39, 88, 23, dn(Btn::Play) * 18, 23, 18);
-            blit(&mut c, cb, 62, 88, 46, dn(Btn::Pause) * 18, 23, 18);
-            blit(&mut c, cb, 85, 88, 69, dn(Btn::Stop) * 18, 23, 18);
-            blit(&mut c, cb, 108, 88, 92, dn(Btn::Next) * 18, 22, 18);
-            blit(&mut c, cb, 136, 89, 114, dn(Btn::Eject) * 16, 22, 16);
+            for &(b, sx) in CBUTTON_SRC_X {
+                let h = btn_rect(b).map(|r| r.3 as u32).unwrap_or(0);
+                let sy = if st.pressed == Some(b) { h } else { 0 };
+                blit_btn(&mut c, cb, b, sx, sy);
+            }
         }
 
         // Shuffle / repeat / eq / pl.
@@ -162,10 +162,10 @@ impl ClassicSkin {
                 (false, true) => 15,
                 (false, false) => 0,
             };
-            blit(&mut c, sr, 164, 89, 28, ysel(st.shuffle, st.pressed == Some(Btn::Shuffle)), 47, 15);
-            blit(&mut c, sr, 210, 89, 0, ysel(st.repeat, st.pressed == Some(Btn::Repeat)), 28, 15);
-            blit(&mut c, sr, 219, 58, 0, if st.eq_on { 73 } else { 61 }, 23, 12);
-            blit(&mut c, sr, 242, 58, 23, if st.pl_on { 73 } else { 61 }, 23, 12);
+            blit_btn(&mut c, sr, Btn::Shuffle, 28, ysel(st.shuffle, st.pressed == Some(Btn::Shuffle)));
+            blit_btn(&mut c, sr, Btn::Repeat, 0, ysel(st.repeat, st.pressed == Some(Btn::Repeat)));
+            blit_btn(&mut c, sr, Btn::Eq, 0, if st.eq_on { 73 } else { 61 });
+            blit_btn(&mut c, sr, Btn::Pl, 23, if st.pl_on { 73 } else { 61 });
         }
 
         // Play/pause/stop indicator.
@@ -576,6 +576,17 @@ impl ClassicSkin {
         tile_h(&mut img, g, GEN_BOTTOM_SIDE_W, w - GEN_BOTTOM_SIDE_W, by, 127, 72, GEN_CORNER_W, GEN_BORDER_B);
 
         Some(img)
+    }
+}
+
+/// Draw a main-window button sprite. Its destination rect and size come from the
+/// shared `REGIONS` table (via `btn_rect`), so a button is always drawn on exactly
+/// its click target with no second copy of the coordinates to keep in sync. `sx`/
+/// `sy` are the source origin on the button's own sprite sheet; the sprite is 1:1,
+/// so the source size equals the destination size. No-op for a non-button region.
+fn blit_btn(dst: &mut RgbaImage, src: &RgbaImage, b: Btn, sx: u32, sy: u32) {
+    if let Some((dx, dy, w, h)) = btn_rect(b) {
+        blit(dst, src, dx, dy, sx, sy, w as u32, h as u32);
     }
 }
 

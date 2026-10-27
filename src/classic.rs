@@ -146,6 +146,29 @@ mod tests {
     use image::Rgba;
 
     #[test]
+    fn drawn_buttons_sit_on_their_hit_targets() {
+        // S4: the main-window button sprites are drawn on the rect from the shared
+        // REGIONS table (via btn_rect), so a button's draw rect and its click
+        // target can't drift apart. Every button the compositor draws must map
+        // back to itself when hit-tested at its own centre.
+        let drawn = [
+            Btn::Prev, Btn::Play, Btn::Pause, Btn::Stop, Btn::Next, Btn::Eject,
+            Btn::Shuffle, Btn::Repeat, Btn::Eq, Btn::Pl, Btn::Close, Btn::Minimize,
+        ];
+        for b in drawn {
+            let (x, y, w, h) = super::btn_rect(b).unwrap_or_else(|| panic!("no rect for {b:?}"));
+            let (cx, cy) = ((x + w / 2) as f32, (y + h / 2) as f32);
+            assert_eq!(region_at(cx, cy), Some(b), "{b:?} draw rect centre doesn't hit it");
+        }
+        // The transport table covers all six CBUTTONS buttons on distinct sprites.
+        assert_eq!(super::CBUTTON_SRC_X.len(), 6);
+        let mut xs: Vec<u32> = super::CBUTTON_SRC_X.iter().map(|&(_, sx)| sx).collect();
+        xs.sort_unstable();
+        xs.dedup();
+        assert_eq!(xs.len(), 6, "duplicate source x in CBUTTON_SRC_X");
+    }
+
+    #[test]
     fn ascii_folds_accented_text_to_base_letters() {
         // Accented and Vietnamese characters render via their base ASCII cell,
         // not as blanks (#97).
