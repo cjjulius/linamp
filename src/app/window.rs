@@ -145,7 +145,7 @@ impl super::LinAmpApp {
         }
 
         if pressed {
-            self.active_region = None;
+            self.render.active_region = None;
             self.eq.active = None;
             if let Some(l) = local {
                 let nx = l.x / self.scale;
@@ -191,7 +191,7 @@ impl super::LinAmpApp {
                             Some(H::Pos) => {
                                 // Click/drag the mini-posbar to seek; reuses the
                                 // expanded seek drag machinery (active_region).
-                                self.active_region = Some(Btn::Seek);
+                                self.render.active_region = Some(Btn::Seek);
                                 self.apply_classic_slider(Btn::Seek, nx);
                             }
                             None => {}
@@ -201,10 +201,10 @@ impl super::LinAmpApp {
                     match win {
                         ClWin::Main => {
                             let r = classic::region_at(nx, ny);
-                            self.active_region = r;
+                            self.render.active_region = r;
                             match r {
                                 Some(Btn::TitleBar) => {
-                                    self.active_region = None;
+                                    self.render.active_region = None;
                                     self.start_drag(ctx, win, screen_cursor);
                                 }
                                 Some(b @ (Btn::Seek | Btn::Volume | Btn::Balance)) => {
@@ -359,7 +359,7 @@ impl super::LinAmpApp {
             if let Some(l) = local {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;
-                if let Some(r) = self.active_region {
+                if let Some(r) = self.render.active_region {
                     if matches!(r, Btn::Seek | Btn::Volume | Btn::Balance) {
                         self.apply_classic_slider(r, nx);
                     }
@@ -422,7 +422,7 @@ impl super::LinAmpApp {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;
                 if win == ClWin::Main {
-                    if let Some(r) = self.active_region {
+                    if let Some(r) = self.render.active_region {
                         if classic::region_at(nx, ny) == Some(r) {
                             if r == Btn::Options || r == Btn::ClutterO {
                                 self.open_popup_in(Popup::Options, win, l);
@@ -434,7 +434,7 @@ impl super::LinAmpApp {
                             }
                         }
                     }
-                    if self.active_region == Some(Btn::Seek) {
+                    if self.render.active_region == Some(Btn::Seek) {
                         if let Some(p) = self.classic_seek_preview.take() {
                             self.player.seek(Duration::from_secs_f32(p));
                         }
@@ -467,14 +467,14 @@ impl super::LinAmpApp {
                     }
                 }
             }
-            self.active_region = None;
+            self.render.active_region = None;
             self.eq.active = None;
             self.pl_menu_press = None;
         }
 
         if win == ClWin::Main {
-            self.pressed_btn = if down {
-                match self.active_region {
+            self.render.pressed_btn = if down {
+                match self.render.active_region {
                     Some(b @ (Btn::Prev | Btn::Play | Btn::Pause | Btn::Stop | Btn::Next | Btn::Eject
                     | Btn::Shuffle | Btn::Repeat | Btn::Seek | Btn::Volume | Btn::Balance)) => Some(b),
                     _ => None,

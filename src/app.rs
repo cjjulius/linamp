@@ -391,6 +391,25 @@ struct EqState {
     save_name: Option<String>,
 }
 
+/// Per-window classic-render caches (composite textures, fingerprints, X11 shape
+/// masks and cursor state), grouped so the render pipeline's state lives in one
+/// place (C1).
+struct ClassicRenderState {
+    classic_tex: Option<egui::TextureHandle>,
+    eq_tex: Option<egui::TextureHandle>,
+    pl_tex: Option<egui::TextureHandle>,
+    /// Per-window (main/eq/pl) X11 shape fingerprint, so REGION.TXT masks are only
+    /// re-applied on change.
+    shape_sig: [Option<u64>; 3],
+    /// Last custom cursor name applied per window (main/eq/pl), to switch the X
+    /// cursor only when the hovered region changes.
+    cur_cursor: [Option<&'static str>; 3],
+    /// Last composed fingerprint per window, to skip re-compositing an unchanged frame.
+    tex_fp: [u64; 3],
+    active_region: Option<Btn>,
+    pressed_btn: Option<Btn>,
+}
+
 pub struct LinAmpApp {
     player: Player,
     playlist: Playlist,
@@ -467,26 +486,15 @@ pub struct LinAmpApp {
     // classic skin renderer
     ui_mode: UiMode,
     classic: Option<ClassicSkin>,
-    classic_tex: Option<egui::TextureHandle>,
-    eq_tex: Option<egui::TextureHandle>,
-    pl_tex: Option<egui::TextureHandle>,
+    /// Per-window composite textures, fingerprints, shape masks and cursor caches.
+    render: ClassicRenderState,
     /// Composed GEN.BMP library-window frame + a fingerprint (skin, active, size)
     /// so it is only re-composited when something changes.
     lib_tex: Option<egui::TextureHandle>,
     lib_tex_sig: Option<(String, bool, u32, u32)>,
-    /// Per-window (main/eq/pl) X11 shape fingerprint, so REGION.TXT masks are only
-    /// re-applied on change; `shaped_any` tracks whether any shape was ever set (to
-    /// reset windows to rectangular when switching to a skin without regions).
-    shape_sig: [Option<u64>; 3],
+    /// Whether any X11 shape was ever set, to reset windows to rectangular when
+    /// switching to a skin without regions.
     shaped_any: bool,
-    /// Last custom cursor name applied per window (main/eq/pl), to switch the X
-    /// cursor only when the hovered region changes.
-    cur_cursor: [Option<&'static str>; 3],
-    /// Last composed fingerprint per window (main/eq/pl), to skip re-compositing
-    /// and re-uploading an unchanged frame.
-    tex_fp: [u64; 3],
-    active_region: Option<Btn>,
-    pressed_btn: Option<Btn>,
     classic_seek_preview: Option<f32>,
     balance: f32,
     time_remaining: bool,
@@ -750,9 +758,7 @@ impl LinAmpApp {
             lib_drag: None,
             lib_tex: None,
             lib_tex_sig: None,
-            shape_sig: [None; 3],
             shaped_any: false,
-            cur_cursor: [None; 3],
             lib_nav: crate::library::LibView::Audio,
             lib_artists: Vec::new(),
             lib_albums: Vec::new(),
@@ -775,12 +781,16 @@ impl LinAmpApp {
             skins: Vec::new(),
             ui_mode: UiMode::Modern,
             classic: None,
-            classic_tex: None,
-            eq_tex: None,
-            pl_tex: None,
-            tex_fp: [0; 3],
-            active_region: None,
-            pressed_btn: None,
+            render: ClassicRenderState {
+                classic_tex: None,
+                eq_tex: None,
+                pl_tex: None,
+                shape_sig: [None; 3],
+                cur_cursor: [None; 3],
+                tex_fp: [0; 3],
+                active_region: None,
+                pressed_btn: None,
+            },
             classic_seek_preview: None,
             balance: 0.0,
             time_remaining: false,
@@ -1579,9 +1589,9 @@ impl LinAmpApp {
         // Load the classic sprite sheets for the same skin. Drop every cached
         // window texture so all three re-composite with the new skin.
         self.classic = ClassicSkin::load(path).ok();
-        self.classic_tex = None;
-        self.eq_tex = None;
-        self.pl_tex = None;
+        self.render.classic_tex = None;
+        self.render.eq_tex = None;
+        self.render.pl_tex = None;
         // Destroy the previous skin's cached native cursors (Windows) so they don't
         // leak across skin changes, then reset the desired cursors so a skin with
         // none doesn't keep showing the old skin's; the per-frame cursor update
@@ -1648,7 +1658,7 @@ impl LinAmpApp {
         MainState {
             focused: self.app_focused,
             play,
-            pressed: self.pressed_btn,
+            pressed: self.render.pressed_btn,
             shuffle: self.shuffle,
             repeat: self.repeat_all,
             eq_on: self.eq_visible,
@@ -2588,7 +2598,7 @@ impl LinAmpApp {
                 if disable_cur {
                     self.clear_skin_cursors();
                 } else {
-                    self.cur_cursor = [None; 3];
+                    self.render.cur_cursor = [None; 3];
                 }
             }
         });
@@ -3271,14 +3281,14 @@ impl LinAmpApp {
         if !visible {
             // A hidden window's XID is gone; forget its shape so it re-applies when
             // shown again (the new window starts rectangular).
-            self.shape_sig[idx] = None;
+            self.render.shape_sig[idx] = None;
             return;
         }
         use std::hash::{Hash, Hasher};
         let mut hh = std::collections::hash_map::DefaultHasher::new();
         (skin, idx, self.scale.to_bits(), w, h, polys.is_empty()).hash(&mut hh);
         let sig = hh.finish();
-        if self.shape_sig[idx] == Some(sig) {
+        if self.render.shape_sig[idx] == Some(sig) {
             return;
         }
         let s = self.scale;
@@ -3299,7 +3309,7 @@ impl LinAmpApp {
                 .collect()
         };
         set_window_shape(title, &rects);
-        self.shape_sig[idx] = Some(sig);
+        self.render.shape_sig[idx] = Some(sig);
     }
 
     /// The skin cursor name for the region under native coords (nx, ny) of `win`.
@@ -3361,7 +3371,7 @@ impl LinAmpApp {
         let nx = (hp.x - rect.left()) / self.scale;
         let ny = (hp.y - rect.top()) / self.scale;
         let name = self.cursor_name(win, nx, ny);
-        if self.cur_cursor[idx] == Some(name) {
+        if self.render.cur_cursor[idx] == Some(name) {
             return;
         }
         let title = match win {
@@ -3376,7 +3386,7 @@ impl LinAmpApp {
                 set_window_cursor(title, &format!("{skin}:{name}"), ci);
             }
         }
-        self.cur_cursor[idx] = Some(name);
+        self.render.cur_cursor[idx] = Some(name);
     }
 
     /// Apply the skin's base cursor to an auxiliary window (library, editor,
@@ -3426,7 +3436,7 @@ impl LinAmpApp {
         ] {
             unset_window_cursor(title);
         }
-        self.cur_cursor = [None; 3];
+        self.render.cur_cursor = [None; 3];
     }
 
     fn render_classic(&mut self, ctx: &egui::Context) {

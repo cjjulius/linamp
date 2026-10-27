@@ -28,7 +28,7 @@ impl super::LinAmpApp {
                 // indicator lagged until some other input happened to change.
                 self.prefs.always_on_top.hash(&mut h);
                 self.prefs.double_size.hash(&mut h);
-                self.pressed_btn.hash(&mut h);
+                self.render.pressed_btn.hash(&mut h);
                 self.shuffle.hash(&mut h);
                 self.repeat_all.hash(&mut h);
                 self.eq_visible.hash(&mut h);
@@ -140,29 +140,29 @@ impl super::LinAmpApp {
         let idx = win_idx(win);
         let fp = self.window_fp(win);
         let tex_empty = match win {
-            ClWin::Main => self.classic_tex.is_none(),
-            ClWin::Eq => self.eq_tex.is_none(),
-            ClWin::Pl => self.pl_tex.is_none(),
+            ClWin::Main => self.render.classic_tex.is_none(),
+            ClWin::Eq => self.render.eq_tex.is_none(),
+            ClWin::Pl => self.render.pl_tex.is_none(),
         };
-        if self.tex_fp[idx] != fp || tex_empty {
+        if self.render.tex_fp[idx] != fp || tex_empty {
             let img = self.compose_window(win);
-            self.tex_fp[idx] = fp;
+            self.render.tex_fp[idx] = fp;
             let name = match win {
                 ClWin::Main => "cl_main",
                 ClWin::Eq => "cl_eq",
                 ClWin::Pl => "cl_pl",
             };
             let slot = match win {
-                ClWin::Main => &mut self.classic_tex,
-                ClWin::Eq => &mut self.eq_tex,
-                ClWin::Pl => &mut self.pl_tex,
+                ClWin::Main => &mut self.render.classic_tex,
+                ClWin::Eq => &mut self.render.eq_tex,
+                ClWin::Pl => &mut self.render.pl_tex,
             };
             let _ = upload_tex(slot, ctx, &img, name);
         }
         let tex = match win {
-            ClWin::Main => self.classic_tex.clone(),
-            ClWin::Eq => self.eq_tex.clone(),
-            ClWin::Pl => self.pl_tex.clone(),
+            ClWin::Main => self.render.classic_tex.clone(),
+            ClWin::Eq => self.render.eq_tex.clone(),
+            ClWin::Pl => self.render.pl_tex.clone(),
         }
         .expect("composed above");
         let nw = match win {
