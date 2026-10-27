@@ -111,13 +111,32 @@ fn main() -> eframe::Result<()> {
             // Another LinAmp is already running (single instance). Hand it any
             // files passed on the command line (Open with) through the open-request
             // queue so it opens them, then exit. The running instance polls the
-            // queue and applies them per the "Open with" preference.
-            let files: Vec<std::path::PathBuf> =
-                args.iter().skip(1).map(std::path::PathBuf::from).collect();
+            // queue and applies them per the "Open with" preference. Resolve each
+            // path against this launcher's working directory first: the running
+            // instance has a different cwd, so a relative path (from a terminal
+            // launch) would otherwise be opened against the wrong directory.
+            let cwd = std::env::current_dir().ok();
+            let files: Vec<std::path::PathBuf> = args
+                .iter()
+                .skip(1)
+                .map(|a| {
+                    let p = std::path::PathBuf::from(a);
+                    match &cwd {
+                        Some(cwd) if p.is_relative() => cwd.join(p),
+                        _ => p,
+                    }
+                })
+                .collect();
             openq::enqueue(&files);
             return Ok(());
         }
-        Instance::Acquired(file) => Some(file),
+        Instance::Acquired(file) => {
+            // This launch owns the single instance. Drop any stale open-requests a
+            // previous (crashed) instance left behind, so they aren't replayed as
+            // our startup files before the window begins polling the queue.
+            openq::clear();
+            Some(file)
+        }
         Instance::Unavailable => None,
     };
 
