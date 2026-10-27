@@ -11,6 +11,7 @@ mod decode;
 mod dock;
 mod eq;
 mod eqf;
+mod fileassoc;
 mod library;
 mod mediakeys;
 mod midi;
@@ -109,6 +110,12 @@ fn main() -> eframe::Result<()> {
         Instance::Acquired(file) => Some(file),
         Instance::Unavailable => None,
     };
+
+    // Register LinAmp as a candidate handler for its audio types (#166), so it
+    // shows in Open with / Default Apps and opens files launched with it. Per-user
+    // and idempotent; done each launch so it also tracks a moved executable. Only
+    // on a real GUI launch (the headless flags above have already returned).
+    fileassoc::register();
 
     // Start borderless at classic skin size (the app sets the real mode on the
     // first frame once it knows whether a skin loaded).

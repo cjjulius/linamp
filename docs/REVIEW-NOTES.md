@@ -1094,3 +1094,33 @@ src/mediakeys.rs, one extra channel drained per frame, in both window modes.
   async (needs a runtime); implementing the two interfaces directly on
   zbus::blocking keeps it consistent with the ksni backend and avoids a second
   zbus. Wire it into mediakeys.rs behind cfg(target_os = "linux").
+
+## 2026-10-27 (#166 file-type associations)
+
+New module src/fileassoc.rs. register() runs once per launch (after the
+single-instance guard, so headless flags skip it) and is idempotent. The
+extension set is crate::playlist::SUPPORTED_EXTS, so associations track what the
+player actually decodes.
+- Windows (done, needs a manual check): per-user HKCU\Software\Classes only, no
+  admin. Writes a ProgID (LinAmp.Audio with icon and an open command that passes
+  the file as %1), an Applications\linamp.exe entry (FriendlyAppName + open
+  command, for "Open with > LinAmp"), per-extension OpenWithProgids (candidate
+  only, never seizing the default), SupportedTypes, and a RegisteredApplications
+  capability block so LinAmp lists in Default Apps. Then SHChangeNotify so the
+  shell refreshes. Manual check: run this build once, then right-click an .mp3 and
+  confirm LinAmp appears under "Open with"; open Settings > Default apps and
+  confirm LinAmp is listed and can be set for the audio types. With LinAmp not
+  already running, double-clicking an associated file should open and play it.
+- Known gap (follow-up): a file opened while LinAmp is already running does
+  nothing. The second launch exits on the single-instance lock without handing the
+  path to the running instance. Forwarding it (a small IPC: write the path where
+  the running instance watches, or a named pipe / socket) is a separate change;
+  until then "Open with" only plays when LinAmp isn't already up.
+- Linux (to do on the Linux box): install ~/.local/share/applications/linamp.desktop
+  with Exec=linamp %F and a MimeType= list, then register with xdg-mime (and
+  update-desktop-database), all under $HOME, no root. Map SUPPORTED_EXTS to MIME
+  types (audio/mpeg for mp3/mp1/mp2/mpa, audio/flac, audio/ogg, audio/x-wav,
+  audio/mp4 for m4a/m4b/mp4, audio/aac, audio/x-aiff, audio/midi for mid/midi;
+  the tracker types mod/xm/s3m/it have audio/x-mod and audio/x-xm style types or
+  can be left off if the desktop has no entry for them). Wire it behind
+  cfg(target_os = "linux") in fileassoc.rs.
