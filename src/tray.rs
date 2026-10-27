@@ -352,6 +352,9 @@ mod windows_impl {
     const WS_POPUP: u32 = 0x8000_0000;
     const SW_SHOWNA: i32 = 8;
     const OFF_SCREEN: i32 = -32000;
+    // Sentinel the tray thread publishes when its window fails to create, so spawn
+    // hands back no tray and Drop never joins a thread it can't signal.
+    const HWND_FAILED: isize = -1;
 
     const NIM_ADD: u32 = 0;
     const NIM_DELETE: u32 = 2;
@@ -936,13 +939,26 @@ mod windows_impl {
                 .spawn(move || unsafe { tray_thread(egui, tx, colors, hwnd_for_thread) })
                 .ok()?;
 
-            // Wait briefly for the thread to publish its HWND so Drop can signal
-            // it. The thread stores the handle as its first act.
-            for _ in 0..200 {
-                if hwnd_slot.load(Ordering::Acquire) != 0 {
+            // Wait for the thread to publish its HWND (or the failure sentinel),
+            // its first act. Returning only once it's published means Drop always
+            // has a real handle to post WM_CLOSE to, so teardown can never join a
+            // thread it can't signal.
+            let mut hwnd = 0;
+            for _ in 0..500 {
+                hwnd = hwnd_slot.load(Ordering::Acquire);
+                if hwnd != 0 {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            if hwnd <= 0 {
+                // Window creation failed, or the thread never published in time.
+                // Join only when it signaled failure (then it is exiting); never
+                // block on a thread still starting with no way to stop it.
+                if hwnd == HWND_FAILED {
+                    let _ = thread.join();
+                }
+                return None;
             }
 
             Some(WinTray {
@@ -1015,6 +1031,9 @@ mod windows_impl {
             std::ptr::null(),
         );
         if hwnd == 0 {
+            // Signal the failure so spawn hands back no tray and Drop never joins a
+            // thread it can't stop.
+            hwnd_slot.store(HWND_FAILED, Ordering::Release);
             return;
         }
 
