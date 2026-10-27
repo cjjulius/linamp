@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use rodio::Source;
@@ -12,42 +12,47 @@ const CAP: usize = 8192;
 /// Shared, thread-safe window of recent audio samples. The rodio playback
 /// thread writes into it via [`TapSource`]; the UI thread reads snapshots.
 pub struct VizShared {
-    inner: Mutex<Ring>,
+    /// Lock-free ring of recent mono samples, each stored as f32 bits in its own
+    /// `AtomicU32`. The audio thread (single producer) writes and advances `pos`;
+    /// the UI thread (single consumer) reads a snapshot. Per-slot atomics keep it
+    /// free of data races and locks, so the audio callback never blocks. A
+    /// snapshot taken mid-write may mix a few old and new samples, which is fine
+    /// for a visualizer.
+    data: Box<[AtomicU32]>,
+    pos: AtomicUsize,
     sample_rate: AtomicU32,
-}
-
-struct Ring {
-    data: Vec<f32>,
-    pos: usize,
 }
 
 impl VizShared {
     pub fn new() -> Arc<Self> {
+        let data = (0..CAP)
+            .map(|_| AtomicU32::new(0))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Arc::new(Self {
-            inner: Mutex::new(Ring {
-                data: vec![0.0; CAP],
-                pos: 0,
-            }),
+            data,
+            pos: AtomicUsize::new(0),
             sample_rate: AtomicU32::new(44_100),
         })
     }
 
     fn push_batch(&self, samples: &[f32]) {
-        if let Ok(mut r) = self.inner.lock() {
-            for &s in samples {
-                let i = r.pos;
-                r.data[i] = s;
-                r.pos = (i + 1) % CAP;
-            }
+        // One writer (the audio thread), so loading pos once and advancing it
+        // locally is safe; the Release store publishes the written samples.
+        let mut p = self.pos.load(Ordering::Relaxed);
+        for &s in samples {
+            self.data[p].store(s.to_bits(), Ordering::Relaxed);
+            p = (p + 1) % CAP;
         }
+        self.pos.store(p, Ordering::Release);
     }
 
     /// Zero the buffer (called when a new track starts).
     pub fn clear(&self) {
-        if let Ok(mut r) = self.inner.lock() {
-            r.data.iter_mut().for_each(|x| *x = 0.0);
-            r.pos = 0;
+        for slot in self.data.iter() {
+            slot.store(0, Ordering::Relaxed);
         }
+        self.pos.store(0, Ordering::Release);
     }
 
     /// Copy the most recent `n` samples into `out`, oldest-first.
@@ -55,13 +60,10 @@ impl VizShared {
         let n = n.min(CAP);
         out.clear();
         out.reserve(n);
-        if let Ok(r) = self.inner.lock() {
-            for k in 0..n {
-                let idx = (r.pos + CAP - n + k) % CAP;
-                out.push(r.data[idx]);
-            }
-        } else {
-            out.extend(std::iter::repeat(0.0).take(n));
+        let p = self.pos.load(Ordering::Acquire);
+        for k in 0..n {
+            let idx = (p + CAP - n + k) % CAP;
+            out.push(f32::from_bits(self.data[idx].load(Ordering::Relaxed)));
         }
     }
 
