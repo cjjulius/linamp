@@ -262,8 +262,8 @@ fn decode_loop(
         };
 
     // Sample rate / channels are taken from the first decoded packet's spec and
-    // reported to the caller before any samples flow.
-    let mut announced = false;
+    // reported to the caller before any samples flow. `sbuf` being Some doubles as
+    // "the handshake has been sent", so there is no separate flag.
     let mut sbuf: Option<SampleBuffer<f32>> = None;
 
     loop {
@@ -288,7 +288,6 @@ fn decode_loop(
             if info_tx.send(Ok((sample_rate, channels))).is_err() {
                 return; // caller gave up already
             }
-            announced = true;
             sbuf = Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
         }
         let sbuf = sbuf.as_mut().unwrap();
@@ -304,7 +303,7 @@ fn decode_loop(
 
     // Stream ended before (or without) producing audio: make sure the caller
     // isn't left waiting on the handshake.
-    if !announced {
+    if sbuf.is_none() {
         let _ = info_tx.send(Err("stream ended before any audio".into()));
     }
 }

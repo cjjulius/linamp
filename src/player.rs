@@ -199,8 +199,8 @@ impl Player {
     pub fn tick_crossfade(&mut self, dt: f32) {
         // Pre-warm hold: when fading into a CD, keep the current track at full and
         // the CD silent until its audio is flowing, so the spin-up doesn't blend
-        // against silence (#160). Release the hold once it's ready, or once the
-        // outgoing track has already ended (nothing left to hold against).
+        // against silence (#160). Release the hold once the incoming audio is ready,
+        // or once the crossfade is no longer active (`fading` cleared).
         if let Some(flag) = &self.incoming_ready {
             if self.fading.is_some() && !flag.load(Ordering::Relaxed) {
                 return; // still spinning up: hold both gains where they are
