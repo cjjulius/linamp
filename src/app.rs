@@ -695,7 +695,7 @@ fn crossfade_due(
 impl LinAmpApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&cc.egui_ctx);
-        let player = Player::new().expect("failed to open audio output device");
+        let player = Player::new();
         let viz = player.viz();
         let library = Library::open().ok();
         let fft = FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE);
@@ -851,6 +851,13 @@ impl LinAmpApp {
             last_open_check: Instant::now(),
             status: "Ready. Press L to open files.".to_string(),
         };
+
+        // A deviceless launch (no audio output device) still runs; say why playback
+        // does nothing until one is connected. poll_device reacquires one later.
+        if !app.player.has_device() {
+            app.status =
+                "No audio output device found; playback is off until one is connected.".into();
+        }
 
         // Restore the last session's playlist, volume and window layout. This
         // runs whether or not files were passed on the command line, so "Open
