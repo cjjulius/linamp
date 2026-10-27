@@ -1190,7 +1190,11 @@ impl super::LinAmpApp {
         }
 
         // Gather the target tracks for Play/Enqueue (selection, else all shown).
-        let targets: Vec<crate::playlist::Track> = if self.lib_sel_tracks.is_empty() {
+        // Built only when actually acting, so merely having the library open does
+        // not clone the whole result set (up to a couple thousand tracks) a frame.
+        let targets: Vec<crate::playlist::Track> = if !(do_play || do_enqueue) {
+            Vec::new()
+        } else if self.lib_sel_tracks.is_empty() {
             self.lib_results.clone()
         } else {
             self.lib_sel_tracks

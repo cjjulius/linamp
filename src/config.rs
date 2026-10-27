@@ -170,10 +170,24 @@ impl Session {
     /// hand-listed set of fields) means the dirty check can never drift from what
     /// `save` actually writes, the root cause of volume not persisting (#105).
     pub fn sig(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        serde_json::to_string(self).unwrap_or_default().hash(&mut h);
-        h.finish()
+        use std::hash::Hasher;
+        // Hash the serialized form so the dirty check can never drift from what
+        // `save` writes (the #105 fix), but stream the bytes into the hasher rather
+        // than allocating a whole JSON string first (the playlist can be thousands
+        // of paths, and this runs on the periodic persist check).
+        struct HashWriter(std::collections::hash_map::DefaultHasher);
+        impl std::io::Write for HashWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.write(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut w = HashWriter(std::collections::hash_map::DefaultHasher::new());
+        let _ = serde_json::to_writer(&mut w, self);
+        w.0.finish()
     }
 
     /// Whether a saved session exists, false on a truly first launch.

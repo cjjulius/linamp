@@ -1726,8 +1726,8 @@ fn draw_viz(c: &mut RgbaImage, st: &MainState, x: i32, y: i32, w: i32, h: i32) {
                 }
             }
         }
-        Some(VizFrame::Scope(samples)) => {
-            let n = samples.len().max(2);
+        Some(VizFrame::Scope(samples)) if samples.len() >= 2 => {
+            let n = samples.len();
             let mid = y + h / 2;
             let amp = (h as f32 / 2.0 - 1.0).max(1.0);
             let yat = |s: f32| mid - (s.clamp(-1.0, 1.0) * amp) as i32;
@@ -1740,7 +1740,9 @@ fn draw_viz(c: &mut RgbaImage, st: &MainState, x: i32, y: i32, w: i32, h: i32) {
                 prev = cur;
             }
         }
-        None => {}
+        // A 0 or 1 sample scope frame (startup, silence, a buffer gap) has nothing
+        // to plot; draw nothing instead of indexing out of bounds.
+        Some(VizFrame::Scope(_)) | None => {}
     }
 }
 
