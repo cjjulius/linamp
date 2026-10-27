@@ -431,6 +431,40 @@ struct PlaylistViewState {
     menu_press: Option<classic::PlRegion>,
 }
 
+/// Media Library 3-pane browser, search, sort, selection and background-scan
+/// state (C1). The library database itself is `LinAmpApp::library`.
+struct LibraryViewState {
+    query: String,
+    /// When set, a search is pending: run it once the clock passes this instant,
+    /// so fast typing coalesces into one query instead of a LIKE scan per
+    /// keystroke (#96).
+    search_at: Option<std::time::Instant>,
+    results: Vec<crate::playlist::Track>,
+    /// Star rating (0-5) for each row in `results`, parallel-indexed. Only
+    /// populated for the Top Rated view, where the list shows the stars.
+    ratings: Vec<i64>,
+    /// Cached (path, rating) for the selected row, so the bottom bar's star
+    /// display doesn't query SQLite every frame.
+    rating_cache: Option<(PathBuf, i64)>,
+    /// User-resizable track-table column fractions [artist, title]; the third
+    /// column (album/rating) takes the remainder.
+    col_fr: [f32; 2],
+    /// Active track-table sort: (column 0=artist 1=title 2=album/rating 3=time,
+    /// ascending). None = the view's natural order.
+    sort: Option<(u8, bool)>,
+    nav: crate::library::LibView,
+    artists: Vec<(String, i64)>,
+    albums: Vec<(String, i64)>,
+    sel_artists: Vec<String>,
+    sel_albums: Vec<String>,
+    sel_tracks: std::collections::BTreeSet<usize>,
+    /// Active background scan receiver + its latest progress text.
+    scan: Option<std::sync::mpsc::Receiver<crate::library::ScanMsg>>,
+    scan_text: String,
+    /// Whether the Library window's own menu is open.
+    menu_open: bool,
+}
+
 pub struct LinAmpApp {
     player: Player,
     playlist: Playlist,
@@ -451,39 +485,13 @@ pub struct LinAmpApp {
     view: View,
     pl_search: String,
     sort_key: SortKey,
-    lib_query: String,
-    /// When set, a search is pending: run it once the clock passes this instant,
-    /// so fast typing coalesces into one query instead of a full-table LIKE scan
-    /// per keystroke (#96).
-    lib_search_at: Option<std::time::Instant>,
-    lib_results: Vec<crate::playlist::Track>,
-    /// Star rating (0–5) for each row in `lib_results`, parallel-indexed. Only
-    /// populated for the Top Rated view, where the list shows the stars.
-    lib_ratings: Vec<i64>,
-    /// Cached (path, rating) for the selected library row, so the bottom bar's
-    /// star display doesn't query SQLite every frame. Invalidated when the
-    /// selection path changes or the user re-rates.
-    lib_rating_cache: Option<(PathBuf, i64)>,
-    /// User-resizable track-table column fractions of the flexible width:
-    /// [artist, title]; the third column (album/rating) takes the remainder.
-    lib_col_fr: [f32; 2],
-    /// Active track-table sort: (column 0=artist 1=title 2=album/rating 3=time,
-    /// ascending). None = the view's natural order. Reset when the view changes.
-    lib_sort: Option<(u8, bool)>,
-    // Media Library window (dockable, non-shading) + 3-pane browser state.
+    /// Media Library 3-pane browser, search, sort, selection and scan state.
+    lib: LibraryViewState,
+    // Media Library window (dockable, non-shading) geometry.
     lib_pos: egui::Pos2,
     lib_pos_init: bool,
     /// Grab offset (points) while the custom title bar is being dragged.
     lib_drag: Option<egui::Vec2>,
-    lib_nav: crate::library::LibView,
-    lib_artists: Vec<(String, i64)>,
-    lib_albums: Vec<(String, i64)>,
-    lib_sel_artists: Vec<String>,
-    lib_sel_albums: Vec<String>,
-    lib_sel_tracks: std::collections::BTreeSet<usize>,
-    /// Active background scan receiver + its latest progress text.
-    lib_scan: Option<std::sync::mpsc::Receiver<crate::library::ScanMsg>>,
-    lib_scan_text: String,
 
     // visualization
     viz: Arc<VizShared>,
@@ -569,13 +577,6 @@ pub struct LinAmpApp {
     foc_eq: bool,
     foc_pl: bool,
     foc_lib: bool,
-    /// Whether a Media Library context menu is open. Tracked by us because the
-    /// library is its own OS window and egui's menu never sees clicks in the
-    /// other windows. Set on a library right-click, cleared when a classic window
-    /// is *primary*-pressed (mirroring the classic popups' click-away) or when a
-    /// classic popup opens, never on a secondary click, which is the library's
-    /// own open gesture.
-    lib_menu_open: bool,
     /// One-shot: a classic window was primary-pressed (or a classic popup opened)
     /// this frame, so an open library menu should dismiss. Consumed in `ui_library`.
     classic_clicked: bool,
@@ -755,27 +756,30 @@ impl LinAmpApp {
             view: View::Playlist,
             pl_search: String::new(),
             sort_key: SortKey::Custom,
-            lib_query: String::new(),
-            lib_search_at: None,
-            lib_results: Vec::new(),
-            lib_ratings: Vec::new(),
-            lib_rating_cache: None,
-            lib_col_fr: [0.28, 0.42],
-            lib_sort: None,
+            lib: LibraryViewState {
+                query: String::new(),
+                search_at: None,
+                results: Vec::new(),
+                ratings: Vec::new(),
+                rating_cache: None,
+                col_fr: [0.28, 0.42],
+                sort: None,
+                nav: crate::library::LibView::Audio,
+                artists: Vec::new(),
+                albums: Vec::new(),
+                sel_artists: Vec::new(),
+                sel_albums: Vec::new(),
+                sel_tracks: std::collections::BTreeSet::new(),
+                scan: None,
+                scan_text: String::new(),
+                menu_open: false,
+            },
             lib_pos: egui::Pos2::ZERO,
             lib_pos_init: false,
             lib_drag: None,
             lib_tex: None,
             lib_tex_sig: None,
             shaped_any: false,
-            lib_nav: crate::library::LibView::Audio,
-            lib_artists: Vec::new(),
-            lib_albums: Vec::new(),
-            lib_sel_artists: Vec::new(),
-            lib_sel_albums: Vec::new(),
-            lib_sel_tracks: std::collections::BTreeSet::new(),
-            lib_scan: None,
-            lib_scan_text: String::new(),
             viz,
             viz_mode: VizMode::Spectrum,
             viz_bars: vec![0.0; VIZ_BANDS],
@@ -839,7 +843,6 @@ impl LinAmpApp {
             foc_eq: false,
             foc_pl: false,
             foc_lib: false,
-            lib_menu_open: false,
             classic_clicked: false,
             session_sig: None,
             quit_countdown: None,
@@ -930,7 +933,7 @@ impl LinAmpApp {
             app.pl_shade = session.pl_shade;
             app.lib_visible = session.lib_visible;
             if let Some(fr) = session.lib_col_fr {
-                app.lib_col_fr = fr;
+                app.lib.col_fr = fr;
             }
             // Restore the saved window layout (absolute top-lefts). When present
             // it replaces the default dock arrangement; frame 1 clamps it on-
@@ -1777,7 +1780,7 @@ impl LinAmpApp {
             || self.quit_countdown.is_some()
             // Keep repainting while a background scan runs so its progress and the
             // final refresh show up without waiting on the next input.
-            || self.lib_scan.is_some()
+            || self.lib.scan.is_some()
             || (self.player.state() == PlayState::Stopped
                 && self.viz_mode == VizMode::Spectrum
                 // Bars *and* peak markers, the peaks fall slower, so without
@@ -1944,7 +1947,7 @@ impl LinAmpApp {
     /// Rebuild the Media Library Bookmarks list after the bookmark store changes,
     /// so an open library on that view reflects the add/remove/clear immediately.
     fn refresh_bookmarks_view_if_shown(&mut self) {
-        if self.lib_nav == crate::library::LibView::Bookmarks {
+        if self.lib.nav == crate::library::LibView::Bookmarks {
             self.refresh_library();
         }
     }
@@ -1973,7 +1976,7 @@ impl LinAmpApp {
             eq_shade: self.eq_shade,
             pl_shade: self.pl_shade,
             lib_visible: self.lib_visible,
-            lib_col_fr: Some(self.lib_col_fr),
+            lib_col_fr: Some(self.lib.col_fr),
             // Remember the window layout once it's been established on frame 1.
             main_pos: self.positions_init.then_some((self.win_pos[0].x, self.win_pos[0].y)),
             eq_pos: self.positions_init.then_some((self.win_pos[1].x, self.win_pos[1].y)),
