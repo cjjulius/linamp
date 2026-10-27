@@ -232,4 +232,77 @@ mod tests {
         assert_eq!(bars.len(), 10);
         assert!(bars.iter().all(|b| *b <= 0.01));
     }
+
+    #[test]
+    fn snapshot_is_oldest_first() {
+        let v = VizShared::new();
+        v.push_batch(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let mut out = Vec::new();
+        v.snapshot(&mut out, 3);
+        // The three most recent samples, oldest-first.
+        assert_eq!(out, vec![3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn snapshot_handles_ring_wraparound() {
+        let v = VizShared::new();
+        // Push more than the ring holds so the write cursor wraps past 0.
+        let data: Vec<f32> = (0..(CAP as i32 + 3)).map(|i| i as f32).collect();
+        v.push_batch(&data);
+        let mut out = Vec::new();
+        v.snapshot(&mut out, 3);
+        assert_eq!(out, vec![CAP as f32, (CAP + 1) as f32, (CAP + 2) as f32]);
+    }
+
+    #[test]
+    fn clear_zeroes_the_ring() {
+        let v = VizShared::new();
+        v.push_batch(&[1.0, 2.0, 3.0]);
+        v.clear();
+        let mut out = Vec::new();
+        v.snapshot(&mut out, 3);
+        assert_eq!(out, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn bars_on_short_input_are_zero() {
+        use rustfft::FftPlanner;
+        let fft = FftPlanner::<f32>::new().plan_fft_forward(1024);
+        // Fewer samples than the FFT size returns a zeroed band set, no panic.
+        let bars = compute_bars(&vec![0.0f32; 100], &*fft, 1024, 8, 44100);
+        assert_eq!(bars, vec![0.0; 8]);
+    }
+
+    #[test]
+    fn a_sine_lands_in_its_own_band() {
+        use rustfft::FftPlanner;
+        let (fft_size, bands, sr, freq) = (1024usize, 16usize, 44_100u32, 1000.0f32);
+        let samples: Vec<f32> = (0..fft_size)
+            .map(|i| (2.0 * PI * freq * i as f32 / sr as f32).sin())
+            .collect();
+        let fft = FftPlanner::<f32>::new().plan_fft_forward(fft_size);
+        let bars = compute_bars(&samples, &*fft, fft_size, bands, sr);
+
+        // The band that the log-spacing assigns to `freq`.
+        let nyquist = sr as f32 / 2.0;
+        let fmin = 40.0f32;
+        let fmax = nyquist.min(16_000.0).max(fmin + 1.0);
+        let expected = (0..bands)
+            .find(|&b| {
+                let f0 = fmin * (fmax / fmin).powf(b as f32 / bands as f32);
+                let f1 = fmin * (fmax / fmin).powf((b + 1) as f32 / bands as f32);
+                freq >= f0 && freq < f1
+            })
+            .unwrap();
+        let argmax = (0..bands)
+            .max_by(|&a, &b| bars[a].partial_cmp(&bars[b]).unwrap())
+            .unwrap();
+        // The peak lands in the expected band (allow one band for spectral leakage).
+        assert!(
+            (argmax as i32 - expected as i32).abs() <= 1,
+            "argmax={argmax} expected={expected} bars={bars:?}"
+        );
+        assert!(bars[expected] > 0.3, "bars={bars:?}");
+        assert!(bars[0] + 0.2 < bars[expected], "low band not below the peak: bars={bars:?}");
+    }
 }

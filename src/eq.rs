@@ -351,4 +351,107 @@ mod tests {
         assert_eq!(p.preamp_db, 6.0);
         assert_eq!(p.bands[0], 1.0);
     }
+
+    /// A tiny in-test rodio `Source` over a fixed sample vector. `try_seek`
+    /// rewinds to the start so a test can replay the same input after a seek.
+    struct Buf {
+        data: Vec<f32>,
+        idx: usize,
+        ch: u16,
+    }
+    impl Iterator for Buf {
+        type Item = f32;
+        fn next(&mut self) -> Option<f32> {
+            let v = self.data.get(self.idx).copied();
+            if v.is_some() {
+                self.idx += 1;
+            }
+            v
+        }
+    }
+    impl Source for Buf {
+        fn current_frame_len(&self) -> Option<usize> {
+            None
+        }
+        fn channels(&self) -> u16 {
+            self.ch
+        }
+        fn sample_rate(&self) -> u32 {
+            44_100
+        }
+        fn total_duration(&self) -> Option<Duration> {
+            None
+        }
+        fn try_seek(&mut self, _: Duration) -> Result<(), rodio::source::SeekError> {
+            self.idx = 0;
+            Ok(())
+        }
+    }
+    fn buf(data: Vec<f32>, ch: u16) -> Buf {
+        Buf { data, idx: 0, ch }
+    }
+
+    #[test]
+    fn disabled_eq_passes_through() {
+        let sh = EqShared::new(); // disabled by default
+        let mut e = eq(buf(vec![0.5, -0.3, 0.2], 1), sh);
+        assert_eq!(e.next(), Some(0.5));
+        assert_eq!(e.next(), Some(-0.3));
+        assert_eq!(e.next(), Some(0.2));
+    }
+
+    #[test]
+    fn enabled_flat_eq_is_identity() {
+        let sh = EqShared::new();
+        sh.set(true, 0.0, [0.0; 10]); // flat bands + 0 dB preamp = transparent
+        let xs = [0.5, -0.3, 0.2, 0.1];
+        let mut e = eq(buf(xs.to_vec(), 1), sh);
+        for &x in &xs {
+            assert!((e.next().unwrap() - x).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn version_bump_reloads_mid_stream() {
+        let sh = EqShared::new();
+        let mut e = eq(buf(vec![0.1, 0.1, 0.1], 1), sh.clone());
+        assert!((e.next().unwrap() - 0.1).abs() < 1e-6); // disabled: passthrough
+        sh.set(true, 20.0, [0.0; 10]); // +20 dB preamp (10x), flat bands
+        let y = e.next().unwrap();
+        assert!((y - 1.0).abs() < 1e-3, "y={y}"); // 0.1 * 10 through identity
+    }
+
+    #[test]
+    fn seek_clears_filter_memory() {
+        let sh = EqShared::new();
+        let mut bands = [0.0; 10];
+        bands[0] = 12.0; // a boosting band builds up filter state
+        sh.set(true, 0.0, bands);
+        let xs = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // an impulse
+        let mut e = eq(buf(xs.clone(), 1), sh);
+        let a: Vec<f32> = (0..xs.len()).map(|_| e.next().unwrap()).collect();
+        e.try_seek(Duration::ZERO).unwrap(); // clears filter memory and rewinds the buf
+        let b: Vec<f32> = (0..xs.len()).map(|_| e.next().unwrap()).collect();
+        // Memory cleared, so the replayed impulse yields an identical response.
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn per_channel_state_is_independent() {
+        let sh = EqShared::new();
+        let mut bands = [0.0; 10];
+        bands[0] = 12.0;
+        sh.set(true, 0.0, bands);
+        // Stereo L,R,...: the left gets an impulse, the right is silent throughout.
+        let xs = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let mut e = eq(buf(xs, 2), sh);
+        let out: Vec<f32> = (0..6).map(|_| e.next().unwrap()).collect();
+        // Right channel (odd indices) stays silent: its filter state is untouched by the left.
+        assert!(
+            out[1].abs() < 1e-6 && out[3].abs() < 1e-6 && out[5].abs() < 1e-6,
+            "out={out:?}"
+        );
+        // Left channel responds to the impulse.
+        assert!(out[0].abs() > 0.0);
+    }
 }
