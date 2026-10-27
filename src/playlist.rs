@@ -309,23 +309,8 @@ impl Playlist {
     /// selected. The order is not reproducible (seeded from the clock).
     pub fn randomize(&mut self) {
         let cur = self.current_path();
-        // xorshift64, a playlist shuffle needs no cryptographic quality.
-        let mut s = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0x9E37_79B9_7F4A_7C15)
-            | 1;
-        let mut next = || {
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            s
-        };
-        // Fisher-Yates.
-        for i in (1..self.tracks.len()).rev() {
-            let j = (next() % (i as u64 + 1)) as usize;
-            self.tracks.swap(i, j);
-        }
+        let tracks = &mut self.tracks;
+        fisher_yates(tracks.len(), |i, j| tracks.swap(i, j));
         self.reselect(cur);
     }
 
@@ -421,21 +406,7 @@ impl Playlist {
     fn refill_shuffle(&mut self) {
         let len = self.tracks.len();
         let mut order: Vec<usize> = (0..len).collect();
-        let mut s = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0x9E37_79B9_7F4A_7C15)
-            | 1;
-        let mut next = || {
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            s
-        };
-        for i in (1..len).rev() {
-            let j = (next() % (i as u64 + 1)) as usize;
-            order.swap(i, j);
-        }
+        fisher_yates(len, |i, j| order.swap(i, j));
         // Avoid immediately replaying the current track at the start of a new cycle.
         if len > 1 {
             if let Some(c) = self.current {
@@ -459,6 +430,28 @@ impl Playlist {
             }
         }
         self.tracks.len() - before
+    }
+}
+
+/// Clock-seeded Fisher-Yates over `0..len`, calling `swap(i, j)` for each step.
+/// Shared by the one-shot `randomize` and the shuffle-bag `refill_shuffle`; a
+/// playlist shuffle needs no cryptographic quality, so an xorshift64 seeded from
+/// the clock is fine.
+fn fisher_yates(len: usize, mut swap: impl FnMut(usize, usize)) {
+    let mut s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E37_79B9_7F4A_7C15)
+        | 1;
+    let mut next = || {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        s
+    };
+    for i in (1..len).rev() {
+        let j = (next() % (i as u64 + 1)) as usize;
+        swap(i, j);
     }
 }
 

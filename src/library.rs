@@ -99,14 +99,18 @@ impl Library {
     /// Insert or update a single track keyed by its path. `date_added`,
     /// `play_count`, `last_played` and `rating` are preserved across re-scans.
     pub fn upsert(&self, t: &Track) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO tracks
+        // prepare_cached reuses the compiled statement across the thousands of
+        // upserts a library scan runs, rather than re-parsing the SQL each call.
+        self.conn
+            .prepare_cached(
+                "INSERT INTO tracks
                 (path,title,artist,album,duration_secs,sample_rate,bitrate,channels,date_added)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
              ON CONFLICT(path) DO UPDATE SET
                 title=?2, artist=?3, album=?4, duration_secs=?5,
                 sample_rate=?6, bitrate=?7, channels=?8",
-            params![
+            )?
+            .execute(params![
                 t.path.to_string_lossy(),
                 t.title,
                 t.artist,
