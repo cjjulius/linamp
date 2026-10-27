@@ -483,4 +483,32 @@ mod tests {
         assert_eq!(q.pl_pos, None);
         assert_eq!(q.lib_pos, Some((375.0, 200.0)));
     }
+
+    #[test]
+    fn sig_detects_a_track_list_change() {
+        // A playlist edit is the most common session change, so sig() must notice
+        // it or a save would be skipped and the edit lost on exit.
+        let base = Session::default();
+        let mut with_track = base.clone();
+        with_track.tracks.push("x.mp3".into());
+        assert_ne!(with_track.sig(), base.sig());
+    }
+
+    #[test]
+    fn legacy_prefs_default_new_fields() {
+        // A prefs file predating these fields loads them at their defaults.
+        let p: Prefs = serde_json::from_str("{}").unwrap();
+        assert!(!p.crossfade);
+        assert!(!p.tray_enabled);
+        assert_eq!(p.open_with, OpenWith::Enqueue);
+    }
+
+    #[test]
+    fn malformed_prefs_json_falls_back_to_default() {
+        // load() does serde_json::from_str(...).ok().unwrap_or_default(); a
+        // corrupt (not merely empty) file must yield defaults, not an error.
+        let parsed: Prefs = serde_json::from_str("{ this is not valid json").unwrap_or_default();
+        assert!(!parsed.double_size);
+        assert_eq!(parsed.open_with, OpenWith::Enqueue);
+    }
 }

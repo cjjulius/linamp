@@ -666,6 +666,69 @@ mod tests {
     }
 
     #[test]
+    fn repair_mojibake_is_idempotent() {
+        for correct in ["Bằng Kiều", "Những Ngày Đẹp Trời", "Café del Mar"] {
+            let garbled: String = correct.bytes().map(|b| b as char).collect();
+            let once = repair_mojibake(&garbled);
+            // Repairing an already-repaired string must leave it unchanged.
+            assert_eq!(repair_mojibake(&once), once, "not idempotent for {correct:?}");
+        }
+    }
+
+    #[test]
+    fn pls_save_round_trips_paths() {
+        let pls =
+            std::env::temp_dir().join(format!("linamp_pls_save_{}.pls", std::process::id()));
+        let tracks = [
+            Track::new(PathBuf::from("/music/a.mp3")),
+            Track::new(PathBuf::from("/music/b.flac")),
+        ];
+        save_playlist_file(&pls, &tracks).unwrap();
+        let text = std::fs::read_to_string(&pls).unwrap();
+        assert!(text.starts_with("[playlist]"));
+        assert!(text.contains("File1=") && text.contains("File2="));
+        assert!(text.contains("NumberOfEntries=2"));
+        assert!(text.contains("Version=2"));
+        // The written file parses back to the same track file names.
+        let got = parse_playlist_file(&pls);
+        let got_names: Vec<String> = got
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        assert!(got_names.iter().any(|n| n == "a.mp3"), "got {got_names:?}");
+        assert!(got_names.iter().any(|n| n == "b.flac"), "got {got_names:?}");
+        let _ = std::fs::remove_file(&pls);
+    }
+
+    #[test]
+    fn shuffle_steps_backward_to_the_previous_entry() {
+        let mut pl = pl_of(&["/a.mp3", "/b.mp3", "/c.mp3", "/d.mp3"], Some(0));
+        let first = pl.next_index(true, false).unwrap();
+        let _second = pl.next_index(true, false).unwrap();
+        // Stepping back through the shuffle bag returns the previously-played entry.
+        assert_eq!(pl.prev_index(true, false), Some(first));
+    }
+
+    #[test]
+    fn shuffle_bag_rebuilds_when_track_count_changes() {
+        let mut pl = pl_of(&["/a.mp3", "/b.mp3", "/c.mp3"], Some(0));
+        let _ = pl.next_index(true, false); // builds a three-entry bag
+        assert_eq!(pl.shuffle_order.len(), 3);
+        pl.add_file(PathBuf::from("/d.mp3")); // now four tracks
+        let idx = pl.next_index(true, false).unwrap(); // the stale bag must be rebuilt
+        assert_eq!(pl.shuffle_order.len(), 4);
+        assert!(idx < 4);
+    }
+
+    #[test]
+    fn move_tail_to_rejects_degenerate_counts() {
+        let mut pl = pl_of(&["/a.mp3", "/b.mp3"], None);
+        assert_eq!(pl.move_tail_to(0, 0), None); // nothing was appended
+        assert_eq!(pl.move_tail_to(99, 0), None); // count exceeds the length
+        assert_eq!(pl.len(), 2); // the list is untouched either way
+    }
+
+    #[test]
     fn lazy_track_uses_filename() {
         let t = Track::new(PathBuf::from("/music/Song.mp3"));
         assert!(!t.loaded);
