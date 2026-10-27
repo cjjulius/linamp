@@ -22,7 +22,15 @@ Kept current as code-review fixes land.
 (Updated as fixes land. Each Windows fix below compiles on the dev machine but its
 runtime effect needs the noted hardware.)
 
-- (none yet)
+- [ ] **Confirm the `intern` CString guard compiles on Linux** (C8,
+  `src/app/platform_win.rs`, in the X11 `x11util` module): the guard was added on
+  the Windows machine, where that module isn't compiled. It is a trivial
+  `CString::new(name)` let-else, but build it on Linux to be sure.
+- [ ] **CD short-read fix (P2), not yet done** (`src/cdda.rs`): the Windows
+  `read_sectors` advances `next_lba` by the full requested count even on a short
+  `DeviceIoControl` read, silently skipping sectors. The fix (loop to fill the
+  full count, or advance by sectors actually returned) needs a CD drive to verify
+  end-to-end, so it is deferred to the machine with one.
 
 ## Notes
 

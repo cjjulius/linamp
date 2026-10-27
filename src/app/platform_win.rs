@@ -166,7 +166,11 @@ mod x11util {
     }
 
     unsafe fn intern(xlib: &xlib::Xlib, d: *mut xlib::Display, name: &str) -> xlib::Atom {
-        let c = CString::new(name).unwrap();
+        // A name with an interior NUL can't be a C string; return the None atom (0)
+        // rather than panicking, in case a future caller passes a dynamic name.
+        let Ok(c) = CString::new(name) else {
+            return 0;
+        };
         (xlib.XInternAtom)(d, c.as_ptr(), 0)
     }
 
