@@ -4,6 +4,20 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Write `contents` to `path` atomically: write a sibling temp file then rename
+/// over the target, so a crash mid-write can't leave a half-written file that then
+/// fails to parse and loses the whole session/prefs. Rename replaces the
+/// destination atomically on both the Windows and Linux targets.
+fn write_atomic(path: &std::path::Path, contents: &[u8]) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, contents).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
@@ -108,12 +122,8 @@ impl Prefs {
     }
 
     pub fn save(&self) {
-        let p = Self::path();
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d).ok();
-        }
         if let Ok(s) = serde_json::to_string_pretty(self) {
-            std::fs::write(p, s).ok();
+            write_atomic(&Self::path(), s.as_bytes());
         }
     }
 }
@@ -203,12 +213,8 @@ impl Session {
     }
 
     pub fn save(&self) {
-        let p = Self::path();
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d).ok();
-        }
         if let Ok(s) = serde_json::to_string_pretty(self) {
-            std::fs::write(p, s).ok();
+            write_atomic(&Self::path(), s.as_bytes());
         }
     }
 }
@@ -243,12 +249,8 @@ impl Bookmarks {
     }
 
     pub fn save(&self) {
-        let p = Self::path();
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d).ok();
-        }
         if let Ok(s) = serde_json::to_string_pretty(self) {
-            std::fs::write(p, s).ok();
+            write_atomic(&Self::path(), s.as_bytes());
         }
     }
 
@@ -300,12 +302,8 @@ impl EqPresets {
     }
 
     pub fn save_to_disk(&self) {
-        let p = Self::path();
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d).ok();
-        }
         if let Ok(s) = serde_json::to_string_pretty(self) {
-            std::fs::write(p, s).ok();
+            write_atomic(&Self::path(), s.as_bytes());
         }
     }
 
