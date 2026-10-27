@@ -269,10 +269,10 @@ mod linux_impl {
         }
     }
 
-    /// A running StatusNotifierItem. The handle keeps the background service
-    /// alive; dropping it (at app exit) lets the service and icon go away.
+    /// A running StatusNotifierItem. Dropping it shuts the service down and removes
+    /// the icon (see `Drop`), so leaving tray mode or exiting clears the tray.
     pub(super) struct LinuxTray {
-        _handle: Handle<LinampTray>,
+        handle: Handle<LinampTray>,
     }
 
     impl LinuxTray {
@@ -284,7 +284,16 @@ mod linux_impl {
             };
             // A failure here means no StatusNotifierItem host is running (e.g. a
             // bare window manager with no tray). Run on without a tray.
-            tray.spawn().ok().map(|handle| LinuxTray { _handle: handle })
+            tray.spawn().ok().map(|handle| LinuxTray { handle })
+        }
+    }
+
+    impl Drop for LinuxTray {
+        fn drop(&mut self) {
+            // ksni's Handle does not stop the service when dropped, so the icon would
+            // linger after leaving tray mode (or exiting). Shut it down explicitly and
+            // wait, so the icon is gone before a replacement tray registers.
+            self.handle.shutdown().wait();
         }
     }
 
