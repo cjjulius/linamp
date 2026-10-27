@@ -247,7 +247,11 @@ impl super::LinAmpApp {
                     };
                     cs.compose_pl_shade(self.app_focused, &text, &time, self.pl_colors().normal)
                 } else {
-                    let rows = self.build_pl_rows();
+                    // Build only the visible window; compose skips `first` rows, so
+                    // the slice starts at pl_first and we pass first: 0 below.
+                    let vis = classic::pl_visible_rows(self.pl_px_h as u32);
+                    let end = (self.pl_first + vis).min(self.playlist.len());
+                    let rows = self.build_pl_rows(self.pl_first, end);
                     let colors = self.pl_colors();
                     let elapsed_secs = match self.player.state() {
                         PlayState::Stopped => 0.0,
@@ -271,7 +275,7 @@ impl super::LinAmpApp {
                         focused: self.app_focused,
                         colors,
                         rows: &rows,
-                        first: self.pl_first,
+                        first: 0,
                         pressed: self.pl_pressed_button(),
                         elapsed_secs,
                         cur_duration,
