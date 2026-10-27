@@ -375,6 +375,22 @@ impl VizMode {
     }
 }
 
+/// Equalizer state, grouped so an EQ change touches one field of `LinAmpApp`
+/// instead of several scattered ones (the first step of decomposing the app
+/// state, see docs/CODE-REVIEW.md C1).
+struct EqState {
+    enabled: bool,
+    preamp_db: f32,
+    bands: [f32; 10],
+    auto: bool,
+    /// The EQ slider / region currently held (classic view).
+    active: Option<classic::EqRegion>,
+    /// User-named EQ presets, persisted to eq_presets.json.
+    presets: crate::config::EqPresets,
+    /// When `Some`, the "Save EQ preset as…" name dialog is open with this buffer.
+    save_name: Option<String>,
+}
+
 pub struct LinAmpApp {
     player: Player,
     playlist: Playlist,
@@ -389,9 +405,7 @@ pub struct LinAmpApp {
     seek_preview: f32,
 
     // equalizer
-    eq_enabled: bool,
-    eq_preamp_db: f32,
-    eq_bands: [f32; 10],
+    eq: EqState,
 
     // playlist / library views
     view: View,
@@ -472,7 +486,6 @@ pub struct LinAmpApp {
     /// and re-uploading an unchanged frame.
     tex_fp: [u64; 3],
     active_region: Option<Btn>,
-    eq_active: Option<classic::EqRegion>,
     pressed_btn: Option<Btn>,
     classic_seek_preview: Option<f32>,
     balance: f32,
@@ -487,7 +500,6 @@ pub struct LinAmpApp {
     mode_init: bool,
     eq_visible: bool,
     pl_visible: bool,
-    eq_auto: bool,
     pl_first: usize,
     pl_selection: HashSet<usize>,
     /// Fixed end for shift-range selection; set by a plain/ctrl click or nav.
@@ -505,10 +517,6 @@ pub struct LinAmpApp {
     pending_popup: Option<(Popup, ClWin, egui::Pos2)>,
     /// Alt+I bookmarks, persisted to bookmarks.json.
     bookmarks: crate::config::Bookmarks,
-    /// User-named EQ presets, persisted to eq_presets.json.
-    eq_presets: crate::config::EqPresets,
-    /// When `Some`, the "Save EQ preset as…" name dialog is open with this buffer.
-    eq_save_name: Option<String>,
     popup_fresh: bool,
     /// Whether the popup window's rounded region has been applied for the current
     /// popup, so we apply it once (retrying only until it succeeds) instead of
@@ -718,9 +726,15 @@ impl LinAmpApp {
             repeat_one: false,
             seeking: false,
             seek_preview: 0.0,
-            eq_enabled: false,
-            eq_preamp_db: 0.0,
-            eq_bands: [0.0; 10],
+            eq: EqState {
+                enabled: false,
+                preamp_db: 0.0,
+                bands: [0.0; 10],
+                auto: false,
+                active: None,
+                presets: crate::config::EqPresets::load(),
+                save_name: None,
+            },
             view: View::Playlist,
             pl_search: String::new(),
             sort_key: SortKey::Custom,
@@ -766,7 +780,6 @@ impl LinAmpApp {
             pl_tex: None,
             tex_fp: [0; 3],
             active_region: None,
-            eq_active: None,
             pressed_btn: None,
             classic_seek_preview: None,
             balance: 0.0,
@@ -777,7 +790,6 @@ impl LinAmpApp {
             mode_init: true,
             eq_visible: false,
             pl_visible: false,
-            eq_auto: false,
             pl_first: 0,
             pl_selection: HashSet::new(),
             pl_anchor: None,
@@ -787,8 +799,6 @@ impl LinAmpApp {
             popup: None,
             pending_popup: None,
             bookmarks: crate::config::Bookmarks::load(),
-            eq_presets: crate::config::EqPresets::load(),
-            eq_save_name: None,
             popup_fresh: false,
             popup_rounded: false,
             popup_rounded_h: None,
@@ -949,11 +959,11 @@ impl LinAmpApp {
         // Restore equalizer state from the last session and push it to the DSP.
         let eq_session = Session::load();
         if !eq_session.eq_bands.is_empty() {
-            app.eq_enabled = eq_session.eq_enabled;
-            app.eq_auto = eq_session.eq_auto;
-            app.eq_preamp_db = eq_session.eq_preamp;
+            app.eq.enabled = eq_session.eq_enabled;
+            app.eq.auto = eq_session.eq_auto;
+            app.eq.preamp_db = eq_session.eq_preamp;
             for (i, b) in eq_session.eq_bands.iter().take(10).enumerate() {
-                app.eq_bands[i] = *b;
+                app.eq.bands[i] = *b;
             }
             app.apply_eq();
         }
@@ -1932,10 +1942,10 @@ impl LinAmpApp {
             balance: Some(self.balance),
             pl_width: Some(self.pl_px_w),
             pl_height: Some(self.pl_px_h),
-            eq_enabled: self.eq_enabled,
-            eq_auto: self.eq_auto,
-            eq_preamp: self.eq_preamp_db,
-            eq_bands: self.eq_bands.to_vec(),
+            eq_enabled: self.eq.enabled,
+            eq_auto: self.eq.auto,
+            eq_preamp: self.eq.preamp_db,
+            eq_bands: self.eq.bands.to_vec(),
             eq_visible: self.eq_visible,
             pl_visible: self.pl_visible,
             main_shade: self.main_shade,
@@ -2051,11 +2061,11 @@ impl LinAmpApp {
     fn make_eq_state(&self) -> classic::EqState {
         classic::EqState {
             focused: self.app_focused,
-            on: self.eq_enabled,
-            auto: self.eq_auto,
-            pressed: self.eq_active,
-            preamp: (self.eq_preamp_db / 12.0).clamp(-1.0, 1.0),
-            bands: self.eq_bands.map(|d| (d / 12.0).clamp(-1.0, 1.0)),
+            on: self.eq.enabled,
+            auto: self.eq.auto,
+            pressed: self.eq.active,
+            preamp: (self.eq.preamp_db / 12.0).clamp(-1.0, 1.0),
+            bands: self.eq.bands.map(|d| (d / 12.0).clamp(-1.0, 1.0)),
         }
     }
 
@@ -2210,11 +2220,11 @@ impl LinAmpApp {
         use classic::EqRegion as R;
         match region {
             R::On => {
-                self.eq_enabled = !self.eq_enabled;
+                self.eq.enabled = !self.eq.enabled;
                 self.apply_eq();
             }
             R::Auto => {
-                self.eq_auto = !self.eq_auto;
+                self.eq.auto = !self.eq.auto;
                 self.apply_eq_auto_gain();
                 self.apply_eq();
             }
@@ -2234,10 +2244,10 @@ impl LinAmpApp {
     /// Apply a built-in preset (by index into [`eq::PRESETS`]).
     fn apply_eq_preset(&mut self, idx: usize) {
         if let Some((_, preamp, bands)) = crate::eq::PRESETS.get(idx) {
-            self.eq_bands = *bands;
-            self.eq_preamp_db = *preamp;
-            if !self.eq_enabled {
-                self.eq_enabled = true;
+            self.eq.bands = *bands;
+            self.eq.preamp_db = *preamp;
+            if !self.eq.enabled {
+                self.eq.enabled = true;
             }
             self.apply_eq_auto_gain();
             self.apply_eq();
@@ -2247,28 +2257,28 @@ impl LinAmpApp {
     /// Apply a user-named preset from the in-app library (by index).
     fn load_named_eq_preset(&mut self, idx: usize) {
         let Some((bands, preamp, name)) = self
-            .eq_presets
+            .eq.presets
             .items
             .get(idx)
             .map(|p| (p.bands, p.preamp, p.name.clone()))
         else {
             return;
         };
-        self.eq_bands = bands;
-        self.eq_preamp_db = preamp;
-        self.eq_auto = false; // an explicit preset is a manual override
-        self.eq_enabled = true;
+        self.eq.bands = bands;
+        self.eq.preamp_db = preamp;
+        self.eq.auto = false; // an explicit preset is a manual override
+        self.eq.enabled = true;
         self.apply_eq();
         self.status = format!("Loaded EQ preset: {name}");
     }
 
     /// Delete a saved preset from the in-app library (by index).
     fn delete_named_eq_preset(&mut self, idx: usize) {
-        let Some(name) = self.eq_presets.items.get(idx).map(|p| p.name.clone()) else {
+        let Some(name) = self.eq.presets.items.get(idx).map(|p| p.name.clone()) else {
             return;
         };
-        self.eq_presets.remove(&name);
-        self.eq_presets.save_to_disk();
+        self.eq.presets.remove(&name);
+        self.eq.presets.save_to_disk();
         self.status = format!("Deleted EQ preset: {name}");
     }
 
@@ -2278,9 +2288,9 @@ impl LinAmpApp {
         if name.is_empty() {
             return;
         }
-        self.eq_presets
-            .save_preset(name.clone(), self.eq_preamp_db, self.eq_bands);
-        self.eq_presets.save_to_disk();
+        self.eq.presets
+            .save_preset(name.clone(), self.eq.preamp_db, self.eq.bands);
+        self.eq.presets.save_to_disk();
         self.status = format!("Saved EQ preset: {name}");
     }
 
@@ -2296,10 +2306,10 @@ impl LinAmpApp {
         match std::fs::read(&path).map_err(anyhow::Error::from).and_then(|b| crate::eqf::parse(&b)) {
             Ok(presets) => match presets.into_iter().next() {
                 Some(p) => {
-                    self.eq_bands = p.bands;
-                    self.eq_preamp_db = p.preamp;
-                    self.eq_auto = false; // an explicit preset is a manual override
-                    self.eq_enabled = true;
+                    self.eq.bands = p.bands;
+                    self.eq.preamp_db = p.preamp;
+                    self.eq.auto = false; // an explicit preset is a manual override
+                    self.eq.enabled = true;
                     self.apply_eq();
                     self.status = format!("Loaded EQ preset: {}", p.name);
                 }
@@ -2321,8 +2331,8 @@ impl LinAmpApp {
         };
         let preset = crate::eqf::EqfPreset {
             name: "LinAmp".to_string(),
-            bands: self.eq_bands,
-            preamp: self.eq_preamp_db,
+            bands: self.eq.bands,
+            preamp: self.eq.preamp_db,
         };
         match std::fs::write(&path, crate::eqf::write(std::slice::from_ref(&preset))) {
             Ok(()) => self.status = "Saved EQ preset".into(),
@@ -2333,8 +2343,8 @@ impl LinAmpApp {
     /// When Auto is on, set the preamp to offset the loudest boosted band so the
     /// EQ is less likely to clip.
     fn apply_eq_auto_gain(&mut self) {
-        if self.eq_auto {
-            self.eq_preamp_db = crate::eq::auto_preamp(&self.eq_bands);
+        if self.eq.auto {
+            self.eq.preamp_db = crate::eq::auto_preamp(&self.eq.bands);
         }
     }
 
@@ -2916,7 +2926,7 @@ impl LinAmpApp {
 
     /// "Save EQ preset as…": name the current EQ curve and store it in the library.
     fn ui_eq_save_name(&mut self, ctx: &egui::Context) {
-        if self.eq_save_name.is_none() {
+        if self.eq.save_name.is_none() {
             return;
         }
         let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
@@ -2933,7 +2943,7 @@ impl LinAmpApp {
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let name = {
-                    let buf = self.eq_save_name.as_mut().unwrap();
+                    let buf = self.eq.save_name.as_mut().unwrap();
                     ui.label("Preset name:");
                     let resp = ui.add(egui::TextEdit::singleline(buf).hint_text("My preset"));
                     resp.request_focus();
@@ -2964,7 +2974,7 @@ impl LinAmpApp {
             close = true;
         }
         if close {
-            self.eq_save_name = None;
+            self.eq.save_name = None;
         }
     }
 
@@ -3181,12 +3191,12 @@ impl LinAmpApp {
         match region {
             classic::EqRegion::Preamp => {
                 // Dragging the preamp is a manual override, so it turns Auto off.
-                self.eq_auto = false;
-                self.eq_preamp_db = v * 12.0;
+                self.eq.auto = false;
+                self.eq.preamp_db = v * 12.0;
                 self.apply_eq();
             }
             classic::EqRegion::Band(i) if i < 10 => {
-                self.eq_bands[i] = v * 12.0;
+                self.eq.bands[i] = v * 12.0;
                 self.apply_eq_auto_gain();
                 self.apply_eq();
             }
@@ -3198,12 +3208,12 @@ impl LinAmpApp {
     fn reset_eq_slider(&mut self, region: classic::EqRegion) {
         match region {
             classic::EqRegion::Preamp => {
-                self.eq_auto = false; // a manual override, like dragging it
-                self.eq_preamp_db = 0.0;
+                self.eq.auto = false; // a manual override, like dragging it
+                self.eq.preamp_db = 0.0;
                 self.apply_eq();
             }
             classic::EqRegion::Band(i) if i < 10 => {
-                self.eq_bands[i] = 0.0;
+                self.eq.bands[i] = 0.0;
                 self.apply_eq_auto_gain();
                 self.apply_eq();
             }
@@ -3669,7 +3679,7 @@ impl LinAmpApp {
         // all filtering (and the preamp), matching Winamp's behaviour.
         self.player
             .eq()
-            .set(self.eq_enabled, self.eq_preamp_db, self.eq_bands);
+            .set(self.eq.enabled, self.eq.preamp_db, self.eq.bands);
     }
 }
 

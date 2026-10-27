@@ -146,7 +146,7 @@ impl super::LinAmpApp {
 
         if pressed {
             self.active_region = None;
-            self.eq_active = None;
+            self.eq.active = None;
             if let Some(l) = local {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;
@@ -162,7 +162,7 @@ impl super::LinAmpApp {
                                 er @ (classic::EqRegion::ShadeVolume
                                 | classic::EqRegion::ShadeBalance),
                             ) => {
-                                self.eq_active = Some(er);
+                                self.eq.active = Some(er);
                                 self.apply_eq_shade_slider(er, nx);
                                 true
                             }
@@ -215,10 +215,10 @@ impl super::LinAmpApp {
                         }
                         ClWin::Eq => {
                             let r = self.eq_region(nx, ny);
-                            self.eq_active = r;
+                            self.eq.active = r;
                             match r {
                                 Some(classic::EqRegion::TitleBar) => {
-                                    self.eq_active = None;
+                                    self.eq.active = None;
                                     self.start_drag(ctx, win, screen_cursor);
                                 }
                                 Some(er @ (classic::EqRegion::Preamp | classic::EqRegion::Band(_))) => {
@@ -364,7 +364,7 @@ impl super::LinAmpApp {
                         self.apply_classic_slider(r, nx);
                     }
                 }
-                if let Some(er) = self.eq_active {
+                if let Some(er) = self.eq.active {
                     match er {
                         classic::EqRegion::ShadeVolume | classic::EqRegion::ShadeBalance => {
                             self.apply_eq_shade_slider(er, nx)
@@ -441,7 +441,7 @@ impl super::LinAmpApp {
                     }
                 }
                 if win == ClWin::Eq {
-                    if let Some(er) = self.eq_active {
+                    if let Some(er) = self.eq.active {
                         if self.eq_region(nx, ny) == Some(er) {
                             if er == classic::EqRegion::Presets {
                                 self.open_popup_in(Popup::EqPresets, ClWin::Eq, l);
@@ -468,7 +468,7 @@ impl super::LinAmpApp {
                 }
             }
             self.active_region = None;
-            self.eq_active = None;
+            self.eq.active = None;
             self.pl_menu_press = None;
         }
 

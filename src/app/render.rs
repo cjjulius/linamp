@@ -67,11 +67,11 @@ impl super::LinAmpApp {
                     self.player.volume().to_bits().hash(&mut h);
                     self.balance.to_bits().hash(&mut h);
                 }
-                self.eq_enabled.hash(&mut h);
-                self.eq_auto.hash(&mut h);
-                self.eq_active.hash(&mut h);
-                self.eq_preamp_db.to_bits().hash(&mut h);
-                for b in &self.eq_bands {
+                self.eq.enabled.hash(&mut h);
+                self.eq.auto.hash(&mut h);
+                self.eq.active.hash(&mut h);
+                self.eq.preamp_db.to_bits().hash(&mut h);
+                for b in &self.eq.bands {
                     b.to_bits().hash(&mut h);
                 }
             }

@@ -135,13 +135,13 @@ impl super::LinAmpApp {
             Popup::EqPresets => {
                 // Built-in presets + the saved library + up to 4 actions (Save,
                 // optional Delete, Import, Export). Capped height; the arm scrolls.
-                let actions = if self.eq_presets.items.is_empty() { 3 } else { 4 };
-                let rows = (crate::eq::PRESETS.len() + self.eq_presets.items.len()) as i32 + actions;
-                let seps = if self.eq_presets.items.is_empty() { 1 } else { 2 };
+                let actions = if self.eq.presets.items.is_empty() { 3 } else { 4 };
+                let rows = (crate::eq::PRESETS.len() + self.eq.presets.items.len()) as i32 + actions;
+                let seps = if self.eq.presets.items.is_empty() { 1 } else { 2 };
                 (182.0, popup_height(rows, seps).min(420.0))
             }
             Popup::EqDelete => {
-                let rows = self.eq_presets.items.len().clamp(1, 12) as i32;
+                let rows = self.eq.presets.items.len().clamp(1, 12) as i32;
                 (200.0, popup_height(rows, 0))
             }
             _ => popup_dims(kind),
@@ -510,7 +510,7 @@ impl super::LinAmpApp {
                             // Snapshot the saved library so clicks can borrow self
                             // mutably without aliasing the list.
                             let saved: Vec<(usize, String)> = self
-                                .eq_presets
+                                .eq.presets
                                 .items
                                 .iter()
                                 .enumerate()
@@ -534,7 +534,7 @@ impl super::LinAmpApp {
                                 }
                                 ui.separator();
                                 if item(ui, "Save current as…") {
-                                    self.eq_save_name = Some(String::new());
+                                    self.eq.save_name = Some(String::new());
                                     close = true;
                                 }
                                 if !saved.is_empty() && item(ui, "Delete a saved preset…") {
@@ -555,7 +555,7 @@ impl super::LinAmpApp {
                         }
                         Popup::EqDelete => {
                             let saved: Vec<(usize, String)> = self
-                                .eq_presets
+                                .eq.presets
                                 .items
                                 .iter()
                                 .enumerate()
