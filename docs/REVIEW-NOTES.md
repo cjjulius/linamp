@@ -877,3 +877,198 @@ code plus a working/not-working binary): visual and behavior changes.
   (note.xm, placed in qa-music). Manual check: drop a few real .mod/.xm/.s3m/.it files
   in qa-music and confirm they play and sound right through the EQ/analyzer, and that
   the track ends (auto-advances) rather than looping forever.
+
+## 2026-10-26 (#40 system-tray icon, Windows side, needs manual + Linux QA)
+
+- System-tray icon added (#40), on by default (Prefs field tray_enabled). The
+  native tray runs on its own thread and reports clicks over a channel the app
+  drains each frame (src/tray.rs). Windows uses Shell_NotifyIcon on a message-only
+  window (hand-rolled FFI, no new crate); left-click toggles all LinAmp windows
+  (hide to tray / restore), right-click opens a transport menu (Play/Pause, Stop,
+  Previous, Next, Restore LinAmp, Exit LinAmp). Hiding to tray saves which of the
+  eq/playlist/library windows were open and restores exactly those. The menu
+  command ids map to actions in a pure, unit-tested helper; a disabled tray still
+  returns a working (empty) receiver.
+- Manual check (Windows): launch LinAmp and confirm the LinAmp icon appears in the
+  notification area. Left-click it: the window (and any EQ/playlist/library windows)
+  should disappear with no taskbar button, then a second left-click should bring
+  back exactly those windows, focused. Right-click: each menu item should drive the
+  matching transport action, Restore should bring the window back, Exit should quit
+  cleanly. Confirm the icon disappears when the app exits (no stale ghost icon).
+- Linux side implemented with ksni 0.3.7 (features = ["blocking"], pure-Rust zbus,
+  no GTK or libdbus C dependency). LinAmp registers a StatusNotifierItem that ships
+  its own ARGB pixmap (from assets/linamp_logo_32.png), so the icon shows without a
+  matching icon theme. Left-click (activate) sends Toggle, the menu mirrors the
+  Windows one. The service runs on ksni's own background thread; the Handle is held
+  for the app's lifetime. This path could not be compiled here (Windows box, and
+  cross-checking fails on the C deps rusqlite/alsa), so it needs a build + run on
+  Pop!_OS. Manual check (Linux): confirm the icon appears in the tray, left-click
+  hides/restores the windows, the right-click menu drives transport, Exit quits. If
+  the desktop has no StatusNotifierItem host, spawn fails and LinAmp just runs
+  without a tray (no crash), which is the intended fallback.
+- Open question for review: minimize-to-tray is currently only the tray left-click.
+  The classic Minimize button still minimizes to the taskbar as before. Decide
+  whether the Close/Minimize buttons should hide to tray too (and whether that
+  should be a preference).
+
+## 2026-10-26 (#40 tray reworked into two window modes, needs manual + Linux QA)
+
+- The tray is now a two-mode window setting (Preferences > Display > System tray),
+  and it supersedes the "on by default" note above. Default is Normal mode.
+  - Normal mode: a taskbar button, no tray icon. Minimize iconifies to the taskbar.
+    The close (X) button and an OS close (Alt+F4 / taskbar Close) exit. Main-menu
+    Exit exits.
+  - System tray mode: a tray icon, no taskbar button. Minimize and the close (X)
+    button hide to the tray (saving/restoring exactly the windows that were open).
+    An OS close (Alt+F4) also hides. The only ways to quit are main-menu Exit and
+    the tray's Exit.
+- Applied at launch, not live: egui can only set the taskbar-button visibility at
+  window creation, so the mode is read once at startup (main.rs sets with_taskbar,
+  and the app snapshots tray_mode). Changing the pref shows "Takes effect when you
+  restart LinAmp." A genuine Exit sets force_quit so it quits even in tray mode.
+- Safety: tray_mode is only active when the tray actually started. If the tray
+  backend fails (for example a Linux desktop with no StatusNotifierItem host), the
+  app behaves as Normal so a close still exits rather than hiding to nothing.
+- Manual check (Windows): set System tray mode, restart. Confirm there is no
+  taskbar button, the X and Minimize both hide to the tray, left-click restores,
+  the tray menu's Exit and the main menu's Exit both quit, and switching back to
+  Normal (after a restart) brings the taskbar button back with no tray icon.
+- Linux QA (Pop!_OS): confirm the same on the ksni tray. Note: stock GNOME shows
+  StatusNotifierItems only with the AppIndicator/KStatusNotifier extension. Without
+  a tray host the icon won't appear; the app stays in Normal-like behavior (no
+  stranded window), but the taskbar button was still suppressed at launch, so on
+  such a desktop prefer Normal mode. Mint Cinnamon has a tray by default.
+
+## 2026-10-26 (build hygiene: mirror music/ next to the exe)
+
+- build.rs now mirrors music/ into target/<profile>/music (like skins/ and
+  soundfont/), and first_run_music_dir prefers the copy next to the executable.
+  This keeps the pristine repo music/ folder from being written to when a dev or
+  release build loads the demo track (the demo loader can rewrite its ID3 tags).
+  The installer already bundles music/, so shipped builds are unaffected. No
+  behavior change for users; purely protects the source tree during testing.
+
+## 2026-10-26 (#40 window mode now applies live, no restart)
+
+- Supersedes the "applied at launch, not live" note above. Switching the mode in
+  Preferences > Display > System tray now takes effect immediately: the tray icon
+  appears or disappears, the taskbar button flips, and the close/minimize behaviour
+  changes, with no restart. The Preferences hint no longer mentions restarting.
+- Mechanism: set_window_mode re-spawns the tray to match and calls
+  platform_win::set_taskbar_button. On Windows that drives ITaskbarList
+  (AddTab / DeleteTab) on the main window found by title "LinAmp", the same COM
+  interface winit uses for its taskbar option, so a live toggle matches the startup
+  state cleanly. The window is still created with the saved mode at launch
+  (main.rs with_taskbar), so first paint is already correct.
+- Linux: the tray icon and behaviour toggle live too. The taskbar-button toggle is
+  a best-effort X11 _NET_WM_STATE_SKIP_TASKBAR message (reused from the child-window
+  grouping code); it will not work under Wayland or on a WM that ignores the hint,
+  where the taskbar aspect then effectively needs a relaunch. Needs Pop!_OS QA.
+- Manual check (Windows): with the window shown, toggle to System tray and confirm
+  the taskbar button disappears and the tray icon appears at once; toggle back and
+  the taskbar button returns. Then in tray mode, the close (X) hides to tray without
+  a restart. Leaving tray mode while hidden should bring the window back.
+
+## 2026-10-26 (#40 fixes: tray freeze on hide, and tray-menu highlight)
+
+- Freeze fix: hiding to the tray now minimizes the window instead of hiding it
+  with Visible(false). A window hidden with Visible(false) stops receiving
+  WM_PAINT on Windows, so eframe never runs update() again and the tray's queued
+  clicks (Restore, Play/Pause, Exit) were never drained, the window froze. winit's
+  request_redraw uses RedrawWindow(RDW_INTERNALPAINT), which still posts WM_PAINT
+  to a minimized window (it keeps WS_VISIBLE) but not a hidden one, and eframe
+  keeps running update() while minimized, so the tray stays responsive. In tray
+  mode the taskbar button is already removed, so a minimized window shows nothing.
+- Tray-menu highlight fix: the tray's helper window was message-only (HWND_MESSAGE),
+  which can never be the foreground window, so SetForegroundWindow before
+  TrackPopupMenu failed and the menu never tracked the mouse (no hover highlight,
+  no click-away dismiss). It's now a normal top-level window, created hidden and
+  never shown (WS_EX_TOOLWINDOW keeps it out of the taskbar and Alt+Tab), so the
+  menu gets standard hover highlighting and dismissal.
+- Manual check (Windows): in tray mode, minimize or close to the tray, then
+  left-click the tray icon to restore, and use the right-click menu's Play/Pause
+  and Exit. All should work now, and the menu items should highlight on hover.
+
+## 2026-10-26 (#40 follow-up: taskbar button not removed, and still no menu highlight)
+
+- Root cause of both: when the tray helper window became a normal top-level
+  window, it was titled "LinAmp", the same as the main player window. So
+  FindWindowW("LinAmp") used by the live taskbar toggle (and window grouping)
+  could resolve to the helper window instead of the player, and DeleteTab then
+  ran on the wrong window, leaving the real taskbar button in place (bar->tray
+  looked broken; tray->bar only looked fine because the button was never actually
+  removed). Fixed by titling the helper window "LinAmp Tray".
+- Menu highlight: a tray popup menu only highlights and dismisses when its owner
+  window is the foreground window, and SetForegroundWindow won't take on a window
+  that has never been shown. The helper window is now shown with SW_SHOWNA (zero
+  size, off-screen, WS_EX_TOOLWINDOW), so it draws nothing but can take the
+  foreground, and the menu gets the standard hover highlight.
+- Manual check (Windows): switch Normal/System tray in Preferences and confirm the
+  taskbar button appears/disappears both ways; right-click the tray icon and
+  confirm the menu items highlight as the mouse moves over them.
+
+## 2026-10-26 (#40 tray menu: skin-themed and owner-drawn, with working highlight)
+
+- The native tray menu is now owner-drawn in the current skin's colours, from the
+  same source as LinAmp's egui menus: theme.rs menu_palette gives (bg, text,
+  hover_bg, hover_text, border), where bg/text/border match window_fill /
+  override_text_color / window_stroke, and the hovered row uses the skin's
+  selection colour. The app pushes this palette to the tray whenever the skin
+  changes (apply_theme sites) and when the tray respawns, via Tray::set_menu_colors
+  (shared atomics read by the tray thread). Off Windows it's a no-op (the Linux
+  ksni menu follows the desktop theme).
+- Mechanism (Windows): MF_OWNERDRAW items + SetMenuInfo (MNS_NOCHECK, skin bg
+  brush); WM_MEASUREITEM sizes rows from the label, WM_DRAWITEM paints bg/hover,
+  text and a thin themed border down the sides and across the top/bottom. Separators
+  are disabled owner-draw rows drawn as a line.
+- The hover highlight now works because the menu is forced to the foreground with
+  AttachThreadInput before TrackPopupMenu (SetForegroundWindow alone is blocked
+  from a background thread by the foreground lock, which is why hover did nothing
+  before). Owner-draw then highlights the hovered row in the skin colours.
+- Manual check (Windows): right-click the tray icon; the menu should be dark/skin-
+  coloured with a themed border, and moving the mouse over items should highlight
+  them in the skin's selection colour. Load a different skin and confirm the menu
+  colours follow it.
+
+## 2026-10-26 (#40 fixes: layout forgotten on tray exit, and tray-menu font)
+
+- Window layout was lost when exiting from the tray: hide_to_tray closes the
+  EQ/playlist/library windows (sets their visible flags false) and minimizes the
+  main one, and persist_session_if_changed kept saving that hidden state, so the
+  exit wrote "only the main window" as the layout. Now persistence is skipped while
+  hidden_to_tray (as it already was during shutdown), so the last saved layout is
+  the real on-screen one, and exiting from the tray then reopening restores the
+  windows and positions that were open.
+- Tray-menu font: the owner-drawn menu now uses LinAmp's bundled UI font (Noto
+  Sans, the same assets/fonts/NotoSans-Regular.ttf the egui menus use), loaded via
+  AddFontMemResourceEx and sized to the system DPI, so the menu matches the app's
+  own menus instead of the system font. Falls back to the system menu font if the
+  font can't be created.
+- Manual check (Windows): open the EQ and playlist, position the windows, hide to
+  the tray, then Exit from the tray menu. Reopen and confirm the same windows come
+  back in the same places. Also confirm the tray menu's text now matches LinAmp's
+  own menus.
+
+## 2026-10-26 (#40 Linux parity checklist, for work on the Linux machine)
+
+The tray / window-mode work is verified on Windows. None of the Linux side has
+been compiled or run (developed on Windows; cross-check fails on the C deps). The
+two other #40 parts are split out: media keys (#165) and file associations (#166).
+To bring Linux to parity, verify on Pop!_OS (and Mint):
+- Compiles: cargo build with the ksni 0.3.7 dep (blocking feature, zbus 5).
+- Tray icon shows: stock GNOME (Pop!_OS) needs the AppIndicator / KStatusNotifier
+  extension for StatusNotifierItems; Mint Cinnamon has a tray by default. With no
+  tray host, tray_mode stays off and the window behaves normally (no stranding).
+- Left-click toggles the window; the right-click menu drives transport; Exit quits.
+- RISK, hide-to-tray freeze: the Windows fix minimizes instead of hiding, relying
+  on winit posting WM_PAINT to a minimized window (RDW_INTERNALPAINT). That is
+  Windows-specific; on X11/Wayland a minimized window may not keep repainting, so
+  eframe could stop running update() and the tray would go unresponsive like it
+  did on Windows before the fix. Test minimize-to-tray then a tray click; if it
+  freezes, the Linux path likely needs a different hide (e.g. keep the window
+  mapped but off-screen) so the event loop keeps running.
+- Taskbar button: Windows toggles it live via ITaskbarList. Linux is a best-effort
+  X11 _NET_WM_STATE_SKIP_TASKBAR message (no effect under Wayland or a WM that
+  ignores it), so the no-taskbar-button aspect may need a relaunch or more work.
+- Tray menu theming: the skin-coloured owner-drawn menu is Windows-only. The Linux
+  ksni menu follows the desktop theme (SNI menus are host-drawn), which is expected.
