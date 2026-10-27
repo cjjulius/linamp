@@ -80,6 +80,19 @@ impl Library {
                  PRAGMA user_version = 1;",
             )?;
         }
+        if ver < 2 {
+            // v2: indexes so the browse and smart-view queries don't full-scan and
+            // sort on a large library (the search LIKE '%..%' can't use one).
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_tracks_artist_album_title
+                     ON tracks(artist, album, title);
+                 CREATE INDEX IF NOT EXISTS idx_tracks_play_count  ON tracks(play_count);
+                 CREATE INDEX IF NOT EXISTS idx_tracks_date_added  ON tracks(date_added);
+                 CREATE INDEX IF NOT EXISTS idx_tracks_last_played ON tracks(last_played);
+                 CREATE INDEX IF NOT EXISTS idx_tracks_rating      ON tracks(rating);
+                 PRAGMA user_version = 2;",
+            )?;
+        }
         Ok(())
     }
 
@@ -466,12 +479,12 @@ mod tests {
     fn migration_adds_columns_and_is_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
         let lib = Library::init(conn).unwrap();
-        // user_version advanced to 1, and the new columns are queryable.
+        // user_version advanced to the latest, and the new columns are queryable.
         let ver: i64 = lib
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(ver, 1);
+        assert_eq!(ver, 2);
         lib.conn
             .query_row("SELECT play_count, rating, date_added, last_played FROM tracks", [], |_| Ok(()))
             .ok();

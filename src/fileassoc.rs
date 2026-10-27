@@ -201,13 +201,17 @@ mod windows_impl {
         let icon = format!("{exe},0");
         let classes = "Software\\Classes";
 
+        // Track whether every write succeeded, so a failed or partial registration
+        // (a locked hive, a permissions hiccup) is not stamped as done, which would
+        // defeat the self-heal on the next launch.
+        let mut ok = true;
         unsafe {
             // The ProgID: a friendly name, the exe's icon, and the open command
             // that passes the clicked file as the first argument (LinAmp's
             // command-line handling enqueues and plays it).
-            set_value(HKEY_CURRENT_USER, &format!("{classes}\\{PROGID}"), None, "LinAmp audio file");
-            set_value(HKEY_CURRENT_USER, &format!("{classes}\\{PROGID}\\DefaultIcon"), None, &icon);
-            set_value(
+            ok &= set_value(HKEY_CURRENT_USER, &format!("{classes}\\{PROGID}"), None, "LinAmp audio file");
+            ok &= set_value(HKEY_CURRENT_USER, &format!("{classes}\\{PROGID}\\DefaultIcon"), None, &icon);
+            ok &= set_value(
                 HKEY_CURRENT_USER,
                 &format!("{classes}\\{PROGID}\\shell\\open\\command"),
                 None,
@@ -217,8 +221,8 @@ mod windows_impl {
             // The Applications\linamp.exe entry: a friendly name plus the same open
             // command, which is what backs "Open with > LinAmp".
             let app = format!("{classes}\\Applications\\{APP_EXE}");
-            set_value(HKEY_CURRENT_USER, &app, Some("FriendlyAppName"), "LinAmp");
-            set_value(
+            ok &= set_value(HKEY_CURRENT_USER, &app, Some("FriendlyAppName"), "LinAmp");
+            ok &= set_value(
                 HKEY_CURRENT_USER,
                 &format!("{app}\\shell\\open\\command"),
                 None,
@@ -226,8 +230,8 @@ mod windows_impl {
             );
 
             // The capability block the Default Apps UI reads.
-            set_value(HKEY_CURRENT_USER, CAPABILITIES_KEY, Some("ApplicationName"), "LinAmp");
-            set_value(
+            ok &= set_value(HKEY_CURRENT_USER, CAPABILITIES_KEY, Some("ApplicationName"), "LinAmp");
+            ok &= set_value(
                 HKEY_CURRENT_USER,
                 CAPABILITIES_KEY,
                 Some("ApplicationDescription"),
@@ -239,19 +243,19 @@ mod windows_impl {
             // the extension to our ProgID in the capability block.
             for ext in SUPPORTED_EXTS {
                 let dot = format!(".{ext}");
-                set_value(
+                ok &= set_value(
                     HKEY_CURRENT_USER,
                     &format!("{classes}\\{dot}\\OpenWithProgids"),
                     Some(PROGID),
                     "",
                 );
-                set_value(
+                ok &= set_value(
                     HKEY_CURRENT_USER,
                     &format!("{app}\\SupportedTypes"),
                     Some(&dot),
                     "",
                 );
-                set_value(
+                ok &= set_value(
                     HKEY_CURRENT_USER,
                     &format!("{CAPABILITIES_KEY}\\FileAssociations"),
                     Some(&dot),
@@ -261,7 +265,7 @@ mod windows_impl {
 
             // Point RegisteredApplications at the capability block so LinAmp lists
             // in Default Apps.
-            set_value(
+            ok &= set_value(
                 HKEY_CURRENT_USER,
                 "Software\\RegisteredApplications",
                 Some("LinAmp"),
@@ -272,12 +276,16 @@ mod windows_impl {
             SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, std::ptr::null(), std::ptr::null());
         }
 
-        // Record what we just registered so the next launch can skip the writes.
-        let stamp = stamp_path();
-        if let Some(parent) = stamp.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        // Record what we just registered so the next launch can skip the writes,
+        // but only when every write succeeded. A partial registration is left
+        // unstamped so the next launch retries it.
+        if ok {
+            let stamp = stamp_path();
+            if let Some(parent) = stamp.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(stamp, signature);
         }
-        let _ = std::fs::write(stamp, signature);
     }
 
     #[allow(dead_code)]
