@@ -162,13 +162,19 @@ mod windows_impl {
                 .spawn(move || unsafe { keys_thread(egui, tx, tid_for_thread) })
                 .map_err(|_| ())?;
 
-            // Wait briefly for the thread to publish its id so Drop can post it a
-            // quit message. The thread stores it as its first act.
-            for _ in 0..200 {
-                if tid_slot.load(Ordering::Acquire) != 0 {
+            // Wait for the thread to publish its id (its first act). Returning only
+            // once it's published means Drop always has an id to post WM_QUIT to, so
+            // teardown can never join a thread it has no way to stop.
+            let mut tid = 0;
+            for _ in 0..500 {
+                tid = tid_slot.load(Ordering::Acquire);
+                if tid != 0 {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            if tid == 0 {
+                return Err(()); // never published; don't hand back an unstoppable listener
             }
 
             Ok(WinMediaKeys {
