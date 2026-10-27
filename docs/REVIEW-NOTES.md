@@ -1140,3 +1140,20 @@ an audio file from Explorer and confirm Enqueue appends it and plays it while th
 rest of the playlist survives; switch the pref to Clear queue and confirm the
 playlist is replaced. (The single-instance forwarding gap still applies: this is
 about a launch, not opening a file while LinAmp is already running.)
+
+## 2026-10-27 (#166 "Open with" works while LinAmp is already running)
+
+Closes the single-instance forwarding gap noted above. "Open with" now works
+whether or not LinAmp is already open:
+- A second launch with file arguments can't run beside the first (single
+  instance). Instead it writes the paths to a small cross-instance queue
+  (src/openq.rs, one atomically-published file per request in the LinAmp data dir)
+  and exits. The running instance polls the queue each frame (throttled to 250ms)
+  and opens the files per the "Open with" pref, then brings its window forward
+  (restoring from the tray if it was hidden).
+- A cold launch (no instance running) opens the files directly as before. Both
+  paths share one open_paths() method, so Enqueue/Clear behave identically either
+  way, and the restored volume/balance/window layout is untouched.
+Manual check (Windows): with LinAmp open and a playlist built, open an audio file
+from Explorer and confirm the running window takes focus and (Enqueue) appends +
+plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.

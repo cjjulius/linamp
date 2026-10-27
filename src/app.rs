@@ -625,6 +625,8 @@ pub struct LinAmpApp {
     last_frame: Instant,
     last_device_check: Instant,
     last_session_check: Instant,
+    /// Throttle for polling the cross-instance "Open with" queue (#166).
+    last_open_check: Instant,
     status: String,
 }
 
@@ -841,6 +843,7 @@ impl LinAmpApp {
             last_frame: Instant::now(),
             last_device_check: Instant::now(),
             last_session_check: Instant::now(),
+            last_open_check: Instant::now(),
             status: "Ready. Press L to open files.".to_string(),
         };
 
@@ -908,27 +911,7 @@ impl LinAmpApp {
             // install cues the bundled demo instead.
             let cli: Vec<PathBuf> = std::env::args().skip(1).map(PathBuf::from).collect();
             if !cli.is_empty() {
-                if app.prefs.open_with == crate::config::OpenWith::Clear {
-                    app.playlist.clear();
-                }
-                // Where the opened items land, so playback starts on what the user
-                // opened rather than the top of an enqueued-into playlist.
-                let first_new = app.playlist.len();
-                for p in cli {
-                    if p.is_dir() {
-                        app.playlist.add_folder(&p);
-                    } else if matches!(
-                        p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
-                        Some("m3u") | Some("m3u8") | Some("pls")
-                    ) {
-                        app.playlist.load_file(&p);
-                    } else {
-                        app.playlist.add_file(p);
-                    }
-                }
-                if app.playlist.len() > first_new {
-                    app.play_index(first_new);
-                }
+                app.open_paths(&cc.egui_ctx, cli, false);
             } else if first_run {
                 // Fresh install (no saved session): the classic trio open and
                 // stacked (at the 1x default), the library closed and the bundled
@@ -990,6 +973,50 @@ impl LinAmpApp {
         apply_theme(&cc.egui_ctx, &app.theme);
         app.push_tray_theme();
         app
+    }
+
+    /// Open files handed over by "Open with" (at launch, or forwarded from a
+    /// second instance). Honors the `open_with` pref: Clear replaces the playlist,
+    /// Enqueue (the default) adds to it. The first opened item starts playing.
+    /// When `focus` is set (a forwarded open to the already-running instance), the
+    /// window is surfaced so the user sees what they opened.
+    fn open_paths(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>, focus: bool) {
+        if paths.is_empty() {
+            return;
+        }
+        if self.prefs.open_with == crate::config::OpenWith::Clear {
+            self.playlist.clear();
+        }
+        // Where the opened items land, so playback starts on what was opened
+        // rather than the top of an enqueued-into playlist.
+        let first_new = self.playlist.len();
+        for p in paths {
+            if p.is_dir() {
+                self.playlist.add_folder(&p);
+            } else if matches!(
+                p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
+                Some("m3u") | Some("m3u8") | Some("pls")
+            ) {
+                self.playlist.load_file(&p);
+            } else {
+                self.playlist.add_file(p);
+            }
+        }
+        if self.prefs.tag_on_load {
+            self.playlist.load_all();
+        }
+        if self.playlist.len() > first_new {
+            self.play_index(first_new);
+        }
+        if focus {
+            // Surface the window for a forwarded open so the user sees the result.
+            if self.hidden_to_tray {
+                self.show_from_tray(ctx);
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+        }
     }
 
     // ---- transport helpers -------------------------------------------------
@@ -3753,6 +3780,18 @@ impl eframe::App for LinAmpApp {
         let media_actions: Vec<_> = self.media_keys_rx.try_iter().collect();
         for action in media_actions {
             self.handle_tray_action(ctx, action);
+        }
+
+        // Files forwarded from a second "Open with" launch (#166): a second
+        // instance can't run beside this one (single instance), so it dropped the
+        // paths in the open-request queue. Poll it (throttled) and open them per
+        // the "Open with" pref, bringing the window forward.
+        if now.duration_since(self.last_open_check).as_millis() >= 250 {
+            self.last_open_check = now;
+            let opened = crate::openq::drain();
+            if !opened.is_empty() {
+                self.open_paths(ctx, opened, true);
+            }
         }
 
         // Startup taskbar suppression (Linux): winit's with_taskbar(false) doesn't
