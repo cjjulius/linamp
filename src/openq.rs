@@ -29,6 +29,17 @@ pub fn drain() -> Vec<PathBuf> {
     drain_in(&dir())
 }
 
+/// Drop every pending request without opening it. The instance that owns the
+/// single-instance lock calls this at startup so a request left by a previous
+/// crashed instance isn't replayed as this launch's files.
+pub fn clear() {
+    clear_in(&dir());
+}
+
+fn clear_in(d: &Path) {
+    let _ = std::fs::remove_dir_all(d);
+}
+
 fn enqueue_in(d: &Path, paths: &[PathBuf]) {
     if paths.is_empty() || std::fs::create_dir_all(d).is_err() {
         return;
@@ -110,6 +121,16 @@ mod tests {
         let got = drain_in(&d);
         assert_eq!(got.len(), 2);
         assert!(got.contains(&PathBuf::from("/a.mp3")) && got.contains(&PathBuf::from("/b.mp3")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn clear_drops_pending_requests() {
+        let d = temp_dir("clear");
+        enqueue_in(&d, &[PathBuf::from("/a.mp3")]);
+        clear_in(&d);
+        // A cold-start owner clears the queue, so nothing is left to replay.
+        assert!(drain_in(&d).is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 

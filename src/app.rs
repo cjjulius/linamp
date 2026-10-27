@@ -984,7 +984,8 @@ impl LinAmpApp {
         if paths.is_empty() {
             return;
         }
-        if self.prefs.open_with == crate::config::OpenWith::Clear {
+        let clear = self.prefs.open_with == crate::config::OpenWith::Clear;
+        if clear {
             self.playlist.clear();
         }
         // Where the opened items land, so playback starts on what was opened
@@ -1002,11 +1003,19 @@ impl LinAmpApp {
                 self.playlist.add_file(p);
             }
         }
-        if self.prefs.tag_on_load {
-            self.playlist.load_all();
-        }
         if self.playlist.len() > first_new {
+            // Read tags for just the opened items; the rest were already loaded at
+            // restore (or load lazily), so don't re-scan the whole playlist.
+            if self.prefs.tag_on_load {
+                for i in first_new..self.playlist.len() {
+                    self.playlist.ensure_loaded(i);
+                }
+            }
             self.play_index(first_new);
+        } else if clear {
+            // Clear mode but nothing openable was added: the playlist is now empty,
+            // so stop the track that was playing instead of leaving it sounding.
+            self.stop_playback();
         }
         if focus {
             // Surface the window for a forwarded open so the user sees the result.

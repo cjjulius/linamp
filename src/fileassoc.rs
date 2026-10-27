@@ -59,6 +59,19 @@ mod windows_impl {
     // Where the RegisteredApplications entry points for the Default Apps block.
     const CAPABILITIES_KEY: &str = "Software\\LinAmp\\Capabilities";
 
+    // Bump when the set of registry keys written by `register` changes, so an
+    // existing install re-registers under the new layout.
+    const SCHEMA_VERSION: u32 = 1;
+
+    /// Path of the stamp file recording the last registration signature, so a
+    /// launch that would write the same thing can skip the registry writes.
+    fn stamp_path() -> std::path::PathBuf {
+        dirs::data_local_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("LinAmp")
+            .join("fileassoc.stamp")
+    }
+
     #[link(name = "advapi32")]
     extern "system" {
         fn RegCreateKeyExW(
@@ -136,6 +149,14 @@ mod windows_impl {
             return;
         };
         let exe = exe.to_string_lossy().into_owned();
+        // Skip the registry writes when nothing relevant changed since the last
+        // launch. The signature covers the schema version, the exe path and the
+        // extension list, so a moved executable or a new supported type still
+        // re-registers.
+        let signature = format!("{SCHEMA_VERSION}|{exe}|{}", SUPPORTED_EXTS.join(","));
+        if std::fs::read_to_string(stamp_path()).ok().as_deref() == Some(signature.as_str()) {
+            return;
+        }
         let open_command = format!("\"{exe}\" \"%1\"");
         let icon = format!("{exe},0");
         let classes = "Software\\Classes";
@@ -210,6 +231,13 @@ mod windows_impl {
             // Nudge the shell to pick up the new associations.
             SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, std::ptr::null(), std::ptr::null());
         }
+
+        // Record what we just registered so the next launch can skip the writes.
+        let stamp = stamp_path();
+        if let Some(parent) = stamp.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(stamp, signature);
     }
 
     #[allow(dead_code)]
@@ -235,6 +263,8 @@ mod windows_impl {
             // is harmless and ignored by the shell).
             SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, std::ptr::null(), std::ptr::null());
         }
+        // Drop the stamp so a later register() rewrites instead of skipping.
+        let _ = std::fs::remove_file(stamp_path());
     }
 }
 
