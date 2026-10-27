@@ -52,13 +52,13 @@ impl super::LinAmpApp {
         }
 
         // Clicking any main window dismisses an open menu (click-away).
-        if pressed && self.popup.is_some() && !self.popup_fresh {
-            self.popup = None;
+        if pressed && self.popups.cur.is_some() && !self.popups.fresh {
+            self.popups.cur = None;
         }
         // Escape closes an open menu. The popup no longer steals focus, so its own
         // viewport won't see the key, the focused window catches it here instead.
-        if self.popup.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.popup = None;
+        if self.popups.cur.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.popups.cur = None;
         }
 
         if secondary && win == ClWin::Main {

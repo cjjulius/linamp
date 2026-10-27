@@ -441,7 +441,7 @@ impl super::LinAmpApp {
         // popup (playlist/options menu), the classic click-away only runs for the
         // classic windows, so it never sees clicks landing here.
         if ui.ctx().input(|i| i.pointer.any_pressed()) {
-            self.popup = None;
+            self.popups.cur = None;
         }
         let lib_menu_base = self.ui_mode != UiMode::Classic || self.lib.menu_open;
         // When the skin ships general-purpose window art (GEN.BMP/GENEX.BMP), use
@@ -692,7 +692,7 @@ impl super::LinAmpApp {
                                                 artist_click = Some((Some(name.clone()), ctrl));
                                             }
                                             if resp.secondary_clicked() {
-                                                self.popup = None;
+                                                self.popups.cur = None;
                                                 self.lib.menu_open = true;
                                                 if !sel {
                                                     artist_click = Some((Some(name.clone()), false));
@@ -743,7 +743,7 @@ impl super::LinAmpApp {
                                                 album_click = Some((Some(name.clone()), ctrl));
                                             }
                                             if resp.secondary_clicked() {
-                                                self.popup = None;
+                                                self.popups.cur = None;
                                                 self.lib.menu_open = true;
                                                 if !sel {
                                                     album_click = Some((Some(name.clone()), false));
@@ -950,7 +950,7 @@ impl super::LinAmpApp {
                                         // A library right-click dismisses any open
                                         // classic playlist/options popup, and marks
                                         // the library menu open for the gate.
-                                        self.popup = None;
+                                        self.popups.cur = None;
                                         self.lib.menu_open = true;
                                         if !selected {
                                             track_click = Some((i, false));

@@ -112,7 +112,7 @@ impl super::LinAmpApp {
     /// Render the open popup menu in its own borderless window (so it is never
     /// clipped by the small main/playlist windows). Positioned at the click.
     pub(super) fn draw_popup_viewport(&mut self, ctx: &egui::Context) {
-        let Some((kind, owner, pos)) = self.popup else {
+        let Some((kind, owner, pos)) = self.popups.cur else {
             return;
         };
         let (w, h) = match kind {
@@ -179,7 +179,7 @@ impl super::LinAmpApp {
             // `screen`, which flashes a frame at the wrong place. Keep it hidden on
             // its opening frame (while it gets positioned/sized) and reveal it next
             // frame, so the menu only ever appears where it was clicked.
-            .with_visible(!self.popup_fresh)
+            .with_visible(!self.popups.fresh)
             // Always on top: the EQ/playlist/library windows are *owned* by the main
             // window (group_child_windows), which keeps them above sibling windows,
             // and clicking one re-raises it, so only a system-topmost popup stays
@@ -187,7 +187,7 @@ impl super::LinAmpApp {
             // sit under the menu, so dialog actions hide the menu first (see
             // `hide_popup_window`).
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
-        let id = egui::ViewportId::from_hash_of(("linamp_popup", self.popup_serial));
+        let id = egui::ViewportId::from_hash_of(("linamp_popup", self.popups.serial));
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
             egui::CentralPanel::default()
@@ -269,7 +269,7 @@ impl super::LinAmpApp {
                             if item(ui, "Bookmarks…") {
                                 // Classic popups aren't nested; open the list once
                                 // this menu closes.
-                                self.pending_popup = Some((Popup::Bookmarks, owner, pos));
+                                self.popups.pending = Some((Popup::Bookmarks, owner, pos));
                                 close = true;
                             }
                             // The Minibrowser is an opt-in "Optional Features" extra.
@@ -540,7 +540,7 @@ impl super::LinAmpApp {
                                 if !saved.is_empty() && item(ui, "Delete a saved preset…") {
                                     // Classic popups aren't nested; open the delete
                                     // list once this menu closes.
-                                    self.pending_popup = Some((Popup::EqDelete, owner, pos));
+                                    self.popups.pending = Some((Popup::EqDelete, owner, pos));
                                     close = true;
                                 }
                                 if item(ui, "Import preset (.eqf)…") {
@@ -673,10 +673,10 @@ impl super::LinAmpApp {
         let radius = (corner * ctx.pixels_per_point()).round() as i32;
         // Rebuild the region when first opened, and if a different-sized menu opens
         // into the same serial, so the rounded corners track the window size.
-        let size_changed = self.popup_rounded_h != Some(h);
-        if (!self.popup_rounded || size_changed) && round_popup_window(radius, self.popup_fresh || size_changed) {
-            self.popup_rounded = true;
-            self.popup_rounded_h = Some(h);
+        let size_changed = self.popups.rounded_h != Some(h);
+        if (!self.popups.rounded || size_changed) && round_popup_window(radius, self.popups.fresh || size_changed) {
+            self.popups.rounded = true;
+            self.popups.rounded_h = Some(h);
         }
         // On X11 the popup window is reused and resized between menus (and, when the
         // menu is switched rapidly, destroyed and recreated), while XGetGeometry can
@@ -685,38 +685,38 @@ impl super::LinAmpApp {
         // recreated window never keeps a square corner.
         #[cfg(all(unix, not(target_os = "macos")))]
         {
-            let _ = round_popup_window(radius, self.popup_fresh);
+            let _ = round_popup_window(radius, self.popups.fresh);
             // Always-on-top isn't enough on X11: the main window's transient-for
             // children (EQ/playlist/library) can stack over the popup, so it opens
             // behind them. Raise it each frame while it's open to keep it visible.
             raise_popup_window();
         }
 
-        if self.popup_fresh {
+        if self.popups.fresh {
             // The opening frame drew the menu hidden (see `with_visible` above);
             // request the next frame now so it's revealed immediately rather than
             // waiting on the next input event.
             ctx.request_repaint();
         }
-        self.popup_fresh = false;
+        self.popups.fresh = false;
         if close {
-            self.popup = None;
+            self.popups.cur = None;
             // Chain to a queued popup (example: Options then Bookmarks) now this one is gone.
-            if let Some((k, w, p)) = self.pending_popup.take() {
+            if let Some((k, w, p)) = self.popups.pending.take() {
                 self.open_popup_in(k, w, p);
             }
         }
     }
 
     pub(super) fn open_popup_in(&mut self, kind: Popup, win: ClWin, local: egui::Pos2) {
-        self.popup = Some((kind, win, local));
-        self.popup_fresh = true;
+        self.popups.cur = Some((kind, win, local));
+        self.popups.fresh = true;
         // New popup window: re-apply the rounded region on the next frame.
-        self.popup_rounded = false;
-        self.popup_rounded_h = None;
+        self.popups.rounded = false;
+        self.popups.rounded_h = None;
         // Fresh viewport id per open, so the menu never inherits a reused window's
         // size on a re-right-click (#154).
-        self.popup_serial = self.popup_serial.wrapping_add(1);
+        self.popups.serial = self.popups.serial.wrapping_add(1);
         // Opening a classic popup dismisses an open Media Library menu, so the two
         // menu systems are never up at once.
         self.classic_clicked = true;
