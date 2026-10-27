@@ -12,6 +12,7 @@ mod dock;
 mod eq;
 mod eqf;
 mod library;
+mod mediakeys;
 mod midi;
 mod player;
 mod playlist;

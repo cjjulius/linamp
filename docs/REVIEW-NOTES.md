@@ -1072,3 +1072,25 @@ To bring Linux to parity, verify on Pop!_OS (and Mint):
   ignores it), so the no-taskbar-button aspect may need a relaunch or more work.
 - Tray menu theming: the skin-coloured owner-drawn menu is Windows-only. The Linux
   ksni menu follows the desktop theme (SNI menus are host-drawn), which is expected.
+
+## 2026-10-27 (#165 global media keys)
+
+Global media keys feed the existing transport actions (TrayAction), so a press
+routes through the same handle_tray_action as the tray buttons. New module
+src/mediakeys.rs, one extra channel drained per frame, in both window modes.
+- Windows (done, needs a manual check): RegisterHotKey on VK_MEDIA_PLAY_PAUSE,
+  VK_MEDIA_STOP, VK_MEDIA_PREV_TRACK and VK_MEDIA_NEXT_TRACK (MOD_NOREPEAT) on a
+  dedicated thread; WM_HOTKEY maps to PlayPause/Stop/Prev/Next. A key already held
+  by another app is skipped, the rest still register. Manual check: with LinAmp
+  unfocused (and hidden to the tray), press the keyboard's Play/Pause, Stop,
+  Previous and Next media keys and confirm each drives playback.
+- Linux (to do on the Linux box): the no-key backend is a no-op there for now.
+  Implement MPRIS over D-Bus so the desktop routes media keys (and the system
+  media controls) to LinAmp: serve org.mpris.MediaPlayer2 and .MediaPlayer2.Player
+  under org.mpris.MediaPlayer2.linamp, map the Player PlayPause/Stop/Next/Previous
+  methods onto the same TrayActions, and call egui.request_repaint() on each. zbus
+  5 is already in the tree via ksni, so share it rather than pulling a second
+  zbus. mpris-server is the obvious crate but currently targets zbus 6 and is
+  async (needs a runtime); implementing the two interfaces directly on
+  zbus::blocking keeps it consistent with the ksni backend and avoids a second
+  zbus. Wire it into mediakeys.rs behind cfg(target_os = "linux").
