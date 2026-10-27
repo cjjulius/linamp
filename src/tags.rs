@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use lofty::tag::ItemKey;
 
 /// Editable ID3 fields. ID3v1 uses only `track`..=`comment`; ID3v2 uses all.
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Id3Fields {
     pub track: String,
     pub title: String,
@@ -370,6 +370,45 @@ mod tests {
         assert_eq!(GENRES[0], "Blues");
         assert_eq!(GENRES[17], "Rock");
         assert!(GENRES.len() >= 80);
+    }
+
+    #[test]
+    fn apply_v2_and_read_back_round_trips_fields() {
+        // Exercises the ID3v2 write mapping (apply_v2) and read mapping
+        // (fields_from_tag) together, with no MP3 file needed, so this runs in a
+        // clean checkout/CI where the bundled sample is absent.
+        use lofty::tag::{Tag, TagType};
+        let f = Id3Fields {
+            track: "3".into(),
+            title: "The Title".into(),
+            artist: "The Artist".into(),
+            album: "The Album".into(),
+            year: "2024".into(),
+            genre: "Rock".into(),
+            comment: "a comment".into(),
+            composer: "A. Composer".into(),
+            orig_artist: "Orig".into(),
+            copyright: "(c) 2024".into(),
+            url: "https://example.com".into(),
+            encoded_by: "LinAmp".into(),
+        };
+        let mut tag = Tag::new(TagType::Id3v2);
+        apply_v2(&mut tag, &f);
+        assert_eq!(fields_from_tag(&tag), f);
+    }
+
+    #[test]
+    fn fields_from_tag_repairs_mojibake() {
+        use lofty::tag::{Accessor, Tag, TagType};
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.set_title("Clean Title".to_string());
+        // UTF-8 bytes mistakenly stored in a Latin-1-flagged frame (what some
+        // taggers write); the editor must show the intended characters.
+        let garbled: String = "Café del Mar".bytes().map(|b| b as char).collect();
+        tag.set_artist(garbled);
+        let f = fields_from_tag(&tag);
+        assert_eq!(f.title, "Clean Title");
+        assert_eq!(f.artist, "Café del Mar");
     }
 
     #[test]
