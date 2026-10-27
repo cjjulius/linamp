@@ -15,6 +15,7 @@ mod fileassoc;
 mod library;
 mod mediakeys;
 mod midi;
+mod openq;
 mod player;
 mod playlist;
 mod region;
@@ -106,7 +107,16 @@ fn main() -> eframe::Result<()> {
     // flags above are exempt (they may run alongside a GUI). The OS frees the lock on
     // exit or crash, so a stale lock can never wedge startup.
     let _instance_lock = match acquire_instance_lock() {
-        Instance::AlreadyRunning => return Ok(()),
+        Instance::AlreadyRunning => {
+            // Another LinAmp is already running (single instance). Hand it any
+            // files passed on the command line (Open with) through the open-request
+            // queue so it opens them, then exit. The running instance polls the
+            // queue and applies them per the "Open with" preference.
+            let files: Vec<std::path::PathBuf> =
+                args.iter().skip(1).map(std::path::PathBuf::from).collect();
+            openq::enqueue(&files);
+            return Ok(());
+        }
         Instance::Acquired(file) => Some(file),
         Instance::Unavailable => None,
     };
