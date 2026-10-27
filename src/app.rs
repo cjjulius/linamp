@@ -569,6 +569,10 @@ pub struct LinAmpApp {
     _tray: crate::tray::Tray,
     tray_rx: std::sync::mpsc::Receiver<crate::tray::TrayAction>,
     hidden_to_tray: bool,
+    /// Time of the last tray-icon toggle, to debounce a double-click. A desktop that
+    /// reports Activate for both clicks would otherwise toggle twice (hide then show,
+    /// a net no-op), so a second toggle in quick succession is ignored.
+    last_tray_toggle: Option<Instant>,
     /// Visibility of the (eq, playlist, library) windows before hiding to the
     /// tray, so restoring brings back exactly the windows that were open.
     tray_prev_vis: (bool, bool, bool),
@@ -801,6 +805,7 @@ impl LinAmpApp {
             _tray: tray,
             tray_rx,
             hidden_to_tray: false,
+            last_tray_toggle: None,
             tray_prev_vis: (false, false, false),
             tray_mode,
             // Re-apply the taskbar-skip hint for a few seconds after launch (Linux),
@@ -1071,6 +1076,18 @@ impl LinAmpApp {
             TrayAction::Prev => self.prev(),
             TrayAction::Next => self.next(),
             TrayAction::Toggle => {
+                // Collapse a double-click: some desktops deliver Activate for both
+                // clicks, which would toggle twice (hide then show, a net no-op). A
+                // second toggle within 400ms is ignored, so single and double click
+                // both do one show/hide.
+                let now = Instant::now();
+                let recent = self
+                    .last_tray_toggle
+                    .is_some_and(|t| now.duration_since(t) < Duration::from_millis(400));
+                if recent {
+                    return;
+                }
+                self.last_tray_toggle = Some(now);
                 if self.hidden_to_tray {
                     self.show_from_tray(ctx);
                 } else {
