@@ -34,6 +34,7 @@ extern "system" {
     fn FindWindowW(class: *const u16, title: *const u16) -> Hwnd;
     fn SetCursor(h: Handle) -> Handle;
     fn CreateIconIndirect(info: *const ICONINFO) -> Handle;
+    fn DestroyCursor(h: Handle) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -196,6 +197,26 @@ pub fn clear(title: &str) {
     DESIRED.with(|d| {
         d.borrow_mut().remove(&hwnd);
     });
+}
+
+/// Destroy every cached `HCURSOR` and empty the cache. Called on a skin change so
+/// the previous skin's cursors don't leak for the process lifetime, and so a
+/// reused cache key can't return a stale cursor from the old skin.
+pub fn clear_cache() {
+    CACHE.with(|c| {
+        let mut m = c.borrow_mut();
+        for &cur in m.values() {
+            if cur != 0 {
+                unsafe {
+                    DestroyCursor(cur);
+                }
+            }
+        }
+        m.clear();
+    });
+    // The desired-cursor map pointed at the now-destroyed cursors; drop it so
+    // windows fall back to the arrow until the new skin re-applies.
+    DESIRED.with(|d| d.borrow_mut().clear());
 }
 
 fn desired_for(hwnd: Hwnd) -> Option<Handle> {
