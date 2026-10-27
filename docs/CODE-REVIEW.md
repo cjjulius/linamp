@@ -231,6 +231,27 @@ anything else, by module:
   search bar / nav / columns / track table / apply-actions, ideally onto the
   `LibraryViewState` bundle from C1.
 
+#### Phase 2 resolution status
+
+- **[C1] Done (bundles).** The god-object is decomposed into six field-bundle
+  sub-structs: `EqState`, `ClassicRenderState`, `PlaylistViewState`,
+  `LibraryViewState`, `WindowGeom`, `PopupState`. The follow-on "narrow the
+  `&mut` slices passed to submodules" step was assessed and deliberately **not
+  done**: the `render`/`window` methods are inherently cross-cutting (the render
+  fingerprint reads every subsystem; the drag/geometry helpers need the window
+  positions plus the visibility flags, skin sizes and scale together), the pure
+  computations are already free functions, and the bundles already group the
+  state. Threading bundle slices through those coordinators would add parameters
+  and risk in untested render/drag paths for no modularity gain, so it is closed
+  as a conscious no.
+- **[S3]/[S4] Done.** `classic.rs` split into `classic/geometry.rs` +
+  `classic/compose.rs` (parent re-exports, every `classic::*` path unchanged);
+  the main-window button rects now live only in the `REGIONS` table, drawn via
+  `btn_rect`/`blit_btn`, with an alignment test. Verified byte-identical.
+- **[C6] Done.** The fixed popup menus draw, size and test from one
+  `fixed_menu_entries` list. Surfaced and fixed a latent over-tall right-click
+  playlist menu (5 declared separators vs 4 drawn).
+
 ### Phase 3: skip or defer (conscious no for now)
 
 - **[S12]** Rewrite the per-pixel classic blits to row-slice copies (C, Low, M,
