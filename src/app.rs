@@ -498,6 +498,25 @@ struct WindowGeom {
     root_last: Option<(egui::Pos2, egui::Vec2)>,
 }
 
+/// Classic right-click / options popup state (C1): the open popup, a queued one,
+/// and the rounded-region / fresh-window bookkeeping that keeps each menu sized
+/// correctly.
+struct PopupState {
+    /// The currently open popup (kind, owner window, click position).
+    cur: Option<(Popup, ClWin, egui::Pos2)>,
+    /// A popup to open once the current one closes (classic popups aren't nested).
+    pending: Option<(Popup, ClWin, egui::Pos2)>,
+    fresh: bool,
+    /// Whether the popup window's rounded region has been applied for the current
+    /// popup (applied once, retrying only until it succeeds).
+    rounded: bool,
+    /// Window height the rounded-corner region was last built for, so it rebuilds
+    /// only when a different-sized menu opens (#154).
+    rounded_h: Option<f32>,
+    /// Bumped on every popup open so each menu gets a fresh viewport id/window (#154).
+    serial: u64,
+}
+
 pub struct LinAmpApp {
     player: Player,
     playlist: Playlist,
@@ -569,24 +588,11 @@ pub struct LinAmpApp {
     pl_visible: bool,
     /// Classic playlist view + selection state.
     plview: PlaylistViewState,
-    popup: Option<(Popup, ClWin, egui::Pos2)>,
-    /// A popup to open once the current one closes (for opening the Bookmarks
-    /// list from an Options-menu item, classic popups aren't nested).
-    pending_popup: Option<(Popup, ClWin, egui::Pos2)>,
+    /// Classic right-click / options popup state (open popup, queued popup, the
+    /// rounded-region and fresh-window bookkeeping).
+    popups: PopupState,
     /// Alt+I bookmarks, persisted to bookmarks.json.
     bookmarks: crate::config::Bookmarks,
-    popup_fresh: bool,
-    /// Whether the popup window's rounded region has been applied for the current
-    /// popup, so we apply it once (retrying only until it succeeds) instead of
-    /// rebuilding the GDI region every frame the menu is open.
-    popup_rounded: bool,
-    /// Window height the popup's rounded-corner region was last built for, so the
-    /// region is rebuilt only when a different-sized menu opens (#154).
-    popup_rounded_h: Option<f32>,
-    /// Bumped on every popup open so each menu gets a fresh viewport id (and OS
-    /// window). Reusing one window meant a reused window kept a previous menu's
-    /// size on re-right-clicks; a fresh window is sized correctly every time (#154).
-    popup_serial: u64,
     tb_last_click: Option<(ClWin, Instant)>,
     /// One-shot: a classic window was primary-pressed (or a classic popup opened)
     /// this frame, so an open library menu should dismiss. Consumed in `ui_library`.
@@ -847,13 +853,15 @@ impl LinAmpApp {
                 px_h: classic::PL_H as f32,
                 menu_press: None,
             },
-            popup: None,
-            pending_popup: None,
+            popups: PopupState {
+                cur: None,
+                pending: None,
+                fresh: false,
+                rounded: false,
+                rounded_h: None,
+                serial: 0,
+            },
             bookmarks: crate::config::Bookmarks::load(),
-            popup_fresh: false,
-            popup_rounded: false,
-            popup_rounded_h: None,
-            popup_serial: 0,
             tb_last_click: None,
             classic_clicked: false,
             session_sig: None,
@@ -1785,7 +1793,7 @@ impl LinAmpApp {
             || self.geom.drag.is_some()
             || self.classic_seek_preview.is_some()
             || self.pending_stream.is_some() // keep polling while a stream connects
-            || self.popup.is_some()
+            || self.popups.cur.is_some()
             || self.quit_countdown.is_some()
             // Keep repainting while a background scan runs so its progress and the
             // final refresh show up without waiting on the next input.
@@ -3487,7 +3495,7 @@ impl LinAmpApp {
             || self.geom.foc_eq
             || self.geom.foc_pl
             || self.geom.foc_lib
-            || self.popup.is_some();
+            || self.popups.cur.is_some();
 
         // Root viewport = main window.
         self.render_window(ctx, ClWin::Main);
@@ -3620,7 +3628,7 @@ impl LinAmpApp {
         if let Some(r) = self.plview.menu_press {
             return Some(r);
         }
-        if let Some((kind, ClWin::Pl, _)) = self.popup {
+        if let Some((kind, ClWin::Pl, _)) = self.popups.cur {
             return match kind {
                 Popup::PlAdd => Some(P::AddMenu),
                 Popup::PlRem => Some(P::RemMenu),
@@ -3897,7 +3905,7 @@ impl eframe::App for LinAmpApp {
                 self.eq_visible = false;
                 self.pl_visible = false;
                 self.lib_visible = false;
-                self.popup = None;
+                self.popups.cur = None;
                 self.quit_countdown = Some(2);
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             }

@@ -711,7 +711,7 @@ mod x11util {
     /// Unmap (hide) the window titled `title` immediately. Used to drop the
     /// always-on-top context-menu popup before a modal file dialog opens, since
     /// the blocking dialog freezes the egui loop before it can close the viewport.
-    /// egui tears the window down on the next frame once `self.popup` is cleared.
+    /// egui tears the window down on the next frame once `self.popups.cur` is cleared.
     pub fn unmap_window(title: &str) {
         with_conn(|xlib, d| unsafe {
             let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
@@ -829,7 +829,7 @@ pub(crate) fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visibl
 /// Hide the borderless context-menu popup window immediately, so a modal file
 /// dialog opened from a menu item (which blocks the egui loop before egui can
 /// close the viewport) appears above it rather than under the always-on-top menu.
-/// The window is torn down by egui on the next frame once `self.popup` is cleared.
+/// The window is torn down by egui on the next frame once `self.popups.cur` is cleared.
 pub(crate) fn hide_popup_window() {
     #[cfg(windows)]
     {
