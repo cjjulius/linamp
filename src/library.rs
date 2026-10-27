@@ -561,4 +561,50 @@ mod tests {
         assert_eq!(lib.rating(Path::new("/m/a1.mp3")), 4);
         assert_eq!(lib.view(LibView::MostPlayed, 10).len(), 1);
     }
+
+    #[test]
+    fn remove_paths_drops_only_those_rows() {
+        let lib = Library::open_in_memory();
+        seed(&lib); // four tracks
+        lib.remove_paths(&[PathBuf::from("/m/a1.mp3"), PathBuf::from("/m/b1.mp3")]);
+        assert_eq!(lib.count(), 2);
+        assert!(lib.track_for_path(Path::new("/m/a1.mp3")).is_none());
+        assert!(lib.track_for_path(Path::new("/m/a2.mp3")).is_some());
+        // Removing an unknown path is a harmless no-op.
+        lib.remove_paths(&[PathBuf::from("/m/nope.mp3")]);
+        assert_eq!(lib.count(), 2);
+    }
+
+    #[test]
+    fn recently_added_orders_newest_first() {
+        let lib = Library::open_in_memory();
+        seed(&lib);
+        // Give the rows distinct, known add times (upsert stamps them all with the
+        // current second otherwise, leaving same-second order undefined).
+        for (p, t) in [("/m/a1.mp3", 100i64), ("/m/a2.mp3", 300), ("/m/a3.mp3", 200), ("/m/b1.mp3", 50)] {
+            lib.conn
+                .execute("UPDATE tracks SET date_added = ?2 WHERE path = ?1", params![p, t])
+                .unwrap();
+        }
+        let order: Vec<String> = lib
+            .view(LibView::RecentlyAdded, 100)
+            .iter()
+            .map(|t| t.path.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(order, vec!["/m/a2.mp3", "/m/a3.mp3", "/m/a1.mp3", "/m/b1.mp3"]);
+    }
+
+    #[test]
+    fn search_matches_artist_and_album_and_respects_limit() {
+        let lib = Library::open_in_memory();
+        seed(&lib);
+        // Matches on the artist field (all three Alice tracks).
+        assert_eq!(lib.search("Alice", 100).len(), 3);
+        // Matches on the album field.
+        let by_album = lib.search("Second", 100);
+        assert_eq!(by_album.len(), 1);
+        assert_eq!(by_album[0].title, "Three");
+        // The LIMIT caps the result count.
+        assert_eq!(lib.search("Alice", 2).len(), 2);
+    }
 }
