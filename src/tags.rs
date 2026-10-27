@@ -289,10 +289,14 @@ fn apply_v2(tag: &mut lofty::tag::Tag, f: &Id3Fields) {
     }
     macro_rules! num_f {
         ($v:expr, $set:ident, $rm:ident) => {
-            match $v.trim().parse::<u32>() {
-                Ok(n) => tag.$set(n),
-                Err(_) => tag.$rm(),
+            let t = $v.trim();
+            if t.is_empty() {
+                tag.$rm();
+            } else if let Ok(n) = t.parse::<u32>() {
+                tag.$set(n);
             }
+            // A non-empty value that isn't a plain number (e.g. "2024 (remaster)"
+            // or "3/12") is left as-is rather than silently dropping the frame.
         };
     }
     macro_rules! key_f {
@@ -395,6 +399,20 @@ mod tests {
         let mut tag = Tag::new(TagType::Id3v2);
         apply_v2(&mut tag, &f);
         assert_eq!(fields_from_tag(&tag), f);
+    }
+
+    #[test]
+    fn apply_v2_keeps_a_non_numeric_year() {
+        use lofty::tag::{Accessor, Tag, TagType};
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.set_year(1999);
+        // A non-numeric year ("2024 (remaster)") leaves the existing frame intact,
+        // rather than silently dropping the user's value.
+        apply_v2(&mut tag, &Id3Fields { year: "2024 (remaster)".into(), ..Default::default() });
+        assert_eq!(tag.year(), Some(1999));
+        // An empty value still clears the frame.
+        apply_v2(&mut tag, &Id3Fields { year: String::new(), ..Default::default() });
+        assert_eq!(tag.year(), None);
     }
 
     #[test]

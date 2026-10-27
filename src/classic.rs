@@ -335,6 +335,19 @@ pub struct ClassicSkin {
     cursors: HashMap<String, crate::cursor::CursorImage>,
 }
 
+/// Decode a skin bitmap with a sane size cap, so a crafted BMP header can't force
+/// a huge allocation. Returns None (the sprite is skipped) on any failure.
+fn decode_bmp_capped(buf: &[u8]) -> Option<image::RgbaImage> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(buf))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    reader.limits(limits);
+    Some(reader.decode().ok()?.to_rgba8())
+}
+
 impl ClassicSkin {
     pub fn load(path: &Path) -> Result<Self> {
         let file = File::open(path)?;
@@ -353,8 +366,8 @@ impl ClassicSkin {
             if base.ends_with(".bmp") {
                 let mut buf = Vec::new();
                 if f.read_to_end(&mut buf).is_ok() {
-                    if let Ok(img) = image::load_from_memory(&buf) {
-                        bitmaps.insert(base, img.to_rgba8());
+                    if let Some(img) = decode_bmp_capped(&buf) {
+                        bitmaps.insert(base, img);
                     }
                 }
             } else if base == "region.txt" {

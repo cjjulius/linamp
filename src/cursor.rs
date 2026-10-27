@@ -78,7 +78,12 @@ fn first_ani_frame(bytes: &[u8]) -> Option<Vec<u8>> {
                 if sid == b"icon" {
                     return Some(bytes.get(sbody..send)?.to_vec());
                 }
-                s = sbody + ssize + (ssize & 1);
+                // Advance to the next subchunk, word-aligned, guarding against a
+                // crafted size that would overflow the cursor.
+                match sbody.checked_add(ssize).and_then(|v| v.checked_add(ssize & 1)) {
+                    Some(next) => s = next,
+                    None => break,
+                }
             }
         }
         off = body + size + (size & 1);

@@ -125,10 +125,11 @@ fn split_polygons(num_points: &[usize], point_list: &[i32]) -> Vec<Polygon> {
     let mut i = 0;
     for &n in &sizes {
         if n < 3 || i >= all.len() {
-            i += n;
+            // Saturating, so a crafted NumPoints count can't overflow the cursor.
+            i = i.saturating_add(n);
             continue;
         }
-        let end = (i + n).min(all.len());
+        let end = i.saturating_add(n).min(all.len());
         polys.push(all[i..end].to_vec());
         i = end;
     }
@@ -283,6 +284,17 @@ mod tests {
         assert!(rects.contains(&(7, 7, 3, 1)));
         // Nothing fills the notch gap on that row.
         assert!(!rects.iter().any(|&(x, y, wd, _)| y == 7 && x <= 4 && x + wd > 5));
+    }
+
+    #[test]
+    fn split_polygons_tolerates_a_huge_numpoints() {
+        // A crafted NumPoints far larger than the point list must not overflow.
+        let txt = format!(
+            "[Normal]\nNumPoints={},3\nPointList=0,0, 5,0, 0,5, 10,0, 20,0, 10,5\n",
+            usize::MAX
+        );
+        // Completes without panicking (the saturating arithmetic clamps the count).
+        assert_eq!(parse(&txt).main.len(), 1);
     }
 
     #[test]
