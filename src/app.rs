@@ -465,6 +465,39 @@ struct LibraryViewState {
     menu_open: bool,
 }
 
+/// Window geometry and focus (C1): the classic windows' positions, the library
+/// window's position/drag, drag/resize state, window-shade flags and per-window
+/// focus.
+struct WindowGeom {
+    /// Top-left of each classic window (main/eq/pl).
+    win_pos: [egui::Pos2; 3],
+    positions_init: bool,
+    /// true when the last session's positions were restored, so frame 1 keeps them
+    /// (clamped on-screen) instead of applying the default layout.
+    has_pos_memory: bool,
+    /// Media Library window position, whether it has been placed, and its
+    /// title-bar grab offset while dragging.
+    lib_pos: egui::Pos2,
+    lib_pos_init: bool,
+    lib_drag: Option<egui::Vec2>,
+    /// Window-shade (collapsed) flags per classic window.
+    main_shade: bool,
+    eq_shade: bool,
+    pl_shade: bool,
+    /// App-level focus (true while any LinAmp window is focused) plus per-window
+    /// focus, OR'd each frame.
+    app_focused: bool,
+    foc_root: bool,
+    foc_eq: bool,
+    foc_pl: bool,
+    foc_lib: bool,
+    /// Active window drag, and the playlist resize grab offsets (width, height) px.
+    drag: Option<Dragging>,
+    resize_pl: Option<egui::Vec2>,
+    /// The root window's last (pos, size), for drag tracking.
+    root_last: Option<(egui::Pos2, egui::Vec2)>,
+}
+
 pub struct LinAmpApp {
     player: Player,
     playlist: Playlist,
@@ -487,11 +520,8 @@ pub struct LinAmpApp {
     sort_key: SortKey,
     /// Media Library 3-pane browser, search, sort, selection and scan state.
     lib: LibraryViewState,
-    // Media Library window (dockable, non-shading) geometry.
-    lib_pos: egui::Pos2,
-    lib_pos_init: bool,
-    /// Grab offset (points) while the custom title bar is being dragged.
-    lib_drag: Option<egui::Vec2>,
+    /// Window geometry and focus (positions, drag/resize, shades, per-window focus).
+    geom: WindowGeom,
 
     // visualization
     viz: Arc<VizShared>,
@@ -557,26 +587,7 @@ pub struct LinAmpApp {
     /// window). Reusing one window meant a reused window kept a previous menu's
     /// size on re-right-clicks; a fresh window is sized correctly every time (#154).
     popup_serial: u64,
-    main_shade: bool,
-    eq_shade: bool,
-    pl_shade: bool,
     tb_last_click: Option<(ClWin, Instant)>,
-    // multi-window geometry (points)
-    win_pos: [egui::Pos2; 3],
-    positions_init: bool,
-    /// true when the last session's window positions were restored, so frame 1
-    /// keeps them (clamped on-screen) instead of applying the default layout.
-    has_pos_memory: bool,
-    /// App-level focus: true while any LinAmp window is focused. All windows show
-    /// their active title bar together and their inactive one only when the whole
-    /// app loses focus (example: to another application), matching Winamp, rather
-    /// than one window dimming when another LinAmp window is clicked. Per-window
-    /// focus is tracked in `foc_*` and OR'd each frame.
-    app_focused: bool,
-    foc_root: bool,
-    foc_eq: bool,
-    foc_pl: bool,
-    foc_lib: bool,
     /// One-shot: a classic window was primary-pressed (or a classic popup opened)
     /// this frame, so an open library menu should dismiss. Consumed in `ui_library`.
     classic_clicked: bool,
@@ -585,10 +596,6 @@ pub struct LinAmpApp {
     /// Frames remaining in a graceful shutdown (set when the WM asks to close),
     /// used to tear down child viewports before the root to avoid a winit crash.
     quit_countdown: Option<u8>,
-    drag: Option<Dragging>,
-    /// While resizing the playlist, the grab offsets (width, height) in px.
-    resize_pl: Option<egui::Vec2>,
-    root_last: Option<(egui::Pos2, egui::Vec2)>,
     /// Last always-on-top state pushed to the root window (so we only send the
     /// window-level command when it changes).
     on_top_last: Option<bool>,
@@ -774,9 +781,25 @@ impl LinAmpApp {
                 scan_text: String::new(),
                 menu_open: false,
             },
-            lib_pos: egui::Pos2::ZERO,
-            lib_pos_init: false,
-            lib_drag: None,
+            geom: WindowGeom {
+                win_pos: [egui::pos2(100.0, 100.0); 3],
+                positions_init: false,
+                has_pos_memory: false,
+                lib_pos: egui::Pos2::ZERO,
+                lib_pos_init: false,
+                lib_drag: None,
+                main_shade: false,
+                eq_shade: false,
+                pl_shade: false,
+                app_focused: true,
+                foc_root: true,
+                foc_eq: false,
+                foc_pl: false,
+                foc_lib: false,
+                drag: None,
+                resize_pl: None,
+                root_last: None,
+            },
             lib_tex: None,
             lib_tex_sig: None,
             shaped_any: false,
@@ -831,24 +854,10 @@ impl LinAmpApp {
             popup_rounded: false,
             popup_rounded_h: None,
             popup_serial: 0,
-            main_shade: false,
-            eq_shade: false,
-            pl_shade: false,
             tb_last_click: None,
-            win_pos: [egui::pos2(100.0, 100.0); 3],
-            positions_init: false,
-            has_pos_memory: false,
-            app_focused: true,
-            foc_root: true,
-            foc_eq: false,
-            foc_pl: false,
-            foc_lib: false,
             classic_clicked: false,
             session_sig: None,
             quit_countdown: None,
-            drag: None,
-            resize_pl: None,
-            root_last: None,
             on_top_last: None,
             prefs,
             _tray: tray,
@@ -928,9 +937,9 @@ impl LinAmpApp {
             // placed on frame 1; absent them, positions_init docks the windows.
             app.eq_visible = session.eq_visible;
             app.pl_visible = session.pl_visible;
-            app.main_shade = session.main_shade;
-            app.eq_shade = session.eq_shade;
-            app.pl_shade = session.pl_shade;
+            app.geom.main_shade = session.main_shade;
+            app.geom.eq_shade = session.eq_shade;
+            app.geom.pl_shade = session.pl_shade;
             app.lib_visible = session.lib_visible;
             if let Some(fr) = session.lib_col_fr {
                 app.lib.col_fr = fr;
@@ -942,12 +951,12 @@ impl LinAmpApp {
                 let p = |o: Option<(f32, f32)>, d: egui::Pos2| {
                     o.map(|(x, y)| egui::pos2(x, y)).unwrap_or(d)
                 };
-                app.win_pos[0] = egui::pos2(x, y);
-                app.win_pos[1] = p(session.eq_pos, app.win_pos[0]);
-                app.win_pos[2] = p(session.pl_pos, app.win_pos[0]);
-                app.lib_pos = p(session.lib_pos, app.win_pos[0]);
-                app.lib_pos_init = true;
-                app.has_pos_memory = true;
+                app.geom.win_pos[0] = egui::pos2(x, y);
+                app.geom.win_pos[1] = p(session.eq_pos, app.geom.win_pos[0]);
+                app.geom.win_pos[2] = p(session.pl_pos, app.geom.win_pos[0]);
+                app.geom.lib_pos = p(session.lib_pos, app.geom.win_pos[0]);
+                app.geom.lib_pos_init = true;
+                app.geom.has_pos_memory = true;
             }
 
             // Files passed on the command line ("Open with", or files dropped on
@@ -1427,7 +1436,7 @@ impl LinAmpApp {
         }
         // Where to insert: a drop on the (expanded) playlist window lands at the row
         // under the release point; every other target appends (row = None).
-        let drop_row = if win == Some(ClWin::Pl) && !self.pl_shade {
+        let drop_row = if win == Some(ClWin::Pl) && !self.geom.pl_shade {
             ctx.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()))
                 .map(|p| classic::pl_row_at(p.y / self.scale, self.plview.first))
         } else {
@@ -1538,9 +1547,9 @@ impl LinAmpApp {
     fn toggle_library(&mut self) {
         self.lib_visible = !self.lib_visible;
         if self.lib_visible {
-            if !self.lib_pos_init {
-                self.lib_pos = self.library_default_pos();
-                self.lib_pos_init = true;
+            if !self.geom.lib_pos_init {
+                self.geom.lib_pos = self.library_default_pos();
+                self.geom.lib_pos_init = true;
             }
             self.refresh_library();
         }
@@ -1550,7 +1559,7 @@ impl LinAmpApp {
     /// Default position when the library is first opened: docked to the right edge
     /// of the main window, top-aligned with it.
     fn library_default_pos(&self) -> egui::Pos2 {
-        let base = self.win_pos[0];
+        let base = self.geom.win_pos[0];
         egui::pos2(base.x + classic::MAIN_W as f32 * self.scale, base.y)
     }
 
@@ -1628,7 +1637,7 @@ impl LinAmpApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
                     self.win_inner_size(ClWin::Main),
                 ));
-                self.root_last = None;
+                self.geom.root_last = None;
             }
             UiMode::Modern => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
@@ -1670,7 +1679,7 @@ impl LinAmpApp {
             .unwrap_or_else(|| self.player.position().as_secs_f32());
 
         MainState {
-            focused: self.app_focused,
+            focused: self.geom.app_focused,
             play,
             pressed: self.render.pressed_btn,
             shuffle: self.shuffle,
@@ -1773,7 +1782,7 @@ impl LinAmpApp {
             // Paused flashes the time (see `time_blink_hidden`), so keep repainting.
             || self.player.state() == PlayState::Paused
             || self.fade.is_some()
-            || self.drag.is_some()
+            || self.geom.drag.is_some()
             || self.classic_seek_preview.is_some()
             || self.pending_stream.is_some() // keep polling while a stream connects
             || self.popup.is_some()
@@ -1794,10 +1803,10 @@ impl LinAmpApp {
 
     /// Height in native px of each classic window given shade state.
     fn main_h(&self) -> f32 {
-        if self.main_shade { 14.0 } else { classic::MAIN_H as f32 }
+        if self.geom.main_shade { 14.0 } else { classic::MAIN_H as f32 }
     }
     fn eq_h(&self) -> f32 {
-        if self.eq_shade { 14.0 } else { classic::EQ_H as f32 }
+        if self.geom.eq_shade { 14.0 } else { classic::EQ_H as f32 }
     }
     fn apply_classic_slider(&mut self, region: Btn, lx: f32) {
         match region {
@@ -1809,7 +1818,7 @@ impl LinAmpApp {
                     .map(|d| d.as_secs_f32())
                     .unwrap_or(0.0);
                 if dur > 0.0 {
-                    let frac = if self.main_shade {
+                    let frac = if self.geom.main_shade {
                         // Collapsed main bar uses the shorter mini-posbar track.
                         (lx - classic::SHADE_POS_X)
                             / (classic::SHADE_POS_W - classic::SHADE_POS_THUMB_W)
@@ -1972,17 +1981,17 @@ impl LinAmpApp {
             eq_bands: self.eq.bands.to_vec(),
             eq_visible: self.eq_visible,
             pl_visible: self.pl_visible,
-            main_shade: self.main_shade,
-            eq_shade: self.eq_shade,
-            pl_shade: self.pl_shade,
+            main_shade: self.geom.main_shade,
+            eq_shade: self.geom.eq_shade,
+            pl_shade: self.geom.pl_shade,
             lib_visible: self.lib_visible,
             lib_col_fr: Some(self.lib.col_fr),
             // Remember the window layout once it's been established on frame 1.
-            main_pos: self.positions_init.then_some((self.win_pos[0].x, self.win_pos[0].y)),
-            eq_pos: self.positions_init.then_some((self.win_pos[1].x, self.win_pos[1].y)),
-            pl_pos: self.positions_init.then_some((self.win_pos[2].x, self.win_pos[2].y)),
-            lib_pos: (self.positions_init && self.lib_pos_init)
-                .then_some((self.lib_pos.x, self.lib_pos.y)),
+            main_pos: self.geom.positions_init.then_some((self.geom.win_pos[0].x, self.geom.win_pos[0].y)),
+            eq_pos: self.geom.positions_init.then_some((self.geom.win_pos[1].x, self.geom.win_pos[1].y)),
+            pl_pos: self.geom.positions_init.then_some((self.geom.win_pos[2].x, self.geom.win_pos[2].y)),
+            lib_pos: (self.geom.positions_init && self.geom.lib_pos_init)
+                .then_some((self.geom.lib_pos.x, self.geom.lib_pos.y)),
         }
     }
 
@@ -2004,7 +2013,7 @@ impl LinAmpApp {
         }
         // Don't churn the file every 300ms during a drag; the final resting
         // position is saved on the next cycle after the button is released.
-        if self.drag.is_some() || self.lib_drag.is_some() {
+        if self.geom.drag.is_some() || self.geom.lib_drag.is_some() {
             return;
         }
         // Change detection hashes every track path, so don't run it every frame.
@@ -2084,7 +2093,7 @@ impl LinAmpApp {
 
     fn make_eq_state(&self) -> classic::EqState {
         classic::EqState {
-            focused: self.app_focused,
+            focused: self.geom.app_focused,
             on: self.eq.enabled,
             auto: self.eq.auto,
             pressed: self.eq.active,
@@ -2377,7 +2386,7 @@ impl LinAmpApp {
             ClWin::Main => self.main_h(),
             ClWin::Eq => self.eq_h(),
             ClWin::Pl => {
-                if self.pl_shade {
+                if self.geom.pl_shade {
                     14.0
                 } else {
                     self.plview.px_h
@@ -2388,7 +2397,7 @@ impl LinAmpApp {
 
     fn win_inner_size(&self, win: ClWin) -> egui::Vec2 {
         let w = match win {
-            ClWin::Pl if !self.pl_shade => self.plview.px_w,
+            ClWin::Pl if !self.geom.pl_shade => self.plview.px_w,
             _ => classic::MAIN_W as f32,
         };
         egui::vec2(w * self.scale, self.win_native_h(win) * self.scale)
@@ -2424,7 +2433,7 @@ impl LinAmpApp {
         if !self.lib_visible {
             return false;
         }
-        let lib = egui::Rect::from_min_size(self.lib_pos, self.lib_size());
+        let lib = egui::Rect::from_min_size(self.geom.lib_pos, self.lib_size());
         rects_docked(lib, self.win_rect_pts(0))
             || (self.eq_visible && rects_docked(lib, self.win_rect_pts(1)))
             || (self.pl_visible && rects_docked(lib, self.win_rect_pts(2)))
@@ -2440,7 +2449,7 @@ impl LinAmpApp {
         // borderless main window. Borderless with a skin-drawn title bar (like the
         // classic windows and the Library) so the skin cursor covers the whole
         // window, including the title bar, with no OS chrome to break it.
-        let default_pos = self.win_pos[0] + egui::vec2(24.0, 24.0);
+        let default_pos = self.geom.win_pos[0] + egui::vec2(24.0, 24.0);
         let pos = *self.prefs_pos.get_or_insert(default_pos);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
@@ -2779,7 +2788,7 @@ impl LinAmpApp {
         if self.jump_file.is_none() {
             return;
         }
-        let screen = self.win_pos[0] + egui::vec2(28.0, 28.0);
+        let screen = self.geom.win_pos[0] + egui::vec2(28.0, 28.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, Jump to file")
             .with_position(screen)
@@ -2896,7 +2905,7 @@ impl LinAmpApp {
         if self.jump_time.is_none() {
             return;
         }
-        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
+        let screen = self.geom.win_pos[0] + egui::vec2(40.0, 40.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, Jump to time")
             .with_position(screen)
@@ -2953,7 +2962,7 @@ impl LinAmpApp {
         if self.eq.save_name.is_none() {
             return;
         }
-        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
+        let screen = self.geom.win_pos[0] + egui::vec2(40.0, 40.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, Save EQ preset")
             .with_position(screen)
@@ -3053,7 +3062,7 @@ impl LinAmpApp {
         if self.location_entry.is_none() {
             return;
         }
-        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
+        let screen = self.geom.win_pos[0] + egui::vec2(40.0, 40.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, Open location")
             .with_position(screen)
@@ -3127,7 +3136,7 @@ impl LinAmpApp {
         if !self.mb_visible || !self.prefs.minibrowser_enabled {
             return;
         }
-        let screen = self.win_pos[0] + egui::vec2(60.0, 60.0);
+        let screen = self.geom.win_pos[0] + egui::vec2(60.0, 60.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, Minibrowser")
             .with_position(screen)
@@ -3266,17 +3275,17 @@ impl LinAmpApp {
             return; // normal skin, never shaped, leave windows rectangular
         }
         let skin = self.theme.name.clone();
-        let main: &[Polygon] = if self.main_shade { &main_sr } else { &main_r };
+        let main: &[Polygon] = if self.geom.main_shade { &main_sr } else { &main_r };
         self.shape_one(0, "LinAmp", true, main, classic::MAIN_W, self.main_h() as u32, &skin);
-        let eq: &[Polygon] = if self.eq_shade { &eq_sr } else { &eq_r };
+        let eq: &[Polygon] = if self.geom.eq_shade { &eq_sr } else { &eq_r };
         let eqv = self.eq_visible;
         self.shape_one(1, "LinAmp Equalizer", eqv, eq, classic::MAIN_W, self.eq_h() as u32, &skin);
-        let (plw, plh) = if self.pl_shade {
+        let (plw, plh) = if self.geom.pl_shade {
             (classic::MAIN_W, 14)
         } else {
             (self.plview.px_w as u32, self.plview.px_h as u32)
         };
-        let pl: &[Polygon] = if self.pl_shade { &[] } else { &pl_r };
+        let pl: &[Polygon] = if self.geom.pl_shade { &[] } else { &pl_r };
         let plv = self.pl_visible;
         self.shape_one(2, "LinAmp Playlist", plv, pl, plw, plh, &skin);
         self.shaped_any = true;
@@ -3331,7 +3340,7 @@ impl LinAmpApp {
         use classic::{Btn, EqRegion, PlRegion};
         match win {
             ClWin::Main => {
-                if self.main_shade {
+                if self.geom.main_shade {
                     return "titlebar";
                 }
                 match classic::region_at(nx, ny) {
@@ -3343,7 +3352,7 @@ impl LinAmpApp {
                 }
             }
             ClWin::Eq => {
-                if self.eq_shade {
+                if self.geom.eq_shade {
                     return "eqtitle";
                 }
                 match classic::eq_region_at(nx, ny) {
@@ -3354,7 +3363,7 @@ impl LinAmpApp {
                 }
             }
             ClWin::Pl => {
-                if self.pl_shade {
+                if self.geom.pl_shade {
                     return "ptbar";
                 }
                 match classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h) {
@@ -3461,23 +3470,23 @@ impl LinAmpApp {
         // App-level focus: this frame's root focus OR'd with last frame's child
         // focus (children render later); hidden windows don't hold focus. The
         // shared active/inactive title-bar behaviour is in docs/ARCHITECTURE.md.
-        self.foc_root = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_root);
+        self.geom.foc_root = ctx.input(|i| i.viewport().focused).unwrap_or(self.geom.foc_root);
         if !self.eq_visible {
-            self.foc_eq = false;
+            self.geom.foc_eq = false;
         }
         if !self.pl_visible {
-            self.foc_pl = false;
+            self.geom.foc_pl = false;
         }
         if !self.lib_visible {
-            self.foc_lib = false;
+            self.geom.foc_lib = false;
         }
         // A classic popup menu is part of our app: keep the app considered focused
         // while one is open so the windows stay on their active title bars instead
         // of dimming (the popup is a separate OS window that may take focus).
-        self.app_focused = self.foc_root
-            || self.foc_eq
-            || self.foc_pl
-            || self.foc_lib
+        self.geom.app_focused = self.geom.foc_root
+            || self.geom.foc_eq
+            || self.geom.foc_pl
+            || self.geom.foc_lib
             || self.popup.is_some();
 
         // Root viewport = main window.
@@ -3493,9 +3502,9 @@ impl LinAmpApp {
         self.poll_pending_stream();
 
         // Initialise window positions, once.
-        if !self.positions_init {
+        if !self.geom.positions_init {
             if let Some(r) = ctx.input(|i| i.viewport().outer_rect) {
-                if self.has_pos_memory {
+                if self.geom.has_pos_memory {
                     // Restore the saved layout. If it would sit (partly) off the
                     // current virtual desktop, example: after a resolution drop, nudge
                     // the whole visible cluster back on, prioritising the top-left so
@@ -3511,43 +3520,43 @@ impl LinAmpApp {
                         }
                         if self.lib_visible {
                             union = union
-                                .union(egui::Rect::from_min_size(self.lib_pos, self.lib_size()));
+                                .union(egui::Rect::from_min_size(self.geom.lib_pos, self.lib_size()));
                         }
                         let delta = egui::vec2(
                             nudge_onto(union.min.x, union.max.x, vr.min.x, vr.max.x),
                             nudge_onto(union.min.y, union.max.y, vr.min.y, vr.max.y),
                         );
-                        for p in self.win_pos.iter_mut() {
+                        for p in self.geom.win_pos.iter_mut() {
                             *p += delta;
                         }
-                        self.lib_pos += delta;
+                        self.geom.lib_pos += delta;
                     }
-                    self.root_last = None; // move the root window to the restored pos
+                    self.geom.root_last = None; // move the root window to the restored pos
                 } else {
-                    self.win_pos[0] = r.min;
+                    self.geom.win_pos[0] = r.min;
                     // Dock the EQ/playlist windows under the main one, honouring
                     // which are visible and their collapsed state.
                     self.restack();
                     // Seed the library position (docked right of main) if it was
                     // restored visible but never positioned.
-                    if !self.lib_pos_init {
-                        self.lib_pos = self.library_default_pos();
-                        self.lib_pos_init = true;
+                    if !self.geom.lib_pos_init {
+                        self.geom.lib_pos = self.library_default_pos();
+                        self.geom.lib_pos_init = true;
                     }
                 }
-                self.positions_init = true;
+                self.geom.positions_init = true;
             }
         }
 
         // Apply root position/size only when we changed them (avoids fighting OS).
         let size = self.win_inner_size(ClWin::Main);
-        let pos = self.win_pos[0];
-        if self.root_last != Some((pos, size)) {
+        let pos = self.geom.win_pos[0];
+        if self.geom.root_last != Some((pos, size)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-            if self.positions_init {
+            if self.geom.positions_init {
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
             }
-            self.root_last = Some((pos, size));
+            self.geom.root_last = Some((pos, size));
         }
 
         // Keep the root window's always-on-top level in sync (send only on change).
@@ -3561,7 +3570,7 @@ impl LinAmpApp {
             let builder = egui::ViewportBuilder::default()
                 .with_title("LinAmp Equalizer")
                 .with_inner_size(self.win_inner_size(ClWin::Eq))
-                .with_position(self.win_pos[1])
+                .with_position(self.geom.win_pos[1])
                 .with_decorations(false)
                 .with_resizable(false)
                 .with_taskbar(false)
@@ -3571,7 +3580,7 @@ impl LinAmpApp {
                 // Fire global shortcuts while this window has focus (keyboard
                 // input goes to the focused viewport, not the root).
                 self.handle_shortcuts(ctx, ClWin::Eq);
-                self.foc_eq = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_eq);
+                self.geom.foc_eq = ctx.input(|i| i.viewport().focused).unwrap_or(self.geom.foc_eq);
                 self.render_window(ctx, ClWin::Eq);
             });
         }
@@ -3581,7 +3590,7 @@ impl LinAmpApp {
             let builder = egui::ViewportBuilder::default()
                 .with_title("LinAmp Playlist")
                 .with_inner_size(self.win_inner_size(ClWin::Pl))
-                .with_position(self.win_pos[2])
+                .with_position(self.geom.win_pos[2])
                 .with_decorations(false)
                 .with_resizable(false)
                 .with_taskbar(false)
@@ -3589,7 +3598,7 @@ impl LinAmpApp {
             let id = egui::ViewportId::from_hash_of("linamp_pl");
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
                 self.handle_shortcuts(ctx, ClWin::Pl);
-                self.foc_pl = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_pl);
+                self.geom.foc_pl = ctx.input(|i| i.viewport().focused).unwrap_or(self.geom.foc_pl);
                 self.render_window(ctx, ClWin::Pl);
             });
         }
