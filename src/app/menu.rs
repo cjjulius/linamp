@@ -324,13 +324,13 @@ impl super::LinAmpApp {
                             }
                             if item(ui, "Remove missing files") {
                                 let n = self.playlist.remove_missing();
-                                self.pl_selection.clear();
+                                self.plview.selection.clear();
                                 self.status = format!("Removed {n} missing file(s).");
                                 close = true;
                             }
                             if item(ui, "Remove all") {
                                 self.playlist.clear();
-                                self.pl_selection.clear();
+                                self.plview.selection.clear();
                                 self.player.stop();
                                 close = true;
                             }
@@ -341,7 +341,7 @@ impl super::LinAmpApp {
                                 close = true;
                             }
                             if item(ui, "Select none") {
-                                self.pl_selection.clear();
+                                self.plview.selection.clear();
                                 close = true;
                             }
                             if item(ui, "Invert selection") {
@@ -376,19 +376,19 @@ impl super::LinAmpApp {
                             }
                             if item(ui, "Randomize list") {
                                 self.playlist.randomize();
-                                self.pl_selection.clear();
+                                self.plview.selection.clear();
                                 close = true;
                             }
                             if item(ui, "Reverse list") {
                                 self.playlist.reverse();
-                                self.pl_selection.clear();
+                                self.plview.selection.clear();
                                 close = true;
                             }
                         }
                         Popup::PlList => {
                             if item(ui, "New list") {
                                 self.playlist.clear();
-                                self.pl_selection.clear();
+                                self.plview.selection.clear();
                                 self.player.stop();
                                 close = true;
                             }
@@ -406,8 +406,8 @@ impl super::LinAmpApp {
                             // selection's first) so Play / Edit act on what the user
                             // actually clicked, even within a multi-selection.
                             let target = self
-                                .pl_ctx_row
-                                .or_else(|| self.pl_selection.iter().min().copied());
+                                .plview.ctx_row
+                                .or_else(|| self.plview.selection.iter().min().copied());
                             if menu_item(ui, "Play", "Enter") {
                                 if let Some(i) = target {
                                     self.play_index(i);
@@ -457,7 +457,7 @@ impl super::LinAmpApp {
                                 close = true;
                             }
                             if menu_item(ui, "Select none", "") {
-                                self.pl_selection.clear();
+                                self.plview.selection.clear();
                                 close = true;
                             }
                             if menu_item(ui, "Invert selection", "") {
@@ -492,7 +492,7 @@ impl super::LinAmpApp {
                             ui.separator();
                             if menu_item(ui, "Remove all", "") {
                                 self.playlist.clear();
-                                self.pl_selection.clear();
+                                self.plview.selection.clear();
                                 self.player.stop();
                                 close = true;
                             }

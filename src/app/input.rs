@@ -161,7 +161,7 @@ impl super::LinAmpApp {
             if k.ctrl {
                 // Ctrl+R, reverse the playlist order.
                 self.playlist.reverse();
-                self.pl_selection.clear();
+                self.plview.selection.clear();
             } else {
                 self.repeat_all = !self.repeat_all;
             }
@@ -296,7 +296,7 @@ impl super::LinAmpApp {
             self.open_files();
         }
         if k.enter {
-            if let Some(&idx) = self.pl_selection.iter().min() {
+            if let Some(&idx) = self.plview.selection.iter().min() {
                 self.play_index(idx);
             }
         }

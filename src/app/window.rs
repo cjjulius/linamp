@@ -81,22 +81,22 @@ impl super::LinAmpApp {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;
                 if let Some(classic::PlRegion::List) =
-                    classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h)
+                    classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h)
                 {
-                    let row = classic::pl_row_at(ny, self.pl_first);
+                    let row = classic::pl_row_at(ny, self.plview.first);
                     if row < self.playlist.len() {
                         // Winamp rule: right-clicking a row outside the current
                         // selection selects just it; a row already in the
                         // selection keeps the whole multi-selection.
-                        if !self.pl_selection.contains(&row) {
-                            self.pl_selection.clear();
-                            self.pl_selection.insert(row);
-                            self.pl_anchor = Some(row);
-                            self.pl_lead = Some(row);
+                        if !self.plview.selection.contains(&row) {
+                            self.plview.selection.clear();
+                            self.plview.selection.insert(row);
+                            self.plview.anchor = Some(row);
+                            self.plview.lead = Some(row);
                         }
                         // Remember the exact row so Play / Edit target it even when
                         // it's one of several selected.
-                        self.pl_ctx_row = Some(row);
+                        self.plview.ctx_row = Some(row);
                         self.open_popup_in(Popup::PlTrack, win, l);
                     } else {
                         self.open_popup_in(Popup::PlVoid, win, l);
@@ -108,7 +108,7 @@ impl super::LinAmpApp {
         if win == ClWin::Pl && !shaded && scroll != 0.0 {
             let max = self.playlist.len().saturating_sub(1) as i32;
             let step = if scroll > 0.0 { -3 } else { 3 };
-            self.pl_first = (self.pl_first as i32 + step).clamp(0, max.max(0)) as usize;
+            self.plview.first = (self.plview.first as i32 + step).clamp(0, max.max(0)) as usize;
         }
 
         // Mouse wheel over the main window adjusts volume, like classic Winamp
@@ -236,15 +236,15 @@ impl super::LinAmpApp {
                         }
                         ClWin::Pl => {
                             use classic::PlRegion as P;
-                            match classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h) {
+                            match classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h) {
                                 Some(P::Close) => self.close_window(ctx, ClWin::Pl),
                                 Some(P::TitleBar) => self.start_drag(ctx, win, screen_cursor),
                                 Some(P::Resize) => {
                                     self.resize_pl =
-                                        Some(egui::vec2(self.pl_px_w - nx, self.pl_px_h - ny))
+                                        Some(egui::vec2(self.plview.px_w - nx, self.plview.px_h - ny))
                                 }
                                 Some(P::List) => {
-                                    let row = classic::pl_row_at(ny, self.pl_first);
+                                    let row = classic::pl_row_at(ny, self.plview.first);
                                     if row < self.playlist.len() {
                                         let now = Instant::now();
                                         // A plain repeat-click on the same row plays
@@ -253,7 +253,7 @@ impl super::LinAmpApp {
                                         let dbl = !sel_ctrl
                                             && !sel_shift
                                             && self
-                                                .pl_last_click
+                                                .plview.last_click
                                                 .map(|(r, t)| {
                                                     r == row
                                                         && now.duration_since(t).as_millis() < 350
@@ -269,12 +269,12 @@ impl super::LinAmpApp {
                                                 crate::selection::CtrlMode::Toggle,
                                             );
                                         }
-                                        self.pl_last_click = Some((row, now));
+                                        self.plview.last_click = Some((row, now));
                                     }
                                 }
                                 Some(menu @ (P::AddMenu | P::RemMenu | P::SelMenu | P::MiscMenu | P::ListMenu)) => {
                                     // Open on release (below) so this click can't dismiss it.
-                                    self.pl_menu_press = Some(menu);
+                                    self.plview.menu_press = Some(menu);
                                 }
                                 // Mini-player transport buttons mirror the main window's.
                                 Some(P::MiniPrev) => self.trigger_classic(ctx, Btn::Prev),
@@ -376,8 +376,8 @@ impl super::LinAmpApp {
                     // Resize smoothly during the drag; the 25/29px grid is applied
                     // only on release (#61), so the rows don't re-flow and jiggle
                     // as the size jumps between grid steps mid-drag.
-                    self.pl_px_h = (ny + grab.y).max(87.0);
-                    self.pl_px_w = (nx + grab.x).max(classic::MAIN_W as f32);
+                    self.plview.px_h = (ny + grab.y).max(87.0);
+                    self.plview.px_w = (nx + grab.x).max(classic::MAIN_W as f32);
                     // Stop growing at the screen edge: cap the height so the window's
                     // bottom can't pass the bottom of the desktop. Otherwise the WM
                     // pushes the top edge up to keep the window on-screen, so the
@@ -387,7 +387,7 @@ impl super::LinAmpApp {
                     if let Some(vr) = virtual_desktop_rect(ctx) {
                         let top_y = self.win_pos[win_idx(ClWin::Pl)].y;
                         if let Some(max_h) = classic::pl_max_height(vr.max.y, top_y, self.scale) {
-                            self.pl_px_h = self.pl_px_h.min(max_h);
+                            self.plview.px_h = self.plview.px_h.min(max_h);
                         }
                     }
                 }
@@ -411,11 +411,11 @@ impl super::LinAmpApp {
                 // Quantize to Winamp's 25px (width) / 29px (height) grid now the
                 // drag is finished (#61).
                 let hstep = 29.0;
-                self.pl_px_h = ((self.pl_px_h / hstep).round() * hstep).max(87.0);
+                self.plview.px_h = ((self.plview.px_h / hstep).round() * hstep).max(87.0);
                 let wstep = 25.0;
                 let min_w = classic::MAIN_W as f32;
-                self.pl_px_w =
-                    (((self.pl_px_w - min_w) / wstep).round() * wstep + min_w).max(min_w);
+                self.plview.px_w =
+                    (((self.plview.px_w - min_w) / wstep).round() * wstep + min_w).max(min_w);
             }
             self.resize_pl = None;
             if let Some(l) = local {
@@ -452,8 +452,8 @@ impl super::LinAmpApp {
                     }
                 }
                 if win == ClWin::Pl {
-                    if let Some(r) = self.pl_menu_press.take() {
-                        if classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h) == Some(r) {
+                    if let Some(r) = self.plview.menu_press.take() {
+                        if classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h) == Some(r) {
                             use classic::PlRegion as P;
                             let kind = match r {
                                 P::AddMenu => Popup::PlAdd,
@@ -469,7 +469,7 @@ impl super::LinAmpApp {
             }
             self.render.active_region = None;
             self.eq.active = None;
-            self.pl_menu_press = None;
+            self.plview.menu_press = None;
         }
 
         if win == ClWin::Main {

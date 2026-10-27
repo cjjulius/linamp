@@ -77,9 +77,9 @@ impl super::LinAmpApp {
             }
             ClWin::Pl => {
                 self.pl_shade.hash(&mut h);
-                self.pl_px_w.to_bits().hash(&mut h);
-                self.pl_px_h.to_bits().hash(&mut h);
-                self.pl_first.hash(&mut h);
+                self.plview.px_w.to_bits().hash(&mut h);
+                self.plview.px_h.to_bits().hash(&mut h);
+                self.plview.first.hash(&mut h);
                 self.pl_pressed_button().hash(&mut h);
                 self.time_remaining.hash(&mut h);
                 self.time_blink_hidden.hash(&mut h);
@@ -93,12 +93,12 @@ impl super::LinAmpApp {
                 let vis = if self.pl_shade {
                     0
                 } else {
-                    classic::pl_visible_rows(self.pl_px_h as u32)
+                    classic::pl_visible_rows(self.plview.px_h as u32)
                 };
-                let end = (self.pl_first + vis).min(self.playlist.len());
-                for i in self.pl_first..end {
+                let end = (self.plview.first + vis).min(self.playlist.len());
+                for i in self.plview.first..end {
                     (Some(i) == self.playlist.current).hash(&mut h);
-                    self.pl_selection.contains(&i).hash(&mut h);
+                    self.plview.selection.contains(&i).hash(&mut h);
                     if let Some(t) = self.playlist.tracks.get(i) {
                         t.artist.hash(&mut h);
                         t.title.hash(&mut h);
@@ -128,9 +128,9 @@ impl super::LinAmpApp {
 
         // Lazily read tags for the playlist rows about to be shown (on-view mode).
         if win == ClWin::Pl && !self.pl_shade {
-            let vis = classic::pl_visible_rows(self.pl_px_h as u32);
-            let end = (self.pl_first + vis).min(self.playlist.len());
-            for i in self.pl_first..end {
+            let vis = classic::pl_visible_rows(self.plview.px_h as u32);
+            let end = (self.plview.first + vis).min(self.playlist.len());
+            for i in self.plview.first..end {
                 self.playlist.ensure_loaded(i);
             }
         }
@@ -166,7 +166,7 @@ impl super::LinAmpApp {
         }
         .expect("composed above");
         let nw = match win {
-            ClWin::Pl if !self.pl_shade => self.pl_px_w,
+            ClWin::Pl if !self.pl_shade => self.plview.px_w,
             _ => classic::MAIN_W as f32,
         };
         let nh = self.win_native_h(win);
@@ -185,7 +185,7 @@ impl super::LinAmpApp {
                     ClWin::Main if !self.main_shade => classic::main_tooltips(),
                     ClWin::Eq if !self.eq_shade => classic::eq_tooltips(),
                     ClWin::Pl if !self.pl_shade => {
-                        classic::pl_tooltips(self.pl_px_w as i32, self.pl_px_h as i32)
+                        classic::pl_tooltips(self.plview.px_w as i32, self.plview.px_h as i32)
                     }
                     _ => Vec::new(),
                 };
@@ -249,9 +249,9 @@ impl super::LinAmpApp {
                 } else {
                     // Build only the visible window; compose skips `first` rows, so
                     // the slice starts at pl_first and we pass first: 0 below.
-                    let vis = classic::pl_visible_rows(self.pl_px_h as u32);
-                    let end = (self.pl_first + vis).min(self.playlist.len());
-                    let rows = self.build_pl_rows(self.pl_first, end);
+                    let vis = classic::pl_visible_rows(self.plview.px_h as u32);
+                    let end = (self.plview.first + vis).min(self.playlist.len());
+                    let rows = self.build_pl_rows(self.plview.first, end);
                     let colors = self.pl_colors();
                     let elapsed_secs = match self.player.state() {
                         PlayState::Stopped => 0.0,
@@ -284,7 +284,7 @@ impl super::LinAmpApp {
                         total_partial,
                         time_hidden: self.time_blink_hidden,
                     };
-                    cs.compose_playlist(&st, self.pl_px_w as u32, self.pl_px_h as u32)
+                    cs.compose_playlist(&st, self.plview.px_w as u32, self.plview.px_h as u32)
                 }
             }
         }

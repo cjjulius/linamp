@@ -29,8 +29,8 @@ pub(super) struct TagEditor {
 impl super::LinAmpApp {
     /// Open the file-info / tag editor for the selected row (or current track).
     pub(super) fn open_tag_editor(&mut self) {
-        let idx = if self.pl_selection.len() == 1 {
-            self.pl_selection.iter().next().copied()
+        let idx = if self.plview.selection.len() == 1 {
+            self.plview.selection.iter().next().copied()
         } else {
             self.playlist.current
         }

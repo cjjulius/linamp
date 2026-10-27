@@ -410,6 +410,27 @@ struct ClassicRenderState {
     pressed_btn: Option<Btn>,
 }
 
+/// Classic playlist view + selection state (C1).
+struct PlaylistViewState {
+    /// Index of the first visible row (scroll position).
+    first: usize,
+    selection: HashSet<usize>,
+    /// Fixed end for shift-range selection; set by a plain/ctrl click or nav.
+    anchor: Option<usize>,
+    /// The focus ("lead") row keyboard navigation moves from; the highlight follows
+    /// it along with the rest of the selection.
+    lead: Option<usize>,
+    last_click: Option<(usize, Instant)>,
+    /// The row a playlist right-click targeted, so the track menu's Play / Edit act
+    /// on exactly that row rather than the selection's min / current track.
+    ctx_row: Option<usize>,
+    /// Playlist window size in unscaled skin pixels.
+    px_w: f32,
+    px_h: f32,
+    /// Bottom-bar menu button currently held / with its menu open.
+    menu_press: Option<classic::PlRegion>,
+}
+
 pub struct LinAmpApp {
     player: Player,
     playlist: Playlist,
@@ -508,17 +529,8 @@ pub struct LinAmpApp {
     mode_init: bool,
     eq_visible: bool,
     pl_visible: bool,
-    pl_first: usize,
-    pl_selection: HashSet<usize>,
-    /// Fixed end for shift-range selection; set by a plain/ctrl click or nav.
-    pl_anchor: Option<usize>,
-    /// The focus ("lead") row keyboard navigation moves from; the highlight
-    /// follows it along with the rest of the selection.
-    pl_lead: Option<usize>,
-    pl_last_click: Option<(usize, Instant)>,
-    /// The row a playlist right-click targeted, so the track menu's Play / Edit
-    /// act on exactly that row rather than the selection's min / current track.
-    pl_ctx_row: Option<usize>,
+    /// Classic playlist view + selection state.
+    plview: PlaylistViewState,
     popup: Option<(Popup, ClWin, egui::Pos2)>,
     /// A popup to open once the current one closes (for opening the Bookmarks
     /// list from an Options-menu item, classic popups aren't nested).
@@ -543,8 +555,6 @@ pub struct LinAmpApp {
     tb_last_click: Option<(ClWin, Instant)>,
     // multi-window geometry (points)
     win_pos: [egui::Pos2; 3],
-    pl_px_h: f32,
-    pl_px_w: f32,
     positions_init: bool,
     /// true when the last session's window positions were restored, so frame 1
     /// keeps them (clamped on-screen) instead of applying the default layout.
@@ -581,7 +591,6 @@ pub struct LinAmpApp {
     /// Last always-on-top state pushed to the root window (so we only send the
     /// window-level command when it changes).
     on_top_last: Option<bool>,
-    pl_menu_press: Option<classic::PlRegion>,
     prefs: Prefs,
     /// System-tray icon (kept alive for its lifetime) and the channel its clicks
     /// arrive on, drained once per frame (#40). `hidden_to_tray` tracks whether
@@ -800,12 +809,17 @@ impl LinAmpApp {
             mode_init: true,
             eq_visible: false,
             pl_visible: false,
-            pl_first: 0,
-            pl_selection: HashSet::new(),
-            pl_anchor: None,
-            pl_lead: None,
-            pl_last_click: None,
-            pl_ctx_row: None,
+            plview: PlaylistViewState {
+                first: 0,
+                selection: HashSet::new(),
+                anchor: None,
+                lead: None,
+                last_click: None,
+                ctx_row: None,
+                px_w: classic::MAIN_W as f32,
+                px_h: classic::PL_H as f32,
+                menu_press: None,
+            },
             popup: None,
             pending_popup: None,
             bookmarks: crate::config::Bookmarks::load(),
@@ -818,8 +832,6 @@ impl LinAmpApp {
             pl_shade: false,
             tb_last_click: None,
             win_pos: [egui::pos2(100.0, 100.0); 3],
-            pl_px_h: classic::PL_H as f32,
-            pl_px_w: classic::MAIN_W as f32,
             positions_init: false,
             has_pos_memory: false,
             app_focused: true,
@@ -835,7 +847,6 @@ impl LinAmpApp {
             resize_pl: None,
             root_last: None,
             on_top_last: None,
-            pl_menu_press: None,
             prefs,
             _tray: tray,
             tray_rx,
@@ -904,10 +915,10 @@ impl LinAmpApp {
                 app.playlist.load_all();
             }
             if let Some(w) = session.pl_width {
-                app.pl_px_w = w.max(classic::MAIN_W as f32);
+                app.plview.px_w = w.max(classic::MAIN_W as f32);
             }
             if let Some(h) = session.pl_height {
-                app.pl_px_h = h.max(87.0);
+                app.plview.px_h = h.max(87.0);
             }
             // Restore which windows were open and their collapsed/full state.
             // The saved window positions (if any) are applied just below and
@@ -1415,7 +1426,7 @@ impl LinAmpApp {
         // under the release point; every other target appends (row = None).
         let drop_row = if win == Some(ClWin::Pl) && !self.pl_shade {
             ctx.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()))
-                .map(|p| classic::pl_row_at(p.y / self.scale, self.pl_first))
+                .map(|p| classic::pl_row_at(p.y / self.scale, self.plview.first))
         } else {
             None
         };
@@ -1441,8 +1452,8 @@ impl LinAmpApp {
                 // Rows at/after the insertion point shifted down by `added`; keep the
                 // selection pointing at the same tracks (the dropped ones stay
                 // unselected).
-                self.pl_selection = self
-                    .pl_selection
+                self.plview.selection = self
+                    .plview.selection
                     .iter()
                     .map(|&i| if i >= at { i + added } else { i })
                     .collect();
@@ -1950,8 +1961,8 @@ impl LinAmpApp {
             current: self.playlist.current,
             volume: Some(self.player.volume()),
             balance: Some(self.balance),
-            pl_width: Some(self.pl_px_w),
-            pl_height: Some(self.pl_px_h),
+            pl_width: Some(self.plview.px_w),
+            pl_height: Some(self.plview.px_h),
             eq_enabled: self.eq.enabled,
             eq_auto: self.eq.auto,
             eq_preamp: self.eq.preamp_db,
@@ -2090,7 +2101,7 @@ impl LinAmpApp {
                 (
                     format!("{}. {}", i + 1, t.display_name()),
                     Some(i) == cur,
-                    self.pl_selection.contains(&i),
+                    self.plview.selection.contains(&i),
                     t.duration.map(|d| d.as_secs_f32()),
                 )
             })
@@ -2098,9 +2109,9 @@ impl LinAmpApp {
     }
 
     fn pl_select_all(&mut self) {
-        self.pl_selection = (0..self.playlist.len()).collect();
-        self.pl_anchor = Some(0);
-        self.pl_lead = self.playlist.len().checked_sub(1);
+        self.plview.selection = (0..self.playlist.len()).collect();
+        self.plview.anchor = Some(0);
+        self.plview.lead = self.playlist.len().checked_sub(1);
     }
 
     /// Apply a selection gesture landing on `target`, honoring Ctrl and Shift.
@@ -2120,16 +2131,16 @@ impl LinAmpApp {
         let target = target.min(max);
         // Clamp a stale anchor (the list may have shrunk since it was set) so a
         // shift-range can't run past the end.
-        let anchor = self.pl_anchor.map(|a| a.min(max));
-        self.pl_anchor = Some(crate::selection::apply(
-            &mut self.pl_selection,
+        let anchor = self.plview.anchor.map(|a| a.min(max));
+        self.plview.anchor = Some(crate::selection::apply(
+            &mut self.plview.selection,
             anchor,
             target,
             ctrl,
             shift,
             ctrl_mode,
         ));
-        self.pl_lead = Some(target);
+        self.plview.lead = Some(target);
         self.pl_scroll_to(target);
     }
 
@@ -2141,8 +2152,8 @@ impl LinAmpApp {
         }
         let len = self.playlist.len() as i32;
         let from = self
-            .pl_lead
-            .or(self.pl_anchor)
+            .plview.lead
+            .or(self.plview.anchor)
             .map(|b| b as i32)
             // Nothing focused yet: enter from the near end.
             .unwrap_or(if delta < 0 { len } else { -1 });
@@ -2157,17 +2168,17 @@ impl LinAmpApp {
 
     /// Adjust the playlist scroll offset so row `idx` is visible.
     fn pl_scroll_to(&mut self, idx: usize) {
-        let visible = classic::pl_visible_rows(self.pl_px_h as u32).max(1);
-        if idx < self.pl_first {
-            self.pl_first = idx;
-        } else if idx >= self.pl_first + visible {
-            self.pl_first = idx + 1 - visible;
+        let visible = classic::pl_visible_rows(self.plview.px_h as u32).max(1);
+        if idx < self.plview.first {
+            self.plview.first = idx;
+        } else if idx >= self.plview.first + visible {
+            self.plview.first = idx + 1 - visible;
         }
     }
 
     fn pl_invert_selection(&mut self) {
-        self.pl_selection = (0..self.playlist.len())
-            .filter(|i| !self.pl_selection.contains(i))
+        self.plview.selection = (0..self.playlist.len())
+            .filter(|i| !self.plview.selection.contains(i))
             .collect();
     }
 
@@ -2175,28 +2186,28 @@ impl LinAmpApp {
     /// one (or to the front when nothing is playing), keeping their order. The
     /// moved block becomes the new selection.
     fn play_next_selected(&mut self) {
-        if self.pl_selection.is_empty() {
+        if self.plview.selection.is_empty() {
             return;
         }
-        let sel: Vec<usize> = self.pl_selection.iter().copied().collect();
+        let sel: Vec<usize> = self.plview.selection.iter().copied().collect();
         let (cur, start, count) =
             reorder_play_next(&mut self.playlist.tracks, self.playlist.current, &sel);
         if count == 0 {
             return;
         }
         self.playlist.current = cur;
-        self.pl_selection = (start..start + count).collect();
+        self.plview.selection = (start..start + count).collect();
         self.sort_key = SortKey::Custom;
     }
 
     /// Remove tracks: when `keep` is true keep only selected (crop), else remove
     /// the selected ones. Preserves the current track by path where possible.
     fn pl_remove(&mut self, keep: bool) {
-        if self.pl_selection.is_empty() {
+        if self.plview.selection.is_empty() {
             return;
         }
         let cur_path = self.playlist.current_track().map(|t| t.path.clone());
-        let sel = self.pl_selection.clone();
+        let sel = self.plview.selection.clone();
         let mut i = 0usize;
         self.playlist.tracks.retain(|_| {
             let selected = sel.contains(&i);
@@ -2207,12 +2218,12 @@ impl LinAmpApp {
                 !selected
             }
         });
-        self.pl_selection.clear();
-        self.pl_anchor = None;
-        self.pl_lead = None;
+        self.plview.selection.clear();
+        self.plview.anchor = None;
+        self.plview.lead = None;
         self.playlist.current =
             cur_path.and_then(|p| self.playlist.tracks.iter().position(|t| t.path == p));
-        self.pl_first = self.pl_first.min(self.playlist.len().saturating_sub(1));
+        self.plview.first = self.plview.first.min(self.playlist.len().saturating_sub(1));
         self.status = format!("{} track(s) in playlist.", self.playlist.len());
     }
 
@@ -2366,7 +2377,7 @@ impl LinAmpApp {
                 if self.pl_shade {
                     14.0
                 } else {
-                    self.pl_px_h
+                    self.plview.px_h
                 }
             }
         }
@@ -2374,7 +2385,7 @@ impl LinAmpApp {
 
     fn win_inner_size(&self, win: ClWin) -> egui::Vec2 {
         let w = match win {
-            ClWin::Pl if !self.pl_shade => self.pl_px_w,
+            ClWin::Pl if !self.pl_shade => self.plview.px_w,
             _ => classic::MAIN_W as f32,
         };
         egui::vec2(w * self.scale, self.win_native_h(win) * self.scale)
@@ -3260,7 +3271,7 @@ impl LinAmpApp {
         let (plw, plh) = if self.pl_shade {
             (classic::MAIN_W, 14)
         } else {
-            (self.pl_px_w as u32, self.pl_px_h as u32)
+            (self.plview.px_w as u32, self.plview.px_h as u32)
         };
         let pl: &[Polygon] = if self.pl_shade { &[] } else { &pl_r };
         let plv = self.pl_visible;
@@ -3343,7 +3354,7 @@ impl LinAmpApp {
                 if self.pl_shade {
                     return "ptbar";
                 }
-                match classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h) {
+                match classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h) {
                     Some(PlRegion::TitleBar) => "ptbar",
                     Some(PlRegion::Resize) => "psize",
                     _ => "pnormal",
@@ -3594,7 +3605,7 @@ impl LinAmpApp {
     /// down, or the one whose fly-out menu is currently open.
     fn pl_pressed_button(&self) -> Option<classic::PlRegion> {
         use classic::PlRegion as P;
-        if let Some(r) = self.pl_menu_press {
+        if let Some(r) = self.plview.menu_press {
             return Some(r);
         }
         if let Some((kind, ClWin::Pl, _)) = self.popup {
