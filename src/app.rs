@@ -1565,9 +1565,12 @@ impl LinAmpApp {
         self.classic_tex = None;
         self.eq_tex = None;
         self.pl_tex = None;
-        // Reset cursors so a skin without custom cursors doesn't keep showing the
-        // previous skin's; the per-frame cursor update re-applies for the new skin
-        // if it ships any.
+        // Destroy the previous skin's cached native cursors (Windows) so they don't
+        // leak across skin changes, then reset the desired cursors so a skin with
+        // none doesn't keep showing the old skin's; the per-frame cursor update
+        // re-applies for the new skin if it ships any.
+        #[cfg(windows)]
+        crate::wincursor::clear_cache();
         self.clear_skin_cursors();
         // Remember this skin for next launch.
         self.skin_path = Some(path.to_path_buf());
