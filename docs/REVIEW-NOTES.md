@@ -1124,3 +1124,19 @@ player actually decodes.
   the tracker types mod/xm/s3m/it have audio/x-mod and audio/x-xm style types or
   can be left off if the desktop has no entry for them). Wire it behind
   cfg(target_os = "linux") in fileassoc.rs.
+
+## 2026-10-27 (#166 "Open with" enqueue vs clear)
+
+Launching LinAmp with files now restores the saved session first (playlist,
+volume, window layout) and then applies the opened files per a new preference,
+Preferences > Playlist > "Open with":
+- Enqueue (default): the opened files are added to the current playlist and the
+  first opened item starts playing. Your existing playlist and window layout are
+  kept (previously a command-line launch started from an empty playlist and
+  default layout).
+- Clear queue: the playlist is replaced with just the opened files.
+Manual check (Windows, LinAmp not already running): with a saved playlist, open
+an audio file from Explorer and confirm Enqueue appends it and plays it while the
+rest of the playlist survives; switch the pref to Clear queue and confirm the
+playlist is replaced. (The single-instance forwarding gap still applies: this is
+about a launch, not opening a file while LinAmp is already running.)

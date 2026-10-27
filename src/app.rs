@@ -844,28 +844,13 @@ impl LinAmpApp {
             status: "Ready. Press L to open files.".to_string(),
         };
 
-        // Accept files/folders/playlists passed on the command line.
-        let mut had_cli = false;
-        for arg in std::env::args().skip(1) {
-            let p = PathBuf::from(arg);
-            had_cli = true;
-            if p.is_dir() {
-                app.playlist.add_folder(&p);
-            } else if matches!(
-                p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
-                Some("m3u") | Some("m3u8") | Some("pls")
-            ) {
-                app.playlist.load_file(&p);
-            } else {
-                app.playlist.add_file(p);
-            }
-        }
-        if had_cli {
-            if !app.playlist.is_empty() {
-                app.play_index(0);
-            }
-        } else {
-            // Restore last session's playlist/window size (but don't auto-play).
+        // Restore the last session's playlist, volume and window layout. This
+        // runs whether or not files were passed on the command line, so "Open
+        // with" can enqueue into the current playlist and keep the window layout;
+        // a truly fresh install is handled by `first_run` below. Playback is
+        // started (if at all) by the command-line / first-run logic that follows,
+        // not here.
+        {
             let first_run = !Session::exists();
             let session = Session::load();
             for t in &session.tracks {
@@ -916,10 +901,38 @@ impl LinAmpApp {
                 app.has_pos_memory = true;
             }
 
-            // Fresh install (no saved session): the classic trio open and
-            // stacked (at the 1x default), the library closed and the bundled
-            // demo song cued in the playlist. The base skin loads by default.
-            if first_run {
+            // Files passed on the command line ("Open with", or files dropped on
+            // the exe). The "Open with" pref decides whether they replace the
+            // playlist (Clear) or add to it (Enqueue, the default); either way the
+            // first opened item starts playing. When none were passed, a fresh
+            // install cues the bundled demo instead.
+            let cli: Vec<PathBuf> = std::env::args().skip(1).map(PathBuf::from).collect();
+            if !cli.is_empty() {
+                if app.prefs.open_with == crate::config::OpenWith::Clear {
+                    app.playlist.clear();
+                }
+                // Where the opened items land, so playback starts on what the user
+                // opened rather than the top of an enqueued-into playlist.
+                let first_new = app.playlist.len();
+                for p in cli {
+                    if p.is_dir() {
+                        app.playlist.add_folder(&p);
+                    } else if matches!(
+                        p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
+                        Some("m3u") | Some("m3u8") | Some("pls")
+                    ) {
+                        app.playlist.load_file(&p);
+                    } else {
+                        app.playlist.add_file(p);
+                    }
+                }
+                if app.playlist.len() > first_new {
+                    app.play_index(first_new);
+                }
+            } else if first_run {
+                // Fresh install (no saved session): the classic trio open and
+                // stacked (at the 1x default), the library closed and the bundled
+                // demo song cued. The base skin loads by default.
                 app.eq_visible = true;
                 app.pl_visible = true;
                 app.lib_visible = false;
@@ -928,8 +941,6 @@ impl LinAmpApp {
                     if app.prefs.tag_on_load {
                         app.playlist.load_all();
                     }
-                    // First run only: start the bundled song playing. On later
-                    // launches a saved session exists, so this never re-fires.
                     if !app.playlist.is_empty() {
                         app.play_index(0);
                     }
@@ -2639,6 +2650,25 @@ impl LinAmpApp {
                     self.playlist.load_all();
                 }
             }
+        });
+        Self::pref_section(ui, "Open with", |ui| {
+            let mut mode = self.prefs.open_with;
+            ui.radio_value(
+                &mut mode,
+                crate::config::OpenWith::Enqueue,
+                "Enqueue: add opened files to the current playlist",
+            );
+            ui.radio_value(
+                &mut mode,
+                crate::config::OpenWith::Clear,
+                "Clear queue: replace the playlist with the opened files",
+            );
+            if mode != self.prefs.open_with {
+                self.prefs.open_with = mode;
+                self.prefs.save();
+            }
+            ui.add_space(4.0);
+            ui.weak("Applies when you open audio files with LinAmp from your file manager.");
         });
     }
 
