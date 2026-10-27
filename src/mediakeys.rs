@@ -358,6 +358,36 @@ mod linux_impl {
         fn can_control(&self) -> bool {
             true
         }
+
+        // The remaining MPRIS-required read properties. LinAmp does not report live
+        // state over MPRIS yet (a documented follow-up), but a client that reads
+        // these must get a value rather than an UnknownProperty error, or a strict
+        // media widget will drop LinAmp from the system controls. Static defaults:
+        // no track metadata, full volume, position 0, fixed 1.0x rate.
+        #[zbus(property)]
+        fn metadata(&self) -> std::collections::HashMap<String, zbus::zvariant::OwnedValue> {
+            std::collections::HashMap::new()
+        }
+        #[zbus(property)]
+        fn volume(&self) -> f64 {
+            1.0
+        }
+        #[zbus(property)]
+        fn position(&self) -> i64 {
+            0
+        }
+        #[zbus(property)]
+        fn rate(&self) -> f64 {
+            1.0
+        }
+        #[zbus(property)]
+        fn minimum_rate(&self) -> f64 {
+            1.0
+        }
+        #[zbus(property)]
+        fn maximum_rate(&self) -> f64 {
+            1.0
+        }
     }
 
     pub(super) fn spawn(egui: egui::Context, tx: Sender<TrayAction>) -> Result<LinuxMediaKeys, ()> {

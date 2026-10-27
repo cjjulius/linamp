@@ -317,16 +317,11 @@ mod linux_impl {
     /// creating parent directories. Returns whether the file was (re)written, so
     /// the caller refreshes the system cache only on a real change.
     fn write_if_changed(path: &Path, contents: &str) -> bool {
-        if std::fs::read_to_string(path).ok().as_deref() == Some(contents) {
-            return false;
-        }
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        std::fs::write(path, contents).is_ok()
+        write_bytes_if_changed(path, contents.as_bytes())
     }
 
-    /// Byte equivalent of `write_if_changed`, for the binary icon.
+    /// Write `contents` to `path` only when it differs, creating parent
+    /// directories. Returns whether the file was (re)written.
     fn write_bytes_if_changed(path: &Path, contents: &[u8]) -> bool {
         if std::fs::read(path).ok().as_deref() == Some(contents) {
             return false;
@@ -378,9 +373,6 @@ mod linux_impl {
             write_bytes_if_changed(&icons.join("256x256").join("apps").join("linamp.png"), ICON_PNG);
         icon_changed |=
             write_if_changed(&icons.join("scalable").join("apps").join("linamp.svg"), ICON_SVG);
-        if icon_changed {
-            refresh_icon_cache(&icons);
-        }
 
         // The desktop entry: a complete entry with the running executable as Exec
         // and the full MIME list, so "Open with" and the Default Apps UI offer
@@ -412,16 +404,32 @@ mod linux_impl {
              StartupNotify=false\n"
         );
         let app_dir = data.join("applications");
-        if write_if_changed(&app_dir.join(DESKTOP_FILE), &desktop) {
-            run_quiet("update-desktop-database", &app_dir);
-        }
+        let desktop_changed = write_if_changed(&app_dir.join(DESKTOP_FILE), &desktop);
 
-        // Teach the per-user MIME database the tracker types. Only refresh the
-        // cache when the package changed, since update-mime-database rebuilds the
-        // whole user cache and that is wasted work on a steady-state launch.
+        // Teach the per-user MIME database the tracker types that standard
+        // shared-mime-info omits.
         let mime_dir = data.join("mime");
-        if write_if_changed(&mime_dir.join("packages").join(MIME_PACKAGE), MIME_PACKAGE_XML) {
-            run_quiet("update-mime-database", &mime_dir);
+        let mime_changed =
+            write_if_changed(&mime_dir.join("packages").join(MIME_PACKAGE), MIME_PACKAGE_XML);
+
+        // Run the cache refreshes off the main thread. update-mime-database
+        // rebuilds the whole per-user MIME cache (1-3s on a first launch), and
+        // register() runs before the window is created, so doing these inline would
+        // stall startup. They only run when a file actually changed, so steady-state
+        // launches spawn nothing. The GUI launch outlives the detached thread, so
+        // the refreshes finish.
+        if icon_changed || desktop_changed || mime_changed {
+            std::thread::spawn(move || {
+                if icon_changed {
+                    refresh_icon_cache(&icons);
+                }
+                if desktop_changed {
+                    run_quiet("update-desktop-database", &app_dir);
+                }
+                if mime_changed {
+                    run_quiet("update-mime-database", &mime_dir);
+                }
+            });
         }
     }
 
