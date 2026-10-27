@@ -11,8 +11,11 @@ mod decode;
 mod dock;
 mod eq;
 mod eqf;
+mod fileassoc;
 mod library;
+mod mediakeys;
 mod midi;
+mod openq;
 mod player;
 mod playlist;
 mod region;
@@ -104,10 +107,44 @@ fn main() -> eframe::Result<()> {
     // flags above are exempt (they may run alongside a GUI). The OS frees the lock on
     // exit or crash, so a stale lock can never wedge startup.
     let _instance_lock = match acquire_instance_lock() {
-        Instance::AlreadyRunning => return Ok(()),
-        Instance::Acquired(file) => Some(file),
+        Instance::AlreadyRunning => {
+            // Another LinAmp is already running (single instance). Hand it any
+            // files passed on the command line (Open with) through the open-request
+            // queue so it opens them, then exit. The running instance polls the
+            // queue and applies them per the "Open with" preference. Resolve each
+            // path against this launcher's working directory first: the running
+            // instance has a different cwd, so a relative path (from a terminal
+            // launch) would otherwise be opened against the wrong directory.
+            let cwd = std::env::current_dir().ok();
+            let files: Vec<std::path::PathBuf> = args
+                .iter()
+                .skip(1)
+                .map(|a| {
+                    let p = std::path::PathBuf::from(a);
+                    match &cwd {
+                        Some(cwd) if p.is_relative() => cwd.join(p),
+                        _ => p,
+                    }
+                })
+                .collect();
+            openq::enqueue(&files);
+            return Ok(());
+        }
+        Instance::Acquired(file) => {
+            // This launch owns the single instance. Drop any stale open-requests a
+            // previous (crashed) instance left behind, so they aren't replayed as
+            // our startup files before the window begins polling the queue.
+            openq::clear();
+            Some(file)
+        }
         Instance::Unavailable => None,
     };
+
+    // Register LinAmp as a candidate handler for its audio types (#166), so it
+    // shows in Open with / Default Apps and opens files launched with it. Per-user
+    // and idempotent; done each launch so it also tracks a moved executable. Only
+    // on a real GUI launch (the headless flags above have already returned).
+    fileassoc::register();
 
     // Start borderless at classic skin size (the app sets the real mode on the
     // first frame once it knows whether a skin loaded).
