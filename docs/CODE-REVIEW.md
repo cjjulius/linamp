@@ -251,6 +251,11 @@ anything else, by module:
 - **[C6] Done.** The fixed popup menus draw, size and test from one
   `fixed_menu_entries` list. Surfaced and fixed a latent over-tall right-click
   playlist menu (5 declared separators vs 4 drawn).
+- **[C7] Done.** `ui_library` (one ~800-line method) is split into a slim
+  orchestrator plus `ui_lib_top` / `ui_lib_bottom` / `ui_lib_nav` /
+  `ui_lib_center` (`ui_lib_columns` + `ui_lib_tracks`) and `apply_lib_actions`,
+  with the derived render context in a `LibCx` struct and the deferred UI
+  actions in a `LibActs` struct. Panel bodies unchanged, behavior preserved.
 
 ### Phase 3: skip or defer (conscious no for now)
 
