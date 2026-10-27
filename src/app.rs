@@ -568,6 +568,11 @@ pub struct LinAmpApp {
     /// the window is currently hidden so a tray left-click toggles it.
     _tray: crate::tray::Tray,
     tray_rx: std::sync::mpsc::Receiver<crate::tray::TrayAction>,
+    /// Global media-key listener (kept alive for its lifetime) and the channel
+    /// its presses arrive on (#165). Reuses `TrayAction`, so presses route
+    /// through the same `handle_tray_action` as the tray's transport buttons.
+    _media_keys: crate::mediakeys::MediaKeys,
+    media_keys_rx: std::sync::mpsc::Receiver<crate::tray::TrayAction>,
     hidden_to_tray: bool,
     /// Time of the last tray-icon toggle, to debounce a double-click. A desktop that
     /// reports Activate for both clicks would otherwise toggle twice (hide then show,
@@ -691,6 +696,9 @@ impl LinAmpApp {
         let prefs = Prefs::load();
         let scale = prefs.scale();
         let (tray, tray_rx) = crate::tray::Tray::spawn(&cc.egui_ctx, prefs.tray_enabled);
+        // Global media keys (#165) are independent of tray mode, so they always
+        // spawn; the listener is a no-op where unsupported.
+        let (media_keys, media_keys_rx) = crate::mediakeys::MediaKeys::spawn(&cc.egui_ctx);
         // Run in tray mode only when the pref asks for it and the tray actually
         // started, so we never hide the window to a tray that isn't there.
         let tray_mode = prefs.tray_enabled && tray.is_active();
@@ -804,6 +812,8 @@ impl LinAmpApp {
             prefs,
             _tray: tray,
             tray_rx,
+            _media_keys: media_keys,
+            media_keys_rx,
             hidden_to_tray: false,
             last_tray_toggle: None,
             tray_prev_vis: (false, false, false),
@@ -3703,6 +3713,15 @@ impl eframe::App for LinAmpApp {
         // since the last frame. Collected first so each dispatch can take &mut self.
         let tray_actions: Vec<_> = self.tray_rx.try_iter().collect();
         for action in tray_actions {
+            self.handle_tray_action(ctx, action);
+        }
+
+        // Global media keys (#165): the keyboard transport keys report the same
+        // TrayActions, so route them through the same handler. A media-key
+        // PlayPause/Stop/Prev/Next never carries Toggle/Restore/Quit, so this is
+        // just the transport subset.
+        let media_actions: Vec<_> = self.media_keys_rx.try_iter().collect();
+        for action in media_actions {
             self.handle_tray_action(ctx, action);
         }
 
