@@ -35,6 +35,12 @@ pub struct Prefs {
     pub crossfade: bool,
     /// Crossfade length in seconds when `crossfade` is on.
     pub crossfade_secs: f32,
+    /// Window mode (#40). false = Normal: a taskbar button, no tray icon, and the
+    /// close/minimize buttons behave as usual. true = System tray: a tray icon,
+    /// no taskbar button, minimize and the close (X) button hide to the tray, and
+    /// only the main-menu Exit or the tray's Exit quit. A change applies live and
+    /// sets the launch state for next time.
+    pub tray_enabled: bool,
 }
 
 impl Default for Prefs {
@@ -54,6 +60,9 @@ impl Default for Prefs {
             numpad_transport: false,
             crossfade: false,
             crossfade_secs: 3.0,
+            // Normal window mode by default (taskbar button, no tray icon); the
+            // user opts into System tray mode in Preferences.
+            tray_enabled: false,
         }
     }
 }

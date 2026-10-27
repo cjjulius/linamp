@@ -33,3 +33,17 @@ pub(super) fn apply_theme(ctx: &egui::Context, t: &Theme) {
     style.spacing.slider_width = 120.0;
     ctx.set_style(style);
 }
+
+/// The skin-derived palette for a menu, so the native tray menu (#40) draws from
+/// the same source as the egui classic menus: background `bg` and text
+/// `contrast_text(bg)` (matching `window_fill` and `override_text_color` above),
+/// the theme-derived `window_stroke` border, and the skin's selection colour for
+/// the hovered row. Returns (bg, text, hover_bg, hover_text, border).
+pub(super) fn menu_palette(t: &Theme) -> (Color32, Color32, Color32, Color32, Color32) {
+    let bg = t.bg;
+    let text = skin::contrast_text(t.bg);
+    let hover_bg = t.list_sel_bg;
+    let hover_text = skin::contrast_text(t.list_sel_bg);
+    let border = skin::blend(t.bg, skin::contrast_text(t.bg), 0.35);
+    (bg, text, hover_bg, hover_text, border)
+}

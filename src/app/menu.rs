@@ -83,7 +83,8 @@ pub(super) fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool 
         .override_text_color
         .unwrap_or_else(|| vis.text_color());
     let weak = ui.visuals().weak_text_color();
-    let font = egui::TextStyle::Button.resolve(ui.style());
+    // One shared size for every menu, including the native tray menu.
+    let font = egui::FontId::proportional(crate::app::MENU_FONT_PT);
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, vis.rounding, vis.weak_bg_fill);
@@ -292,6 +293,9 @@ impl super::LinAmpApp {
                                 // This runs inside the popup's own viewport, so a
                                 // plain Close would only dismiss the menu. Target
                                 // the root viewport to actually quit the app.
+                                // force_quit makes the close handler quit even in
+                                // tray mode (where an X would otherwise hide).
+                                self.force_quit = true;
                                 ctx.send_viewport_cmd_to(
                                     egui::ViewportId::ROOT,
                                     egui::ViewportCommand::Close,
