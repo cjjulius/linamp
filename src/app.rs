@@ -568,6 +568,11 @@ pub struct LinAmpApp {
     /// the window is currently hidden so a tray left-click toggles it.
     _tray: crate::tray::Tray,
     tray_rx: std::sync::mpsc::Receiver<crate::tray::TrayAction>,
+    /// Global media-key listener (kept alive for its lifetime) and the channel
+    /// its presses arrive on (#165). Reuses `TrayAction`, so presses route
+    /// through the same `handle_tray_action` as the tray's transport buttons.
+    _media_keys: crate::mediakeys::MediaKeys,
+    media_keys_rx: std::sync::mpsc::Receiver<crate::tray::TrayAction>,
     hidden_to_tray: bool,
     /// Time of the last tray-icon toggle, to debounce a double-click. A desktop that
     /// reports Activate for both clicks would otherwise toggle twice (hide then show,
@@ -620,6 +625,8 @@ pub struct LinAmpApp {
     last_frame: Instant,
     last_device_check: Instant,
     last_session_check: Instant,
+    /// Throttle for polling the cross-instance "Open with" queue (#166).
+    last_open_check: Instant,
     status: String,
 }
 
@@ -691,6 +698,9 @@ impl LinAmpApp {
         let prefs = Prefs::load();
         let scale = prefs.scale();
         let (tray, tray_rx) = crate::tray::Tray::spawn(&cc.egui_ctx, prefs.tray_enabled);
+        // Global media keys (#165) are independent of tray mode, so they always
+        // spawn; the listener is a no-op where unsupported.
+        let (media_keys, media_keys_rx) = crate::mediakeys::MediaKeys::spawn(&cc.egui_ctx);
         // Run in tray mode only when the pref asks for it and the tray actually
         // started, so we never hide the window to a tray that isn't there.
         let tray_mode = prefs.tray_enabled && tray.is_active();
@@ -804,6 +814,8 @@ impl LinAmpApp {
             prefs,
             _tray: tray,
             tray_rx,
+            _media_keys: media_keys,
+            media_keys_rx,
             hidden_to_tray: false,
             last_tray_toggle: None,
             tray_prev_vis: (false, false, false),
@@ -831,31 +843,17 @@ impl LinAmpApp {
             last_frame: Instant::now(),
             last_device_check: Instant::now(),
             last_session_check: Instant::now(),
+            last_open_check: Instant::now(),
             status: "Ready. Press L to open files.".to_string(),
         };
 
-        // Accept files/folders/playlists passed on the command line.
-        let mut had_cli = false;
-        for arg in std::env::args().skip(1) {
-            let p = PathBuf::from(arg);
-            had_cli = true;
-            if p.is_dir() {
-                app.playlist.add_folder(&p);
-            } else if matches!(
-                p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
-                Some("m3u") | Some("m3u8") | Some("pls")
-            ) {
-                app.playlist.load_file(&p);
-            } else {
-                app.playlist.add_file(p);
-            }
-        }
-        if had_cli {
-            if !app.playlist.is_empty() {
-                app.play_index(0);
-            }
-        } else {
-            // Restore last session's playlist/window size (but don't auto-play).
+        // Restore the last session's playlist, volume and window layout. This
+        // runs whether or not files were passed on the command line, so "Open
+        // with" can enqueue into the current playlist and keep the window layout;
+        // a truly fresh install is handled by `first_run` below. Playback is
+        // started (if at all) by the command-line / first-run logic that follows,
+        // not here.
+        {
             let first_run = !Session::exists();
             let session = Session::load();
             for t in &session.tracks {
@@ -906,10 +904,18 @@ impl LinAmpApp {
                 app.has_pos_memory = true;
             }
 
-            // Fresh install (no saved session): the classic trio open and
-            // stacked (at the 1x default), the library closed and the bundled
-            // demo song cued in the playlist. The base skin loads by default.
-            if first_run {
+            // Files passed on the command line ("Open with", or files dropped on
+            // the exe). The "Open with" pref decides whether they replace the
+            // playlist (Clear) or add to it (Enqueue, the default); either way the
+            // first opened item starts playing. When none were passed, a fresh
+            // install cues the bundled demo instead.
+            let cli: Vec<PathBuf> = std::env::args().skip(1).map(PathBuf::from).collect();
+            if !cli.is_empty() {
+                app.open_paths(&cc.egui_ctx, cli, false);
+            } else if first_run {
+                // Fresh install (no saved session): the classic trio open and
+                // stacked (at the 1x default), the library closed and the bundled
+                // demo song cued. The base skin loads by default.
                 app.eq_visible = true;
                 app.pl_visible = true;
                 app.lib_visible = false;
@@ -918,8 +924,6 @@ impl LinAmpApp {
                     if app.prefs.tag_on_load {
                         app.playlist.load_all();
                     }
-                    // First run only: start the bundled song playing. On later
-                    // launches a saved session exists, so this never re-fires.
                     if !app.playlist.is_empty() {
                         app.play_index(0);
                     }
@@ -969,6 +973,59 @@ impl LinAmpApp {
         apply_theme(&cc.egui_ctx, &app.theme);
         app.push_tray_theme();
         app
+    }
+
+    /// Open files handed over by "Open with" (at launch, or forwarded from a
+    /// second instance). Honors the `open_with` pref: Clear replaces the playlist,
+    /// Enqueue (the default) adds to it. The first opened item starts playing.
+    /// When `focus` is set (a forwarded open to the already-running instance), the
+    /// window is surfaced so the user sees what they opened.
+    fn open_paths(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>, focus: bool) {
+        if paths.is_empty() {
+            return;
+        }
+        let clear = self.prefs.open_with == crate::config::OpenWith::Clear;
+        if clear {
+            self.playlist.clear();
+        }
+        // Where the opened items land, so playback starts on what was opened
+        // rather than the top of an enqueued-into playlist.
+        let first_new = self.playlist.len();
+        for p in paths {
+            if p.is_dir() {
+                self.playlist.add_folder(&p);
+            } else if matches!(
+                p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
+                Some("m3u") | Some("m3u8") | Some("pls")
+            ) {
+                self.playlist.load_file(&p);
+            } else {
+                self.playlist.add_file(p);
+            }
+        }
+        if self.playlist.len() > first_new {
+            // Read tags for just the opened items; the rest were already loaded at
+            // restore (or load lazily), so don't re-scan the whole playlist.
+            if self.prefs.tag_on_load {
+                for i in first_new..self.playlist.len() {
+                    self.playlist.ensure_loaded(i);
+                }
+            }
+            self.play_index(first_new);
+        } else if clear {
+            // Clear mode but nothing openable was added: the playlist is now empty,
+            // so stop the track that was playing instead of leaving it sounding.
+            self.stop_playback();
+        }
+        if focus {
+            // Surface the window for a forwarded open so the user sees the result.
+            if self.hidden_to_tray {
+                self.show_from_tray(ctx);
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+        }
     }
 
     // ---- transport helpers -------------------------------------------------
@@ -2630,6 +2687,25 @@ impl LinAmpApp {
                 }
             }
         });
+        Self::pref_section(ui, "Open with", |ui| {
+            let mut mode = self.prefs.open_with;
+            ui.radio_value(
+                &mut mode,
+                crate::config::OpenWith::Enqueue,
+                "Enqueue: add opened files to the current playlist",
+            );
+            ui.radio_value(
+                &mut mode,
+                crate::config::OpenWith::Clear,
+                "Clear queue: replace the playlist with the opened files",
+            );
+            if mode != self.prefs.open_with {
+                self.prefs.open_with = mode;
+                self.prefs.save();
+            }
+            ui.add_space(4.0);
+            ui.weak("Applies when you open audio files with LinAmp from your file manager.");
+        });
     }
 
     fn prefs_page_about(&mut self, ui: &mut egui::Ui) {
@@ -3704,6 +3780,27 @@ impl eframe::App for LinAmpApp {
         let tray_actions: Vec<_> = self.tray_rx.try_iter().collect();
         for action in tray_actions {
             self.handle_tray_action(ctx, action);
+        }
+
+        // Global media keys (#165): the keyboard transport keys report the same
+        // TrayActions, so route them through the same handler. A media-key
+        // PlayPause/Stop/Prev/Next never carries Toggle/Restore/Quit, so this is
+        // just the transport subset.
+        let media_actions: Vec<_> = self.media_keys_rx.try_iter().collect();
+        for action in media_actions {
+            self.handle_tray_action(ctx, action);
+        }
+
+        // Files forwarded from a second "Open with" launch (#166): a second
+        // instance can't run beside this one (single instance), so it dropped the
+        // paths in the open-request queue. Poll it (throttled) and open them per
+        // the "Open with" pref, bringing the window forward.
+        if now.duration_since(self.last_open_check).as_millis() >= 250 {
+            self.last_open_check = now;
+            let opened = crate::openq::drain();
+            if !opened.is_empty() {
+                self.open_paths(ctx, opened, true);
+            }
         }
 
         // Startup taskbar suppression (Linux): winit's with_taskbar(false) doesn't

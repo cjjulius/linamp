@@ -41,6 +41,20 @@ pub struct Prefs {
     /// only the main-menu Exit or the tray's Exit quit. A change applies live and
     /// sets the launch state for next time.
     pub tray_enabled: bool,
+    /// What "Open with" (files passed on the command line) does to the playlist:
+    /// Enqueue adds them to the current playlist (the default), Clear replaces it
+    /// with just the opened file(s). Either way the first opened item plays.
+    pub open_with: OpenWith,
+}
+
+/// What launching LinAmp with file arguments ("Open with", or dropping files on
+/// the exe) does to the current playlist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OpenWith {
+    /// Add the opened file(s) to the current playlist (classic enqueue).
+    Enqueue,
+    /// Replace the playlist with just the opened file(s).
+    Clear,
 }
 
 impl Default for Prefs {
@@ -63,6 +77,9 @@ impl Default for Prefs {
             // Normal window mode by default (taskbar button, no tray icon); the
             // user opts into System tray mode in Preferences.
             tray_enabled: false,
+            // "Open with" adds to the current playlist by default (classic
+            // enqueue); the user can switch to replacing it in Preferences.
+            open_with: OpenWith::Enqueue,
         }
     }
 }
@@ -368,6 +385,18 @@ mod tests {
         assert!(p.minibrowser_url.contains("github.com/cjjulius/linamp"));
         // Optional Features are opt-in (off by default).
         assert!(!p.minibrowser_enabled && !p.numpad_transport);
+    }
+
+    #[test]
+    fn open_with_defaults_to_enqueue_and_roundtrips() {
+        assert_eq!(Prefs::default().open_with, OpenWith::Enqueue);
+        // A legacy config.json without the field loads as the Enqueue default.
+        let legacy: Prefs = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.open_with, OpenWith::Enqueue);
+        // The chosen mode survives a JSON round-trip.
+        let p = Prefs { open_with: OpenWith::Clear, ..Prefs::default() };
+        let s = serde_json::to_string(&p).unwrap();
+        assert_eq!(serde_json::from_str::<Prefs>(&s).unwrap().open_with, OpenWith::Clear);
     }
 
     #[test]

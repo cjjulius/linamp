@@ -1,6 +1,6 @@
 [package]
 name = "linamp"
-version = "0.5.12"
+version = "0.5.13"
 edition = "2021"
 description = "LinAmp - a Winamp-inspired audio player for Linux and Windows, built in Rust"
 authors = ["LinAmp contributors"]
@@ -54,6 +54,14 @@ libc = "0.2"
 # The "blocking" feature exposes a synchronous spawn, which suits our non-async
 # egui loop; it runs the service on its own background thread.
 ksni = { version = "0.3.7", features = ["blocking"] }
+# Linux only: serve MPRIS (org.mpris.MediaPlayer2) over D-Bus for the global media
+# keys (#165). This is the standard route desktops use to deliver the keyboard
+# transport keys to a player. zbus 5 is already in the tree via ksni, so we share
+# that copy rather than pulling a second one. The "tokio" feature is already active
+# on the shared zbus, so the backend drives it from its own current-thread tokio
+# runtime on the media-keys thread.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "net", "time", "io-util"] }
 
 # Windows only: embed the application icon into linamp.exe as a resource so the
 # file and taskbar show the LinAmp icon (the in-app window icon is set from the

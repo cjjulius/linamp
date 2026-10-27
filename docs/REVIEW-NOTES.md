@@ -1072,3 +1072,88 @@ To bring Linux to parity, verify on Pop!_OS (and Mint):
   ignores it), so the no-taskbar-button aspect may need a relaunch or more work.
 - Tray menu theming: the skin-coloured owner-drawn menu is Windows-only. The Linux
   ksni menu follows the desktop theme (SNI menus are host-drawn), which is expected.
+
+## 2026-10-27 (#165 global media keys)
+
+Global media keys feed the existing transport actions (TrayAction), so a press
+routes through the same handle_tray_action as the tray buttons. New module
+src/mediakeys.rs, one extra channel drained per frame, in both window modes.
+- Windows (done, needs a manual check): RegisterHotKey on VK_MEDIA_PLAY_PAUSE,
+  VK_MEDIA_STOP, VK_MEDIA_PREV_TRACK and VK_MEDIA_NEXT_TRACK (MOD_NOREPEAT) on a
+  dedicated thread; WM_HOTKEY maps to PlayPause/Stop/Prev/Next. A key already held
+  by another app is skipped, the rest still register. Manual check: with LinAmp
+  unfocused (and hidden to the tray), press the keyboard's Play/Pause, Stop,
+  Previous and Next media keys and confirm each drives playback.
+- Linux (to do on the Linux box): the no-key backend is a no-op there for now.
+  Implement MPRIS over D-Bus so the desktop routes media keys (and the system
+  media controls) to LinAmp: serve org.mpris.MediaPlayer2 and .MediaPlayer2.Player
+  under org.mpris.MediaPlayer2.linamp, map the Player PlayPause/Stop/Next/Previous
+  methods onto the same TrayActions, and call egui.request_repaint() on each. zbus
+  5 is already in the tree via ksni, so share it rather than pulling a second
+  zbus. mpris-server is the obvious crate but currently targets zbus 6 and is
+  async (needs a runtime); implementing the two interfaces directly on
+  zbus::blocking keeps it consistent with the ksni backend and avoids a second
+  zbus. Wire it into mediakeys.rs behind cfg(target_os = "linux").
+
+## 2026-10-27 (#166 file-type associations)
+
+New module src/fileassoc.rs. register() runs once per launch (after the
+single-instance guard, so headless flags skip it) and is idempotent. The
+extension set is crate::playlist::SUPPORTED_EXTS, so associations track what the
+player actually decodes.
+- Windows (done, needs a manual check): per-user HKCU\Software\Classes only, no
+  admin. Writes a ProgID (LinAmp.Audio with icon and an open command that passes
+  the file as %1), an Applications\linamp.exe entry (FriendlyAppName + open
+  command, for "Open with > LinAmp"), per-extension OpenWithProgids (candidate
+  only, never seizing the default), SupportedTypes, and a RegisteredApplications
+  capability block so LinAmp lists in Default Apps. Then SHChangeNotify so the
+  shell refreshes. Manual check: run this build once, then right-click an .mp3 and
+  confirm LinAmp appears under "Open with"; open Settings > Default apps and
+  confirm LinAmp is listed and can be set for the audio types. With LinAmp not
+  already running, double-clicking an associated file should open and play it.
+- Known gap (follow-up): a file opened while LinAmp is already running does
+  nothing. The second launch exits on the single-instance lock without handing the
+  path to the running instance. Forwarding it (a small IPC: write the path where
+  the running instance watches, or a named pipe / socket) is a separate change;
+  until then "Open with" only plays when LinAmp isn't already up.
+- Linux (to do on the Linux box): install ~/.local/share/applications/linamp.desktop
+  with Exec=linamp %F and a MimeType= list, then register with xdg-mime (and
+  update-desktop-database), all under $HOME, no root. Map SUPPORTED_EXTS to MIME
+  types (audio/mpeg for mp3/mp1/mp2/mpa, audio/flac, audio/ogg, audio/x-wav,
+  audio/mp4 for m4a/m4b/mp4, audio/aac, audio/x-aiff, audio/midi for mid/midi;
+  the tracker types mod/xm/s3m/it have audio/x-mod and audio/x-xm style types or
+  can be left off if the desktop has no entry for them). Wire it behind
+  cfg(target_os = "linux") in fileassoc.rs.
+
+## 2026-10-27 (#166 "Open with" enqueue vs clear)
+
+Launching LinAmp with files now restores the saved session first (playlist,
+volume, window layout) and then applies the opened files per a new preference,
+Preferences > Playlist > "Open with":
+- Enqueue (default): the opened files are added to the current playlist and the
+  first opened item starts playing. Your existing playlist and window layout are
+  kept (previously a command-line launch started from an empty playlist and
+  default layout).
+- Clear queue: the playlist is replaced with just the opened files.
+Manual check (Windows, LinAmp not already running): with a saved playlist, open
+an audio file from Explorer and confirm Enqueue appends it and plays it while the
+rest of the playlist survives; switch the pref to Clear queue and confirm the
+playlist is replaced. (The single-instance forwarding gap still applies: this is
+about a launch, not opening a file while LinAmp is already running.)
+
+## 2026-10-27 (#166 "Open with" works while LinAmp is already running)
+
+Closes the single-instance forwarding gap noted above. "Open with" now works
+whether or not LinAmp is already open:
+- A second launch with file arguments can't run beside the first (single
+  instance). Instead it writes the paths to a small cross-instance queue
+  (src/openq.rs, one atomically-published file per request in the LinAmp data dir)
+  and exits. The running instance polls the queue each frame (throttled to 250ms)
+  and opens the files per the "Open with" pref, then brings its window forward
+  (restoring from the tray if it was hidden).
+- A cold launch (no instance running) opens the files directly as before. Both
+  paths share one open_paths() method, so Enqueue/Clear behave identically either
+  way, and the restored volume/balance/window layout is untouched.
+Manual check (Windows): with LinAmp open and a playlist built, open an audio file
+from Explorer and confirm the running window takes focus and (Enqueue) appends +
+plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.
