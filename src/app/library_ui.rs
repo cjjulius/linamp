@@ -22,6 +22,47 @@ enum LibAction {
     SelectAll,
 }
 
+/// Rendering context derived once at the top of `ui_library` and shared by its
+/// panels: the themed colours, the double-size `scale`, and the view-mode flags.
+#[derive(Clone)]
+struct LibCx {
+    s: f32,
+    panel_frame: egui::Frame,
+    list_fill: Color32,
+    row_col: Color32,
+    sel_bg: Color32,
+    sel_col: Color32,
+    accent: Color32,
+    header_bg: Color32,
+    header_fg: Color32,
+    dim: Color32,
+    browsing: bool,
+    show_rating: bool,
+    lib_menu_base: bool,
+}
+
+/// Actions a library panel defers while it holds `&self` borrows for drawing;
+/// `ui_library` applies them together once the panels are done, so no panel
+/// mutates shared state mid-draw.
+#[derive(Default)]
+struct LibActs {
+    nav_click: Option<crate::library::LibView>,
+    artist_click: Option<(Option<String>, bool)>,
+    album_click: Option<(Option<String>, bool)>,
+    track_click: Option<(usize, bool)>,
+    dbl_track: Option<usize>,
+    rate: Option<i64>,
+    do_play: bool,
+    do_enqueue: bool,
+    do_scan: bool,
+    do_clear: bool,
+    search_changed: bool,
+    lib_action: Option<LibAction>,
+    col_dx: [f32; 2],
+    header_click: Option<u8>,
+}
+
+
 impl super::LinAmpApp {
     /// Snap the library window to the player windows / screen edges on drag end.
     fn snap_lib_pos(&self, pos: egui::Pos2, monitor: Option<egui::Vec2>) -> egui::Pos2 {
@@ -495,29 +536,36 @@ impl super::LinAmpApp {
         let panel_frame = egui::Frame::none()
             .fill(panel_fill)
             .inner_margin(egui::Margin::same(4.0 * s));
-
-        // Deferred actions (collected while `self` is borrowed immutably).
-        let mut nav_click: Option<LibView> = None;
-        let mut artist_click: Option<(Option<String>, bool)> = None; // (None = "All", ctrl)
-        let mut album_click: Option<(Option<String>, bool)> = None;
-        let mut track_click: Option<(usize, bool)> = None;
-        let mut dbl_track: Option<usize> = None;
-        let mut rate: Option<i64> = None;
-        let mut do_play = false;
-        let mut do_enqueue = false;
-        let mut do_scan = false;
-        let mut do_clear = false;
-        let mut search_changed = false;
-        let mut lib_action: Option<LibAction> = None;
-        // Column-resize drag deltas (in body-width fractions) for the two dividers.
-        let mut col_dx = [0.0f32; 2];
-        // A clicked header column (0=artist 1=title 2=album/rating 3=time) to sort by.
-        let mut header_click: Option<u8> = None;
-
         let browsing = self.lib.query.trim().is_empty() && self.lib.nav == LibView::Audio;
         // The Top Rated list swaps the Album column for a star-rating column.
         let show_rating = self.lib.nav == LibView::TopRated && self.lib.query.trim().is_empty();
+        let cx = LibCx {
+            s,
+            panel_frame,
+            list_fill,
+            row_col,
+            sel_bg,
+            sel_col,
+            accent,
+            header_bg,
+            header_fg,
+            dim,
+            browsing,
+            show_rating,
+            lib_menu_base,
+        };
+        let mut act = LibActs::default();
+        self.ui_lib_top(ui, &cx, &mut act);
+        self.ui_lib_bottom(ui, &cx, &mut act);
+        self.ui_lib_nav(ui, &cx, &mut act);
+        self.ui_lib_center(ui, &cx, &mut act);
+        self.apply_lib_actions(ui, &cx, act);
+    }
 
+    fn ui_lib_top(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
+        let s = cx.s;
+        let panel_frame = cx.panel_frame.clone();
+        let accent = cx.accent;
         // ---- top: search + scan -------------------------------------------
         egui::TopBottomPanel::top("lib_top")
             .frame(panel_frame)
@@ -532,24 +580,30 @@ impl super::LinAmpApp {
                         )
                         .changed()
                     {
-                        search_changed = true;
+                        act.search_changed = true;
                     }
                     if ui.button("Clear").clicked() {
-                        do_clear = true;
+                        act.do_clear = true;
                     }
                     ui.separator();
                     if ui
                         .add_enabled(self.lib.scan.is_none(), egui::Button::new("Scan folder…"))
                         .clicked()
                     {
-                        do_scan = true;
+                        act.do_scan = true;
                     }
                     if !self.lib.scan_text.is_empty() {
                         ui.label(RichText::new(&self.lib.scan_text).color(accent));
                     }
                 });
             });
+    }
 
+    fn ui_lib_bottom(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
+        let s = cx.s;
+        let panel_frame = cx.panel_frame.clone();
+        let accent = cx.accent;
+        let dim = cx.dim;
         // ---- bottom: play / enqueue / rating / status ---------------------
         let total_secs: u64 = self
             .lib.results
@@ -580,10 +634,10 @@ impl super::LinAmpApp {
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.button(mnem("Play", 0)).clicked() {
-                        do_play = true;
+                        act.do_play = true;
                     }
                     if ui.button(mnem("Enqueue", 0)).clicked() {
-                        do_enqueue = true;
+                        act.do_enqueue = true;
                     }
                     ui.separator();
                     ui.add_enabled_ui(rating_target.is_some(), |ui| {
@@ -597,7 +651,7 @@ impl super::LinAmpApp {
                                 )
                                 .clicked()
                             {
-                                rate = Some(if cur_rating == n { 0 } else { n });
+                                act.rate = Some(if cur_rating == n { 0 } else { n });
                             }
                         }
                     });
@@ -608,7 +662,13 @@ impl super::LinAmpApp {
                     });
                 });
             });
+    }
 
+    fn ui_lib_nav(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
+        use crate::library::LibView;
+        let s = cx.s;
+        let panel_frame = cx.panel_frame.clone();
+        let dim = cx.dim;
         // ---- left: nav tree -----------------------------------------------
         egui::SidePanel::left("lib_nav")
             .resizable(false)
@@ -620,7 +680,7 @@ impl super::LinAmpApp {
                 let mut nav = |ui: &mut egui::Ui, label: &str, v: LibView| {
                     let indent = egui::RichText::new(format!("   {label}"));
                     if ui.selectable_label(self.lib.nav == v, indent).clicked() {
-                        nav_click = Some(v);
+                        act.nav_click = Some(v);
                     }
                 };
                 nav(ui, "Audio", LibView::Audio);
@@ -642,7 +702,7 @@ impl super::LinAmpApp {
                     )
                     .clicked()
                 {
-                    nav_click = Some(LibView::Bookmarks);
+                    act.nav_click = Some(LibView::Bookmarks);
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| match &self.library {
                     Some(lib) => {
@@ -653,8 +713,12 @@ impl super::LinAmpApp {
                     }
                 });
             });
+    }
 
-        // ---- center: artist/album columns + track table -------------------
+    fn ui_lib_center(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
+        let list_fill = cx.list_fill;
+        let browsing = cx.browsing;
+        let s = cx.s;
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(list_fill))
             .show_inside(ui, |ui| {
@@ -664,6 +728,22 @@ impl super::LinAmpApp {
                         .exact_height(148.0 * s)
                         .frame(egui::Frame::none().fill(list_fill))
                         .show_inside(ui, |ui| {
+                            self.ui_lib_columns(ui, cx, act);
+                        });
+                }
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none().fill(list_fill).inner_margin(egui::Margin::same(2.0 * s)))
+                    .show_inside(ui, |ui| {
+                        self.ui_lib_tracks(ui, cx, act);
+                    });
+            });
+    }
+
+    fn ui_lib_columns(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
+        let s = cx.s;
+        let row_col = cx.row_col;
+        let dim = cx.dim;
+        let lib_menu_base = cx.lib_menu_base;
                             ui.columns(2, |cols| {
                                 // Artist column.
                                 let c = &mut cols[0];
@@ -682,20 +762,20 @@ impl super::LinAmpApp {
                                             )
                                             .clicked()
                                         {
-                                            artist_click = Some((None, false));
+                                            act.artist_click = Some((None, false));
                                         }
                                         for (name, cnt) in &self.lib.artists {
                                             let sel = self.lib.sel_artists.contains(name);
                                             let resp = pane_row(ui, sel, name, *cnt, row_col, dim, s);
                                             if resp.clicked() {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
-                                                artist_click = Some((Some(name.clone()), ctrl));
+                                                act.artist_click = Some((Some(name.clone()), ctrl));
                                             }
                                             if resp.secondary_clicked() {
                                                 self.popups.cur = None;
                                                 self.lib.menu_open = true;
                                                 if !sel {
-                                                    artist_click = Some((Some(name.clone()), false));
+                                                    act.artist_click = Some((Some(name.clone()), false));
                                                 }
                                             }
                                             if lib_menu_base || resp.secondary_clicked() {
@@ -704,11 +784,11 @@ impl super::LinAmpApp {
                                                 // sliver when opened near a screen edge.
                                                 ui.set_min_width(170.0);
                                                 if ui.button(format!("Play all by \u{201c}{name}\u{201d}")).clicked() {
-                                                    lib_action = Some(LibAction::PlayArtist(name.clone()));
+                                                    act.lib_action = Some(LibAction::PlayArtist(name.clone()));
                                                     ui.close_menu();
                                                 }
                                                 if ui.button(format!("Enqueue all by \u{201c}{name}\u{201d}")).clicked() {
-                                                    lib_action = Some(LibAction::EnqueueArtist(name.clone()));
+                                                    act.lib_action = Some(LibAction::EnqueueArtist(name.clone()));
                                                     ui.close_menu();
                                                 }
                                             });
@@ -732,7 +812,7 @@ impl super::LinAmpApp {
                                             )
                                             .clicked()
                                         {
-                                            album_click = Some((None, false));
+                                            act.album_click = Some((None, false));
                                         }
                                         for (name, cnt) in &self.lib.albums {
                                             let label = if name.is_empty() { "(no album)" } else { name };
@@ -740,24 +820,24 @@ impl super::LinAmpApp {
                                             let resp = pane_row(ui, sel, label, *cnt, row_col, dim, s);
                                             if resp.clicked() {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
-                                                album_click = Some((Some(name.clone()), ctrl));
+                                                act.album_click = Some((Some(name.clone()), ctrl));
                                             }
                                             if resp.secondary_clicked() {
                                                 self.popups.cur = None;
                                                 self.lib.menu_open = true;
                                                 if !sel {
-                                                    album_click = Some((Some(name.clone()), false));
+                                                    act.album_click = Some((Some(name.clone()), false));
                                                 }
                                             }
                                             if lib_menu_base || resp.secondary_clicked() {
                                             resp.context_menu(|ui| {
                                                 ui.set_min_width(170.0);
                                                 if ui.button(format!("Play all from \u{201c}{label}\u{201d}")).clicked() {
-                                                    lib_action = Some(LibAction::PlayAlbum(name.clone()));
+                                                    act.lib_action = Some(LibAction::PlayAlbum(name.clone()));
                                                     ui.close_menu();
                                                 }
                                                 if ui.button(format!("Enqueue all from \u{201c}{label}\u{201d}")).clicked() {
-                                                    lib_action = Some(LibAction::EnqueueAlbum(name.clone()));
+                                                    act.lib_action = Some(LibAction::EnqueueAlbum(name.clone()));
                                                     ui.close_menu();
                                                 }
                                             });
@@ -765,13 +845,19 @@ impl super::LinAmpApp {
                                         }
                                     });
                             });
-                        });
-                }
+    }
 
-                // Track table.
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::none().fill(list_fill).inner_margin(egui::Margin::same(2.0 * s)))
-                    .show_inside(ui, |ui| {
+    fn ui_lib_tracks(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
+        use crate::library::LibView;
+        let s = cx.s;
+        let row_col = cx.row_col;
+        let sel_bg = cx.sel_bg;
+        let sel_col = cx.sel_col;
+        let header_bg = cx.header_bg;
+        let header_fg = cx.header_fg;
+        let dim = cx.dim;
+        let show_rating = cx.show_rating;
+        let lib_menu_base = cx.lib_menu_base;
                         let w = ui.available_width();
                         let dur_w = 48.0 * s;
                         // Reserve the scrollbar gutter so the header and the rows
@@ -846,7 +932,7 @@ impl super::LinAmpApp {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             }
                             if zr.clicked() {
-                                header_click = Some(ci);
+                                act.header_click = Some(ci);
                             }
                         }
                         // Draggable dividers between the flexible columns (a subtle,
@@ -866,7 +952,7 @@ impl super::LinAmpApp {
                             let stroke = egui::Stroke::new(1.0_f32, if hot { row_col } else { dim });
                             ui.painter().vline(bx, hdr.rect.y_range(), stroke);
                             if dr.dragged() && body > 1.0 {
-                                col_dx[k] += dr.drag_delta().x / body;
+                                act.col_dx[k] += dr.drag_delta().x / body;
                             }
                         }
                         egui::ScrollArea::vertical()
@@ -941,7 +1027,7 @@ impl super::LinAmpApp {
                                     });
                                     if resp.clicked() {
                                         let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
-                                        track_click = Some((i, ctrl));
+                                        act.track_click = Some((i, ctrl));
                                     }
                                     // Right-click selects the row it targets (unless it's
                                     // already part of the selection) so the menu's target
@@ -953,11 +1039,11 @@ impl super::LinAmpApp {
                                         self.popups.cur = None;
                                         self.lib.menu_open = true;
                                         if !selected {
-                                            track_click = Some((i, false));
+                                            act.track_click = Some((i, false));
                                         }
                                     }
                                     if resp.double_clicked() {
-                                        dbl_track = Some(i);
+                                        act.dbl_track = Some(i);
                                     }
                                     if lib_menu_base || resp.secondary_clicked() {
                                     resp.context_menu(|ui| {
@@ -970,49 +1056,49 @@ impl super::LinAmpApp {
                                             vec![i]
                                         };
                                         if ui.button("Play").clicked() {
-                                            lib_action = Some(LibAction::Play(rows.clone()));
+                                            act.lib_action = Some(LibAction::Play(rows.clone()));
                                             ui.close_menu();
                                         }
                                         if ui.button("Enqueue").clicked() {
-                                            lib_action = Some(LibAction::Enqueue(rows.clone()));
+                                            act.lib_action = Some(LibAction::Enqueue(rows.clone()));
                                             ui.close_menu();
                                         }
                                         ui.separator();
                                         if !t.artist.is_empty()
                                             && ui.button(format!("Play all by \u{201c}{}\u{201d}", t.artist)).clicked()
                                         {
-                                            lib_action = Some(LibAction::PlayArtist(t.artist.clone()));
+                                            act.lib_action = Some(LibAction::PlayArtist(t.artist.clone()));
                                             ui.close_menu();
                                         }
                                         if !t.album.is_empty()
                                             && ui.button(format!("Play all from \u{201c}{}\u{201d}", t.album)).clicked()
                                         {
-                                            lib_action = Some(LibAction::PlayAlbum(t.album.clone()));
+                                            act.lib_action = Some(LibAction::PlayAlbum(t.album.clone()));
                                             ui.close_menu();
                                         }
                                         ui.separator();
                                         if ui.button("Select all").clicked() {
-                                            lib_action = Some(LibAction::SelectAll);
+                                            act.lib_action = Some(LibAction::SelectAll);
                                             ui.close_menu();
                                         }
                                         ui.menu_button("Rate", |ui| {
                                             for s in 1..=5i64 {
                                                 if ui.button("\u{2605}".repeat(s as usize)).clicked() {
-                                                    lib_action = Some(LibAction::Rate(rows.clone(), s));
+                                                    act.lib_action = Some(LibAction::Rate(rows.clone(), s));
                                                     ui.close_menu();
                                                 }
                                             }
                                             if ui.button("Clear rating").clicked() {
-                                                lib_action = Some(LibAction::Rate(rows.clone(), 0));
+                                                act.lib_action = Some(LibAction::Rate(rows.clone(), 0));
                                                 ui.close_menu();
                                             }
                                         });
                                         if ui.button("Edit tags\u{2026}").clicked() {
-                                            lib_action = Some(LibAction::EditTags(i));
+                                            act.lib_action = Some(LibAction::EditTags(i));
                                             ui.close_menu();
                                         }
                                         if ui.button("Explore folder").clicked() {
-                                            lib_action = Some(LibAction::Explore(i));
+                                            act.lib_action = Some(LibAction::Explore(i));
                                             ui.close_menu();
                                         }
                                         ui.separator();
@@ -1022,16 +1108,34 @@ impl super::LinAmpApp {
                                             "Remove from library"
                                         };
                                         if ui.button(remove_label).clicked() {
-                                            lib_action = Some(LibAction::Remove(rows.clone()));
+                                            act.lib_action = Some(LibAction::Remove(rows.clone()));
                                             ui.close_menu();
                                         }
                                     });
                                     }
                                 }
                             });
-                    });
-            });
+    }
 
+    fn apply_lib_actions(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: LibActs) {
+        use crate::library::LibView;
+        let LibActs {
+            nav_click,
+            artist_click,
+            album_click,
+            track_click,
+            dbl_track,
+            rate,
+            do_play,
+            do_enqueue,
+            do_scan,
+            do_clear,
+            search_changed,
+            lib_action,
+            col_dx,
+            header_click,
+        } = act;
+        let show_rating = cx.show_rating;
         // ---- apply deferred actions ---------------------------------------
         // Column resize: divider 0 is artist|title (album fixed), divider 1 is
         // title|album (artist fixed). Keep every column at least 12% wide.
