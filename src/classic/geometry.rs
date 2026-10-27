@@ -99,6 +99,30 @@ pub fn region_at(x: f32, y: f32) -> Option<Btn> {
         .map(|(b, ..)| *b)
 }
 
+/// The `(x, y, w, h)` native-pixel rect for a main-window button, read from the
+/// shared `REGIONS` table so the compositor draws each button on exactly its
+/// click target (no second copy of the coordinates to keep in sync). `None` for
+/// regions that aren't buttons (sliders, title bar, time/viz toggles).
+pub(crate) fn btn_rect(b: Btn) -> Option<(i32, i32, i32, i32)> {
+    REGIONS
+        .iter()
+        .find(|(rb, ..)| *rb == b)
+        .map(|(_, x, y, w, h)| (*x, *y, *w, *h))
+}
+
+/// Transport buttons on CBUTTONS.BMP: each button's source x. Size and dest come
+/// from the shared `REGIONS` rect (`btn_rect`), and pressing a button shifts its
+/// source down one row (by the button's own height). Keeping only the source x
+/// here means a transport-button position is defined once, in `REGIONS`.
+pub(crate) const CBUTTON_SRC_X: &[(Btn, u32)] = &[
+    (Btn::Prev, 0),
+    (Btn::Play, 23),
+    (Btn::Pause, 46),
+    (Btn::Stop, 69),
+    (Btn::Next, 92),
+    (Btn::Eject, 114),
+];
+
 /// Hover-tooltip label for a main-window button, or `None` for regions that
 /// aren't buttons (title bar, sliders, time/viz toggles).
 pub(crate) fn btn_label(b: Btn) -> Option<&'static str> {
