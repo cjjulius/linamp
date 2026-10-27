@@ -2202,12 +2202,14 @@ dependencies = [
  "serde",
  "serde_json",
  "symphonia",
+ "tokio",
  "ureq",
  "walkdir",
  "winresource",
  "x11-dl",
  "xmrs",
  "xmrsplayer",
+ "zbus 5.19.0",
  "zip",
 ]
 

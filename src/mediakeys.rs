@@ -44,7 +44,9 @@ mod hotkey {
 pub struct MediaKeys {
     #[cfg(windows)]
     _win: Option<windows_impl::WinMediaKeys>,
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    _linux: Option<linux_impl::LinuxMediaKeys>,
+    #[cfg(not(any(windows, target_os = "linux")))]
     _noop: (),
 }
 
@@ -62,10 +64,18 @@ impl MediaKeys {
             (MediaKeys { _win: win }, rx)
         }
 
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
         {
-            // No global-key backend on this target yet (Linux MPRIS is a
-            // follow-up). A no-op so the app still runs.
+            // Serve MPRIS so the desktop routes the keyboard media keys to us. A
+            // backend that can't start (no session bus, name taken) returns None
+            // and the keys stay inert, same as the no-op target.
+            let linux = linux_impl::spawn(ctx.clone(), tx).ok();
+            (MediaKeys { _linux: linux }, rx)
+        }
+
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            // No global-key backend on this target. A no-op so the app still runs.
             let _ = (ctx, tx);
             (MediaKeys { _noop: () }, rx)
         }
@@ -218,20 +228,197 @@ mod windows_impl {
     }
 }
 
-// Linux (MPRIS) backend: to be implemented and verified on the Linux box.
-//
-// The standard way desktops deliver media keys to a player is MPRIS over D-Bus:
-// the app serves org.mpris.MediaPlayer2 and org.mpris.MediaPlayer2.Player under
-// the well-known name org.mpris.MediaPlayer2.linamp, and the desktop routes the
-// keyboard transport keys (and the system media controls) to the Player
-// interface's PlayPause / Stop / Next / Previous methods. Those map onto the
-// same `TrayAction`s and the app's play_pause / stop_playback / prev / next.
-//
-// zbus 5 is already in the tree (via ksni), so the backend can share it rather
-// than pulling a second zbus. Implement `linux_impl::spawn` to return a handle
-// like the Windows one, emitting `TrayAction` over the channel and calling
-// `egui.request_repaint()` on each press. See docs/REVIEW-NOTES.md for the full
-// handoff.
+// Linux (MPRIS) backend. The standard way desktops deliver media keys to a player
+// is MPRIS over D-Bus: LinAmp serves org.mpris.MediaPlayer2 and
+// org.mpris.MediaPlayer2.Player under the well-known name
+// org.mpris.MediaPlayer2.linamp, and the desktop routes the keyboard transport
+// keys (and the system media controls) to the Player interface's methods. Those
+// map onto the same TrayActions the tray emits, so they run through the app's
+// existing handle_tray_action. Serving the interface also makes LinAmp show in the
+// GNOME/KDE media widget; reporting live metadata there is a documented follow-up.
+#[cfg(target_os = "linux")]
+mod linux_impl {
+    use super::TrayAction;
+    use std::sync::mpsc::Sender;
+    use std::sync::Arc;
+    use tokio::sync::Notify;
+
+    /// A running MPRIS service. Dropping it tells the backend thread to drop the
+    /// D-Bus connection (which releases the well-known name) and joins it.
+    pub(super) struct LinuxMediaKeys {
+        shutdown: Arc<Notify>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    /// The MPRIS root interface. Desktops look here to confirm LinAmp is a media
+    /// player before routing keys to the Player interface. LinAmp does not expose
+    /// Raise or Quit as transport, so both are no-ops and the can_* flags advertise
+    /// only what it actually does.
+    struct Root;
+
+    #[zbus::interface(name = "org.mpris.MediaPlayer2")]
+    impl Root {
+        fn raise(&self) {}
+        fn quit(&self) {}
+
+        #[zbus(property)]
+        fn can_quit(&self) -> bool {
+            false
+        }
+        #[zbus(property)]
+        fn can_raise(&self) -> bool {
+            false
+        }
+        #[zbus(property)]
+        fn has_track_list(&self) -> bool {
+            false
+        }
+        #[zbus(property)]
+        fn identity(&self) -> String {
+            "LinAmp".to_string()
+        }
+        #[zbus(property)]
+        fn supported_uri_schemes(&self) -> Vec<String> {
+            Vec::new()
+        }
+        #[zbus(property)]
+        fn supported_mime_types(&self) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    /// The MPRIS Player interface. The desktop calls these methods when the user
+    /// presses a media key (or uses the system media controls). Each maps to the
+    /// same TrayAction the tray emits and wakes the egui loop so the app drains the
+    /// channel even while unfocused or hidden.
+    struct Player {
+        egui: egui::Context,
+        tx: Sender<TrayAction>,
+    }
+
+    impl Player {
+        fn fire(&self, action: TrayAction) {
+            let _ = self.tx.send(action);
+            self.egui.request_repaint();
+        }
+    }
+
+    #[zbus::interface(name = "org.mpris.MediaPlayer2.Player")]
+    impl Player {
+        fn play_pause(&self) {
+            self.fire(TrayAction::PlayPause);
+        }
+        // Some desktops send Play / Pause rather than PlayPause for the single
+        // play/pause key. LinAmp has one toggle, so both route to it.
+        fn play(&self) {
+            self.fire(TrayAction::PlayPause);
+        }
+        fn pause(&self) {
+            self.fire(TrayAction::PlayPause);
+        }
+        fn stop(&self) {
+            self.fire(TrayAction::Stop);
+        }
+        fn next(&self) {
+            self.fire(TrayAction::Next);
+        }
+        fn previous(&self) {
+            self.fire(TrayAction::Prev);
+        }
+
+        // Advertise the transport LinAmp supports, so it also appears in the
+        // GNOME/KDE media widget. PlaybackStatus is a required property; a static
+        // "Stopped" is reported rather than live state, which key routing does not
+        // need (live metadata/status is a follow-up).
+        #[zbus(property)]
+        fn playback_status(&self) -> String {
+            "Stopped".to_string()
+        }
+        #[zbus(property)]
+        fn can_go_next(&self) -> bool {
+            true
+        }
+        #[zbus(property)]
+        fn can_go_previous(&self) -> bool {
+            true
+        }
+        #[zbus(property)]
+        fn can_play(&self) -> bool {
+            true
+        }
+        #[zbus(property)]
+        fn can_pause(&self) -> bool {
+            true
+        }
+        #[zbus(property)]
+        fn can_seek(&self) -> bool {
+            false
+        }
+        #[zbus(property)]
+        fn can_control(&self) -> bool {
+            true
+        }
+    }
+
+    pub(super) fn spawn(egui: egui::Context, tx: Sender<TrayAction>) -> Result<LinuxMediaKeys, ()> {
+        let shutdown = Arc::new(Notify::new());
+        let shutdown_thread = shutdown.clone();
+
+        let thread = std::thread::Builder::new()
+            .name("linamp-mediakeys".into())
+            .spawn(move || {
+                // Own a small current-thread tokio runtime: the shared zbus has its
+                // tokio feature active, so its connection needs a tokio context.
+                let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                else {
+                    return;
+                };
+                rt.block_on(async move {
+                    let player = Player { egui, tx };
+                    // Build the connection, claim the MPRIS name, and serve both
+                    // interfaces at the standard object path.
+                    let built = (|| -> zbus::Result<_> {
+                        Ok(zbus::connection::Builder::session()?
+                            .name("org.mpris.MediaPlayer2.linamp")?
+                            .serve_at("/org/mpris/MediaPlayer2", Root)?
+                            .serve_at("/org/mpris/MediaPlayer2", player)?)
+                    })();
+                    let builder = match built {
+                        Ok(b) => b,
+                        Err(_) => return,
+                    };
+                    // If the session bus is missing or the name is taken, serve
+                    // nothing; media keys simply stay inert, like the no-op target.
+                    let Ok(_conn) = builder.build().await else {
+                        return;
+                    };
+                    // zbus dispatches method calls on its own background tasks, so
+                    // park here until Drop asks us to stop, then let the connection
+                    // drop (which releases the bus name).
+                    shutdown_thread.notified().await;
+                });
+            })
+            .map_err(|_| ())?;
+
+        Ok(LinuxMediaKeys {
+            shutdown,
+            thread: Some(thread),
+        })
+    }
+
+    impl Drop for LinuxMediaKeys {
+        fn drop(&mut self) {
+            // Wake the backend thread so it drops the connection and releases the
+            // MPRIS name promptly, then wait for it to finish.
+            self.shutdown.notify_one();
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
