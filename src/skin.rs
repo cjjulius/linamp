@@ -270,7 +270,7 @@ pub fn describe(path: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{blend, contrast_text, parse_hex, parse_viscolor};
+    use super::{blend, contrast_text, parse_hex, parse_pledit, parse_viscolor, sample_bmp};
     use egui::Color32;
 
     #[test]
@@ -297,5 +297,29 @@ mod tests {
     fn contrast_picks_readable() {
         assert_eq!(contrast_text(Color32::BLACK), Color32::from_rgb(225, 225, 225));
         assert_eq!(contrast_text(Color32::WHITE), Color32::from_rgb(15, 15, 15));
+    }
+
+    #[test]
+    fn pledit_parses_the_four_colours() {
+        let txt = "Normal=#00FF00\nCurrent=#FFFFFF\nNormalBG=#000000\n\
+                   SelectedBG=#334455\nJunk=notacolor\nNoEqualsLine\n";
+        let pl = parse_pledit(txt);
+        assert_eq!(pl.normal, Some(Color32::from_rgb(0, 255, 0)));
+        assert_eq!(pl.current, Some(Color32::from_rgb(255, 255, 255)));
+        assert_eq!(pl.normal_bg, Some(Color32::from_rgb(0, 0, 0)));
+        assert_eq!(pl.selected_bg, Some(Color32::from_rgb(0x33, 0x44, 0x55)));
+    }
+
+    #[test]
+    fn sample_bmp_averages_and_darkens() {
+        // A 2x2 solid grey image encoded as BMP.
+        let img = image::RgbImage::from_pixel(2, 2, image::Rgb([100, 100, 100]));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Bmp)
+            .unwrap();
+        let (avg, dark) = sample_bmp(&bytes).unwrap();
+        assert_eq!(avg, Color32::from_rgb(100, 100, 100));
+        assert_eq!(dark, Color32::from_rgb(60, 60, 60)); // avg * 6/10
     }
 }
