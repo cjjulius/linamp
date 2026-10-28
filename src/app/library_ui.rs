@@ -224,7 +224,7 @@ impl super::LinAmpApp {
         if self.lib.scan.is_some() {
             return; // a scan is already running
         }
-        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+        if let Some(dir) = self.pick_dialog(|| rfd::FileDialog::new().pick_folder()) {
             self.lib.scan = Some(crate::library::scan_folder_bg(dir));
             self.lib.scan_text = "Scanning…".into();
         }
