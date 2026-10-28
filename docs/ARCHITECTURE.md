@@ -18,7 +18,8 @@ Core (`src/`):
 - `playlist.rs`, track list, M3U/M3U8/PLS load/save, ordering, next/prev,
   shuffle.
 - `selection.rs`, Winamp-style multi-selection logic (kept pure for testing).
-- `tags.rs`, read/write ID3/Vorbis/FLAC tags.
+- `tags.rs`, read/write tags: ID3 (MP3/MP2/MP1), Vorbis comments (FLAC/Ogg) and
+  MP4 atoms (M4A); plus Basic Info (format, length, bitrate, …) for any format.
 - `library.rs`, SQLite media library (scan, search).
 - `config.rs`, on-disk preferences and session (skin, playlist, volume, …).
 - `skin.rs`, derives the modern-view colour theme from a skin.
