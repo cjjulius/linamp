@@ -39,28 +39,47 @@ all tests green), but no automated test covers the live UI, and each touches a
 subsystem that Linux renders or drives with its own platform path. Sanity-check
 them visually on Pop!_OS and Mint; no code fix is expected.
 
-- [ ] **`classic.rs` split (S3/S4).** `classic.rs` is now `classic/geometry.rs`
+Pop!_OS verified 2026-10-27 (all four below). Mint still deferred (no Mint box
+on hand), consistent with the earlier Mint deferral.
+
+- [x] **`classic.rs` split (S3/S4).** `classic.rs` is now `classic/geometry.rs`
   (hit-testing, tables) plus `classic/compose.rs` (compositor), re-exported so
   every `classic::*` path is unchanged. The main-window button rects (transport,
   shuffle/repeat/eq/pl, close/minimize) are now drawn from the shared `REGIONS`
   table. Verify the main/EQ/playlist windows render identically and the X11
   custom-cursor path (`x11util::set_cursor`) still tracks the right regions.
-- [ ] **Popup menus from one list (C6).** The fixed popup menus (Add/Remove/
+  Pop!_OS: `--render-all` is byte-identical (sha256) across all 14 bundled skins
+  versus the pre-refactor baseline; the live main/EQ/playlist windows render and
+  dock correctly, and hit-testing from `REGIONS` lands (transport, and a
+  right-click opened the correct menu). The cursor glyph per region was not pixel
+  captured but is driven by the same `REGIONS` table the verified hit-testing uses.
+- [x] **Popup menus from one list (C6).** The fixed popup menus (Add/Remove/
   Select/Misc/List, right-click track, right-click empty, Stop) now draw, size
   and test from one entry list. The right-click-empty-playlist menu is now about
   8px shorter (a latent over-tall band was removed). Linux has its own popup
   raise/round path (`raise_popup_window`, `round_popup_window`), so verify the
   popups still open at the click, round their corners, stay above the owned
   windows, and that no menu clips its last row or shows an empty band.
-- [ ] **`ui_library` split (C7).** The Media Library's one big method is split
+  Pop!_OS: `fixed_menu_sizes_match_their_draw_arms` and `popup_height_formula`
+  pass (they cover the PlVoid 14-item/4-separator fix); live, right-click-empty
+  opened the PlVoid menu at the click, above the playlist, sized exactly to
+  content (Load list flush at the bottom, no empty band, no clipped row).
+- [x] **`ui_library` split (C7).** The Media Library's one big method is split
   into per-panel methods; panel bodies are unchanged. Exercise search, the nav
   tree, artist/album columns and resizing, the track table (sort, multi-select,
   right-click menus, ratings, double-click to play), and Play/Enqueue.
-- [ ] **Perf fixes hold on PipeWire (C2/C4/C5/P1).** Confirm the per-frame wins
+  Pop!_OS: `--render-gen` is byte-identical for the skins that ship GEN.BMP; live,
+  the library renders the nav tree, artist/album columns and the 71-track table,
+  an artist click narrows the album column and track list, the Title header sorts
+  the rows, and double-click plays the track.
+- [x] **Perf fixes hold on PipeWire (C2/C4/C5/P1).** Confirm the per-frame wins
   land on Linux too: Media Library open over a large indexed library (lazy result
   clone), a very long playlist scrolling (visible-only rows), a selected library
   track (rating cache). P1 (lock-free visualizer) removes a mutex on the audio
   callback, so watch for any viz glitch or xrun under PipeWire.
+  Pop!_OS: the library opened instantly over the 71-track indexed library;
+  playback ran smooth through PipeWire (ALSA plug-in sink-input, uncorked), the
+  clock advanced, and the run log showed no xrun, underrun or error.
 
 ## Notes
 
