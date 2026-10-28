@@ -45,6 +45,9 @@ pub struct FileInfo {
     pub copyrighted: bool,
     pub original: bool,
     pub emphasis: String,
+    /// True for MPEG audio (MP3), the only format with the copyright/original/
+    /// emphasis flags; the Basic Info tab shows those rows only then.
+    pub is_mpeg: bool,
 }
 
 /// Extensions LinAmp can currently *write* tags for. Reading isn't restricted.
@@ -193,64 +196,117 @@ pub fn write_single(path: &Path, fields: &Id3Fields) -> Result<()> {
     Ok(())
 }
 
-/// Read MPEG format info for the Basic Info tab (best-effort; blank on failure).
+/// A friendly format name from the file extension, so the Basic Info tab names
+/// the format even for types lofty doesn't parse (MIDI, tracker modules).
+fn format_label(ext: &str) -> String {
+    match ext {
+        "mp3" | "mp2" | "mp1" | "mpa" => "MP3",
+        "flac" => "FLAC",
+        "ogg" | "oga" => "Ogg Vorbis",
+        "opus" => "Opus",
+        "m4a" | "m4b" | "mp4" => "MPEG-4 / AAC",
+        "wav" | "wave" => "WAV",
+        "aif" | "aiff" | "aifc" => "AIFF",
+        "mid" | "midi" | "rmi" | "kar" => "MIDI",
+        "mod" | "xm" | "it" | "s3m" | "mtm" | "umx" => "Tracker module",
+        "" => return String::new(),
+        other => return other.to_uppercase(),
+    }
+    .to_string()
+}
+
+fn channel_label(ch: u8) -> String {
+    match ch {
+        1 => "Mono".to_string(),
+        2 => "Stereo".to_string(),
+        n => format!("{n} channels"),
+    }
+}
+
+/// Read file / format info for the Basic Info tab (best-effort; fields stay blank
+/// when unavailable). Works for every format: a label comes from the extension,
+/// and duration / bitrate / sample rate / channels come from lofty for the audio
+/// formats it parses (MIDI and tracker modules get the label and size only).
 pub fn read_info(path: &Path) -> FileInfo {
     use lofty::config::ParseOptions;
     use lofty::file::AudioFile;
     use lofty::mpeg::{ChannelMode, Emphasis, Layer, MpegFile, MpegVersion};
 
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
     let mut info = FileInfo {
         path: path.display().to_string(),
         size_bytes: std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
+        mpeg: format_label(&ext),
         ..Default::default()
     };
-    // The MPEG parser only populates this for MPEG audio, but on any other file it
-    // scans the whole thing looking for frames before failing, seconds of freeze on
-    // a large .wav/.aiff when the tag editor opens. Only run it for MPEG extensions.
-    let is_mpeg = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "mp3" | "mp2" | "mp1" | "mpa"))
-        .unwrap_or(false);
+    let is_mpeg = matches!(ext.as_str(), "mp3" | "mp2" | "mp1" | "mpa");
     if is_mpeg {
+        info.is_mpeg = true;
+        // MP3 reads the MPEG-specific details (version/layer, channel mode, and the
+        // copyright/original/emphasis flags) the generic properties don't carry.
         if let Ok(mut f) = std::fs::File::open(path) {
-        if let Ok(mpeg) = MpegFile::read_from(&mut f, ParseOptions::new()) {
-            let p = mpeg.properties();
+            if let Ok(mpeg) = MpegFile::read_from(&mut f, ParseOptions::new()) {
+                let p = mpeg.properties();
+                info.length_secs = p.duration().as_secs();
+                info.bitrate_kbps = p.audio_bitrate();
+                info.sample_rate_hz = p.sample_rate();
+                let ver = match p.version() {
+                    MpegVersion::V1 => "MPEG-1",
+                    MpegVersion::V2 => "MPEG-2",
+                    MpegVersion::V2_5 => "MPEG-2.5",
+                    MpegVersion::V4 => "MPEG-4",
+                };
+                let layer = match p.layer() {
+                    Layer::Layer1 => "Layer 1",
+                    Layer::Layer2 => "Layer 2",
+                    Layer::Layer3 => "Layer 3",
+                };
+                info.mpeg = format!("{ver} {layer}");
+                info.channel_mode = match p.channel_mode() {
+                    ChannelMode::Stereo => "Stereo",
+                    ChannelMode::JointStereo => "Joint Stereo",
+                    ChannelMode::DualChannel => "Dual Channel",
+                    ChannelMode::SingleChannel => "Mono",
+                }
+                .to_string();
+                info.copyrighted = p.is_copyright();
+                info.original = p.is_original();
+                info.emphasis = match p.emphasis() {
+                    None => "None",
+                    Some(Emphasis::MS5015) => "50/15 ms",
+                    Some(Emphasis::Reserved) => "Reserved",
+                    Some(Emphasis::CCIT_J17) => "CCIT J.17",
+                }
+                .to_string();
+            }
+        }
+    } else if lofty_parses(&ext) {
+        // FLAC/Ogg/Opus/MP4/WAV/AIFF: lofty's own parser gives the generic audio
+        // properties fast (no frame scan). MIDI and tracker modules aren't parsed,
+        // so they keep just the label and size above.
+        if let Ok(tagged) = lofty::read_from_path(path) {
+            let p = tagged.properties();
             info.length_secs = p.duration().as_secs();
-            info.bitrate_kbps = p.audio_bitrate();
-            info.sample_rate_hz = p.sample_rate();
-            let ver = match p.version() {
-                MpegVersion::V1 => "MPEG-1",
-                MpegVersion::V2 => "MPEG-2",
-                MpegVersion::V2_5 => "MPEG-2.5",
-                MpegVersion::V4 => "MPEG-4",
-            };
-            let layer = match p.layer() {
-                Layer::Layer1 => "Layer 1",
-                Layer::Layer2 => "Layer 2",
-                Layer::Layer3 => "Layer 3",
-            };
-            info.mpeg = format!("{ver} {layer}");
-            info.channel_mode = match p.channel_mode() {
-                ChannelMode::Stereo => "Stereo",
-                ChannelMode::JointStereo => "Joint Stereo",
-                ChannelMode::DualChannel => "Dual Channel",
-                ChannelMode::SingleChannel => "Mono",
-            }
-            .to_string();
-            info.copyrighted = p.is_copyright();
-            info.original = p.is_original();
-            info.emphasis = match p.emphasis() {
-                None => "None",
-                Some(Emphasis::MS5015) => "50/15 ms",
-                Some(Emphasis::Reserved) => "Reserved",
-                Some(Emphasis::CCIT_J17) => "CCIT J.17",
-            }
-            .to_string();
-            }
+            info.bitrate_kbps = p.audio_bitrate().or_else(|| p.overall_bitrate()).unwrap_or(0);
+            info.sample_rate_hz = p.sample_rate().unwrap_or(0);
+            info.channel_mode = p.channels().map(channel_label).unwrap_or_default();
         }
     }
     info
+}
+
+/// Whether lofty can parse this extension for audio properties (so we don't ask
+/// it to open MIDI / tracker modules it doesn't understand).
+fn lofty_parses(ext: &str) -> bool {
+    matches!(
+        ext,
+        "flac" | "ogg" | "oga" | "opus" | "spx" | "m4a" | "m4b" | "mp4"
+            | "aac" | "wav" | "wave" | "aif" | "aiff" | "aifc" | "ape" | "wv"
+    )
 }
 
 /// Prepare an ID3v1 text field: trim, drop if empty and cap to `max` bytes on a
@@ -462,6 +518,8 @@ mod tests {
         assert!(out.is_ascii() && out == "Hello");
         assert_eq!(v1_text("   ", V1_MAX_TEXT), None);
     }
+
+
 
     #[test]
     fn editable_exts() {
