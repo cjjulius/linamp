@@ -1,10 +1,10 @@
 <div align="center">
 
-<h1><img src="assets/linamp_logo_64.png" alt="" height="40" align="middle"> &nbsp;LinAmp</h1>
+<h1><img src="assets/linamp_logo_64.png" alt="" height="30" align="absmiddle"> &nbsp;LinAmp</h1>
 
 A Winamp-inspired audio player for Linux and Windows, in Rust.
 
-Pixel-perfect classic skin - 10-band EQ - live analyzer - playlist - Winamp keyboard shortcuts
+Pixel-perfect classic skin with full `.wsz` skin support - 10-band EQ - live analyzer - playlist - full keyboard shortcut support
 
 <img src="assets/screenshot.png" alt="LinAmp in the classic skin, main player, equalizer and playlist" width="380">
 
