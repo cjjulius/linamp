@@ -1,5 +1,5 @@
 //! System-tray (notification-area) icon with a right-click transport menu and
-//! left-click show/hide, matching classic Winamp's tray behaviour (#40).
+//! left-click show/hide, matching the classic player's tray behaviour (#40).
 //!
 //! The native tray runs on its own thread and reports what the user clicked
 //! back over a channel the app drains once per frame. The app resolves the
@@ -882,7 +882,7 @@ mod windows_impl {
             match mouse {
                 WM_LBUTTONUP | WM_LBUTTONDBLCLK => ctx.emit(TrayAction::Toggle),
                 WM_RBUTTONUP => {
-                    // Winamp-style transport menu at the cursor, owner-drawn in the
+                    // classic-style transport menu at the cursor, owner-drawn in the
                     // skin's colours. Forcing the foreground (and the WM_NULL after)
                     // is what makes the menu highlight on hover and dismiss when
                     // clicked away from.

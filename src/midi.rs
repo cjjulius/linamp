@@ -1,6 +1,6 @@
 //! MIDI (.mid/.midi) playback via rustysynth, a pure-Rust SoundFont synth (#159).
 //!
-//! Classic Winamp played MIDI through a built-in softsynth. We synthesize with
+//! The classic player played MIDI through a built-in softsynth. We synthesize with
 //! rustysynth and a bundled SoundFont (.sf2), rendering to a lazy rodio `Source`
 //! so MIDI flows through the same EQ / analyzer / balance pipeline as everything
 //! else. The SoundFont is discovered next to the binary (see [`soundfont_path`],

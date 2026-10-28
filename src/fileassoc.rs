@@ -235,7 +235,7 @@ mod windows_impl {
                 HKEY_CURRENT_USER,
                 CAPABILITIES_KEY,
                 Some("ApplicationDescription"),
-                "A Winamp-inspired audio player.",
+                "A classic-style audio player.",
             );
 
             // Per extension: offer LinAmp as a candidate (OpenWithProgids, never
@@ -436,7 +436,7 @@ mod linux_impl {
              Type=Application\n\
              Name=LinAmp\n\
              GenericName=Audio Player\n\
-             Comment=A Winamp-inspired audio player\n\
+             Comment=A classic-style audio player\n\
              Exec=\"{exe}\" %F\n\
              Icon=linamp\n\
              Terminal=false\n\
