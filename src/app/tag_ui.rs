@@ -45,6 +45,24 @@ fn read_editor_tags(
     }
 }
 
+/// One grid row (label + field) in points, including the grid's vertical
+/// spacing. The editor renders at the default scale, so this is a constant.
+const TAG_ROW_H: f32 = 23.0;
+/// Fixed chrome height around the content box: the path field, the tab strip, the
+/// group-frame margins, the button row and the panel padding.
+const TAG_WINDOW_CHROME: f32 = 132.0;
+/// Extra height reserved for the save-error status line (editable files only).
+const TAG_STATUS_H: f32 = 24.0;
+
+/// Height of the content box, sized to the tallest tab. When editable the ID3 tab
+/// is tallest: 15 fields (see `tag_fields_grid`), the 2-line Comment counting as
+/// an extra row, plus a header row. Otherwise only the 9-row Basic Info tab shows.
+/// Keep the counts in step with the render code.
+fn tag_box_height(editable: bool) -> f32 {
+    let rows = if editable { 17.0 } else { 9.0 };
+    rows * TAG_ROW_H
+}
+
 /// The genre dropdown shared by the ID3 tabs (closes on a keyboard pick).
 fn genre_combo(ui: &mut egui::Ui, salt: &str, val: &mut String) {
     let combo = egui::ComboBox::from_id_salt(salt)
@@ -126,11 +144,9 @@ impl super::LinAmpApp {
         let (v1, v2, v1_on, v2_on, single) = read_editor_tags(&path);
         let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
-        let status = if editable {
-            String::new()
-        } else {
-            "Read-only: tag writing isn't supported for this format yet.".into()
-        };
+        // No read-only banner: a non-editable file simply shows the Basic Info tab
+        // alone (the ID3 tab is hidden). Status is for save errors only.
+        let status = String::new();
         self.tag_editor = Some(TagEditor {
             index,
             path,
@@ -153,11 +169,9 @@ impl super::LinAmpApp {
         let (v1, v2, v1_on, v2_on, single) = read_editor_tags(&path);
         let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
-        let status = if editable {
-            String::new()
-        } else {
-            "Read-only: tag writing isn't supported for this format yet.".into()
-        };
+        // No read-only banner: a non-editable file simply shows the Basic Info tab
+        // alone (the ID3 tab is hidden). Status is for save errors only.
+        let status = String::new();
         self.tag_editor = Some(TagEditor {
             index: usize::MAX,
             path,
@@ -237,14 +251,27 @@ impl super::LinAmpApp {
 
     /// The tag editor window (own viewport, like preferences / library).
     pub(super) fn ui_tag_editor(&mut self, ctx: &egui::Context) {
-        if self.tag_editor.is_none() {
+        let Some(editable) = self.tag_editor.as_ref().map(|e| e.editable) else {
             return;
+        };
+        // Size the window to its tallest tab from the (fixed) row counts, so no
+        // content is clipped and the height doesn't jump when switching tabs. The
+        // ID3 tab is the tallest when the file is editable; otherwise only the
+        // Basic Info tab shows.
+        let box_h = tag_box_height(editable);
+        let win_h = box_h + TAG_WINDOW_CHROME + if editable { TAG_STATUS_H } else { 0.0 };
+        let size = egui::vec2(660.0, win_h);
+        // Keep the window on-screen: a tall editor opened near the bottom/right edge
+        // would otherwise spill off the desktop.
+        let mut screen = self.geom.win_pos[0] + egui::vec2(32.0, 32.0);
+        if let Some(vr) = virtual_desktop_rect(ctx) {
+            screen.x = screen.x.clamp(vr.min.x, (vr.max.x - size.x).max(vr.min.x));
+            screen.y = screen.y.clamp(vr.min.y, (vr.max.y - size.y).max(vr.min.y));
         }
-        let screen = self.geom.win_pos[0] + egui::vec2(32.0, 32.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, File Info")
             .with_position(screen)
-            .with_inner_size(egui::vec2(660.0, 470.0))
+            .with_inner_size(size)
             .with_resizable(false)
             .with_taskbar(false)
             .with_window_level(self.window_level());
@@ -310,20 +337,27 @@ impl super::LinAmpApp {
                     .horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         let b = tab_btn(ui, "Basic Info", ed.tab == TagTab::Basic);
-                        let i = tab_btn(ui, "ID3", ed.tab == TagTab::Id3);
+                        // A non-editable file has no writable tag, so only Basic Info
+                        // shows: no ID3 tab.
+                        let i = on.then(|| tab_btn(ui, "ID3", ed.tab == TagTab::Id3));
                         (b, i)
                     })
                     .inner;
                 if basic_resp.clicked() {
                     ed.tab = TagTab::Basic;
                 }
-                if id3_resp.clicked() {
-                    ed.tab = TagTab::Id3;
+                if let Some(i) = &id3_resp {
+                    if i.clicked() {
+                        ed.tab = TagTab::Id3;
+                    }
+                }
+                if !on {
+                    ed.tab = TagTab::Basic;
                 }
 
                 let group = egui::Frame::group(ui.style()).fill(panel).show(ui, |ui| {
                     ui.set_min_width(624.0);
-                    ui.set_min_height(300.0);
+                    ui.set_min_height(box_h);
                     match ed.tab {
                         TagTab::Basic => {
                             egui::Grid::new("basic_grid")
@@ -397,10 +431,9 @@ impl super::LinAmpApp {
                 let checks = group.inner;
                 // Erase the seam under the active tab so it reads as one surface
                 // with the content box (the classic folder-tab join).
-                let active_rect = if ed.tab == TagTab::Basic {
-                    basic_resp.rect
-                } else {
-                    id3_resp.rect
+                let active_rect = match (&id3_resp, ed.tab) {
+                    (Some(i), TagTab::Id3) => i.rect,
+                    _ => basic_resp.rect,
                 };
                 // Span from the tab's own bottom edge to the box's top edge so
                 // the join holds even if the tab row is taller than the button.
@@ -444,8 +477,10 @@ impl super::LinAmpApp {
                     basic_resp.request_focus();
                 }
                 if k_id3 {
-                    ed.tab = TagTab::Id3;
-                    id3_resp.request_focus();
+                    if let Some(i) = &id3_resp {
+                        ed.tab = TagTab::Id3;
+                        i.request_focus();
+                    }
                 }
                 let id3 = ed.tab == TagTab::Id3;
                 if on && id3 && k_v1 {
