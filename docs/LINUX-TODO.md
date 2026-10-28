@@ -83,17 +83,34 @@ on hand), consistent with the earlier Mint deferral.
 
 ## 2.x bug fixes (`fix/2x-bugs`)
 
-- [ ] **Always-on-top dialog trap: X11 equivalent (#172).** `set_windows_topmost`
+- [x] **Always-on-top dialog trap: X11 equivalent (#172).** `set_windows_topmost`
   (`src/app/platform_win.rs`) drops the topmost flag on every LinAmp window around
   a blocking native dialog so it isn't trapped behind our always-on-top windows,
   then restores it. It is Windows-only (SetWindowPos); on X11 it is a no-op.
   Reproduce on Pop!_OS with always-on-top on (open a file/skin dialog and see
   whether it is reachable), and if the trap exists, add the X11 version in
   `x11util` (toggle `_NET_WM_STATE_ABOVE`, or lower/raise, around the dialog).
-- [ ] **Verify fade-on-pause on Linux (#171).** Pausing now fades out (then
+  Pop!_OS (Mutter): trap confirmed. With always-on-top on, the portal file
+  chooser (`xdg-desktop-portal-gnome`, `_NET_WM_WINDOW_TYPE_NORMAL`, no
+  transient-for) opened below the three above-layer LinAmp windows in the stacking
+  order, and the Library window covered the Select button. Fixed: `set_windows_topmost`
+  now has an X11 branch (`x11util::set_group_above`) that removes `_NET_WM_STATE_ABOVE`
+  from every LinAmp window before the dialog and re-adds it after. Verified by the
+  stacking order (dialog moved to the top, our windows lost ABOVE while open, ABOVE
+  restored on close) and visually (Select button reachable).
+- [x] **Verify fade-on-pause on Linux (#171).** Pausing now fades out (then
   pauses) when "fade out when stopping or pausing" is on, matching stop. Pure
   cross-platform logic (no platform code), but confirm the tray and button pause
   fade on PipeWire and resume at full volume.
+  Pop!_OS: the pause button and the Play/Pause toggle (space/X, and the tray
+  Play/Pause, all via `play_pause` -> `pause_playback`) fade correctly: pressing
+  the pause button at 00:03 kept the clock advancing to 00:06 over the 3s fade,
+  then held at 00:06 (paused, not reset), and resume continued from 00:06 at full
+  volume. Gap found, not Linux-specific: the dedicated pause key (`C`,
+  `input.rs` `k.pause`) still calls `player.pause()` directly, so it cuts abruptly
+  with no fade (clock froze instantly), unlike the button and the commit's stated
+  intent ("key pause cut audio abruptly"). Routing `k.pause` through
+  `pause_playback` would close it; flagged to the Windows side as cross-platform.
 
 ## Notes
 
