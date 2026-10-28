@@ -54,12 +54,40 @@ const TAG_WINDOW_CHROME: f32 = 132.0;
 /// Extra height reserved for the save-error status line (editable files only).
 const TAG_STATUS_H: f32 = 24.0;
 
+/// Number of rows the Basic Info tab draws for this file (mirrors the conditional
+/// rows in the render), so a MIDI showing just Size + Format gets a small window.
+fn basic_info_rows(i: &crate::tags::FileInfo) -> f32 {
+    let mut n = 1.0; // Size
+    if !i.mpeg.is_empty() {
+        n += 1.0;
+    }
+    if i.length_secs > 0 {
+        n += 1.0;
+    }
+    if i.bitrate_kbps > 0 {
+        n += 1.0;
+    }
+    if i.sample_rate_hz > 0 {
+        n += 1.0;
+    }
+    if !i.channel_mode.is_empty() {
+        n += 1.0;
+    }
+    if i.is_mpeg {
+        n += 2.0; // Copyrighted, Original
+        if !i.emphasis.is_empty() {
+            n += 1.0;
+        }
+    }
+    n
+}
+
 /// Height of the content box, sized to the tallest tab. When editable the ID3 tab
 /// is tallest: 15 fields (see `tag_fields_grid`), the 2-line Comment counting as
-/// an extra row, plus a header row. Otherwise only the 9-row Basic Info tab shows.
-/// Keep the counts in step with the render code.
-fn tag_box_height(editable: bool) -> f32 {
-    let rows = if editable { 17.0 } else { 9.0 };
+/// an extra row, plus a header row. Otherwise only the Basic Info tab shows, sized
+/// to its actual row count. Keep the ID3 count in step with the render code.
+fn tag_box_height(editable: bool, basic_rows: f32) -> f32 {
+    let rows = if editable { 17.0 } else { basic_rows };
     rows * TAG_ROW_H
 }
 
@@ -251,14 +279,18 @@ impl super::LinAmpApp {
 
     /// The tag editor window (own viewport, like preferences / library).
     pub(super) fn ui_tag_editor(&mut self, ctx: &egui::Context) {
-        let Some(editable) = self.tag_editor.as_ref().map(|e| e.editable) else {
+        let Some((editable, basic_rows)) = self
+            .tag_editor
+            .as_ref()
+            .map(|e| (e.editable, basic_info_rows(&e.info)))
+        else {
             return;
         };
         // Size the window to its tallest tab from the (fixed) row counts, so no
         // content is clipped and the height doesn't jump when switching tabs. The
         // ID3 tab is the tallest when the file is editable; otherwise only the
-        // Basic Info tab shows.
-        let box_h = tag_box_height(editable);
+        // Basic Info tab shows, sized to its own row count.
+        let box_h = tag_box_height(editable, basic_rows);
         let win_h = box_h + TAG_WINDOW_CHROME + if editable { TAG_STATUS_H } else { 0.0 };
         let size = egui::vec2(660.0, win_h);
         // Keep the window on-screen: a tall editor opened near the bottom/right edge
@@ -370,15 +402,32 @@ impl super::LinAmpApp {
                                         ui.label(v);
                                         ui.end_row();
                                     };
+                                    // Show only rows with real data for this format,
+                                    // so a MIDI/WAV doesn't list 0 kbps, 0 Hz or the
+                                    // MP3-only copyright/emphasis flags.
                                     r("Size", format!("{} bytes", i.size_bytes));
-                                    r("Length", format!("{} seconds", i.length_secs));
-                                    r("Format", i.mpeg.clone());
-                                    r("Bitrate", format!("{} kbps", i.bitrate_kbps));
-                                    r("Sample rate", format!("{} Hz", i.sample_rate_hz));
-                                    r("Channels", i.channel_mode.clone());
-                                    r("Copyrighted", if i.copyrighted { "Yes" } else { "No" }.into());
-                                    r("Original", if i.original { "Yes" } else { "No" }.into());
-                                    r("Emphasis", i.emphasis.clone());
+                                    if !i.mpeg.is_empty() {
+                                        r("Format", i.mpeg.clone());
+                                    }
+                                    if i.length_secs > 0 {
+                                        r("Length", format!("{} seconds", i.length_secs));
+                                    }
+                                    if i.bitrate_kbps > 0 {
+                                        r("Bitrate", format!("{} kbps", i.bitrate_kbps));
+                                    }
+                                    if i.sample_rate_hz > 0 {
+                                        r("Sample rate", format!("{} Hz", i.sample_rate_hz));
+                                    }
+                                    if !i.channel_mode.is_empty() {
+                                        r("Channels", i.channel_mode.clone());
+                                    }
+                                    if i.is_mpeg {
+                                        r("Copyrighted", if i.copyrighted { "Yes" } else { "No" }.into());
+                                        r("Original", if i.original { "Yes" } else { "No" }.into());
+                                        if !i.emphasis.is_empty() {
+                                            r("Emphasis", i.emphasis.clone());
+                                        }
+                                    }
                                 });
                             None
                         }
