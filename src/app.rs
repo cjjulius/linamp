@@ -1393,14 +1393,30 @@ impl LinAmpApp {
 
     // ---- file dialogs ------------------------------------------------------
 
+    /// Run a blocking native file dialog with always-on-top suspended, so the
+    /// dialog comes to the front instead of being trapped behind our topmost
+    /// windows (#172). No-op cost when always-on-top is off.
+    fn pick_dialog<T>(&self, pick: impl FnOnce() -> T) -> T {
+        let restore = self.prefs.always_on_top;
+        if restore {
+            set_windows_topmost(false);
+        }
+        let r = pick();
+        if restore {
+            set_windows_topmost(true);
+        }
+        r
+    }
+
     fn open_files(&mut self) {
         hide_popup_window();
-        if let Some(paths) = rfd::FileDialog::new()
-            // Single source of truth: the same list `is_supported` gates on, so
-            // adding a format only touches `SUPPORTED_EXTS`.
-            .add_filter("Audio", crate::playlist::SUPPORTED_EXTS)
-            .pick_files()
-        {
+        if let Some(paths) = self.pick_dialog(|| {
+            rfd::FileDialog::new()
+                // Single source of truth: the same list `is_supported` gates on, so
+                // adding a format only touches `SUPPORTED_EXTS`.
+                .add_filter("Audio", crate::playlist::SUPPORTED_EXTS)
+                .pick_files()
+        }) {
             let was_empty = self.playlist.is_empty();
             for p in paths {
                 self.playlist.add_file(p);
@@ -1500,7 +1516,7 @@ impl LinAmpApp {
 
     fn open_folder(&mut self) {
         hide_popup_window();
-        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+        if let Some(dir) = self.pick_dialog(|| rfd::FileDialog::new().pick_folder()) {
             let was_empty = self.playlist.is_empty();
             self.playlist.add_folder(&dir);
             self.maybe_scan_tags();
@@ -1517,12 +1533,13 @@ impl LinAmpApp {
             return;
         }
         hide_popup_window();
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("M3U playlist", &["m3u"])
-            .add_filter("PLS playlist", &["pls"])
-            .set_file_name("playlist.m3u")
-            .save_file()
-        {
+        if let Some(path) = self.pick_dialog(|| {
+            rfd::FileDialog::new()
+                .add_filter("M3U playlist", &["m3u"])
+                .add_filter("PLS playlist", &["pls"])
+                .set_file_name("playlist.m3u")
+                .save_file()
+        }) {
             match save_playlist_file(&path, &self.playlist.tracks) {
                 Ok(()) => self.status = format!("Saved {}", path.display()),
                 Err(e) => self.status = format!("Save error: {e}"),
@@ -1532,10 +1549,11 @@ impl LinAmpApp {
 
     fn load_playlist_dialog(&mut self) {
         hide_popup_window();
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Playlists", &["m3u", "m3u8", "pls"])
-            .pick_file()
-        {
+        if let Some(path) = self.pick_dialog(|| {
+            rfd::FileDialog::new()
+                .add_filter("Playlists", &["m3u", "m3u8", "pls"])
+                .pick_file()
+        }) {
             let was_empty = self.playlist.is_empty();
             let n = self.playlist.load_file(&path);
             self.maybe_scan_tags();
@@ -2363,10 +2381,11 @@ impl LinAmpApp {
     /// Import a Winamp `.EQF` preset file and apply its first preset.
     fn import_eqf(&mut self) {
         hide_popup_window();
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Winamp EQ preset", &["eqf", "q1"])
-            .pick_file()
-        else {
+        let Some(path) = self.pick_dialog(|| {
+            rfd::FileDialog::new()
+                .add_filter("Winamp EQ preset", &["eqf", "q1"])
+                .pick_file()
+        }) else {
             return;
         };
         match std::fs::read(&path).map_err(anyhow::Error::from).and_then(|b| crate::eqf::parse(&b)) {
@@ -2388,11 +2407,12 @@ impl LinAmpApp {
     /// Export the current EQ settings to a Winamp `.EQF` file.
     fn export_eqf(&mut self) {
         hide_popup_window();
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Winamp EQ preset", &["eqf"])
-            .set_file_name("linamp.eqf")
-            .save_file()
-        else {
+        let Some(path) = self.pick_dialog(|| {
+            rfd::FileDialog::new()
+                .add_filter("Winamp EQ preset", &["eqf"])
+                .set_file_name("linamp.eqf")
+                .save_file()
+        }) else {
             return;
         };
         let preset = crate::eqf::EqfPreset {
@@ -3670,10 +3690,11 @@ impl LinAmpApp {
 
     fn load_skin_dialog(&mut self, ctx: &egui::Context) {
         hide_popup_window();
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Winamp skin", &["wsz", "zip"])
-            .pick_file()
-        {
+        if let Some(path) = self.pick_dialog(|| {
+            rfd::FileDialog::new()
+                .add_filter("Winamp skin", &["wsz", "zip"])
+                .pick_file()
+        }) {
             self.apply_skin_path(ctx, &path);
         }
     }

@@ -851,6 +851,56 @@ pub(crate) fn hide_popup_window() {
     }
 }
 
+/// Drop (or restore) always-on-top on every LinAmp window around a blocking
+/// native file dialog, so the dialog comes to the front instead of being trapped
+/// behind our topmost windows (#172). `on` restores topmost (true) or clears it
+/// (false). Pass true only when always-on-top is actually enabled. The menu popup
+/// is handled separately by `hide_popup_window`. Windows only; a no-op elsewhere
+/// (an X11 equivalent, if the trap exists there, is a separate task).
+pub(crate) fn set_windows_topmost(on: bool) {
+    #[cfg(windows)]
+    {
+        #[allow(non_snake_case)]
+        extern "system" {
+            fn SetWindowPos(
+                hwnd: isize,
+                after: isize,
+                x: i32,
+                y: i32,
+                cx: i32,
+                cy: i32,
+                flags: u32,
+            ) -> i32;
+        }
+        const HWND_TOPMOST: isize = -1;
+        const HWND_NOTOPMOST: isize = -2;
+        const SWP_NOSIZE: u32 = 0x0001;
+        const SWP_NOMOVE: u32 = 0x0002;
+        const SWP_NOACTIVATE: u32 = 0x0010;
+        let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        for title in [
+            "LinAmp",
+            "LinAmp Equalizer",
+            "LinAmp Playlist",
+            "LinAmp Library",
+            "LinAmp Preferences",
+            "LinAmp, File Info",
+            "LinAmp, Minibrowser",
+        ] {
+            let h = find_window(title);
+            if h != 0 {
+                unsafe {
+                    SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = on;
+    }
+}
+
 /// A NUL-terminated UTF-16 string for the Win32 `*W` APIs.
 #[cfg(windows)]
 pub(crate) fn wide(s: &str) -> Vec<u16> {
