@@ -37,6 +37,46 @@ pub fn unregister() {
     linux_impl::unregister();
 }
 
+/// The MIME type for a supported audio extension, or None for one we do not map.
+/// Several extensions share a type (all the MPEG audio layers are audio/mpeg), so
+/// the Linux desktop entry lists each type once. Kept platform-agnostic (and built
+/// under test) so it is unit-tested everywhere, though only the Linux backend uses
+/// it at runtime.
+#[cfg(any(target_os = "linux", test))]
+fn mime_for_ext(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        "mp3" | "mp1" | "mp2" | "mpa" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "ogg" | "oga" => "audio/ogg",
+        "wav" => "audio/x-wav",
+        "m4a" | "m4b" | "mp4" => "audio/mp4",
+        "aac" => "audio/aac",
+        "aiff" | "aif" => "audio/x-aiff",
+        "mid" | "midi" => "audio/midi",
+        // Tracker modules, taught to the MIME database by MIME_PACKAGE_XML.
+        "mod" => "audio/x-mod",
+        "xm" => "audio/x-xm",
+        "s3m" => "audio/x-s3m",
+        "it" => "audio/x-it",
+        _ => return None,
+    })
+}
+
+/// The distinct MIME types across all supported extensions, in first-seen order,
+/// so the list tracks exactly what the player decodes.
+#[cfg(any(target_os = "linux", test))]
+fn supported_mime_types() -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for ext in crate::playlist::SUPPORTED_EXTS {
+        if let Some(m) = mime_for_ext(ext) {
+            if !out.contains(&m) {
+                out.push(m);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(windows)]
 mod windows_impl {
     use crate::playlist::SUPPORTED_EXTS;
@@ -161,13 +201,17 @@ mod windows_impl {
         let icon = format!("{exe},0");
         let classes = "Software\\Classes";
 
+        // Track whether every write succeeded, so a failed or partial registration
+        // (a locked hive, a permissions hiccup) is not stamped as done, which would
+        // defeat the self-heal on the next launch.
+        let mut ok = true;
         unsafe {
             // The ProgID: a friendly name, the exe's icon, and the open command
             // that passes the clicked file as the first argument (LinAmp's
             // command-line handling enqueues and plays it).
-            set_value(HKEY_CURRENT_USER, &format!("{classes}\\{PROGID}"), None, "LinAmp audio file");
-            set_value(HKEY_CURRENT_USER, &format!("{classes}\\{PROGID}\\DefaultIcon"), None, &icon);
-            set_value(
+            ok &= set_value(HKEY_CURRENT_USER, &format!("{classes}\\{PROGID}"), None, "LinAmp audio file");
+            ok &= set_value(HKEY_CURRENT_USER, &format!("{classes}\\{PROGID}\\DefaultIcon"), None, &icon);
+            ok &= set_value(
                 HKEY_CURRENT_USER,
                 &format!("{classes}\\{PROGID}\\shell\\open\\command"),
                 None,
@@ -177,8 +221,8 @@ mod windows_impl {
             // The Applications\linamp.exe entry: a friendly name plus the same open
             // command, which is what backs "Open with > LinAmp".
             let app = format!("{classes}\\Applications\\{APP_EXE}");
-            set_value(HKEY_CURRENT_USER, &app, Some("FriendlyAppName"), "LinAmp");
-            set_value(
+            ok &= set_value(HKEY_CURRENT_USER, &app, Some("FriendlyAppName"), "LinAmp");
+            ok &= set_value(
                 HKEY_CURRENT_USER,
                 &format!("{app}\\shell\\open\\command"),
                 None,
@@ -186,8 +230,8 @@ mod windows_impl {
             );
 
             // The capability block the Default Apps UI reads.
-            set_value(HKEY_CURRENT_USER, CAPABILITIES_KEY, Some("ApplicationName"), "LinAmp");
-            set_value(
+            ok &= set_value(HKEY_CURRENT_USER, CAPABILITIES_KEY, Some("ApplicationName"), "LinAmp");
+            ok &= set_value(
                 HKEY_CURRENT_USER,
                 CAPABILITIES_KEY,
                 Some("ApplicationDescription"),
@@ -199,19 +243,19 @@ mod windows_impl {
             // the extension to our ProgID in the capability block.
             for ext in SUPPORTED_EXTS {
                 let dot = format!(".{ext}");
-                set_value(
+                ok &= set_value(
                     HKEY_CURRENT_USER,
                     &format!("{classes}\\{dot}\\OpenWithProgids"),
                     Some(PROGID),
                     "",
                 );
-                set_value(
+                ok &= set_value(
                     HKEY_CURRENT_USER,
                     &format!("{app}\\SupportedTypes"),
                     Some(&dot),
                     "",
                 );
-                set_value(
+                ok &= set_value(
                     HKEY_CURRENT_USER,
                     &format!("{CAPABILITIES_KEY}\\FileAssociations"),
                     Some(&dot),
@@ -221,7 +265,7 @@ mod windows_impl {
 
             // Point RegisteredApplications at the capability block so LinAmp lists
             // in Default Apps.
-            set_value(
+            ok &= set_value(
                 HKEY_CURRENT_USER,
                 "Software\\RegisteredApplications",
                 Some("LinAmp"),
@@ -232,12 +276,16 @@ mod windows_impl {
             SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, std::ptr::null(), std::ptr::null());
         }
 
-        // Record what we just registered so the next launch can skip the writes.
-        let stamp = stamp_path();
-        if let Some(parent) = stamp.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        // Record what we just registered so the next launch can skip the writes,
+        // but only when every write succeeded. A partial registration is left
+        // unstamped so the next launch retries it.
+        if ok {
+            let stamp = stamp_path();
+            if let Some(parent) = stamp.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(stamp, signature);
         }
-        let _ = std::fs::write(stamp, signature);
     }
 
     #[allow(dead_code)]
@@ -270,7 +318,6 @@ mod windows_impl {
 
 #[cfg(target_os = "linux")]
 mod linux_impl {
-    use crate::playlist::SUPPORTED_EXTS;
     use std::path::Path;
 
     const DESKTOP_FILE: &str = "linamp.desktop";
@@ -306,42 +353,6 @@ mod linux_impl {
   </mime-type>
 </mime-info>
 "#;
-
-    /// The MIME type for a supported extension, or None for one we do not map.
-    /// Several extensions share a type (all the MPEG audio layers are audio/mpeg),
-    /// so the desktop entry lists each type once.
-    fn mime_for_ext(ext: &str) -> Option<&'static str> {
-        Some(match ext {
-            "mp3" | "mp1" | "mp2" | "mpa" => "audio/mpeg",
-            "flac" => "audio/flac",
-            "ogg" | "oga" => "audio/ogg",
-            "wav" => "audio/x-wav",
-            "m4a" | "m4b" | "mp4" => "audio/mp4",
-            "aac" => "audio/aac",
-            "aiff" | "aif" => "audio/x-aiff",
-            "mid" | "midi" => "audio/midi",
-            // Tracker modules, taught to the MIME database by MIME_PACKAGE_XML.
-            "mod" => "audio/x-mod",
-            "xm" => "audio/x-xm",
-            "s3m" => "audio/x-s3m",
-            "it" => "audio/x-it",
-            _ => return None,
-        })
-    }
-
-    /// The distinct MIME types across all supported extensions, in first-seen
-    /// order, so the list tracks exactly what the player decodes.
-    fn supported_mime_types() -> Vec<&'static str> {
-        let mut out: Vec<&'static str> = Vec::new();
-        for ext in SUPPORTED_EXTS {
-            if let Some(m) = mime_for_ext(ext) {
-                if !out.contains(&m) {
-                    out.push(m);
-                }
-            }
-        }
-        out
-    }
 
     /// Write `contents` to `path` only when it differs from what is there,
     /// creating parent directories. Returns whether the file was (re)written, so
@@ -419,7 +430,7 @@ mod linux_impl {
         // then show a busy cursor until the notification timed out (5-10s). Off, the
         // forward is instant with no stuck cursor.
         let exe = exe.to_string_lossy();
-        let mimes = supported_mime_types().join(";");
+        let mimes = super::supported_mime_types().join(";");
         let desktop = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
@@ -480,5 +491,33 @@ mod linux_impl {
         let mime_dir = data.join("mime");
         let _ = std::fs::remove_file(mime_dir.join("packages").join(MIME_PACKAGE));
         run_quiet("update-mime-database", &mime_dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mime_for_ext, supported_mime_types};
+
+    #[test]
+    fn every_supported_ext_has_a_mime_type() {
+        // A newly added SUPPORTED_EXTS entry with no MIME mapping would silently
+        // drop out of the Linux "Open with" list; this guards against that.
+        for ext in crate::playlist::SUPPORTED_EXTS {
+            assert!(mime_for_ext(ext).is_some(), "no MIME type for .{ext}");
+        }
+    }
+
+    #[test]
+    fn mime_types_dedup_in_first_seen_order() {
+        let mimes = supported_mime_types();
+        // The MPEG audio layers collapse to a single audio/mpeg entry.
+        assert_eq!(mimes.iter().filter(|m| **m == "audio/mpeg").count(), 1);
+        // mp3 is the first supported extension, so audio/mpeg leads.
+        assert_eq!(mimes.first(), Some(&"audio/mpeg"));
+        // No duplicates across the whole list.
+        let mut unique = mimes.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), mimes.len());
     }
 }

@@ -23,8 +23,11 @@ pub enum PlayState {
 /// `OutputStream` is not `Send`, which is fine: the whole player lives on the
 /// UI thread and egui drives it from `update()`.
 pub struct Player {
-    _stream: OutputStream,
-    handle: OutputStreamHandle,
+    // Optional so a launch with no audio output device degrades gracefully
+    // (deviceless, no sound) instead of crashing; `poll_device` reacquires one
+    // when it appears.
+    _stream: Option<OutputStream>,
+    handle: Option<OutputStreamHandle>,
     sink: Option<Sink>,
     state: PlayState,
     volume: f32,
@@ -56,9 +59,16 @@ pub struct Player {
 }
 
 impl Player {
-    pub fn new() -> Result<Self> {
-        let (stream, handle) = OutputStream::try_default()?;
-        Ok(Self {
+    pub fn new() -> Self {
+        // Open the system default output device if there is one. A launch with no
+        // device (no sound card, every device busy, a headless session) runs
+        // deviceless rather than crashing; `poll_device` picks one up later.
+        let (stream, handle) = match OutputStream::try_default() {
+            Ok((s, h)) => (Some(s), Some(h)),
+            Err(_) => (None, None),
+        };
+        let device_name = handle.as_ref().and(Self::default_device_name());
+        Self {
             _stream: stream,
             handle,
             sink: None,
@@ -71,13 +81,19 @@ impl Player {
             viz: VizShared::new(),
             eq: EqShared::new(),
             balance: BalanceShared::new(),
-            device_name: Self::default_device_name(),
+            device_name,
             crossfade_secs: 0.0,
             fading: None,
             fade_out: 1.0,
             fade_in: 1.0,
             incoming_ready: None,
-        })
+        }
+    }
+
+    /// Whether an audio output device is currently open. False after a deviceless
+    /// launch; playback does nothing until `poll_device` reacquires one.
+    pub fn has_device(&self) -> bool {
+        self.handle.is_some()
     }
 
     fn default_device_name() -> Option<String> {
@@ -98,8 +114,8 @@ impl Player {
         let pos = self.position();
         let was = self.state;
         if let Ok((stream, handle)) = OutputStream::try_default() {
-            self._stream = stream;
-            self.handle = handle;
+            self._stream = Some(stream);
+            self.handle = Some(handle);
             self.device_name = current;
             self.sink = None;
             self.state = PlayState::Stopped;
@@ -199,8 +215,8 @@ impl Player {
     pub fn tick_crossfade(&mut self, dt: f32) {
         // Pre-warm hold: when fading into a CD, keep the current track at full and
         // the CD silent until its audio is flowing, so the spin-up doesn't blend
-        // against silence (#160). Release the hold once it's ready, or once the
-        // outgoing track has already ended (nothing left to hold against).
+        // against silence (#160). Release the hold once the incoming audio is ready,
+        // or once the crossfade is no longer active (`fading` cleared).
         if let Some(flag) = &self.incoming_ready {
             if self.fading.is_some() && !flag.load(Ordering::Relaxed) {
                 return; // still spinning up: hold both gains where they are
@@ -248,7 +264,10 @@ impl Player {
         let tapped = viz::tap(equalized, self.viz.clone());
         let balanced = balance::balance(tapped, self.balance.clone());
 
-        let sink = Sink::try_new(&self.handle)?;
+        let Some(handle) = self.handle.as_ref() else {
+            anyhow::bail!("no audio output device");
+        };
+        let sink = Sink::try_new(handle)?;
         sink.append(balanced);
         // Crossfade: when enabled and a track is already playing, keep the outgoing
         // one on its own sink fading out while the new one fades in, instead of

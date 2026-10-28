@@ -86,4 +86,24 @@ mod tests {
         assert_eq!(scroll_text("abcdefgh", 15.0, 5), scroll_text("abcdefgh", 0.0, 5));
         assert_eq!(scroll_text("abcdefgh", 1000.0, 5).chars().count(), 5);
     }
+
+    #[test]
+    fn marquee_passes_short_text_through() {
+        assert_eq!(marquee("short title", 0.0), "short title");
+        let forty = "x".repeat(40);
+        assert_eq!(marquee(&forty, 10.0), forty); // exactly 40 chars: no scroll
+    }
+
+    #[test]
+    fn marquee_scrolls_long_text_to_40_chars() {
+        // 52 characters, longer than the 40-char window.
+        let long: String = (b'a'..=b'z').chain(b'a'..=b'z').map(char::from).collect();
+        let out = marquee(&long, 0.0);
+        assert_eq!(out.chars().count(), 40);
+        assert!(out.starts_with("abcde"));
+        // Offset wraps modulo the padded length (text + 6 spaces) without panicking.
+        let padded_len = long.chars().count() + 6;
+        assert_eq!(marquee(&long, padded_len as f32), marquee(&long, 0.0));
+        assert_eq!(marquee(&long, 10_000.0).chars().count(), 40);
+    }
 }

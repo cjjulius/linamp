@@ -16,7 +16,7 @@ pub(super) fn apply_theme(ctx: &egui::Context, t: &Theme) {
     visuals.selection.bg_fill = t.list_sel_bg;
     // Outline colour, derived from the skin so bevels/outlines track the theme
     // (used by the tag editor's tabs, buttons and field frames).
-    let outline = egui::Stroke::new(1.0_f32, skin::blend(t.bg, skin::contrast_text(t.bg), 0.35));
+    let outline = egui::Stroke::new(1.0_f32, theme_border(t));
     visuals.widgets.noninteractive.bg_stroke = outline;
     // Menu/popup outline, so the Media Library menu and the classic popups share
     // one theme-derived border colour.
@@ -44,6 +44,13 @@ pub(super) fn menu_palette(t: &Theme) -> (Color32, Color32, Color32, Color32, Co
     let text = skin::contrast_text(t.bg);
     let hover_bg = t.list_sel_bg;
     let hover_text = skin::contrast_text(t.list_sel_bg);
-    let border = skin::blend(t.bg, skin::contrast_text(t.bg), 0.35);
+    let border = theme_border(t);
     (bg, text, hover_bg, hover_text, border)
+}
+
+/// The theme's border/outline colour, derived from the background so the egui
+/// bevels, the menu/popup outline and the native tray menu all take it from one
+/// place instead of recomputing the same blend.
+pub(super) fn theme_border(t: &Theme) -> Color32 {
+    skin::blend(t.bg, skin::contrast_text(t.bg), 0.35)
 }

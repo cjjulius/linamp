@@ -25,6 +25,140 @@ pub(super) enum Popup {
     EqDelete,
 }
 
+/// The action a fixed popup-menu row performs when clicked. Pairing each row
+/// with its action in one list (`fixed_menu_entries`) lets the same list drive
+/// the drawing, the window height and the test, so they can never drift (#154).
+#[derive(Clone, Copy)]
+pub(super) enum MenuAct {
+    OpenFiles,
+    OpenFolder,
+    RemoveSelected,
+    Crop,
+    RemoveMissing,
+    RemoveAll,
+    SelectAll,
+    SelectNone,
+    InvertSelection,
+    Sort(SortKey),
+    Randomize,
+    Reverse,
+    NewList,
+    SaveList,
+    LoadList,
+    PlayTarget,
+    PlayNext,
+    EditTagsTarget,
+    ExploreTarget,
+    Stop,
+    ToggleStopAfter,
+    StopFade,
+}
+
+/// One row of a fixed popup menu: a clickable item (label + dimmed shortcut +
+/// its action) or a separator. The single source of truth for a fixed menu's
+/// layout.
+pub(super) enum MenuEntry {
+    Item { label: String, shortcut: &'static str, act: MenuAct },
+    Sep,
+}
+
+/// The rows of a fixed popup menu, in order, or `None` for the dynamic menus
+/// (Options / EqPresets / EqDelete / Bookmarks) which size themselves from
+/// runtime state in `draw_popup_viewport`. `stop_after_current` only affects the
+/// Stop menu's toggle label, not the row count. This one list drives the draw
+/// loop, the height in `popup_dims` and the layout test.
+pub(super) fn fixed_menu_entries(kind: Popup, stop_after_current: bool) -> Option<Vec<MenuEntry>> {
+    use MenuAct::*;
+    let it = |label: &str, shortcut: &'static str, act: MenuAct| MenuEntry::Item {
+        label: label.to_string(),
+        shortcut,
+        act,
+    };
+    let sorts = || {
+        vec![
+            it("Sort by title", "", Sort(SortKey::Title)),
+            it("Sort by artist", "", Sort(SortKey::Artist)),
+            it("Sort by album", "", Sort(SortKey::Album)),
+            it("Sort by duration", "", Sort(SortKey::Duration)),
+            it("Sort by filename", "", Sort(SortKey::Filename)),
+            it("Sort by path", "", Sort(SortKey::Path)),
+        ]
+    };
+    Some(match kind {
+        Popup::PlAdd => vec![
+            it("Add file(s)…", "", OpenFiles),
+            it("Add folder…", "", OpenFolder),
+        ],
+        Popup::PlRem => vec![
+            it("Remove selected", "", RemoveSelected),
+            it("Crop (keep selected)", "", Crop),
+            it("Remove missing files", "", RemoveMissing),
+            it("Remove all", "", RemoveAll),
+        ],
+        Popup::PlSel => vec![
+            it("Select all", "", SelectAll),
+            it("Select none", "", SelectNone),
+            it("Invert selection", "", InvertSelection),
+        ],
+        Popup::PlMisc => {
+            let mut v = sorts();
+            v.push(it("Randomize list", "", Randomize));
+            v.push(it("Reverse list", "", Reverse));
+            v
+        }
+        Popup::PlList => vec![
+            it("New list", "", NewList),
+            it("Save list…", "", SaveList),
+            it("Load list…", "", LoadList),
+        ],
+        Popup::PlTrack => vec![
+            it("Play", "Enter", PlayTarget),
+            it("Play Next", "", PlayNext),
+            MenuEntry::Sep,
+            it("Edit file tags…", "Alt+3", EditTagsTarget),
+            it("Explore folder", "", ExploreTarget),
+            MenuEntry::Sep,
+            it("Remove", "Del", RemoveSelected),
+            it("Crop (keep selected)", "", Crop),
+        ],
+        Popup::PlVoid => {
+            let mut v = vec![
+                it("Add file(s)…", "Ins", OpenFiles),
+                it("Add folder…", "Shift+L", OpenFolder),
+                MenuEntry::Sep,
+                it("Select all", "Ctrl+A", SelectAll),
+                it("Select none", "", SelectNone),
+                it("Invert selection", "", InvertSelection),
+                MenuEntry::Sep,
+            ];
+            v.extend(sorts());
+            v.push(MenuEntry::Sep);
+            v.push(it("Remove all", "", RemoveAll));
+            v.push(MenuEntry::Sep);
+            v.push(it("Save list…", "", SaveList));
+            v.push(it("Load list…", "", LoadList));
+            v
+        }
+        Popup::StopMenu => vec![
+            it("Stop", "", Stop),
+            it(
+                &format!("Stop after current: {}", if stop_after_current { "on" } else { "off" }),
+                "",
+                ToggleStopAfter,
+            ),
+            it("Stop with fade out", "", StopFade),
+        ],
+        _ => return None,
+    })
+}
+
+/// `(items, separators)` in an entry list.
+fn count_entries(entries: &[MenuEntry]) -> (i32, i32) {
+    let items = entries.iter().filter(|e| matches!(e, MenuEntry::Item { .. })).count() as i32;
+    let seps = entries.iter().filter(|e| matches!(e, MenuEntry::Sep)).count() as i32;
+    (items, seps)
+}
+
 /// Height (points) one item row costs in a popup menu: the 18px item (see
 /// `menu_item`) plus the 2px inter-row spacing set on the popup.
 const MENU_ROW_H: f32 = 20.0;
@@ -44,27 +178,32 @@ fn popup_height(buttons: i32, seps: i32) -> f32 {
 /// counts must match what the matching arm in `draw_popup_viewport` draws, or the
 /// window leaves an empty band (too many) or clips the last rows (too few) (#154).
 pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
-    let (buttons, seps, width) = match kind {
-        // Height is computed dynamically in draw_popup_viewport (it counts the
-        // optional Minibrowser item); this is only a fallback.
-        Popup::Options => (13, 3, 182.0),
-        Popup::PlAdd => (2, 0, 182.0),
-        Popup::PlRem => (4, 0, 182.0),
-        Popup::PlSel => (3, 0, 182.0),
-        // 6 sort rows + Randomize + Reverse.
-        Popup::PlMisc => (8, 0, 182.0),
-        Popup::PlList => (3, 0, 182.0),
-        // Right-click context menus: wider to fit the shortcut column.
-        Popup::PlTrack => (6, 2, 210.0),
-        // Add×2, Select×3, Sort×6, Remove all, Save/Load list = 14 items, 5 seps.
-        Popup::PlVoid => (14, 5, 210.0),
-        Popup::EqPresets => (crate::eq::PRESETS.len() as i32 + 2, 1, 182.0),
-        Popup::StopMenu => (3, 0, 200.0),
-        // Heights overridden per item count in draw_popup_viewport.
-        Popup::Bookmarks => (2, 1, 240.0),
-        Popup::EqDelete => (1, 0, 200.0),
+    // Width per kind; the right-click context menus are wider for the shortcut
+    // column, the Stop/EqDelete menus a little wider, Bookmarks widest.
+    let width = match kind {
+        Popup::PlTrack | Popup::PlVoid => 210.0,
+        Popup::StopMenu | Popup::EqDelete => 200.0,
+        Popup::Bookmarks => 240.0,
+        _ => 182.0,
     };
-    (width, popup_height(buttons, seps))
+    // Fixed menus take their height from the same entry list the draw loop and
+    // the test use, so the three can't drift (#154). The dynamic menus
+    // (Options / EqPresets / Bookmarks / EqDelete) recompute their height from
+    // runtime item counts in draw_popup_viewport; these are only fallbacks.
+    let height = if let Some(entries) = fixed_menu_entries(kind, false) {
+        let (items, seps) = count_entries(&entries);
+        popup_height(items, seps)
+    } else {
+        let (buttons, seps) = match kind {
+            Popup::Options => (13, 3),
+            Popup::EqPresets => (crate::eq::PRESETS.len() as i32 + 2, 1),
+            Popup::Bookmarks => (2, 1),
+            Popup::EqDelete => (1, 0),
+            _ => (0, 0),
+        };
+        popup_height(buttons, seps)
+    };
+    (width, height)
 }
 
 /// A context-menu row: `label` on the left, dimmed `shortcut` on the right, full
@@ -109,10 +248,82 @@ pub(super) fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool 
 }
 
 impl super::LinAmpApp {
+    /// Run a fixed popup-menu action. Returns true (every fixed-menu click closes
+    /// its menu). The right-click actions resolve their target the same way the
+    /// old inline arms did: the right-clicked row, else the selection's first.
+    fn menu_dispatch(&mut self, act: MenuAct) -> bool {
+        use MenuAct::*;
+        let target = || {
+            self.plview.ctx_row.or_else(|| self.plview.selection.iter().min().copied())
+        };
+        match act {
+            OpenFiles => self.open_files(),
+            OpenFolder => self.open_folder(),
+            RemoveSelected => self.pl_remove(false),
+            Crop => self.pl_remove(true),
+            RemoveMissing => {
+                let n = self.playlist.remove_missing();
+                self.plview.selection.clear();
+                self.status = format!("Removed {n} missing file(s).");
+            }
+            RemoveAll => {
+                self.playlist.clear();
+                self.plview.selection.clear();
+                self.player.stop();
+            }
+            SelectAll => self.pl_select_all(),
+            SelectNone => self.plview.selection.clear(),
+            InvertSelection => self.pl_invert_selection(),
+            Sort(k) => {
+                self.sort_key = k;
+                self.sort_playlist();
+            }
+            Randomize => {
+                self.playlist.randomize();
+                self.plview.selection.clear();
+            }
+            Reverse => {
+                self.playlist.reverse();
+                self.plview.selection.clear();
+            }
+            NewList => {
+                self.playlist.clear();
+                self.plview.selection.clear();
+                self.player.stop();
+            }
+            SaveList => self.save_playlist_dialog(),
+            LoadList => self.load_playlist_dialog(),
+            PlayTarget => {
+                if let Some(i) = target() {
+                    self.play_index(i);
+                }
+            }
+            PlayNext => self.play_next_selected(),
+            EditTagsTarget => match target() {
+                Some(i) => self.open_tag_editor_at(i),
+                None => self.open_tag_editor(),
+            },
+            ExploreTarget => {
+                if let Some(t) = target().and_then(|i| self.playlist.tracks.get(i)) {
+                    open_in_file_manager(&t.path);
+                }
+            }
+            Stop => self.stop_playback(),
+            ToggleStopAfter => self.stop_after_current = !self.stop_after_current,
+            StopFade => {
+                if self.player.state() != PlayState::Stopped {
+                    self.fade = Some(self.prefs.fade_on_stop_secs);
+                    self.status = "Fading out…".into();
+                }
+            }
+        }
+        true
+    }
+
     /// Render the open popup menu in its own borderless window (so it is never
     /// clipped by the small main/playlist windows). Positioned at the click.
     pub(super) fn draw_popup_viewport(&mut self, ctx: &egui::Context) {
-        let Some((kind, owner, pos)) = self.popup else {
+        let Some((kind, owner, pos)) = self.popups.cur else {
             return;
         };
         let (w, h) = match kind {
@@ -135,18 +346,18 @@ impl super::LinAmpApp {
             Popup::EqPresets => {
                 // Built-in presets + the saved library + up to 4 actions (Save,
                 // optional Delete, Import, Export). Capped height; the arm scrolls.
-                let actions = if self.eq_presets.items.is_empty() { 3 } else { 4 };
-                let rows = (crate::eq::PRESETS.len() + self.eq_presets.items.len()) as i32 + actions;
-                let seps = if self.eq_presets.items.is_empty() { 1 } else { 2 };
+                let actions = if self.eq.presets.items.is_empty() { 3 } else { 4 };
+                let rows = (crate::eq::PRESETS.len() + self.eq.presets.items.len()) as i32 + actions;
+                let seps = if self.eq.presets.items.is_empty() { 1 } else { 2 };
                 (182.0, popup_height(rows, seps).min(420.0))
             }
             Popup::EqDelete => {
-                let rows = self.eq_presets.items.len().clamp(1, 12) as i32;
+                let rows = self.eq.presets.items.len().clamp(1, 12) as i32;
                 (200.0, popup_height(rows, 0))
             }
             _ => popup_dims(kind),
         };
-        let mut screen = self.win_pos[win_idx(owner)] + pos.to_vec2();
+        let mut screen = self.geom.win_pos[win_idx(owner)] + pos.to_vec2();
         // Keep the menu fully on the desktop: a tall menu (example: the empty-area
         // menu) opened near the bottom/right edge would otherwise spill off-screen
         // with its lower entries unreachable.
@@ -164,10 +375,6 @@ impl super::LinAmpApp {
         // stroke colour (set in apply_theme), a crisp 1px line painted just inside
         // the window edge (see below).
         let border = egui::Stroke::new(1.0_f32, ctx.style().visuals.window_stroke.color);
-        let sort = |app: &mut Self, k: SortKey| {
-            app.sort_key = k;
-            app.sort_playlist();
-        };
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Menu")
             .with_position(screen)
@@ -179,7 +386,7 @@ impl super::LinAmpApp {
             // `screen`, which flashes a frame at the wrong place. Keep it hidden on
             // its opening frame (while it gets positioned/sized) and reveal it next
             // frame, so the menu only ever appears where it was clicked.
-            .with_visible(!self.popup_fresh)
+            .with_visible(!self.popups.fresh)
             // Always on top: the EQ/playlist/library windows are *owned* by the main
             // window (group_child_windows), which keeps them above sibling windows,
             // and clicking one re-raises it, so only a system-topmost popup stays
@@ -187,7 +394,7 @@ impl super::LinAmpApp {
             // sit under the menu, so dialog actions hide the menu first (see
             // `hide_popup_window`).
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
-        let id = egui::ViewportId::from_hash_of(("linamp_popup", self.popup_serial));
+        let id = egui::ViewportId::from_hash_of(("linamp_popup", self.popups.serial));
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
             egui::CentralPanel::default()
@@ -269,7 +476,7 @@ impl super::LinAmpApp {
                             if item(ui, "Bookmarks…") {
                                 // Classic popups aren't nested; open the list once
                                 // this menu closes.
-                                self.pending_popup = Some((Popup::Bookmarks, owner, pos));
+                                self.popups.pending = Some((Popup::Bookmarks, owner, pos));
                                 close = true;
                             }
                             // The Minibrowser is an opt-in "Optional Features" extra.
@@ -303,214 +510,39 @@ impl super::LinAmpApp {
                                 close = true;
                             }
                         }
-                        Popup::PlAdd => {
-                            if item(ui, "Add file(s)…") {
-                                self.open_files();
-                                close = true;
-                            }
-                            if item(ui, "Add folder…") {
-                                self.open_folder();
-                                close = true;
-                            }
-                        }
-                        Popup::PlRem => {
-                            if item(ui, "Remove selected") {
-                                self.pl_remove(false);
-                                close = true;
-                            }
-                            if item(ui, "Crop (keep selected)") {
-                                self.pl_remove(true);
-                                close = true;
-                            }
-                            if item(ui, "Remove missing files") {
-                                let n = self.playlist.remove_missing();
-                                self.pl_selection.clear();
-                                self.status = format!("Removed {n} missing file(s).");
-                                close = true;
-                            }
-                            if item(ui, "Remove all") {
-                                self.playlist.clear();
-                                self.pl_selection.clear();
-                                self.player.stop();
-                                close = true;
-                            }
-                        }
-                        Popup::PlSel => {
-                            if item(ui, "Select all") {
-                                self.pl_select_all();
-                                close = true;
-                            }
-                            if item(ui, "Select none") {
-                                self.pl_selection.clear();
-                                close = true;
-                            }
-                            if item(ui, "Invert selection") {
-                                self.pl_invert_selection();
-                                close = true;
-                            }
-                        }
-                        Popup::PlMisc => {
-                            if item(ui, "Sort by title") {
-                                sort(self, SortKey::Title);
-                                close = true;
-                            }
-                            if item(ui, "Sort by artist") {
-                                sort(self, SortKey::Artist);
-                                close = true;
-                            }
-                            if item(ui, "Sort by album") {
-                                sort(self, SortKey::Album);
-                                close = true;
-                            }
-                            if item(ui, "Sort by duration") {
-                                sort(self, SortKey::Duration);
-                                close = true;
-                            }
-                            if item(ui, "Sort by filename") {
-                                sort(self, SortKey::Filename);
-                                close = true;
-                            }
-                            if item(ui, "Sort by path") {
-                                sort(self, SortKey::Path);
-                                close = true;
-                            }
-                            if item(ui, "Randomize list") {
-                                self.playlist.randomize();
-                                self.pl_selection.clear();
-                                close = true;
-                            }
-                            if item(ui, "Reverse list") {
-                                self.playlist.reverse();
-                                self.pl_selection.clear();
-                                close = true;
-                            }
-                        }
-                        Popup::PlList => {
-                            if item(ui, "New list") {
-                                self.playlist.clear();
-                                self.pl_selection.clear();
-                                self.player.stop();
-                                close = true;
-                            }
-                            if item(ui, "Save list…") {
-                                self.save_playlist_dialog();
-                                close = true;
-                            }
-                            if item(ui, "Load list…") {
-                                self.load_playlist_dialog();
-                                close = true;
-                            }
-                        }
-                        Popup::PlTrack => {
-                            // Target the right-clicked row (falling back to the
-                            // selection's first) so Play / Edit act on what the user
-                            // actually clicked, even within a multi-selection.
-                            let target = self
-                                .pl_ctx_row
-                                .or_else(|| self.pl_selection.iter().min().copied());
-                            if menu_item(ui, "Play", "Enter") {
-                                if let Some(i) = target {
-                                    self.play_index(i);
+                        Popup::PlAdd
+                        | Popup::PlRem
+                        | Popup::PlSel
+                        | Popup::PlMisc
+                        | Popup::PlList
+                        | Popup::PlTrack
+                        | Popup::PlVoid
+                        | Popup::StopMenu => {
+                            // Fixed menus: one entry list (fixed_menu_entries)
+                            // drives the rows, the window height and the layout
+                            // test, so they can't drift (#154).
+                            if let Some(entries) =
+                                fixed_menu_entries(kind, self.stop_after_current)
+                            {
+                                for e in entries {
+                                    match e {
+                                        MenuEntry::Sep => {
+                                            ui.separator();
+                                        }
+                                        MenuEntry::Item { label, shortcut, act } => {
+                                            if menu_item(ui, &label, shortcut) {
+                                                close = self.menu_dispatch(act);
+                                            }
+                                        }
+                                    }
                                 }
-                                close = true;
-                            }
-                            if menu_item(ui, "Play Next", "") {
-                                self.play_next_selected();
-                                close = true;
-                            }
-                            ui.separator();
-                            if menu_item(ui, "Edit file tags…", "Alt+3") {
-                                match target {
-                                    Some(i) => self.open_tag_editor_at(i),
-                                    None => self.open_tag_editor(),
-                                }
-                                close = true;
-                            }
-                            if menu_item(ui, "Explore folder", "") {
-                                if let Some(t) = target.and_then(|i| self.playlist.tracks.get(i)) {
-                                    open_in_file_manager(&t.path);
-                                }
-                                close = true;
-                            }
-                            ui.separator();
-                            if menu_item(ui, "Remove", "Del") {
-                                self.pl_remove(false);
-                                close = true;
-                            }
-                            if menu_item(ui, "Crop (keep selected)", "") {
-                                self.pl_remove(true);
-                                close = true;
-                            }
-                        }
-                        Popup::PlVoid => {
-                            if menu_item(ui, "Add file(s)…", "Ins") {
-                                self.open_files();
-                                close = true;
-                            }
-                            if menu_item(ui, "Add folder…", "Shift+L") {
-                                self.open_folder();
-                                close = true;
-                            }
-                            ui.separator();
-                            if menu_item(ui, "Select all", "Ctrl+A") {
-                                self.pl_select_all();
-                                close = true;
-                            }
-                            if menu_item(ui, "Select none", "") {
-                                self.pl_selection.clear();
-                                close = true;
-                            }
-                            if menu_item(ui, "Invert selection", "") {
-                                self.pl_invert_selection();
-                                close = true;
-                            }
-                            ui.separator();
-                            if menu_item(ui, "Sort by title", "") {
-                                sort(self, SortKey::Title);
-                                close = true;
-                            }
-                            if menu_item(ui, "Sort by artist", "") {
-                                sort(self, SortKey::Artist);
-                                close = true;
-                            }
-                            if menu_item(ui, "Sort by album", "") {
-                                sort(self, SortKey::Album);
-                                close = true;
-                            }
-                            if menu_item(ui, "Sort by duration", "") {
-                                sort(self, SortKey::Duration);
-                                close = true;
-                            }
-                            if menu_item(ui, "Sort by filename", "") {
-                                sort(self, SortKey::Filename);
-                                close = true;
-                            }
-                            if menu_item(ui, "Sort by path", "") {
-                                sort(self, SortKey::Path);
-                                close = true;
-                            }
-                            ui.separator();
-                            if menu_item(ui, "Remove all", "") {
-                                self.playlist.clear();
-                                self.pl_selection.clear();
-                                self.player.stop();
-                                close = true;
-                            }
-                            ui.separator();
-                            if menu_item(ui, "Save list…", "") {
-                                self.save_playlist_dialog();
-                                close = true;
-                            }
-                            if menu_item(ui, "Load list…", "") {
-                                self.load_playlist_dialog();
-                                close = true;
                             }
                         }
                         Popup::EqPresets => {
                             // Snapshot the saved library so clicks can borrow self
                             // mutably without aliasing the list.
                             let saved: Vec<(usize, String)> = self
-                                .eq_presets
+                                .eq.presets
                                 .items
                                 .iter()
                                 .enumerate()
@@ -534,13 +566,13 @@ impl super::LinAmpApp {
                                 }
                                 ui.separator();
                                 if item(ui, "Save current as…") {
-                                    self.eq_save_name = Some(String::new());
+                                    self.eq.save_name = Some(String::new());
                                     close = true;
                                 }
                                 if !saved.is_empty() && item(ui, "Delete a saved preset…") {
                                     // Classic popups aren't nested; open the delete
                                     // list once this menu closes.
-                                    self.pending_popup = Some((Popup::EqDelete, owner, pos));
+                                    self.popups.pending = Some((Popup::EqDelete, owner, pos));
                                     close = true;
                                 }
                                 if item(ui, "Import preset (.eqf)…") {
@@ -555,7 +587,7 @@ impl super::LinAmpApp {
                         }
                         Popup::EqDelete => {
                             let saved: Vec<(usize, String)> = self
-                                .eq_presets
+                                .eq.presets
                                 .items
                                 .iter()
                                 .enumerate()
@@ -574,24 +606,6 @@ impl super::LinAmpApp {
                                         }
                                     }
                                 });
-                            }
-                        }
-                        Popup::StopMenu => {
-                            if item(ui, "Stop") {
-                                self.stop_playback();
-                                close = true;
-                            }
-                            let after = if self.stop_after_current { "on" } else { "off" };
-                            if item(ui, &format!("Stop after current: {after}")) {
-                                self.stop_after_current = !self.stop_after_current;
-                                close = true;
-                            }
-                            if item(ui, "Stop with fade out") {
-                                if self.player.state() != PlayState::Stopped {
-                                    self.fade = Some(self.prefs.fade_on_stop_secs);
-                                    self.status = "Fading out…".into();
-                                }
-                                close = true;
                             }
                         }
                         Popup::Bookmarks => {
@@ -673,10 +687,10 @@ impl super::LinAmpApp {
         let radius = (corner * ctx.pixels_per_point()).round() as i32;
         // Rebuild the region when first opened, and if a different-sized menu opens
         // into the same serial, so the rounded corners track the window size.
-        let size_changed = self.popup_rounded_h != Some(h);
-        if (!self.popup_rounded || size_changed) && round_popup_window(radius, self.popup_fresh || size_changed) {
-            self.popup_rounded = true;
-            self.popup_rounded_h = Some(h);
+        let size_changed = self.popups.rounded_h != Some(h);
+        if (!self.popups.rounded || size_changed) && round_popup_window(radius, self.popups.fresh || size_changed) {
+            self.popups.rounded = true;
+            self.popups.rounded_h = Some(h);
         }
         // On X11 the popup window is reused and resized between menus (and, when the
         // menu is switched rapidly, destroyed and recreated), while XGetGeometry can
@@ -685,38 +699,38 @@ impl super::LinAmpApp {
         // recreated window never keeps a square corner.
         #[cfg(all(unix, not(target_os = "macos")))]
         {
-            let _ = round_popup_window(radius, self.popup_fresh);
+            let _ = round_popup_window(radius, self.popups.fresh);
             // Always-on-top isn't enough on X11: the main window's transient-for
             // children (EQ/playlist/library) can stack over the popup, so it opens
             // behind them. Raise it each frame while it's open to keep it visible.
             raise_popup_window();
         }
 
-        if self.popup_fresh {
+        if self.popups.fresh {
             // The opening frame drew the menu hidden (see `with_visible` above);
             // request the next frame now so it's revealed immediately rather than
             // waiting on the next input event.
             ctx.request_repaint();
         }
-        self.popup_fresh = false;
+        self.popups.fresh = false;
         if close {
-            self.popup = None;
+            self.popups.cur = None;
             // Chain to a queued popup (example: Options then Bookmarks) now this one is gone.
-            if let Some((k, w, p)) = self.pending_popup.take() {
+            if let Some((k, w, p)) = self.popups.pending.take() {
                 self.open_popup_in(k, w, p);
             }
         }
     }
 
     pub(super) fn open_popup_in(&mut self, kind: Popup, win: ClWin, local: egui::Pos2) {
-        self.popup = Some((kind, win, local));
-        self.popup_fresh = true;
+        self.popups.cur = Some((kind, win, local));
+        self.popups.fresh = true;
         // New popup window: re-apply the rounded region on the next frame.
-        self.popup_rounded = false;
-        self.popup_rounded_h = None;
+        self.popups.rounded = false;
+        self.popups.rounded_h = None;
         // Fresh viewport id per open, so the menu never inherits a reused window's
         // size on a re-right-click (#154).
-        self.popup_serial = self.popup_serial.wrapping_add(1);
+        self.popups.serial = self.popups.serial.wrapping_add(1);
         // Opening a classic popup dismisses an open Media Library menu, so the two
         // menu systems are never up at once.
         self.classic_clicked = true;
@@ -738,10 +752,11 @@ mod tests {
 
     #[test]
     fn fixed_menu_sizes_match_their_draw_arms() {
-        // (items, separators) for each fixed menu must match what
-        // draw_popup_viewport actually draws, or the window clips the last rows
-        // (too few) or leaves an empty band (too many), the #154 regression.
-        // Update these counts and the matching arm together.
+        // The fixed menus are drawn, sized and tested from one entry list
+        // (fixed_menu_entries), so the window can't clip the last rows (too few)
+        // or leave an empty band (too many), the #154 regression. These are the
+        // known-good layouts; a menu change updates fixed_menu_entries and this
+        // assertion together, and the draw loop and height follow automatically.
         for (kind, items, seps) in [
             (Popup::PlAdd, 2, 0),
             (Popup::PlRem, 4, 0),
@@ -749,11 +764,21 @@ mod tests {
             (Popup::PlMisc, 8, 0),
             (Popup::PlList, 3, 0),
             (Popup::PlTrack, 6, 2),
-            (Popup::PlVoid, 14, 5),
+            // 14 items and 4 separators. popup_dims used to claim 5 separators
+            // while the draw arm drew 4, so this menu rendered ~8px too tall with
+            // an empty band; driving both from one list fixes that (the #154 class).
+            (Popup::PlVoid, 14, 4),
             (Popup::StopMenu, 3, 0),
         ] {
+            let entries = fixed_menu_entries(kind, false).expect("fixed menu has entries");
+            assert_eq!(count_entries(&entries), (items, seps), "{kind:?} layout changed");
+            // popup_dims derives height from the same list the draw loop consumes.
             let (_, h) = popup_dims(kind);
             assert_eq!(h, popup_height(items, seps), "{kind:?} height mismatch");
+        }
+        // The dynamic menus size themselves from runtime state, not a fixed list.
+        for kind in [Popup::Options, Popup::EqPresets, Popup::EqDelete, Popup::Bookmarks] {
+            assert!(fixed_menu_entries(kind, false).is_none(), "{kind:?} should be dynamic");
         }
     }
 }

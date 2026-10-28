@@ -135,6 +135,28 @@ mod tests {
     }
 
     #[test]
+    fn drain_returns_requests_oldest_first() {
+        let d = temp_dir("order");
+        enqueue_in(&d, &[PathBuf::from("/first.mp3")]);
+        std::thread::sleep(std::time::Duration::from_millis(3)); // distinct timestamp
+        enqueue_in(&d, &[PathBuf::from("/second.mp3")]);
+        let got = drain_in(&d);
+        assert_eq!(got, vec![PathBuf::from("/first.mp3"), PathBuf::from("/second.mp3")]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn drain_ignores_in_flight_part_files() {
+        let d = temp_dir("part");
+        std::fs::create_dir_all(&d).unwrap();
+        // A half-written request still carries the .part extension and must be skipped.
+        std::fs::write(d.join("00000000000000000001-1.part"), "/half.mp3").unwrap();
+        enqueue_in(&d, &[PathBuf::from("/done.mp3")]);
+        assert_eq!(drain_in(&d), vec![PathBuf::from("/done.mp3")]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn drain_on_missing_dir_is_empty() {
         let d = temp_dir("missing");
         // Never created.
