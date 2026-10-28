@@ -911,6 +911,8 @@ pub(crate) fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visibl
 /// close the viewport) appears above it rather than under the always-on-top menu.
 /// The window is torn down by egui on the next frame once `self.popups.cur` is cleared.
 pub(crate) fn hide_popup_window() {
+    // Both the menu and its one-level flyout, so a dialog opened from a menu item
+    // is never trapped behind either always-on-top window.
     #[cfg(windows)]
     {
         #[allow(non_snake_case)]
@@ -918,16 +920,19 @@ pub(crate) fn hide_popup_window() {
             fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
         }
         const SW_HIDE: i32 = 0;
-        let h = find_window("LinAmp Menu");
-        if h != 0 {
-            unsafe {
-                ShowWindow(h, SW_HIDE);
+        for title in ["LinAmp Menu", "LinAmp Submenu"] {
+            let h = find_window(title);
+            if h != 0 {
+                unsafe {
+                    ShowWindow(h, SW_HIDE);
+                }
             }
         }
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         x11util::unmap_window("LinAmp Menu");
+        x11util::unmap_window("LinAmp Submenu");
     }
 }
 
@@ -1106,7 +1111,7 @@ pub(crate) fn set_taskbar_button(title: &str, show: bool) {
 /// rounded fill. Returns true once the region is applied, so the caller stops
 /// retrying. `force` re-applies even if nothing seems to have changed (X11 only;
 /// used on the frame a popup first opens). Windows and X11; a no-op elsewhere.
-pub(crate) fn round_popup_window(radius: i32, force: bool) -> bool {
+pub(crate) fn round_popup_window(title: &str, radius: i32, force: bool) -> bool {
     #[cfg(windows)]
     {
         let _ = force;
@@ -1118,7 +1123,7 @@ pub(crate) fn round_popup_window(radius: i32, force: bool) -> bool {
             fn DeleteObject(obj: isize) -> i32;
         }
         unsafe {
-            let h = find_window("LinAmp Menu");
+            let h = find_window(title);
             if h == 0 {
                 return false;
             }
@@ -1142,11 +1147,11 @@ pub(crate) fn round_popup_window(radius: i32, force: bool) -> bool {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        x11util::round_window("LinAmp Menu", radius, force)
+        x11util::round_window(title, radius, force)
     }
     #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
-        let _ = (radius, force);
+        let _ = (title, radius, force);
         true
     }
 }
@@ -1161,10 +1166,14 @@ pub(crate) fn round_popup_window(radius: i32, force: bool) -> bool {
 // referenced; keep it defined (documented cross-platform shape) without the
 // dead-code warning.
 #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
-pub(crate) fn raise_popup_window() {
+pub(crate) fn raise_popup_window(title: &str) {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        x11util::raise("LinAmp Menu");
+        x11util::raise(title);
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = title;
     }
 }
 

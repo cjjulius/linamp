@@ -510,9 +510,15 @@ struct PopupState {
     /// Rows for an open dynamic menu (`Popup::LibMenu`), built per click because
     /// the library menus carry per-row names and the live selection.
     dynamic: Option<Vec<library_ui::DynRow>>,
-    /// Library rows the Rate flyout (`Popup::LibRate`) acts on, carried across the
-    /// close-parent/open-child chain from the track menu.
+    /// Library rows the Rate flyout (`Popup::LibRate`) acts on.
     rate_rows: Vec<usize>,
+    /// The open one-level flyout (the Rate submenu): its kind and absolute screen
+    /// anchor. Drawn in a second viewport beside the parent, which stays open.
+    sub: Option<(Popup, egui::Pos2)>,
+    /// Opening frame for the flyout window (mirrors `fresh` for the parent).
+    sub_fresh: bool,
+    /// Window height the flyout's rounded region was last built for.
+    sub_rounded_h: Option<f32>,
     fresh: bool,
     /// Whether the popup window's rounded region has been applied for the current
     /// popup (applied once, retrying only until it succeeds).
@@ -871,6 +877,9 @@ impl LinAmpApp {
                 pending: None,
                 dynamic: None,
                 rate_rows: Vec::new(),
+                sub: None,
+                sub_fresh: false,
+                sub_rounded_h: None,
                 fresh: false,
                 rounded: false,
                 rounded_h: None,
@@ -3536,6 +3545,7 @@ impl LinAmpApp {
             "LinAmp, Jump to file",
             "LinAmp, Jump to time",
             "LinAmp Menu",
+            "LinAmp Submenu",
         ] {
             unset_window_cursor(title);
         }
