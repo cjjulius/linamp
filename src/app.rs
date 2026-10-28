@@ -335,15 +335,17 @@ enum PrefTab {
     Display,
     Playback,
     Playlist,
+    Tags,
     OptionalFeatures,
     About,
 }
 
 impl PrefTab {
-    const ALL: [PrefTab; 5] = [
+    const ALL: [PrefTab; 6] = [
         PrefTab::Display,
         PrefTab::Playback,
         PrefTab::Playlist,
+        PrefTab::Tags,
         PrefTab::OptionalFeatures,
         PrefTab::About,
     ];
@@ -352,6 +354,7 @@ impl PrefTab {
             PrefTab::Display => "Display",
             PrefTab::Playback => "Playback",
             PrefTab::Playlist => "Playlist",
+            PrefTab::Tags => "Tags",
             PrefTab::OptionalFeatures => "Optional Features",
             PrefTab::About => "About",
         }
@@ -2625,6 +2628,7 @@ impl LinAmpApp {
                         PrefTab::Display => self.prefs_page_display(ctx, ui),
                         PrefTab::Playback => self.prefs_page_playback(ui),
                         PrefTab::Playlist => self.prefs_page_playlist(ui),
+                        PrefTab::Tags => self.prefs_page_tags(ui),
                         PrefTab::OptionalFeatures => self.prefs_page_optional_features(ui),
                         PrefTab::About => self.prefs_page_about(ui),
                     });
@@ -2825,6 +2829,20 @@ impl LinAmpApp {
             }
             ui.add_space(4.0);
             ui.weak("Applies when you open audio files with LinAmp from your file manager.");
+        });
+    }
+
+    fn prefs_page_tags(&mut self, ui: &mut egui::Ui) {
+        Self::pref_section(ui, "ID3v2 version", |ui| {
+            let mut v23 = self.prefs.id3v23;
+            ui.radio_value(&mut v23, true, "ID3v2.3 (most compatible; Winamp's default)");
+            ui.radio_value(&mut v23, false, "ID3v2.4 (newer standard)");
+            if v23 != self.prefs.id3v23 {
+                self.prefs.id3v23 = v23;
+                self.prefs.save();
+            }
+            ui.add_space(4.0);
+            ui.weak("The version written when you save MP3 tags. Reading handles both regardless.");
         });
     }
 

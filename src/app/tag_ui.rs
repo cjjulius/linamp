@@ -122,6 +122,7 @@ impl super::LinAmpApp {
             &path,
             v1_on.then_some(&v1),
             v2_on.then_some(&v2),
+            self.prefs.id3v23,
         );
         if result.is_ok() {
             // Refresh the playlist row (when the edit came from the playlist).
