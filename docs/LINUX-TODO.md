@@ -106,11 +106,13 @@ on hand), consistent with the earlier Mint deferral.
   Play/Pause, all via `play_pause` -> `pause_playback`) fade correctly: pressing
   the pause button at 00:03 kept the clock advancing to 00:06 over the 3s fade,
   then held at 00:06 (paused, not reset), and resume continued from 00:06 at full
-  volume. Gap found, not Linux-specific: the dedicated pause key (`C`,
-  `input.rs` `k.pause`) still calls `player.pause()` directly, so it cuts abruptly
-  with no fade (clock froze instantly), unlike the button and the commit's stated
-  intent ("key pause cut audio abruptly"). Routing `k.pause` through
-  `pause_playback` would close it; flagged to the Windows side as cross-platform.
+  volume. Gap found and fixed (cross-platform): the dedicated pause key (`C`,
+  `input.rs` `k.pause`) was still calling `player.pause()` directly, so it cut
+  abruptly with no fade (clock froze instantly), unlike the button and the commit's
+  stated intent ("key pause cut audio abruptly"). Routed `k.pause` through
+  `pause_playback`, which keeps the one-way-pause semantics and adds the fade.
+  Verified: C now keeps the clock advancing through the fade then pauses
+  (00:03 -> ~00:05), same as the button.
 
 ## Notes
 
