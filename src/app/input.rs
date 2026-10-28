@@ -110,7 +110,10 @@ impl super::LinAmpApp {
             self.play_pause();
         }
         if k.pause {
-            self.player.pause();
+            // Fade out before pausing (when the pref is on), like the pause button
+            // and the Play/Pause toggle, instead of cutting abruptly (#171). Still a
+            // one-way pause: pause_playback only acts while playing.
+            self.pause_playback();
         }
         if k.stop {
             if k.shift {
