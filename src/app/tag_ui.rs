@@ -370,8 +370,10 @@ impl super::LinAmpApp {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         let b = tab_btn(ui, "Basic Info", ed.tab == TagTab::Basic);
                         // A non-editable file has no writable tag, so only Basic Info
-                        // shows: no ID3 tab.
-                        let i = on.then(|| tab_btn(ui, "ID3", ed.tab == TagTab::Id3));
+                        // shows: no second tab. The single-tag formats (FLAC/Ogg/M4A)
+                        // aren't ID3, so label their tab "Tags" to match its content.
+                        let tag_label = if ed.single { "Tags" } else { "ID3" };
+                        let i = on.then(|| tab_btn(ui, tag_label, ed.tab == TagTab::Id3));
                         (b, i)
                     })
                     .inner;
