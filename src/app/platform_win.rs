@@ -220,6 +220,27 @@ mod x11util {
         s
     }
 
+    /// A window's `_NET_WM_PID` (owning process id), or 0 if unset. Used to pick
+    /// out our own top-level windows by identity rather than by title.
+    unsafe fn wm_pid(xlib: &xlib::Xlib, d: *mut xlib::Display, w: xlib::Window) -> u32 {
+        let prop = intern(xlib, d, "_NET_WM_PID");
+        const XA_CARDINAL: xlib::Atom = 6;
+        let (mut ty, mut fmt): (xlib::Atom, c_int) = (0, 0);
+        let (mut nitems, mut after): (c_ulong, c_ulong) = (0, 0);
+        let mut data: *mut c_uchar = ptr::null_mut();
+        let st = (xlib.XGetWindowProperty)(
+            d, w, prop, 0, 1, 0, XA_CARDINAL, &mut ty, &mut fmt, &mut nitems, &mut after, &mut data,
+        );
+        let mut pid = 0u32;
+        if st == 0 && !data.is_null() && fmt == 32 && nitems >= 1 {
+            pid = *(data as *const c_ulong) as u32;
+        }
+        if !data.is_null() {
+            (xlib.XFree)(data as *mut _);
+        }
+        pid
+    }
+
     /// Error handler that swallows async X errors (example: a `BadWindow` from a
     /// window destroyed mid-scan) so a stray property query can never abort the
     /// process via Xlib's default handler.
@@ -579,12 +600,15 @@ mod x11util {
     /// them and is partly unreachable. Dropping our above state lets it come forward;
     /// re-adding it restores the pref. The Windows equivalent is `set_windows_topmost`.
     pub fn set_group_above(above: bool) {
+        let our_pid = std::process::id();
         with_conn(|xlib, d| unsafe {
             // Guard the scan: a window another client destroyed mid-query would
             // otherwise reach Xlib's fatal default handler.
             let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            // Match our own windows by _NET_WM_PID, a stable identity, rather than
+            // by title (a retitle would silently drop a window from the group).
             for &w in &client_list(xlib, d) {
-                if wm_name(xlib, d, w).starts_with("LinAmp") {
+                if wm_pid(xlib, d, w) == our_pid {
                     set_above(xlib, d, w, above);
                 }
             }
