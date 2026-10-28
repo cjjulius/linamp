@@ -29,8 +29,9 @@ pub(super) enum Popup {
     /// half of the menu system, consolidated onto the classic popup window (#116).
     LibMenu,
     /// The Rate flyout opened from the track menu, acting on
-    /// `PopupState.rate_rows`. Chained from `LibMenu` like `EqDelete` is from
-    /// `EqPresets` (classic popups are single, never nested windows).
+    /// `PopupState.rate_rows`. Drawn in its own second window beside the parent
+    /// (`draw_sub_viewport`), which stays open, so it is the one case of two popup
+    /// windows up at once rather than the single-popup `pending` chain.
     LibRate,
 }
 
@@ -968,6 +969,10 @@ impl super::LinAmpApp {
     pub(super) fn open_popup_at(&mut self, kind: Popup, anchor: egui::Pos2) {
         self.popups.cur = Some((kind, anchor));
         self.popups.fresh = true;
+        // A new menu supersedes any open flyout from the previous one, so it is
+        // never left on screen beside the new menu (it would otherwise linger when
+        // the pointer moved off the parent before the new right-click).
+        self.popups.sub = None;
         // New popup window: re-apply the rounded region on the next frame.
         self.popups.rounded = false;
         self.popups.rounded_h = None;
