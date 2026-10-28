@@ -43,7 +43,7 @@ use menu::Popup;
 
 const FFT_SIZE: usize = 2048;
 const VIZ_BANDS: usize = 28;
-/// Fewer, wider bars for the small classic analyzer (Winamp-like).
+/// Fewer, wider bars for the small classic analyzer (classic-style).
 const CLASSIC_BANDS: usize = 19;
 
 /// A right-click Cut / Copy / Paste / Select all menu for a single-line text
@@ -327,7 +327,7 @@ fn file_name_key(p: &std::path::Path) -> String {
         .unwrap_or_default()
 }
 
-/// Categories in the Preferences window's left sidebar. Classic Winamp groups
+/// Categories in the Preferences window's left sidebar. The classic player groups
 /// its many options in a tree; LinAmp uses a flat category list that the
 /// buildout can extend (Title display, Audio, Skins, File types, Library…).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -587,7 +587,7 @@ pub struct LinAmpApp {
     classic_seek_preview: Option<f32>,
     balance: f32,
     time_remaining: bool,
-    /// True on the "off" half of the paused-time blink (classic Winamp flashes
+    /// True on the "off" half of the paused-time blink (the classic player flashes
     /// the time while paused). Recomputed each frame in `update`.
     time_blink_hidden: bool,
     /// Stop when the current track ends instead of advancing (Ctrl+V).
@@ -663,7 +663,7 @@ pub struct LinAmpApp {
     prefs_pos: Option<egui::Pos2>,
     prefs_drag: Option<egui::Vec2>,
     lib_visible: bool,
-    /// Whether the Minibrowser window (a themed nod to Winamp's SHOUTcast pane)
+    /// Whether the Minibrowser window (a themed nod to the classic player's SHOUTcast pane)
     /// is open. Transient, it opens from the Options menu each session.
     mb_visible: bool,
     tag_editor: Option<tag_ui::TagEditor>,
@@ -1884,7 +1884,7 @@ impl LinAmpApp {
             Btn::Balance => {
                 let t = ((lx - 177.0) / (38.0 - 14.0)).clamp(0.0, 1.0);
                 let b = t * 2.0 - 1.0;
-                // Snap to dead-centre, as Winamp does.
+                // Snap to dead-centre, as the classic player does.
                 self.balance = if b.abs() < 0.06 { 0.0 } else { b };
                 self.player.set_balance(self.balance);
             }
@@ -1942,7 +1942,7 @@ impl LinAmpApp {
         }
     }
 
-    /// Bookmark the current track (classic Winamp Alt+I). No-op with nothing
+    /// Bookmark the current track (the classic player Alt+I). No-op with nothing
     /// playing, and a duplicate path is skipped.
     fn add_bookmark(&mut self) {
         let (path, title) = match self.playlist.current_track() {
@@ -2389,12 +2389,12 @@ impl LinAmpApp {
         self.status = format!("Saved EQ preset: {name}");
     }
 
-    /// Import a Winamp `.EQF` preset file and apply its first preset.
+    /// Import a classic (.EQF) preset file and apply its first preset.
     fn import_eqf(&mut self) {
         hide_popup_window();
         let Some(path) = self.pick_dialog(|| {
             rfd::FileDialog::new()
-                .add_filter("Winamp EQ preset", &["eqf", "q1"])
+                .add_filter("EQ preset", &["eqf", "q1"])
                 .pick_file()
         }) else {
             return;
@@ -2415,12 +2415,12 @@ impl LinAmpApp {
         }
     }
 
-    /// Export the current EQ settings to a Winamp `.EQF` file.
+    /// Export the current EQ settings to a classic `.EQF` file.
     fn export_eqf(&mut self) {
         hide_popup_window();
         let Some(path) = self.pick_dialog(|| {
             rfd::FileDialog::new()
-                .add_filter("Winamp EQ preset", &["eqf"])
+                .add_filter("EQ preset", &["eqf"])
                 .set_file_name("linamp.eqf")
                 .save_file()
         }) else {
@@ -2582,7 +2582,7 @@ impl LinAmpApp {
                         self.prefs_drag = None;
                     }
                 });
-            // Left: the category list (classic Winamp's Preferences tree, flattened
+            // Left: the category list (the classic player's Preferences tree, flattened
             // to a list that the buildout can extend).
             egui::SidePanel::left("prefs_cats")
                 .resizable(false)
@@ -2775,7 +2775,7 @@ impl LinAmpApp {
 
         Self::pref_section(ui, "Crossfade", |ui| {
             // Overlaps the end of one track with the start of the next. Off by
-            // default (classic Winamp's default is a gapless cut).
+            // default (the classic player's default is a gapless cut).
             let mut on = self.prefs.crossfade;
             let mut changed = ui
                 .checkbox(&mut on, "Crossfade between tracks")
@@ -2835,7 +2835,7 @@ impl LinAmpApp {
     fn prefs_page_tags(&mut self, ui: &mut egui::Ui) {
         Self::pref_section(ui, "ID3v2 version", |ui| {
             let mut v23 = self.prefs.id3v23;
-            ui.radio_value(&mut v23, true, "ID3v2.3 (most compatible; Winamp's default)");
+            ui.radio_value(&mut v23, true, "ID3v2.3 (most compatible)");
             ui.radio_value(&mut v23, false, "ID3v2.4 (newer standard)");
             if v23 != self.prefs.id3v23 {
                 self.prefs.id3v23 = v23;
@@ -3136,7 +3136,7 @@ impl LinAmpApp {
         }
     }
 
-    /// "Open location": enter a stream URL and play it (classic Winamp Ctrl+L).
+    /// "Open location": enter a stream URL and play it (the classic player Ctrl+L).
     fn ui_location(&mut self, ctx: &egui::Context) {
         if self.location_entry.is_none() {
             return;
@@ -3208,7 +3208,7 @@ impl LinAmpApp {
         }
     }
 
-    /// The Minibrowser window: a themed nod to Winamp's SHOUTcast pane. It shows
+    /// The Minibrowser window: a themed nod to the classic player's SHOUTcast pane. It shows
     /// the configured address and opens it in the system browser (LinAmp has no
     /// embedded web view), styled to match the active skin.
     fn ui_minibrowser(&mut self, ctx: &egui::Context) {
@@ -3316,7 +3316,7 @@ impl LinAmpApp {
         }
     }
 
-    /// Reset an EQ preamp/band to 0 dB (flat), as Winamp does on a double-click.
+    /// Reset an EQ preamp/band to 0 dB (flat), as the classic player does on a double-click.
     fn reset_eq_slider(&mut self, region: classic::EqRegion) {
         match region {
             classic::EqRegion::Preamp => {
@@ -3718,7 +3718,7 @@ impl LinAmpApp {
         hide_popup_window();
         if let Some(path) = self.pick_dialog(|| {
             rfd::FileDialog::new()
-                .add_filter("Winamp skin", &["wsz", "zip"])
+                .add_filter("Classic skin", &["wsz", "zip"])
                 .pick_file()
         }) {
             self.apply_skin_path(ctx, &path);
@@ -3789,7 +3789,7 @@ impl LinAmpApp {
 
     fn apply_eq(&mut self) {
         // Push the live settings to the DSP; when disabled the source bypasses
-        // all filtering (and the preamp), matching Winamp's behaviour.
+        // all filtering (and the preamp), matching the classic player's behaviour.
         self.player
             .eq()
             .set(self.eq.enabled, self.eq.preamp_db, self.eq.bands);
@@ -4000,7 +4000,7 @@ impl eframe::App for LinAmpApp {
         if self.player.state() == PlayState::Playing {
             self.marquee_offset = (self.marquee_offset + dt * 4.0) % 100000.0;
         }
-        // Classic Winamp flashes the time display while paused (~1 Hz). Toggle the
+        // The classic player flashes the time display while paused (~1 Hz). Toggle the
         // hidden half off the frame clock; is_animating() keeps repaints coming so
         // it blinks, and the per-window fingerprint includes it so the texture
         // actually refreshes on each toggle.
@@ -4046,7 +4046,7 @@ impl eframe::App for LinAmpApp {
         if self.player.finished() {
             if self.stop_after_current {
                 self.player.stop();
-                self.stop_after_current = false; // one-shot, like Winamp
+                self.stop_after_current = false; // one-shot, like the classic player
             } else if self.repeat_one {
                 if let Some(i) = self.playlist.current {
                     self.play_index(i);
@@ -4176,7 +4176,7 @@ fn load_texture(ctx: &egui::Context, bytes: &[u8]) -> Option<egui::TextureHandle
 
 // ---- free helpers ----------------------------------------------------------
 
-/// A Winamp-style on/off toggle rendered as a selectable label.
+/// A classic-style on/off toggle rendered as a selectable label.
 fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
     let mut resp = ui.selectable_label(*value, label);
     if resp.clicked() {

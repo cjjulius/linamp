@@ -870,7 +870,7 @@ mod x11util {
 }
 
 /// Make EQ/playlist *owned* by the main window so they ride its z-order (rise
-/// together, stay above, hide on minimize), Winamp-style grouping. Idempotent,
+/// together, stay above, hide on minimize), classic-style grouping. Idempotent,
 /// runs each frame to cover show/hide. Windows (owner window) and Linux/X11
 /// (`WM_TRANSIENT_FOR`); a no-op elsewhere.
 pub(crate) fn group_child_windows(eq_visible: bool, pl_visible: bool, lib_visible: bool) {

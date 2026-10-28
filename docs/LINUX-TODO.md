@@ -37,46 +37,15 @@ them, and removed once the work has merged to main.
   Verified end-to-end on Pop!_OS with a real 10-track audio CD (see below): no
   skipped sectors, smooth real-time playback.
 
-## Broadened tag editing (`feat/tag-editing`, #89)
-
-Cross-platform (egui + lofty), QA'd on Windows. Pop!_OS verified 2026-10-28:
-
-- [x] **Tag editor window sizing + off-screen clamp.** The window height is now
-  computed from the tallest tab's row count, and the window is clamped onto the
-  desktop via `virtual_desktop_rect` (which has an X11 path). Verify the editor
-  fits its content (no clipped bottom) for MP3 and for the single-column non-MP3
-  view, and that opening it near a screen edge keeps it on-screen.
-  Pop!_OS: MP3 window (660x547) sized to the taller ID3 tab, ID3v2 column (BPM /
-  Compilation) fully visible with Update/Cancel; read-only formats size down
-  (MIDI 660x201, WAV 660x270). With the main window at the bottom-right corner
-  (1500,1050) the editor opened fully on-screen (right 693, bottom 351 on 1920x1200).
-- [x] **Non-MP3 and MP2/MP1 tag writing.** FLAC/Ogg/M4A show one "Tags" column;
-  MP2/MP1 use the ID3 v1/v2 tabs like MP3. Edit a field, save, reopen, and confirm
-  it stuck on each (lofty is cross-platform, so this should just work). Known gap:
-  the M4A compilation flag does not persist.
-  Pop!_OS: FLAC title edit wrote a Vorbis `TITLE=` comment to disk; MP2 title edit
-  (ID3v2 enabled) wrote an ID3v2 `TIT2` frame (UTF-16) to disk. Both confirmed by
-  reading the file bytes after Update. MP1 shares the MP2 path.
-  Finding (cross-platform, fixed): for the single-tag formats the second tab was
-  labelled "ID3" (`tag_ui.rs`) even though its content header and fields are the
-  generic "Tags" column; for FLAC/Ogg/M4A that label was wrong (they are not ID3).
-  The tab label now follows the `single` flag, so it reads "Tags" for those formats
-  and "ID3" for MP3/MP2/MP1. Verified: the FLAC editor now shows "Basic Info | Tags".
-- [x] **Basic Info for all formats.** MIDI shows size, format (type + track count)
-  and length (via `midi::duration`); other audio shows duration/bitrate/sample
-  rate/channels; a read-only format (e.g. WAV) shows only the Basic Info tab (no
-  ID3 tab, no message). Spot-check a few.
-  Pop!_OS: MIDI showed Size 576 bytes, Format "MIDI (type 0, 1 track(s))", Length
-  30 seconds, Basic-Info-only; WAV showed Format WAV + duration/bitrate/rate/
-  channels, Basic-Info-only (no ID3 tab, no message); MP3/MP2/FLAC Basic Info
-  correct (Format strings "MPEG-1 Layer 3/2", FLAC, etc.).
-
 ## Notes
 
 - Mint verification is deferred across the board (no Mint box on hand); the
   Pop!_OS checks stand in for Linux until one is available.
 - Done and merged to main: Phase 2 code-maintenance refactors (S3/S4, C6, C7,
   perf C2/C4/C5/P1), the 2.x bug fixes (#171 fade-on-pause incl. the C-key, #172
-  always-on-top dialog trap), and the C8 `intern` CString guard (compiles on
-  Linux). All verified on Pop!_OS before merge.
+  always-on-top dialog trap), the C8 `intern` CString guard (compiles on Linux),
+  and the broadened tag editing (#89: FLAC/Ogg/M4A and MP2/MP1 writing, more ID3v2
+  frames, ID3v2.3/2.4, per-format Basic Info, window sizing/clamp) plus the
+  toc_from_entries / x11util test coverage. All verified on Pop!_OS before merge.
+  Remaining tag gap: the M4A compilation flag does not persist; album art is #174.
 - The code review and its resolution plan are in `docs/CODE-REVIEW.md`.

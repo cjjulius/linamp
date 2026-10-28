@@ -47,9 +47,13 @@ feature set:
 - Open location (Ctrl+L) and an Options-menu entry: stream an HTTP(S) URL
   (internet radio or a remote file), decoded on a background thread, with the live
   ICY stream title shown in the scrolling display.
-- Tag reading for every format lofty supports; ID3v1 and ID3v2 text-frame editing
-  for MP3 (title, artist, album, year, track, genre, comment, composer, original
-  artist, copyright, URL, encoded-by), the stock 2.666 File Info set and more.
+- Tag reading for every format lofty supports, and writing broadened beyond MP3:
+  ID3v1/ID3v2 for MPEG audio (MP3/MP2/MP1), Vorbis comments for FLAC/Ogg, and MP4
+  atoms for M4A (#89). The ID3v2 set covers title, artist, album, year, track,
+  disc, genre, comment, composer, original artist, copyright, URL, encoded-by, BPM
+  and the compilation flag, with an ID3v2.3-vs-2.4 choice in Preferences. The Basic
+  Info tab reports format, length, bitrate, sample rate and channels per format
+  (MIDI shows its type, track count and length).
 
 ### Audio formats decoded
 
@@ -125,10 +129,11 @@ Winamp lines rather than 2.x behaviour at all.
 - Maintainer call, out of scope for this run: #40, system integration (global
   media keys, tray icon, file associations).
 - Beyond 2.666 (post-2.x era), not stock 2.666 behaviour:
-  - #89, broaden tag editing. The 2.666-relevant part (MP3 ID3v1/v2 text frames)
-    is done; the remainder, writing FLAC/OGG/M4A tags, album art and the
-    ID3v2.3-vs-2.4 and related Preferences, is modern-era work (stock 2.666 edited
-    MP3 tags only). Hold until the parity bar is signed off.
+  - #174, embedded album art in the tag editor (display/replace/remove). The rest
+    of the tag-editing broadening (#89, writing FLAC/OGG/M4A and MP2/MP1 tags, more
+    ID3v2 frames, the ID3v2.3-vs-2.4 choice and its Preferences) is done; album art
+    is the one piece held as 3.x-era work. A conscious maintainer call to go a
+    little past stock 2.666, which edited MP3 tags only.
   - #108, drop shadows on the classic context menus (a post-2.x window-compositing
     nicety).
 - 3.x: #20 modern `.wal` skin engine, #78 Media Library buildout, #139 EQ graph

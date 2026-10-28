@@ -1,4 +1,4 @@
-//! Classic Winamp keyboard-shortcut handling.
+//! The classic player keyboard-shortcut handling.
 
 use super::*;
 
@@ -199,7 +199,7 @@ impl super::LinAmpApp {
         if k.seek_back {
             self.seek_relative(-5.0);
         }
-        // Numeric-keypad transport (classic Winamp). Opt-in under Optional
+        // Numeric-keypad transport (the classic player). Opt-in under Optional
         // Features, egui's logical Key can't tell the keypad apart from the top
         // number row, so these also fire for the top row; modifier combos (Alt+3
         // tag editor, Ctrl+digit) are excluded so they keep their own meanings.
@@ -281,7 +281,7 @@ impl super::LinAmpApp {
         if k.alt && k.open {
             self.toggle_library();
         }
-        // Ctrl+A: select-all in the playlist window (the Winamp meaning), else
+        // Ctrl+A: select-all in the playlist window (the classic meaning), else
         // toggle always-on-top. Each classic window is its own viewport, so key
         // presses reach only the focused one, `win` here is effectively the window
         // with focus.

@@ -1,6 +1,6 @@
 //! Tracker module playback (.mod/.xm/.s3m/.it) via xmrs + xmrsplayer (#158).
 //!
-//! Classic Winamp played tracker modules natively. We load the module with xmrs
+//! The classic player played tracker modules natively. We load the module with xmrs
 //! and render it with xmrsplayer, both pure Rust, so unlike libopenmpt this adds
 //! no C build dependency and compiles everywhere. The player borrows the module,
 //! so a `self_cell` holds the two together and we expose them as a lazy, seekable

@@ -1,8 +1,8 @@
-//! Winamp `.EQF` equalizer-preset interchange: parse and serialize the classic
-//! "Winamp EQ library file v1.1" format, so presets import/export with Winamp and
-//! compatible players. Layout (from the webamp `winamp-eqf` reference):
-//!   header "Winamp EQ library file v1.1" + 0x1A + "!--", then per preset a
-//!   257-byte null-padded name + 10 band bytes (60Hz..16kHz) + 1 preamp byte.
+//! Classic `.EQF` equalizer-preset interchange: parse and serialize the classic
+//! EQ library format, so presets import/export with the classic player and
+//! compatible players. Layout (from the webamp project EQF reference): the
+//! `HEADER` signature below + 0x1A + "!--", then per preset a 257-byte
+//! null-padded name + 10 band bytes (60Hz..16kHz) + 1 preamp byte.
 //! Each byte is 0..=63, where 0 = maximum boost and 63 = maximum cut.
 
 use anyhow::{bail, Result};
@@ -10,7 +10,7 @@ use anyhow::{bail, Result};
 const HEADER: &[u8] = b"Winamp EQ library file v1.1";
 const NAME_LEN: usize = 257;
 const VALUES: usize = 11; // 10 bands + preamp
-/// LinAmp's band range in dB. (Winamp's own range is wider; imported shapes are
+/// LinAmp's band range in dB. (the classic player's own range is wider; imported shapes are
 /// scaled into this range, and LinAmp-written files round-trip exactly.)
 const MAX_DB: f32 = 12.0;
 
@@ -36,7 +36,7 @@ fn db_to_byte(db: f32) -> u8 {
 /// missing/invalid header.
 pub fn parse(data: &[u8]) -> Result<Vec<EqfPreset>> {
     if data.len() < HEADER.len() + 4 || &data[..HEADER.len()] != HEADER {
-        bail!("not a Winamp .EQF file (bad header)");
+        bail!("not a classic .EQF file (bad header)");
     }
     let mut i = HEADER.len() + 4; // skip the 0x1A "!--" marker
     let mut out = Vec::new();
@@ -113,7 +113,7 @@ mod tests {
     }
 
     #[test]
-    fn header_and_layout_sizes_match_winamp() {
+    fn header_and_layout_sizes_match_the_eqf_spec() {
         let p = EqfPreset { name: "x".into(), bands: [0.0; 10], preamp: 0.0 };
         let bytes = write(std::slice::from_ref(&p));
         assert!(bytes.starts_with(HEADER));

@@ -121,7 +121,7 @@ impl ClassicSkin {
 
             // Clutterbar (O/A/I/D/V) column: the normal strip, then "lit" overlays
             // for the active toggles and whichever button is being pressed.
-            // Source rects from TITLEBAR.BMP (canonical Winamp sprite table).
+            // Source rects from TITLEBAR.BMP (canonical classic sprite table).
             blit(&mut c, tb, 10, 22, 304, 0, 8, 43); // background strip
             // Lit/pressed overlays replace a dim glyph with its bright version at
             // the same spot: dest y 24/32/40/48/56 (matching the strip) from the
@@ -544,7 +544,7 @@ impl ClassicSkin {
         }
         let ry = if active { 0 } else { 21 };
 
-        // --- Title bar (y 0..20). Winamp layout, left to right: corner, striped
+        // --- Title bar (y 0..20). Classic layout, left to right: corner, striped
         // fill running inward, an end-cap, the title (its own centre fill with the
         // caption), the other end-cap, striped fill, corner, so the bars run all
         // the way to the caption like the main window.
@@ -779,7 +779,7 @@ impl ClassicSkin {
 
             // Time readouts in the bottom-right sprite (at w-150): the
             // "<cur>/<total>" summary in the wide top bar and the current time in
-            // the small box, like Winamp's "6:46/52:48:36+" over "02:29". A
+            // the small box, like the classic player's "6:46/52:48:36+" over "02:29". A
             // trailing + means the total omits tracks of unknown length.
             if st.total_secs > 0.0 || st.elapsed_secs > 0.0 {
                 // Sprite origin; its two black boxes sit at these local offsets:
@@ -809,7 +809,7 @@ impl ClassicSkin {
         }
 
         // Track list. Each row shows the title on the left and, when known, the
-        // track length right-aligned (as in Winamp), with the title clipped so
+        // track length right-aligned (as in the classic player), with the title clipped so
         // the two never overlap.
         let visible = pl_visible_rows(height);
         for (i, (text, is_cur, is_sel, dur)) in st.rows.iter().skip(st.first).take(visible).enumerate() {
@@ -913,7 +913,7 @@ impl ClassicSkin {
     }
 
     /// Collapsed (window-shade) playlist bar. Shows the current track and its
-    /// length on the single line, Winamp-style; `text` empty means nothing is
+    /// length on the single line, classic-style; `text` empty means nothing is
     /// playing, so only the bar is drawn.
     pub fn compose_pl_shade(
         &self,
@@ -1000,7 +1000,7 @@ pub(crate) fn eq_valid_sprites(e: &RgbaImage) -> Vec<i32> {
     (0..28).filter(|&i| present(i % 14, i / 14)).collect()
 }
 
-/// Classic Winamp-style analyzer gradient by vertical fraction (0=bottom green,
+/// Classic classic-style analyzer gradient by vertical fraction (0=bottom green,
 /// 0.5=yellow, 1=top red).
 pub(crate) fn viz_gradient(f: f32) -> [u8; 3] {
     let lerp = |a: [u8; 3], b: [u8; 3], t: f32| {
@@ -1235,7 +1235,7 @@ pub fn render_main_png(skin_path: &Path, out: &Path) -> Result<()> {
         volume: 0.78,
         balance: 0.0,
         stereo: true,
-        title: "linamp - smells like winamp".to_string(),
+        title: "linamp - classic skin".to_string(),
         kbps: "128".to_string(),
         khz: "44".to_string(),
         fg: [0, 255, 120],

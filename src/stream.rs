@@ -1,5 +1,5 @@
 //! Streaming playback of an HTTP(S) "location" (internet radio or a remote
-//! file), for the classic Winamp "Open URL" (Ctrl+L) feature.
+//! file), for the classic "Open URL" (Ctrl+L) feature.
 //!
 //! rodio's `Decoder` needs a `Read + Seek` source, which a live stream isn't, so
 //! we decode with symphonia directly: a background thread fetches the URL

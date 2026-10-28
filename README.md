@@ -1,10 +1,10 @@
 <div align="center">
 
-<h1><img src="assets/linamp_logo_64.png" alt="" height="40" align="middle"> &nbsp;LinAmp</h1>
+<h1><img src="assets/linamp_logo_64.png" alt="" height="30" align="absmiddle"> &nbsp;LinAmp</h1>
 
 A Winamp-inspired audio player for Linux and Windows, in Rust.
 
-Pixel-perfect classic skin - 10-band EQ - live analyzer - playlist - Winamp keyboard shortcuts
+Pixel-perfect classic skin with full `.wsz` skin support - 10-band EQ - live analyzer - playlist - full keyboard shortcut support
 
 <img src="assets/screenshot.png" alt="LinAmp in the classic skin, main player, equalizer and playlist" width="380">
 
@@ -27,7 +27,8 @@ coordinates, on a modern cross-platform stack (`eframe`/`egui` UI,
 - 10-band equalizer with presets, preamp and an auto-gain mode (live biquad DSP).
 - Visualizer, live FFT spectrum analyzer and oscilloscope, skin-coloured.
 - Playlist, add files/folders, drag-and-drop, reorder, sort, search, M3U/PLS.
-- Tags & library, read/edit ID3 tags; SQLite-backed media library.
+- Tags & library, read/edit tags (ID3 for MP3/MP2, Vorbis for FLAC/Ogg, MP4 for
+  M4A); SQLite-backed media library.
 
 Full feature list and roadmap: [FEATURES.md](FEATURES.md). The backlog lives in
 [GitHub Issues](https://github.com/cjjulius/linamp/issues).
@@ -47,7 +48,7 @@ or Shift+Up/Down selects a range and Home/End jump to the first/last track.
 | `Shift+V` | Stop with fade-out | | `Ctrl+D` | Toggle double size |
 | `Ctrl+V` | Stop after current (toggle) | | `Ctrl+P` | Preferences |
 | `B` / `Z` | Next / previous track | | `Ctrl+T` | Time elapsed / remaining |
-| `Space` | Play/pause toggle | | `Alt+3` | Edit file tags (ID3) |
+| `Space` | Play/pause toggle | | `Alt+3` | Edit file tags |
 | `Left` / `Right` | Seek -5s / +5s | | `Enter` / `Delete` | Play / remove selected |
 | `Up` / `Down` | Volume up / down | | `Ctrl+A` / `Insert` | Select all / add files |
 | `R` / `S` | Repeat / shuffle | | | |
