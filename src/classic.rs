@@ -1,5 +1,5 @@
-//! Classic Winamp 2.x skin renderer: decodes a `.wsz` (ZIP of BMP sprite sheets)
-//! and composites the classic windows at exact Winamp sprite coords (from the
+//! Classic 2.x skin renderer: decodes a `.wsz` (ZIP of BMP sprite sheets)
+//! and composites the classic windows at exact classic sprite coords (from the
 //! webamp project). Serves both headless PNG previews and the live in-app view
 //! (uploaded as a nearest-neighbour texture).
 
@@ -28,7 +28,7 @@ pub struct MainState {
     /// Show time as remaining (−mm:ss) instead of elapsed.
     pub time_remaining: bool,
     /// Blank the time readout this frame, the "off" half of the paused blink
-    /// (classic Winamp flashes the time while paused).
+    /// (the classic player flashes the time while paused).
     pub time_hidden: bool,
     pub volume: f32,
     pub balance: f32,
@@ -132,7 +132,7 @@ pub struct PlState<'a> {
     /// track durations).
     pub total_secs: f32,
     /// True when at least one track's length is unknown, so `total_secs` is a
-    /// lower bound and the readout gets a trailing `+` (as in Winamp).
+    /// lower bound and the readout gets a trailing `+` (as in the classic player).
     pub total_partial: bool,
     /// Blank the current-track time this frame, the "off" half of the paused
     /// blink (the running total stays put; only the current time flashes).

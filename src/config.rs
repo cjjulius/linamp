@@ -35,7 +35,7 @@ pub struct Prefs {
     pub always_on_top: bool,
     /// true = ignore a skin's custom cursors and use the system cursor instead.
     pub disable_skin_cursors: bool,
-    /// The Minibrowser's address, a nod to Winamp's SHOUTcast pane. Persisted so
+    /// The Minibrowser's address, a nod to the classic player's SHOUTcast pane. Persisted so
     /// the user can point it anywhere; defaults to the project repository.
     pub minibrowser_url: String,
     /// "Optional Features" opt-ins (obsolete / incomplete parity extras, off by
@@ -44,7 +44,7 @@ pub struct Prefs {
     pub minibrowser_enabled: bool,
     pub numpad_transport: bool,
     /// true = blend one track into the next over `crossfade_secs` instead of a hard
-    /// cut. Off by default (a classic Winamp output-plugin extra), so normal
+    /// cut. Off by default (a classic output-plugin extra), so normal
     /// playback is unchanged unless the user turns it on.
     pub crossfade: bool,
     /// Crossfade length in seconds when `crossfade` is on.
@@ -59,7 +59,7 @@ pub struct Prefs {
     /// Enqueue adds them to the current playlist (the default), Clear replaces it
     /// with just the opened file(s). Either way the first opened item plays.
     pub open_with: OpenWith,
-    /// true = write ID3v2.3 tags (the most widely compatible, and Winamp's own
+    /// true = write ID3v2.3 tags (the most widely compatible, and the classic player's own
     /// default); false = ID3v2.4. Reading handles both regardless.
     pub id3v23: bool,
 }
@@ -77,7 +77,7 @@ pub enum OpenWith {
 impl Default for Prefs {
     fn default() -> Self {
         Self {
-            // First launch opens at classic 1x size (authentic Winamp scale);
+            // First launch opens at classic 1x size (authentic the classic player scale);
             // the user can switch to 2x, which then persists.
             double_size: false,
             tag_on_load: true,
@@ -223,7 +223,7 @@ impl Session {
     }
 }
 
-/// A bookmarked track or stream (classic Winamp's Alt+I bookmarks), stored in
+/// A bookmarked track or stream (the classic player's Alt+I bookmarks), stored in
 /// its own file so it outlives the per-session state.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Bookmark {
@@ -275,8 +275,8 @@ impl Bookmarks {
 }
 
 /// A user-named equalizer preset (LinAmp's in-app preset library, the classic
-/// Winamp "Presets > Load/Save" list). Stored losslessly as JSON; the separate
-/// .EQF import/export covers Winamp-format interop.
+/// the classic player "Presets > Load/Save" list). Stored losslessly as JSON; the separate
+/// .EQF import/export covers classic-format interop.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct NamedEqPreset {
     pub name: String,
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn defaults() {
         let p = Prefs::default();
-        // First launch is 1x (classic Winamp size) with tag-on-load.
+        // First launch is 1x (the classic player size) with tag-on-load.
         assert!(!p.double_size && p.tag_on_load);
         assert_eq!(p.scale(), 1.0);
         assert!(p.last_skin.is_none());

@@ -1,4 +1,4 @@
-//! Winamp `.wsz` skin theming: derives a cohesive colour [`Theme`] from each
+//! Classic `.wsz` skin theming: derives a cohesive colour [`Theme`] from each
 //! skin's own `PLEDIT.TXT` (playlist), `VISCOLOR.TXT` (visualizer) and sampled
 //! `MAIN.BMP` (window tone). Sprite compositing lives in `classic`; this module
 //! only produces the theme.

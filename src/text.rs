@@ -1,4 +1,4 @@
-//! LCD text helpers: track-time formatting and Winamp-style marquee scrolling.
+//! LCD text helpers: track-time formatting and classic-style marquee scrolling.
 
 use std::time::Duration;
 

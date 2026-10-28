@@ -1,6 +1,6 @@
 //! Decode a classic skin's `.cur` files (Windows cursors). A `.cur` is an ICO
 //! container (type 2) holding a DIB (bottom-up BITMAPINFOHEADER bitmap) plus the
-//! cursor hotspot. The classic Winamp cursors are 32×32 4-bit paletted DIBs with
+//! cursor hotspot. The classic cursors are 32×32 4-bit paletted DIBs with
 //! a 1-bit AND transparency mask, a form `image`'s ICO decoder does not handle, 
 //! so we decode the DIB ourselves (1/4/8-bit paletted and 24/32-bit direct), and
 //! fall back to `image` only for the rare PNG-compressed entry. The result is
@@ -357,7 +357,7 @@ mod tests {
 
     /// A hand-built 2x2, 4-bit paletted cursor. Output pixel (0,0) is palette
     /// index 1 (red), (1,0) is AND-masked transparent, and the bottom row is
-    /// index 0 (black). This is the classic Winamp cursor shape `image` can't read.
+    /// index 0 (black). This is the classic cursor shape `image` can't read.
     fn cur_2x2_4bpp() -> Vec<u8> {
         let mut dib: Vec<u8> = Vec::new();
         // BITMAPINFOHEADER.
