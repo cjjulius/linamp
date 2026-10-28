@@ -7,8 +7,11 @@ use super::*;
 
 /// A deferred Media Library action, raised by a context menu while `self` is
 /// borrowed immutably and applied after the UI pass. Track actions carry row
-/// indices into `lib_results`; artist/album actions carry the name.
-enum LibAction {
+/// indices into `lib_results`; artist/album actions carry the name. `Clone` so a
+/// classic popup row can hand its action to `apply_lib_action` without moving out
+/// of the stored row list.
+#[derive(Clone)]
+pub(super) enum LibAction {
     Play(Vec<usize>),
     Enqueue(Vec<usize>),
     PlayArtist(String),
@@ -20,6 +23,18 @@ enum LibAction {
     Explore(usize),
     Remove(Vec<usize>),
     SelectAll,
+}
+
+/// One row of a dynamic popup menu (the Media Library context menus). Built per
+/// right-click, held in `PopupState.dynamic`, and drawn by `draw_popup_viewport`.
+/// Unlike the fixed classic menus these rows carry owned, per-click labels.
+pub(super) enum DynRow {
+    /// A clickable row that runs `act` and closes the menu.
+    Item { label: String, act: LibAction },
+    /// A row that opens the Rate flyout (the one nested menu), chained the way the
+    /// EQ-presets menu opens its delete list: the parent closes, the flyout opens.
+    RateSub { label: String },
+    Sep,
 }
 
 /// Rendering context derived once at the top of `ui_library` and shared by its
@@ -38,7 +53,9 @@ struct LibCx {
     dim: Color32,
     browsing: bool,
     show_rating: bool,
-    lib_menu_base: bool,
+    /// Classic mode: library context menus open as classic popup windows; modern
+    /// mode keeps egui's own `context_menu` (a single self-closing viewport).
+    classic: bool,
 }
 
 /// Actions a library panel defers while it holds `&self` borrows for drawing;
@@ -58,6 +75,10 @@ struct LibActs {
     do_clear: bool,
     search_changed: bool,
     lib_action: Option<LibAction>,
+    /// A classic library popup to open after the draw pass (anchor, the rows to
+    /// draw, and the track rows its Rate flyout targets). Deferred because the row
+    /// draw holds `&self` borrows that `open_lib_menu` (&mut self) can't take.
+    open_menu: Option<(egui::Pos2, Vec<DynRow>, Vec<usize>)>,
     col_dx: [f32; 2],
     header_click: Option<u8>,
 }
@@ -469,22 +490,19 @@ impl super::LinAmpApp {
             self.lib.search_at = None;
             self.refresh_library();
         }
-        // Mirror the classic popups' click-away for the library's egui menus: a
-        // primary press on another window (or a classic popup opening) clears the
-        // open flag, so the gate below stops attaching the menu and it closes. The
-        // menu never gates on focus, so a right-click always opens it. Modern mode
-        // is a single viewport whose menus close on their own.
-        if self.classic_clicked {
-            self.lib.menu_open = false;
-        }
-        self.classic_clicked = false;
-        // Clicking anywhere in the Library window also dismisses an open classic
-        // popup (playlist/options menu), the classic click-away only runs for the
-        // classic windows, so it never sees clicks landing here.
-        if ui.ctx().input(|i| i.pointer.any_pressed()) {
+        // A left-click anywhere in the Library window dismisses an open menu
+        // (click-away), the same gesture the classic windows use. `fresh` guards
+        // the right-click that opens the library's own popup this frame from
+        // closing it at once; a right-click never dismisses, it opens. In classic
+        // mode the library menu is now a classic popup too, so this is the single
+        // dismiss path; in modern mode egui owns its own menus.
+        if self.popups.cur.is_some()
+            && !self.popups.fresh
+            && ui.ctx().input(|i| i.pointer.primary_pressed())
+        {
             self.popups.cur = None;
         }
-        let lib_menu_base = self.ui_mode != UiMode::Classic || self.lib.menu_open;
+        let classic = self.ui_mode == UiMode::Classic;
         // When the skin ships general-purpose window art (GEN.BMP/GENEX.BMP), use
         // its defined Media Library colour scheme; otherwise fall back to the
         // palette sampled from the skin.
@@ -552,7 +570,7 @@ impl super::LinAmpApp {
             dim,
             browsing,
             show_rating,
-            lib_menu_base,
+            classic,
         };
         let mut act = LibActs::default();
         self.ui_lib_top(ui, &cx, &mut act);
@@ -743,7 +761,7 @@ impl super::LinAmpApp {
         let s = cx.s;
         let row_col = cx.row_col;
         let dim = cx.dim;
-        let lib_menu_base = cx.lib_menu_base;
+        let classic = cx.classic;
                             ui.columns(2, |cols| {
                                 // Artist column.
                                 let c = &mut cols[0];
@@ -771,27 +789,41 @@ impl super::LinAmpApp {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                 act.artist_click = Some((Some(name.clone()), ctrl));
                                             }
-                                            if resp.secondary_clicked() {
-                                                self.popups.cur = None;
-                                                self.lib.menu_open = true;
-                                                if !sel {
-                                                    act.artist_click = Some((Some(name.clone()), false));
-                                                }
+                                            // Right-click selects the row it targets (unless
+                                            // already selected) so the menu acts on it.
+                                            if resp.secondary_clicked() && !sel {
+                                                act.artist_click = Some((Some(name.clone()), false));
                                             }
-                                            if lib_menu_base || resp.secondary_clicked() {
-                                            resp.context_menu(|ui| {
-                                                // Keep the menu from squishing to a
-                                                // sliver when opened near a screen edge.
-                                                ui.set_min_width(170.0);
-                                                if ui.button(format!("Play all by \u{201c}{name}\u{201d}")).clicked() {
-                                                    act.lib_action = Some(LibAction::PlayArtist(name.clone()));
-                                                    ui.close_menu();
+                                            if classic {
+                                                if resp.secondary_clicked() {
+                                                    let anchor = self.geom.lib_pos
+                                                        + ui.ctx().pointer_latest_pos().unwrap_or_default().to_vec2();
+                                                    let rows = vec![
+                                                        DynRow::Item {
+                                                            label: format!("Play all by \u{201c}{name}\u{201d}"),
+                                                            act: LibAction::PlayArtist(name.clone()),
+                                                        },
+                                                        DynRow::Item {
+                                                            label: format!("Enqueue all by \u{201c}{name}\u{201d}"),
+                                                            act: LibAction::EnqueueArtist(name.clone()),
+                                                        },
+                                                    ];
+                                                    act.open_menu = Some((anchor, rows, Vec::new()));
                                                 }
-                                                if ui.button(format!("Enqueue all by \u{201c}{name}\u{201d}")).clicked() {
-                                                    act.lib_action = Some(LibAction::EnqueueArtist(name.clone()));
-                                                    ui.close_menu();
-                                                }
-                                            });
+                                            } else {
+                                                resp.context_menu(|ui| {
+                                                    // Keep the menu from squishing to a
+                                                    // sliver when opened near a screen edge.
+                                                    ui.set_min_width(170.0);
+                                                    if ui.button(format!("Play all by \u{201c}{name}\u{201d}")).clicked() {
+                                                        act.lib_action = Some(LibAction::PlayArtist(name.clone()));
+                                                        ui.close_menu();
+                                                    }
+                                                    if ui.button(format!("Enqueue all by \u{201c}{name}\u{201d}")).clicked() {
+                                                        act.lib_action = Some(LibAction::EnqueueArtist(name.clone()));
+                                                        ui.close_menu();
+                                                    }
+                                                });
                                             }
                                         }
                                     });
@@ -822,25 +854,38 @@ impl super::LinAmpApp {
                                                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                 act.album_click = Some((Some(name.clone()), ctrl));
                                             }
-                                            if resp.secondary_clicked() {
-                                                self.popups.cur = None;
-                                                self.lib.menu_open = true;
-                                                if !sel {
-                                                    act.album_click = Some((Some(name.clone()), false));
-                                                }
+                                            // Right-click selects the row it targets.
+                                            if resp.secondary_clicked() && !sel {
+                                                act.album_click = Some((Some(name.clone()), false));
                                             }
-                                            if lib_menu_base || resp.secondary_clicked() {
-                                            resp.context_menu(|ui| {
-                                                ui.set_min_width(170.0);
-                                                if ui.button(format!("Play all from \u{201c}{label}\u{201d}")).clicked() {
-                                                    act.lib_action = Some(LibAction::PlayAlbum(name.clone()));
-                                                    ui.close_menu();
+                                            if classic {
+                                                if resp.secondary_clicked() {
+                                                    let anchor = self.geom.lib_pos
+                                                        + ui.ctx().pointer_latest_pos().unwrap_or_default().to_vec2();
+                                                    let rows = vec![
+                                                        DynRow::Item {
+                                                            label: format!("Play all from \u{201c}{label}\u{201d}"),
+                                                            act: LibAction::PlayAlbum(name.clone()),
+                                                        },
+                                                        DynRow::Item {
+                                                            label: format!("Enqueue all from \u{201c}{label}\u{201d}"),
+                                                            act: LibAction::EnqueueAlbum(name.clone()),
+                                                        },
+                                                    ];
+                                                    act.open_menu = Some((anchor, rows, Vec::new()));
                                                 }
-                                                if ui.button(format!("Enqueue all from \u{201c}{label}\u{201d}")).clicked() {
-                                                    act.lib_action = Some(LibAction::EnqueueAlbum(name.clone()));
-                                                    ui.close_menu();
-                                                }
-                                            });
+                                            } else {
+                                                resp.context_menu(|ui| {
+                                                    ui.set_min_width(170.0);
+                                                    if ui.button(format!("Play all from \u{201c}{label}\u{201d}")).clicked() {
+                                                        act.lib_action = Some(LibAction::PlayAlbum(name.clone()));
+                                                        ui.close_menu();
+                                                    }
+                                                    if ui.button(format!("Enqueue all from \u{201c}{label}\u{201d}")).clicked() {
+                                                        act.lib_action = Some(LibAction::EnqueueAlbum(name.clone()));
+                                                        ui.close_menu();
+                                                    }
+                                                });
                                             }
                                         }
                                     });
@@ -857,7 +902,7 @@ impl super::LinAmpApp {
         let header_fg = cx.header_fg;
         let dim = cx.dim;
         let show_rating = cx.show_rating;
-        let lib_menu_base = cx.lib_menu_base;
+        let classic = cx.classic;
                         let w = ui.available_width();
                         let dur_w = 48.0 * s;
                         // Reserve the scrollbar gutter so the header and the rows
@@ -1032,29 +1077,57 @@ impl super::LinAmpApp {
                                     // Right-click selects the row it targets (unless it's
                                     // already part of the selection) so the menu's target
                                     // is highlighted.
-                                    if resp.secondary_clicked() {
-                                        // A library right-click dismisses any open
-                                        // classic playlist/options popup, and marks
-                                        // the library menu open for the gate.
-                                        self.popups.cur = None;
-                                        self.lib.menu_open = true;
-                                        if !selected {
-                                            act.track_click = Some((i, false));
-                                        }
+                                    if resp.secondary_clicked() && !selected {
+                                        act.track_click = Some((i, false));
                                     }
                                     if resp.double_clicked() {
                                         act.dbl_track = Some(i);
                                     }
-                                    if lib_menu_base || resp.secondary_clicked() {
+                                    // Act on the selection when the right-clicked row is
+                                    // part of it; otherwise just this row.
+                                    let rows: Vec<usize> = if selected && !self.lib.sel_tracks.is_empty() {
+                                        self.lib.sel_tracks.iter().copied().collect()
+                                    } else {
+                                        vec![i]
+                                    };
+                                    let remove_label = if self.lib.nav == LibView::Bookmarks {
+                                        "Remove bookmark"
+                                    } else {
+                                        "Remove from library"
+                                    };
+                                    if classic {
+                                        if resp.secondary_clicked() {
+                                            let anchor = self.geom.lib_pos
+                                                + ui.ctx().pointer_latest_pos().unwrap_or_default().to_vec2();
+                                            let mut menu = vec![
+                                                DynRow::Item { label: "Play".into(), act: LibAction::Play(rows.clone()) },
+                                                DynRow::Item { label: "Enqueue".into(), act: LibAction::Enqueue(rows.clone()) },
+                                                DynRow::Sep,
+                                            ];
+                                            if !t.artist.is_empty() {
+                                                menu.push(DynRow::Item {
+                                                    label: format!("Play all by \u{201c}{}\u{201d}", t.artist),
+                                                    act: LibAction::PlayArtist(t.artist.clone()),
+                                                });
+                                            }
+                                            if !t.album.is_empty() {
+                                                menu.push(DynRow::Item {
+                                                    label: format!("Play all from \u{201c}{}\u{201d}", t.album),
+                                                    act: LibAction::PlayAlbum(t.album.clone()),
+                                                });
+                                            }
+                                            menu.push(DynRow::Sep);
+                                            menu.push(DynRow::Item { label: "Select all".into(), act: LibAction::SelectAll });
+                                            menu.push(DynRow::RateSub { label: "Rate".into() });
+                                            menu.push(DynRow::Item { label: "Edit tags\u{2026}".into(), act: LibAction::EditTags(i) });
+                                            menu.push(DynRow::Item { label: "Explore folder".into(), act: LibAction::Explore(i) });
+                                            menu.push(DynRow::Sep);
+                                            menu.push(DynRow::Item { label: remove_label.into(), act: LibAction::Remove(rows.clone()) });
+                                            act.open_menu = Some((anchor, menu, rows.clone()));
+                                        }
+                                    } else {
                                     resp.context_menu(|ui| {
                                         ui.set_min_width(180.0);
-                                        // Act on the selection when the right-clicked
-                                        // row is part of it; otherwise just this row.
-                                        let rows: Vec<usize> = if selected && !self.lib.sel_tracks.is_empty() {
-                                            self.lib.sel_tracks.iter().copied().collect()
-                                        } else {
-                                            vec![i]
-                                        };
                                         if ui.button("Play").clicked() {
                                             act.lib_action = Some(LibAction::Play(rows.clone()));
                                             ui.close_menu();
@@ -1102,11 +1175,6 @@ impl super::LinAmpApp {
                                             ui.close_menu();
                                         }
                                         ui.separator();
-                                        let remove_label = if self.lib.nav == LibView::Bookmarks {
-                                            "Remove bookmark"
-                                        } else {
-                                            "Remove from library"
-                                        };
                                         if ui.button(remove_label).clicked() {
                                             act.lib_action = Some(LibAction::Remove(rows.clone()));
                                             ui.close_menu();
@@ -1132,6 +1200,7 @@ impl super::LinAmpApp {
             do_clear,
             search_changed,
             lib_action,
+            open_menu,
             col_dx,
             header_click,
         } = act;
@@ -1220,87 +1289,11 @@ impl super::LinAmpApp {
         }
 
         if let Some(act) = lib_action {
-            let rows_to_tracks = |app: &Self, rows: &[usize]| -> Vec<crate::playlist::Track> {
-                rows.iter()
-                    .filter_map(|&i| app.lib.results.get(i).cloned())
-                    .collect()
-            };
-            let by = |app: &Self, artists: &[String], albums: &[String]| {
-                app.library
-                    .as_ref()
-                    .map(|l| l.tracks_for(artists, albums))
-                    .unwrap_or_default()
-            };
-            match act {
-                LibAction::SelectAll => {
-                    self.lib.sel_tracks = (0..self.lib.results.len()).collect();
-                }
-                LibAction::Play(rows) => {
-                    let ts = rows_to_tracks(self, &rows);
-                    self.play_tracks(ts);
-                }
-                LibAction::Enqueue(rows) => {
-                    let ts = rows_to_tracks(self, &rows);
-                    self.enqueue_tracks(ts);
-                }
-                LibAction::PlayArtist(a) => {
-                    let ts = by(self, std::slice::from_ref(&a), &[]);
-                    self.play_tracks(ts);
-                }
-                LibAction::EnqueueArtist(a) => {
-                    let ts = by(self, std::slice::from_ref(&a), &[]);
-                    self.enqueue_tracks(ts);
-                }
-                LibAction::PlayAlbum(al) => {
-                    let ts = by(self, &[], std::slice::from_ref(&al));
-                    self.play_tracks(ts);
-                }
-                LibAction::EnqueueAlbum(al) => {
-                    let ts = by(self, &[], std::slice::from_ref(&al));
-                    self.enqueue_tracks(ts);
-                }
-                LibAction::Rate(rows, r) => {
-                    if let Some(lib) = &self.library {
-                        for &i in &rows {
-                            if let Some(t) = self.lib.results.get(i) {
-                                lib.set_rating(&t.path, r);
-                            }
-                        }
-                    }
-                    self.lib.rating_cache = None; // ratings changed
-                    if self.lib.nav == LibView::TopRated {
-                        self.refresh_library();
-                    }
-                }
-                LibAction::EditTags(i) => {
-                    if let Some(t) = self.lib.results.get(i).cloned() {
-                        self.open_tag_editor_path(t.path);
-                    }
-                }
-                LibAction::Explore(i) => {
-                    if let Some(t) = self.lib.results.get(i) {
-                        open_in_file_manager(&t.path);
-                    }
-                }
-                LibAction::Remove(rows) => {
-                    let paths: Vec<_> = rows
-                        .iter()
-                        .filter_map(|&i| self.lib.results.get(i).map(|t| t.path.clone()))
-                        .collect();
-                    if self.lib.nav == LibView::Bookmarks {
-                        // In the Bookmarks view "Remove" drops the bookmark, not the
-                        // library row (the file stays indexed and on disk).
-                        for p in &paths {
-                            self.bookmarks.remove_path(&p.to_string_lossy());
-                        }
-                        self.bookmarks.save();
-                    } else if let Some(lib) = &self.library {
-                        lib.remove_paths(&paths);
-                    }
-                    self.lib.sel_tracks.clear();
-                    self.refresh_library();
-                }
-            }
+            self.apply_lib_action(act);
+        }
+        // Open the classic library popup last, once the row-draw borrows are gone.
+        if let Some((anchor, rows, rate_rows)) = open_menu {
+            self.open_lib_menu(anchor, rows, rate_rows);
         }
 
         // Gather the target tracks for Play/Enqueue (selection, else all shown).
@@ -1335,6 +1328,94 @@ impl super::LinAmpApp {
                 self.playlist.tracks.push(t);
                 let idx = self.playlist.tracks.len() - 1;
                 self.play_index(idx);
+            }
+        }
+    }
+
+    /// Run one Media Library context-menu action. Shared by the modern egui menu
+    /// (deferred through `LibActs`) and the classic popup menu, which calls it
+    /// directly once a row is clicked.
+    pub(super) fn apply_lib_action(&mut self, act: LibAction) {
+        use crate::library::LibView;
+        let rows_to_tracks = |app: &Self, rows: &[usize]| -> Vec<crate::playlist::Track> {
+            rows.iter()
+                .filter_map(|&i| app.lib.results.get(i).cloned())
+                .collect()
+        };
+        let by = |app: &Self, artists: &[String], albums: &[String]| {
+            app.library
+                .as_ref()
+                .map(|l| l.tracks_for(artists, albums))
+                .unwrap_or_default()
+        };
+        match act {
+            LibAction::SelectAll => {
+                self.lib.sel_tracks = (0..self.lib.results.len()).collect();
+            }
+            LibAction::Play(rows) => {
+                let ts = rows_to_tracks(self, &rows);
+                self.play_tracks(ts);
+            }
+            LibAction::Enqueue(rows) => {
+                let ts = rows_to_tracks(self, &rows);
+                self.enqueue_tracks(ts);
+            }
+            LibAction::PlayArtist(a) => {
+                let ts = by(self, std::slice::from_ref(&a), &[]);
+                self.play_tracks(ts);
+            }
+            LibAction::EnqueueArtist(a) => {
+                let ts = by(self, std::slice::from_ref(&a), &[]);
+                self.enqueue_tracks(ts);
+            }
+            LibAction::PlayAlbum(al) => {
+                let ts = by(self, &[], std::slice::from_ref(&al));
+                self.play_tracks(ts);
+            }
+            LibAction::EnqueueAlbum(al) => {
+                let ts = by(self, &[], std::slice::from_ref(&al));
+                self.enqueue_tracks(ts);
+            }
+            LibAction::Rate(rows, r) => {
+                if let Some(lib) = &self.library {
+                    for &i in &rows {
+                        if let Some(t) = self.lib.results.get(i) {
+                            lib.set_rating(&t.path, r);
+                        }
+                    }
+                }
+                self.lib.rating_cache = None; // ratings changed
+                if self.lib.nav == LibView::TopRated {
+                    self.refresh_library();
+                }
+            }
+            LibAction::EditTags(i) => {
+                if let Some(t) = self.lib.results.get(i).cloned() {
+                    self.open_tag_editor_path(t.path);
+                }
+            }
+            LibAction::Explore(i) => {
+                if let Some(t) = self.lib.results.get(i) {
+                    open_in_file_manager(&t.path);
+                }
+            }
+            LibAction::Remove(rows) => {
+                let paths: Vec<_> = rows
+                    .iter()
+                    .filter_map(|&i| self.lib.results.get(i).map(|t| t.path.clone()))
+                    .collect();
+                if self.lib.nav == LibView::Bookmarks {
+                    // In the Bookmarks view "Remove" drops the bookmark, not the
+                    // library row (the file stays indexed and on disk).
+                    for p in &paths {
+                        self.bookmarks.remove_path(&p.to_string_lossy());
+                    }
+                    self.bookmarks.save();
+                } else if let Some(lib) = &self.library {
+                    lib.remove_paths(&paths);
+                }
+                self.lib.sel_tracks.clear();
+                self.refresh_library();
             }
         }
     }
