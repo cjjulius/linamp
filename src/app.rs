@@ -1397,15 +1397,23 @@ impl LinAmpApp {
     /// dialog comes to the front instead of being trapped behind our topmost
     /// windows (#172). No-op cost when always-on-top is off.
     fn pick_dialog<T>(&self, pick: impl FnOnce() -> T) -> T {
+        // Restore always-on-top from a Drop guard, so an unwind out of `pick` still
+        // re-raises the windows. A bare restore after `pick()` would be skipped on a
+        // panic, leaving every window stuck non-topmost (#172).
+        struct TopmostGuard(bool);
+        impl Drop for TopmostGuard {
+            fn drop(&mut self) {
+                if self.0 {
+                    set_windows_topmost(true);
+                }
+            }
+        }
         let restore = self.prefs.always_on_top;
         if restore {
             set_windows_topmost(false);
         }
-        let r = pick();
-        if restore {
-            set_windows_topmost(true);
-        }
-        r
+        let _guard = TopmostGuard(restore);
+        pick()
     }
 
     fn open_files(&mut self) {
