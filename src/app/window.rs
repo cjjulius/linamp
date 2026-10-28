@@ -8,7 +8,7 @@ impl super::LinAmpApp {
     /// The EQ hit-test region at base coords, shade-aware: the collapsed bar has
     /// its own volume/balance/close regions; the full window uses `eq_region_at`.
     fn eq_region(&self, x: f32, y: f32) -> Option<classic::EqRegion> {
-        if self.eq_shade {
+        if self.geom.eq_shade {
             classic::eq_shade_region_at(x, y)
         } else {
             classic::eq_region_at(x, y)
@@ -38,9 +38,9 @@ impl super::LinAmpApp {
         let sel_ctrl = mods.ctrl || mods.command;
         let sel_shift = mods.shift;
         let shaded = match win {
-            ClWin::Main => self.main_shade,
-            ClWin::Eq => self.eq_shade,
-            ClWin::Pl => self.pl_shade,
+            ClWin::Main => self.geom.main_shade,
+            ClWin::Eq => self.geom.eq_shade,
+            ClWin::Pl => self.geom.pl_shade,
         };
 
         // A primary press on any classic window also dismisses an open Media
@@ -52,13 +52,13 @@ impl super::LinAmpApp {
         }
 
         // Clicking any main window dismisses an open menu (click-away).
-        if pressed && self.popup.is_some() && !self.popup_fresh {
-            self.popup = None;
+        if pressed && self.popups.cur.is_some() && !self.popups.fresh {
+            self.popups.cur = None;
         }
         // Escape closes an open menu. The popup no longer steals focus, so its own
         // viewport won't see the key, the focused window catches it here instead.
-        if self.popup.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.popup = None;
+        if self.popups.cur.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.popups.cur = None;
         }
 
         if secondary && win == ClWin::Main {
@@ -66,7 +66,7 @@ impl super::LinAmpApp {
                 // Right-click on the Stop button opens the stop options (classic
                 // Winamp); anywhere else on the main window opens the Options menu.
                 let (nx, ny) = (l.x / self.scale, l.y / self.scale);
-                if !self.main_shade && classic::region_at(nx, ny) == Some(Btn::Stop) {
+                if !self.geom.main_shade && classic::region_at(nx, ny) == Some(Btn::Stop) {
                     self.open_popup_in(Popup::StopMenu, win, l);
                 } else {
                     self.open_popup_in(Popup::Options, win, l);
@@ -81,22 +81,22 @@ impl super::LinAmpApp {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;
                 if let Some(classic::PlRegion::List) =
-                    classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h)
+                    classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h)
                 {
-                    let row = classic::pl_row_at(ny, self.pl_first);
+                    let row = classic::pl_row_at(ny, self.plview.first);
                     if row < self.playlist.len() {
                         // Winamp rule: right-clicking a row outside the current
                         // selection selects just it; a row already in the
                         // selection keeps the whole multi-selection.
-                        if !self.pl_selection.contains(&row) {
-                            self.pl_selection.clear();
-                            self.pl_selection.insert(row);
-                            self.pl_anchor = Some(row);
-                            self.pl_lead = Some(row);
+                        if !self.plview.selection.contains(&row) {
+                            self.plview.selection.clear();
+                            self.plview.selection.insert(row);
+                            self.plview.anchor = Some(row);
+                            self.plview.lead = Some(row);
                         }
                         // Remember the exact row so Play / Edit target it even when
                         // it's one of several selected.
-                        self.pl_ctx_row = Some(row);
+                        self.plview.ctx_row = Some(row);
                         self.open_popup_in(Popup::PlTrack, win, l);
                     } else {
                         self.open_popup_in(Popup::PlVoid, win, l);
@@ -108,7 +108,7 @@ impl super::LinAmpApp {
         if win == ClWin::Pl && !shaded && scroll != 0.0 {
             let max = self.playlist.len().saturating_sub(1) as i32;
             let step = if scroll > 0.0 { -3 } else { 3 };
-            self.pl_first = (self.pl_first as i32 + step).clamp(0, max.max(0)) as usize;
+            self.plview.first = (self.plview.first as i32 + step).clamp(0, max.max(0)) as usize;
         }
 
         // Mouse wheel over the main window adjusts volume, like classic Winamp
@@ -145,8 +145,8 @@ impl super::LinAmpApp {
         }
 
         if pressed {
-            self.active_region = None;
-            self.eq_active = None;
+            self.render.active_region = None;
+            self.eq.active = None;
             if let Some(l) = local {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;
@@ -162,7 +162,7 @@ impl super::LinAmpApp {
                                 er @ (classic::EqRegion::ShadeVolume
                                 | classic::EqRegion::ShadeBalance),
                             ) => {
-                                self.eq_active = Some(er);
+                                self.eq.active = Some(er);
                                 self.apply_eq_shade_slider(er, nx);
                                 true
                             }
@@ -191,7 +191,7 @@ impl super::LinAmpApp {
                             Some(H::Pos) => {
                                 // Click/drag the mini-posbar to seek; reuses the
                                 // expanded seek drag machinery (active_region).
-                                self.active_region = Some(Btn::Seek);
+                                self.render.active_region = Some(Btn::Seek);
                                 self.apply_classic_slider(Btn::Seek, nx);
                             }
                             None => {}
@@ -201,10 +201,10 @@ impl super::LinAmpApp {
                     match win {
                         ClWin::Main => {
                             let r = classic::region_at(nx, ny);
-                            self.active_region = r;
+                            self.render.active_region = r;
                             match r {
                                 Some(Btn::TitleBar) => {
-                                    self.active_region = None;
+                                    self.render.active_region = None;
                                     self.start_drag(ctx, win, screen_cursor);
                                 }
                                 Some(b @ (Btn::Seek | Btn::Volume | Btn::Balance)) => {
@@ -215,10 +215,10 @@ impl super::LinAmpApp {
                         }
                         ClWin::Eq => {
                             let r = self.eq_region(nx, ny);
-                            self.eq_active = r;
+                            self.eq.active = r;
                             match r {
                                 Some(classic::EqRegion::TitleBar) => {
-                                    self.eq_active = None;
+                                    self.eq.active = None;
                                     self.start_drag(ctx, win, screen_cursor);
                                 }
                                 Some(er @ (classic::EqRegion::Preamp | classic::EqRegion::Band(_))) => {
@@ -236,15 +236,15 @@ impl super::LinAmpApp {
                         }
                         ClWin::Pl => {
                             use classic::PlRegion as P;
-                            match classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h) {
+                            match classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h) {
                                 Some(P::Close) => self.close_window(ctx, ClWin::Pl),
                                 Some(P::TitleBar) => self.start_drag(ctx, win, screen_cursor),
                                 Some(P::Resize) => {
-                                    self.resize_pl =
-                                        Some(egui::vec2(self.pl_px_w - nx, self.pl_px_h - ny))
+                                    self.geom.resize_pl =
+                                        Some(egui::vec2(self.plview.px_w - nx, self.plview.px_h - ny))
                                 }
                                 Some(P::List) => {
-                                    let row = classic::pl_row_at(ny, self.pl_first);
+                                    let row = classic::pl_row_at(ny, self.plview.first);
                                     if row < self.playlist.len() {
                                         let now = Instant::now();
                                         // A plain repeat-click on the same row plays
@@ -253,7 +253,7 @@ impl super::LinAmpApp {
                                         let dbl = !sel_ctrl
                                             && !sel_shift
                                             && self
-                                                .pl_last_click
+                                                .plview.last_click
                                                 .map(|(r, t)| {
                                                     r == row
                                                         && now.duration_since(t).as_millis() < 350
@@ -269,12 +269,12 @@ impl super::LinAmpApp {
                                                 crate::selection::CtrlMode::Toggle,
                                             );
                                         }
-                                        self.pl_last_click = Some((row, now));
+                                        self.plview.last_click = Some((row, now));
                                     }
                                 }
                                 Some(menu @ (P::AddMenu | P::RemMenu | P::SelMenu | P::MiscMenu | P::ListMenu)) => {
                                     // Open on release (below) so this click can't dismiss it.
-                                    self.pl_menu_press = Some(menu);
+                                    self.plview.menu_press = Some(menu);
                                 }
                                 // Mini-player transport buttons mirror the main window's.
                                 Some(P::MiniPrev) => self.trigger_classic(ctx, Btn::Prev),
@@ -293,14 +293,14 @@ impl super::LinAmpApp {
 
         if down {
             let idx = win_idx(win);
-            let is_my_drag = self.drag.as_ref().map(|d| d.win == win).unwrap_or(false);
+            let is_my_drag = self.geom.drag.as_ref().map(|d| d.win == win).unwrap_or(false);
             if is_my_drag {
-                let manual = self.drag.as_ref().unwrap().manual;
+                let manual = self.geom.drag.as_ref().unwrap().manual;
                 if manual {
                     // Live move: drive position from the global cursor (feedback-
                     // free), moving the docked group in tandem each frame.
                     if let Some(g) = global_cursor_points(ctx) {
-                        let d = self.drag.as_ref().unwrap();
+                        let d = self.geom.drag.as_ref().unwrap();
                         let mut target = g - d.grab;
                         let group = d.group.clone();
                         let lib_offset = d.lib_offset;
@@ -327,29 +327,29 @@ impl super::LinAmpApp {
                             target.x = target.x.clamp(min_x, (vr.max.x - hi.x).max(min_x));
                             target.y = target.y.clamp(min_y, (vr.max.y - hi.y).max(min_y));
                         }
-                        self.win_pos[idx] = target;
+                        self.geom.win_pos[idx] = target;
                         for (mi, off) in group {
-                            self.win_pos[mi] = target + off;
+                            self.geom.win_pos[mi] = target + off;
                         }
                         if let Some(off) = lib_offset {
-                            self.lib_pos = target + off;
+                            self.geom.lib_pos = target + off;
                         }
                         if (target - press_pos).length() > 3.0 {
-                            if let Some(dm) = self.drag.as_mut() {
+                            if let Some(dm) = self.geom.drag.as_mut() {
                                 dm.moved = true;
                             }
                         }
                         if idx == 0 {
-                            self.root_last = None; // keep root in sync while moving
+                            self.geom.root_last = None; // keep root in sync while moving
                         }
                     }
                     ctx.request_repaint();
-                } else if !self.drag.as_ref().unwrap().started_os {
+                } else if !self.geom.drag.as_ref().unwrap().started_os {
                     // OS fallback: hand off to the OS window-drag past a threshold.
                     if let Some(sc) = screen_cursor {
-                        if (sc - self.drag.as_ref().unwrap().press_screen).length() > 4.0 {
+                        if (sc - self.geom.drag.as_ref().unwrap().press_screen).length() > 4.0 {
                             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                            if let Some(dm) = self.drag.as_mut() {
+                            if let Some(dm) = self.geom.drag.as_mut() {
                                 dm.started_os = true;
                             }
                         }
@@ -359,12 +359,12 @@ impl super::LinAmpApp {
             if let Some(l) = local {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;
-                if let Some(r) = self.active_region {
+                if let Some(r) = self.render.active_region {
                     if matches!(r, Btn::Seek | Btn::Volume | Btn::Balance) {
                         self.apply_classic_slider(r, nx);
                     }
                 }
-                if let Some(er) = self.eq_active {
+                if let Some(er) = self.eq.active {
                     match er {
                         classic::EqRegion::ShadeVolume | classic::EqRegion::ShadeBalance => {
                             self.apply_eq_shade_slider(er, nx)
@@ -372,12 +372,12 @@ impl super::LinAmpApp {
                         _ => self.apply_eq_slider(er, ny),
                     }
                 }
-                if let Some(grab) = self.resize_pl {
+                if let Some(grab) = self.geom.resize_pl {
                     // Resize smoothly during the drag; the 25/29px grid is applied
                     // only on release (#61), so the rows don't re-flow and jiggle
                     // as the size jumps between grid steps mid-drag.
-                    self.pl_px_h = (ny + grab.y).max(87.0);
-                    self.pl_px_w = (nx + grab.x).max(classic::MAIN_W as f32);
+                    self.plview.px_h = (ny + grab.y).max(87.0);
+                    self.plview.px_w = (nx + grab.x).max(classic::MAIN_W as f32);
                     // Stop growing at the screen edge: cap the height so the window's
                     // bottom can't pass the bottom of the desktop. Otherwise the WM
                     // pushes the top edge up to keep the window on-screen, so the
@@ -385,9 +385,9 @@ impl super::LinAmpApp {
                     // pl_px_h is in unscaled skin pixels; on-screen height is
                     // pl_px_h * scale, so convert the available space back by /scale.
                     if let Some(vr) = virtual_desktop_rect(ctx) {
-                        let top_y = self.win_pos[win_idx(ClWin::Pl)].y;
+                        let top_y = self.geom.win_pos[win_idx(ClWin::Pl)].y;
                         if let Some(max_h) = classic::pl_max_height(vr.max.y, top_y, self.scale) {
-                            self.pl_px_h = self.pl_px_h.min(max_h);
+                            self.plview.px_h = self.plview.px_h.min(max_h);
                         }
                     }
                 }
@@ -397,32 +397,32 @@ impl super::LinAmpApp {
         // Finalize a drag once the button is up (covers release after the modal
         // OS drag, which may swallow the release event).
         if !down {
-            if let Some(d) = self.drag.take() {
+            if let Some(d) = self.geom.drag.take() {
                 if d.win == win {
                     self.finalize_drag(d, outer, monitor);
                 } else {
-                    self.drag = Some(d);
+                    self.geom.drag = Some(d);
                 }
             }
         }
 
         if released {
-            if self.resize_pl.is_some() {
+            if self.geom.resize_pl.is_some() {
                 // Quantize to Winamp's 25px (width) / 29px (height) grid now the
                 // drag is finished (#61).
                 let hstep = 29.0;
-                self.pl_px_h = ((self.pl_px_h / hstep).round() * hstep).max(87.0);
+                self.plview.px_h = ((self.plview.px_h / hstep).round() * hstep).max(87.0);
                 let wstep = 25.0;
                 let min_w = classic::MAIN_W as f32;
-                self.pl_px_w =
-                    (((self.pl_px_w - min_w) / wstep).round() * wstep + min_w).max(min_w);
+                self.plview.px_w =
+                    (((self.plview.px_w - min_w) / wstep).round() * wstep + min_w).max(min_w);
             }
-            self.resize_pl = None;
+            self.geom.resize_pl = None;
             if let Some(l) = local {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;
                 if win == ClWin::Main {
-                    if let Some(r) = self.active_region {
+                    if let Some(r) = self.render.active_region {
                         if classic::region_at(nx, ny) == Some(r) {
                             if r == Btn::Options || r == Btn::ClutterO {
                                 self.open_popup_in(Popup::Options, win, l);
@@ -434,14 +434,14 @@ impl super::LinAmpApp {
                             }
                         }
                     }
-                    if self.active_region == Some(Btn::Seek) {
+                    if self.render.active_region == Some(Btn::Seek) {
                         if let Some(p) = self.classic_seek_preview.take() {
                             self.player.seek(Duration::from_secs_f32(p));
                         }
                     }
                 }
                 if win == ClWin::Eq {
-                    if let Some(er) = self.eq_active {
+                    if let Some(er) = self.eq.active {
                         if self.eq_region(nx, ny) == Some(er) {
                             if er == classic::EqRegion::Presets {
                                 self.open_popup_in(Popup::EqPresets, ClWin::Eq, l);
@@ -452,8 +452,8 @@ impl super::LinAmpApp {
                     }
                 }
                 if win == ClWin::Pl {
-                    if let Some(r) = self.pl_menu_press.take() {
-                        if classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h) == Some(r) {
+                    if let Some(r) = self.plview.menu_press.take() {
+                        if classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h) == Some(r) {
                             use classic::PlRegion as P;
                             let kind = match r {
                                 P::AddMenu => Popup::PlAdd,
@@ -467,14 +467,14 @@ impl super::LinAmpApp {
                     }
                 }
             }
-            self.active_region = None;
-            self.eq_active = None;
-            self.pl_menu_press = None;
+            self.render.active_region = None;
+            self.eq.active = None;
+            self.plview.menu_press = None;
         }
 
         if win == ClWin::Main {
-            self.pressed_btn = if down {
-                match self.active_region {
+            self.render.pressed_btn = if down {
+                match self.render.active_region {
                     Some(b @ (Btn::Prev | Btn::Play | Btn::Pause | Btn::Stop | Btn::Next | Btn::Eject
                     | Btn::Shuffle | Btn::Repeat | Btn::Seek | Btn::Volume | Btn::Balance)) => Some(b),
                     _ => None,
@@ -492,29 +492,29 @@ impl super::LinAmpApp {
             // OS fallback moved the window out from under win_pos; re-sync it.
             if !d.manual {
                 if let Some(r) = outer {
-                    self.win_pos[idx] = r.min;
+                    self.geom.win_pos[idx] = r.min;
                 }
                 for (mi, off) in &d.group {
-                    self.win_pos[*mi] = self.win_pos[idx] + *off;
+                    self.geom.win_pos[*mi] = self.geom.win_pos[idx] + *off;
                 }
                 if let Some(off) = d.lib_offset {
-                    self.lib_pos = self.win_pos[idx] + off;
+                    self.geom.lib_pos = self.geom.win_pos[idx] + off;
                 }
             }
             // Magnetic snap to screen edges / other windows; move the group together.
-            let before = self.win_pos[idx];
+            let before = self.geom.win_pos[idx];
             let size = self.win_inner_size(d.win);
             let snapped = self.snap_pos(idx, before, size, monitor);
             let delta = snapped - before;
-            self.win_pos[idx] = snapped;
+            self.geom.win_pos[idx] = snapped;
             for (mi, _) in &d.group {
-                self.win_pos[*mi] += delta;
+                self.geom.win_pos[*mi] += delta;
             }
             if d.lib_offset.is_some() {
-                self.lib_pos += delta;
+                self.geom.lib_pos += delta;
             }
             if d.win == ClWin::Main {
-                self.root_last = None;
+                self.geom.root_last = None;
             }
             // Main never covered; EQ/playlist never cover each other (they stack).
             self.resolve_overlaps(d.win);
@@ -549,14 +549,14 @@ impl super::LinAmpApp {
             };
             let idx = win_idx(win);
             let (manual, grab) = match global_cursor_points(ctx) {
-                Some(g) => (true, g - self.win_pos[idx]),
+                Some(g) => (true, g - self.geom.win_pos[idx]),
                 None => (false, egui::Vec2::ZERO),
             };
-            self.drag = Some(Dragging {
+            self.geom.drag = Some(Dragging {
                 win,
                 manual,
                 grab,
-                press_pos: self.win_pos[idx],
+                press_pos: self.geom.win_pos[idx],
                 press_screen: sc,
                 started_os: false,
                 moved: false,
@@ -571,7 +571,7 @@ impl super::LinAmpApp {
     /// and its sibling; a dragged main pushes the children off instead).
     fn resolve_overlaps(&mut self, dragged: ClWin) {
         let rect = |app: &Self, i: usize| {
-            egui::Rect::from_min_size(app.win_pos[i], app.win_inner_size(idx_win(i)))
+            egui::Rect::from_min_size(app.geom.win_pos[i], app.win_inner_size(idx_win(i)))
         };
         let vis = |app: &Self, i: usize| match i {
             0 => true,
@@ -584,19 +584,19 @@ impl super::LinAmpApp {
             for i in [1usize, 2usize] {
                 if vis(self, i) {
                     if let Some(p) = push_off(rect(self, i), rect(self, 0)) {
-                        self.win_pos[i] = p;
+                        self.geom.win_pos[i] = p;
                     }
                 }
             }
             if vis(self, 1) && vis(self, 2) {
                 // Push the lower one below the higher so they don't overlap.
-                let (hi, lo) = if self.win_pos[1].y <= self.win_pos[2].y {
+                let (hi, lo) = if self.geom.win_pos[1].y <= self.geom.win_pos[2].y {
                     (1, 2)
                 } else {
                     (2, 1)
                 };
                 if let Some(p) = push_off(rect(self, lo), rect(self, hi)) {
-                    self.win_pos[lo] = p;
+                    self.geom.win_pos[lo] = p;
                 }
             }
         } else {
@@ -608,12 +608,12 @@ impl super::LinAmpApp {
             for _ in 0..4 {
                 let mut moved = false;
                 if let Some(p) = push_off(rect(self, di), rect(self, 0)) {
-                    self.win_pos[di] = p;
+                    self.geom.win_pos[di] = p;
                     moved = true;
                 }
                 if vis(self, oi) && rects_docked(rect(self, oi), rect(self, 0)) {
                     if let Some(p) = push_off(rect(self, di), rect(self, oi)) {
-                        self.win_pos[di] = p;
+                        self.geom.win_pos[di] = p;
                         moved = true;
                     }
                 }
@@ -622,7 +622,7 @@ impl super::LinAmpApp {
                 }
             }
         }
-        self.root_last = None;
+        self.geom.root_last = None;
     }
 
     pub(super) fn win_rect_pts(&self, idx: usize) -> egui::Rect {
@@ -631,7 +631,7 @@ impl super::LinAmpApp {
             1 => ClWin::Eq,
             _ => ClWin::Pl,
         };
-        egui::Rect::from_min_size(self.win_pos[idx], self.win_inner_size(w))
+        egui::Rect::from_min_size(self.geom.win_pos[idx], self.win_inner_size(w))
     }
 
     /// The full drag group for a main-window move: the EQ/playlist windows (by
@@ -642,30 +642,30 @@ impl super::LinAmpApp {
             self.win_rect_pts(0),
             self.win_rect_pts(1),
             self.win_rect_pts(2),
-            egui::Rect::from_min_size(self.lib_pos, self.lib_size()),
+            egui::Rect::from_min_size(self.geom.lib_pos, self.lib_size()),
         ];
         let vis = [true, self.eq_visible, self.pl_visible, self.lib_visible];
         let in_group = dock_group_from_main(&rects, &vis);
         let group = [1usize, 2]
             .into_iter()
             .filter(|&j| in_group[j])
-            .map(|j| (j, self.win_pos[j] - self.win_pos[0]))
+            .map(|j| (j, self.geom.win_pos[j] - self.geom.win_pos[0]))
             .collect();
-        let lib_offset = in_group[3].then(|| self.lib_pos - self.win_pos[0]);
+        let lib_offset = in_group[3].then(|| self.geom.lib_pos - self.geom.win_pos[0]);
         (group, lib_offset)
     }
 
     /// Canonical stacking: EQ then playlist dock directly below the main window,
     /// in order, regardless of which was opened first.
     pub(super) fn restack(&mut self) {
-        let base = self.win_pos[0];
+        let base = self.geom.win_pos[0];
         let mut y = base.y + self.main_h() * self.scale;
         if self.eq_visible {
-            self.win_pos[1] = egui::pos2(base.x, y);
+            self.geom.win_pos[1] = egui::pos2(base.x, y);
             y += self.eq_h() * self.scale;
         }
         if self.pl_visible {
-            self.win_pos[2] = egui::pos2(base.x, y);
+            self.geom.win_pos[2] = egui::pos2(base.x, y);
         }
     }
 
@@ -698,11 +698,11 @@ impl super::LinAmpApp {
                 1 => ClWin::Eq,
                 _ => ClWin::Pl,
             };
-            others.push(Rect::from_min_size(self.win_pos[j], self.win_inner_size(jwin)));
+            others.push(Rect::from_min_size(self.geom.win_pos[j], self.win_inner_size(jwin)));
         }
         // The library is a snap target too (but never pushes / is pushed).
         if self.lib_visible {
-            others.push(Rect::from_min_size(self.lib_pos, self.lib_size()));
+            others.push(Rect::from_min_size(self.geom.lib_pos, self.lib_size()));
         }
         snap_rect(r, &others, monitor)
     }
@@ -725,17 +725,17 @@ impl super::LinAmpApp {
         let old_h = before[idx].map(|r| r.height()).unwrap_or(0.0);
         let moved = docked_group_below(&before, idx);
         match win {
-            ClWin::Main => self.main_shade = !self.main_shade,
-            ClWin::Eq => self.eq_shade = !self.eq_shade,
-            ClWin::Pl => self.pl_shade = !self.pl_shade,
+            ClWin::Main => self.geom.main_shade = !self.geom.main_shade,
+            ClWin::Eq => self.geom.eq_shade = !self.geom.eq_shade,
+            ClWin::Pl => self.geom.pl_shade = !self.geom.pl_shade,
         }
         let delta = self.win_inner_size(win).y - old_h;
         for (j, &m) in moved.iter().enumerate() {
             if m {
-                self.win_pos[j].y += delta;
+                self.geom.win_pos[j].y += delta;
             }
         }
-        self.root_last = None;
+        self.geom.root_last = None;
     }
 
     pub(super) fn set_double_size(&mut self, _ctx: &egui::Context, dbl: bool) {
@@ -754,10 +754,10 @@ impl super::LinAmpApp {
             // The whole group scales from the main window's top-left, so scaling the
             // library's offset from main by the same ratio keeps it docked.
             let ratio = self.scale / old_scale;
-            let main = self.win_pos[0];
-            self.lib_pos = main + (self.lib_pos - main) * ratio;
+            let main = self.geom.win_pos[0];
+            self.geom.lib_pos = main + (self.geom.lib_pos - main) * ratio;
         }
-        self.root_last = None; // force the root window to resize next frame
+        self.geom.root_last = None; // force the root window to resize next frame
     }
 }
 

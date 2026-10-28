@@ -4,6 +4,20 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Write `contents` to `path` atomically: write a sibling temp file then rename
+/// over the target, so a crash mid-write can't leave a half-written file that then
+/// fails to parse and loses the whole session/prefs. Rename replaces the
+/// destination atomically on both the Windows and Linux targets.
+fn write_atomic(path: &std::path::Path, contents: &[u8]) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, contents).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
@@ -108,12 +122,8 @@ impl Prefs {
     }
 
     pub fn save(&self) {
-        let p = Self::path();
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d).ok();
-        }
         if let Ok(s) = serde_json::to_string_pretty(self) {
-            std::fs::write(p, s).ok();
+            write_atomic(&Self::path(), s.as_bytes());
         }
     }
 }
@@ -170,10 +180,24 @@ impl Session {
     /// hand-listed set of fields) means the dirty check can never drift from what
     /// `save` actually writes, the root cause of volume not persisting (#105).
     pub fn sig(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        serde_json::to_string(self).unwrap_or_default().hash(&mut h);
-        h.finish()
+        use std::hash::Hasher;
+        // Hash the serialized form so the dirty check can never drift from what
+        // `save` writes (the #105 fix), but stream the bytes into the hasher rather
+        // than allocating a whole JSON string first (the playlist can be thousands
+        // of paths, and this runs on the periodic persist check).
+        struct HashWriter(std::collections::hash_map::DefaultHasher);
+        impl std::io::Write for HashWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.write(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut w = HashWriter(std::collections::hash_map::DefaultHasher::new());
+        let _ = serde_json::to_writer(&mut w, self);
+        w.0.finish()
     }
 
     /// Whether a saved session exists, false on a truly first launch.
@@ -189,12 +213,8 @@ impl Session {
     }
 
     pub fn save(&self) {
-        let p = Self::path();
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d).ok();
-        }
         if let Ok(s) = serde_json::to_string_pretty(self) {
-            std::fs::write(p, s).ok();
+            write_atomic(&Self::path(), s.as_bytes());
         }
     }
 }
@@ -229,12 +249,8 @@ impl Bookmarks {
     }
 
     pub fn save(&self) {
-        let p = Self::path();
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d).ok();
-        }
         if let Ok(s) = serde_json::to_string_pretty(self) {
-            std::fs::write(p, s).ok();
+            write_atomic(&Self::path(), s.as_bytes());
         }
     }
 
@@ -286,12 +302,8 @@ impl EqPresets {
     }
 
     pub fn save_to_disk(&self) {
-        let p = Self::path();
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d).ok();
-        }
         if let Ok(s) = serde_json::to_string_pretty(self) {
-            std::fs::write(p, s).ok();
+            write_atomic(&Self::path(), s.as_bytes());
         }
     }
 
@@ -482,5 +494,33 @@ mod tests {
         assert_eq!(q.main_pos, Some((100.0, 200.0)));
         assert_eq!(q.pl_pos, None);
         assert_eq!(q.lib_pos, Some((375.0, 200.0)));
+    }
+
+    #[test]
+    fn sig_detects_a_track_list_change() {
+        // A playlist edit is the most common session change, so sig() must notice
+        // it or a save would be skipped and the edit lost on exit.
+        let base = Session::default();
+        let mut with_track = base.clone();
+        with_track.tracks.push("x.mp3".into());
+        assert_ne!(with_track.sig(), base.sig());
+    }
+
+    #[test]
+    fn legacy_prefs_default_new_fields() {
+        // A prefs file predating these fields loads them at their defaults.
+        let p: Prefs = serde_json::from_str("{}").unwrap();
+        assert!(!p.crossfade);
+        assert!(!p.tray_enabled);
+        assert_eq!(p.open_with, OpenWith::Enqueue);
+    }
+
+    #[test]
+    fn malformed_prefs_json_falls_back_to_default() {
+        // load() does serde_json::from_str(...).ok().unwrap_or_default(); a
+        // corrupt (not merely empty) file must yield defaults, not an error.
+        let parsed: Prefs = serde_json::from_str("{ this is not valid json").unwrap_or_default();
+        assert!(!parsed.double_size);
+        assert_eq!(parsed.open_with, OpenWith::Enqueue);
     }
 }

@@ -143,4 +143,76 @@ mod tests {
         s.set(2.0);
         assert_eq!(s.get(), 1.0);
     }
+
+    /// A tiny in-test rodio `Source` over a fixed sample vector. `try_seek`
+    /// rewinds to the start so a test can replay the same input after a seek.
+    struct Buf {
+        data: Vec<f32>,
+        idx: usize,
+        ch: u16,
+    }
+    impl Iterator for Buf {
+        type Item = f32;
+        fn next(&mut self) -> Option<f32> {
+            let v = self.data.get(self.idx).copied();
+            if v.is_some() {
+                self.idx += 1;
+            }
+            v
+        }
+    }
+    impl Source for Buf {
+        fn current_frame_len(&self) -> Option<usize> {
+            None
+        }
+        fn channels(&self) -> u16 {
+            self.ch
+        }
+        fn sample_rate(&self) -> u32 {
+            44_100
+        }
+        fn total_duration(&self) -> Option<Duration> {
+            None
+        }
+        fn try_seek(&mut self, _: Duration) -> Result<(), rodio::source::SeekError> {
+            self.idx = 0;
+            Ok(())
+        }
+    }
+    fn buf(data: Vec<f32>, ch: u16) -> Buf {
+        Buf { data, idx: 0, ch }
+    }
+
+    #[test]
+    fn hard_pan_right_zeros_the_left_channel() {
+        let sh = BalanceShared::new();
+        sh.set(1.0);
+        // Stereo interleaved L,R,L,R: left muted, right at unity.
+        let mut b = balance(buf(vec![1.0, 1.0, 1.0, 1.0], 2), sh);
+        assert_eq!(b.next(), Some(0.0));
+        assert_eq!(b.next(), Some(1.0));
+        assert_eq!(b.next(), Some(0.0));
+        assert_eq!(b.next(), Some(1.0));
+    }
+
+    #[test]
+    fn mono_passes_through_untouched() {
+        let sh = BalanceShared::new();
+        sh.set(1.0); // would pan hard right, but a mono stream ignores balance
+        let mut b = balance(buf(vec![0.7, -0.4, 0.2], 1), sh);
+        assert_eq!(b.next(), Some(0.7));
+        assert_eq!(b.next(), Some(-0.4));
+        assert_eq!(b.next(), Some(0.2));
+    }
+
+    #[test]
+    fn seek_resets_the_channel_counter() {
+        let sh = BalanceShared::new();
+        sh.set(-1.0); // full left: left at unity, right muted
+        let mut b = balance(buf(vec![1.0, 1.0, 1.0, 1.0], 2), sh);
+        assert_eq!(b.next(), Some(1.0)); // left at unity; counter now on the right
+        b.try_seek(Duration::ZERO).unwrap(); // resets ch to 0 (and rewinds buf)
+        // If the counter reset, this is the left channel again (unity), not right (muted).
+        assert_eq!(b.next(), Some(1.0));
+    }
 }

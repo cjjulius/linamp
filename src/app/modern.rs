@@ -233,23 +233,23 @@ impl super::LinAmpApp {
             .default_open(false)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if toggle(ui, &mut self.eq_enabled, "EQ On").changed() {
+                    if toggle(ui, &mut self.eq.enabled, "EQ On").changed() {
                         self.apply_eq();
                     }
                     ui.separator();
                     ui.label("Preamp");
                     if ui
-                        .add(egui::Slider::new(&mut self.eq_preamp_db, -12.0..=12.0).suffix(" dB"))
+                        .add(egui::Slider::new(&mut self.eq.preamp_db, -12.0..=12.0).suffix(" dB"))
                         .changed()
                     {
                         self.apply_eq();
                     }
                     if ui.button("Reset").clicked() {
-                        self.eq_bands = [0.0; 10];
-                        self.eq_preamp_db = 0.0;
+                        self.eq.bands = [0.0; 10];
+                        self.eq.preamp_db = 0.0;
                         self.apply_eq();
                     }
-                    if toggle(ui, &mut self.eq_auto, "Auto").changed() {
+                    if toggle(ui, &mut self.eq.auto, "Auto").changed() {
                         self.apply_eq_auto_gain();
                         self.apply_eq();
                     }
@@ -269,7 +269,7 @@ impl super::LinAmpApp {
                         ui.vertical(|ui| {
                             if ui
                                 .add(
-                                    egui::Slider::new(&mut self.eq_bands[i], -12.0..=12.0)
+                                    egui::Slider::new(&mut self.eq.bands[i], -12.0..=12.0)
                                         .vertical()
                                         .show_value(false),
                                 )

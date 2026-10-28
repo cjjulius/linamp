@@ -125,10 +125,11 @@ fn split_polygons(num_points: &[usize], point_list: &[i32]) -> Vec<Polygon> {
     let mut i = 0;
     for &n in &sizes {
         if n < 3 || i >= all.len() {
-            i += n;
+            // Saturating, so a crafted NumPoints count can't overflow the cursor.
+            i = i.saturating_add(n);
             continue;
         }
-        let end = (i + n).min(all.len());
+        let end = i.saturating_add(n).min(all.len());
         polys.push(all[i..end].to_vec());
         i = end;
     }
@@ -260,5 +261,47 @@ mod tests {
     fn section_names_are_case_insensitive() {
         let txt = "[playlist]\nNumPoints=3\nPointList=0,0, 5,0, 0,5\n";
         assert_eq!(parse(txt).playlist.len(), 1);
+    }
+
+    #[test]
+    fn rasterize_concave_polygon_splits_a_row() {
+        // A U-shape: a 10x10 square with a notch cut up from the bottom at x in [3,7).
+        let u = vec![
+            (0, 0),
+            (10, 0),
+            (10, 10),
+            (7, 10),
+            (7, 4),
+            (3, 4),
+            (3, 10),
+            (0, 10),
+        ];
+        let rects = polygons_to_rects(&[u], 10, 10);
+        // Above the notch the row is solid.
+        assert!(rects.contains(&(0, 2, 10, 1)));
+        // Inside the notch the even-odd fill splits the row into two runs.
+        assert!(rects.contains(&(0, 7, 3, 1)));
+        assert!(rects.contains(&(7, 7, 3, 1)));
+        // Nothing fills the notch gap on that row.
+        assert!(!rects.iter().any(|&(x, y, wd, _)| y == 7 && x <= 4 && x + wd > 5));
+    }
+
+    #[test]
+    fn split_polygons_tolerates_a_huge_numpoints() {
+        // A crafted NumPoints far larger than the point list must not overflow.
+        let txt = format!(
+            "[Normal]\nNumPoints={},3\nPointList=0,0, 5,0, 0,5, 10,0, 20,0, 10,5\n",
+            usize::MAX
+        );
+        // Completes without panicking (the saturating arithmetic clamps the count).
+        assert_eq!(parse(&txt).main.len(), 1);
+    }
+
+    #[test]
+    fn rasterize_clamps_vertices_outside_the_window() {
+        // A polygon larger than the window is clamped to w x h.
+        let big = vec![(-5, -5), (20, -5), (20, 20), (-5, 20)];
+        let rects = polygons_to_rects(&[big], 4, 3);
+        assert_eq!(rects, vec![(0, 0, 4, 1), (0, 1, 4, 1), (0, 2, 4, 1)]);
     }
 }

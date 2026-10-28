@@ -375,6 +375,148 @@ impl VizMode {
     }
 }
 
+/// Equalizer state, grouped so an EQ change touches one field of `LinAmpApp`
+/// instead of several scattered ones (the first step of decomposing the app
+/// state, see docs/CODE-REVIEW.md C1).
+struct EqState {
+    enabled: bool,
+    preamp_db: f32,
+    bands: [f32; 10],
+    auto: bool,
+    /// The EQ slider / region currently held (classic view).
+    active: Option<classic::EqRegion>,
+    /// User-named EQ presets, persisted to eq_presets.json.
+    presets: crate::config::EqPresets,
+    /// When `Some`, the "Save EQ preset as…" name dialog is open with this buffer.
+    save_name: Option<String>,
+}
+
+/// Per-window classic-render caches (composite textures, fingerprints, X11 shape
+/// masks and cursor state), grouped so the render pipeline's state lives in one
+/// place (C1).
+struct ClassicRenderState {
+    classic_tex: Option<egui::TextureHandle>,
+    eq_tex: Option<egui::TextureHandle>,
+    pl_tex: Option<egui::TextureHandle>,
+    /// Per-window (main/eq/pl) X11 shape fingerprint, so REGION.TXT masks are only
+    /// re-applied on change.
+    shape_sig: [Option<u64>; 3],
+    /// Last custom cursor name applied per window (main/eq/pl), to switch the X
+    /// cursor only when the hovered region changes.
+    cur_cursor: [Option<&'static str>; 3],
+    /// Last composed fingerprint per window, to skip re-compositing an unchanged frame.
+    tex_fp: [u64; 3],
+    active_region: Option<Btn>,
+    pressed_btn: Option<Btn>,
+}
+
+/// Classic playlist view + selection state (C1).
+struct PlaylistViewState {
+    /// Index of the first visible row (scroll position).
+    first: usize,
+    selection: HashSet<usize>,
+    /// Fixed end for shift-range selection; set by a plain/ctrl click or nav.
+    anchor: Option<usize>,
+    /// The focus ("lead") row keyboard navigation moves from; the highlight follows
+    /// it along with the rest of the selection.
+    lead: Option<usize>,
+    last_click: Option<(usize, Instant)>,
+    /// The row a playlist right-click targeted, so the track menu's Play / Edit act
+    /// on exactly that row rather than the selection's min / current track.
+    ctx_row: Option<usize>,
+    /// Playlist window size in unscaled skin pixels.
+    px_w: f32,
+    px_h: f32,
+    /// Bottom-bar menu button currently held / with its menu open.
+    menu_press: Option<classic::PlRegion>,
+}
+
+/// Media Library 3-pane browser, search, sort, selection and background-scan
+/// state (C1). The library database itself is `LinAmpApp::library`.
+struct LibraryViewState {
+    query: String,
+    /// When set, a search is pending: run it once the clock passes this instant,
+    /// so fast typing coalesces into one query instead of a LIKE scan per
+    /// keystroke (#96).
+    search_at: Option<std::time::Instant>,
+    results: Vec<crate::playlist::Track>,
+    /// Star rating (0-5) for each row in `results`, parallel-indexed. Only
+    /// populated for the Top Rated view, where the list shows the stars.
+    ratings: Vec<i64>,
+    /// Cached (path, rating) for the selected row, so the bottom bar's star
+    /// display doesn't query SQLite every frame.
+    rating_cache: Option<(PathBuf, i64)>,
+    /// User-resizable track-table column fractions [artist, title]; the third
+    /// column (album/rating) takes the remainder.
+    col_fr: [f32; 2],
+    /// Active track-table sort: (column 0=artist 1=title 2=album/rating 3=time,
+    /// ascending). None = the view's natural order.
+    sort: Option<(u8, bool)>,
+    nav: crate::library::LibView,
+    artists: Vec<(String, i64)>,
+    albums: Vec<(String, i64)>,
+    sel_artists: Vec<String>,
+    sel_albums: Vec<String>,
+    sel_tracks: std::collections::BTreeSet<usize>,
+    /// Active background scan receiver + its latest progress text.
+    scan: Option<std::sync::mpsc::Receiver<crate::library::ScanMsg>>,
+    scan_text: String,
+    /// Whether the Library window's own menu is open.
+    menu_open: bool,
+}
+
+/// Window geometry and focus (C1): the classic windows' positions, the library
+/// window's position/drag, drag/resize state, window-shade flags and per-window
+/// focus.
+struct WindowGeom {
+    /// Top-left of each classic window (main/eq/pl).
+    win_pos: [egui::Pos2; 3],
+    positions_init: bool,
+    /// true when the last session's positions were restored, so frame 1 keeps them
+    /// (clamped on-screen) instead of applying the default layout.
+    has_pos_memory: bool,
+    /// Media Library window position, whether it has been placed, and its
+    /// title-bar grab offset while dragging.
+    lib_pos: egui::Pos2,
+    lib_pos_init: bool,
+    lib_drag: Option<egui::Vec2>,
+    /// Window-shade (collapsed) flags per classic window.
+    main_shade: bool,
+    eq_shade: bool,
+    pl_shade: bool,
+    /// App-level focus (true while any LinAmp window is focused) plus per-window
+    /// focus, OR'd each frame.
+    app_focused: bool,
+    foc_root: bool,
+    foc_eq: bool,
+    foc_pl: bool,
+    foc_lib: bool,
+    /// Active window drag, and the playlist resize grab offsets (width, height) px.
+    drag: Option<Dragging>,
+    resize_pl: Option<egui::Vec2>,
+    /// The root window's last (pos, size), for drag tracking.
+    root_last: Option<(egui::Pos2, egui::Vec2)>,
+}
+
+/// Classic right-click / options popup state (C1): the open popup, a queued one,
+/// and the rounded-region / fresh-window bookkeeping that keeps each menu sized
+/// correctly.
+struct PopupState {
+    /// The currently open popup (kind, owner window, click position).
+    cur: Option<(Popup, ClWin, egui::Pos2)>,
+    /// A popup to open once the current one closes (classic popups aren't nested).
+    pending: Option<(Popup, ClWin, egui::Pos2)>,
+    fresh: bool,
+    /// Whether the popup window's rounded region has been applied for the current
+    /// popup (applied once, retrying only until it succeeds).
+    rounded: bool,
+    /// Window height the rounded-corner region was last built for, so it rebuilds
+    /// only when a different-sized menu opens (#154).
+    rounded_h: Option<f32>,
+    /// Bumped on every popup open so each menu gets a fresh viewport id/window (#154).
+    serial: u64,
+}
+
 pub struct LinAmpApp {
     player: Player,
     playlist: Playlist,
@@ -389,43 +531,16 @@ pub struct LinAmpApp {
     seek_preview: f32,
 
     // equalizer
-    eq_enabled: bool,
-    eq_preamp_db: f32,
-    eq_bands: [f32; 10],
+    eq: EqState,
 
     // playlist / library views
     view: View,
     pl_search: String,
     sort_key: SortKey,
-    lib_query: String,
-    /// When set, a search is pending: run it once the clock passes this instant,
-    /// so fast typing coalesces into one query instead of a full-table LIKE scan
-    /// per keystroke (#96).
-    lib_search_at: Option<std::time::Instant>,
-    lib_results: Vec<crate::playlist::Track>,
-    /// Star rating (0–5) for each row in `lib_results`, parallel-indexed. Only
-    /// populated for the Top Rated view, where the list shows the stars.
-    lib_ratings: Vec<i64>,
-    /// User-resizable track-table column fractions of the flexible width:
-    /// [artist, title]; the third column (album/rating) takes the remainder.
-    lib_col_fr: [f32; 2],
-    /// Active track-table sort: (column 0=artist 1=title 2=album/rating 3=time,
-    /// ascending). None = the view's natural order. Reset when the view changes.
-    lib_sort: Option<(u8, bool)>,
-    // Media Library window (dockable, non-shading) + 3-pane browser state.
-    lib_pos: egui::Pos2,
-    lib_pos_init: bool,
-    /// Grab offset (points) while the custom title bar is being dragged.
-    lib_drag: Option<egui::Vec2>,
-    lib_nav: crate::library::LibView,
-    lib_artists: Vec<(String, i64)>,
-    lib_albums: Vec<(String, i64)>,
-    lib_sel_artists: Vec<String>,
-    lib_sel_albums: Vec<String>,
-    lib_sel_tracks: std::collections::BTreeSet<usize>,
-    /// Active background scan receiver + its latest progress text.
-    lib_scan: Option<std::sync::mpsc::Receiver<crate::library::ScanMsg>>,
-    lib_scan_text: String,
+    /// Media Library 3-pane browser, search, sort, selection and scan state.
+    lib: LibraryViewState,
+    /// Window geometry and focus (positions, drag/resize, shades, per-window focus).
+    geom: WindowGeom,
 
     // visualization
     viz: Arc<VizShared>,
@@ -449,27 +564,15 @@ pub struct LinAmpApp {
     // classic skin renderer
     ui_mode: UiMode,
     classic: Option<ClassicSkin>,
-    classic_tex: Option<egui::TextureHandle>,
-    eq_tex: Option<egui::TextureHandle>,
-    pl_tex: Option<egui::TextureHandle>,
+    /// Per-window composite textures, fingerprints, shape masks and cursor caches.
+    render: ClassicRenderState,
     /// Composed GEN.BMP library-window frame + a fingerprint (skin, active, size)
     /// so it is only re-composited when something changes.
     lib_tex: Option<egui::TextureHandle>,
     lib_tex_sig: Option<(String, bool, u32, u32)>,
-    /// Per-window (main/eq/pl) X11 shape fingerprint, so REGION.TXT masks are only
-    /// re-applied on change; `shaped_any` tracks whether any shape was ever set (to
-    /// reset windows to rectangular when switching to a skin without regions).
-    shape_sig: [Option<u64>; 3],
+    /// Whether any X11 shape was ever set, to reset windows to rectangular when
+    /// switching to a skin without regions.
     shaped_any: bool,
-    /// Last custom cursor name applied per window (main/eq/pl), to switch the X
-    /// cursor only when the hovered region changes.
-    cur_cursor: [Option<&'static str>; 3],
-    /// Last composed fingerprint per window (main/eq/pl), to skip re-compositing
-    /// and re-uploading an unchanged frame.
-    tex_fp: [u64; 3],
-    active_region: Option<Btn>,
-    eq_active: Option<classic::EqRegion>,
-    pressed_btn: Option<Btn>,
     classic_seek_preview: Option<f32>,
     balance: f32,
     time_remaining: bool,
@@ -483,69 +586,14 @@ pub struct LinAmpApp {
     mode_init: bool,
     eq_visible: bool,
     pl_visible: bool,
-    eq_auto: bool,
-    pl_first: usize,
-    pl_selection: HashSet<usize>,
-    /// Fixed end for shift-range selection; set by a plain/ctrl click or nav.
-    pl_anchor: Option<usize>,
-    /// The focus ("lead") row keyboard navigation moves from; the highlight
-    /// follows it along with the rest of the selection.
-    pl_lead: Option<usize>,
-    pl_last_click: Option<(usize, Instant)>,
-    /// The row a playlist right-click targeted, so the track menu's Play / Edit
-    /// act on exactly that row rather than the selection's min / current track.
-    pl_ctx_row: Option<usize>,
-    popup: Option<(Popup, ClWin, egui::Pos2)>,
-    /// A popup to open once the current one closes (for opening the Bookmarks
-    /// list from an Options-menu item, classic popups aren't nested).
-    pending_popup: Option<(Popup, ClWin, egui::Pos2)>,
+    /// Classic playlist view + selection state.
+    plview: PlaylistViewState,
+    /// Classic right-click / options popup state (open popup, queued popup, the
+    /// rounded-region and fresh-window bookkeeping).
+    popups: PopupState,
     /// Alt+I bookmarks, persisted to bookmarks.json.
     bookmarks: crate::config::Bookmarks,
-    /// User-named EQ presets, persisted to eq_presets.json.
-    eq_presets: crate::config::EqPresets,
-    /// When `Some`, the "Save EQ preset as…" name dialog is open with this buffer.
-    eq_save_name: Option<String>,
-    popup_fresh: bool,
-    /// Whether the popup window's rounded region has been applied for the current
-    /// popup, so we apply it once (retrying only until it succeeds) instead of
-    /// rebuilding the GDI region every frame the menu is open.
-    popup_rounded: bool,
-    /// Window height the popup's rounded-corner region was last built for, so the
-    /// region is rebuilt only when a different-sized menu opens (#154).
-    popup_rounded_h: Option<f32>,
-    /// Bumped on every popup open so each menu gets a fresh viewport id (and OS
-    /// window). Reusing one window meant a reused window kept a previous menu's
-    /// size on re-right-clicks; a fresh window is sized correctly every time (#154).
-    popup_serial: u64,
-    main_shade: bool,
-    eq_shade: bool,
-    pl_shade: bool,
     tb_last_click: Option<(ClWin, Instant)>,
-    // multi-window geometry (points)
-    win_pos: [egui::Pos2; 3],
-    pl_px_h: f32,
-    pl_px_w: f32,
-    positions_init: bool,
-    /// true when the last session's window positions were restored, so frame 1
-    /// keeps them (clamped on-screen) instead of applying the default layout.
-    has_pos_memory: bool,
-    /// App-level focus: true while any LinAmp window is focused. All windows show
-    /// their active title bar together and their inactive one only when the whole
-    /// app loses focus (example: to another application), matching Winamp, rather
-    /// than one window dimming when another LinAmp window is clicked. Per-window
-    /// focus is tracked in `foc_*` and OR'd each frame.
-    app_focused: bool,
-    foc_root: bool,
-    foc_eq: bool,
-    foc_pl: bool,
-    foc_lib: bool,
-    /// Whether a Media Library context menu is open. Tracked by us because the
-    /// library is its own OS window and egui's menu never sees clicks in the
-    /// other windows. Set on a library right-click, cleared when a classic window
-    /// is *primary*-pressed (mirroring the classic popups' click-away) or when a
-    /// classic popup opens, never on a secondary click, which is the library's
-    /// own open gesture.
-    lib_menu_open: bool,
     /// One-shot: a classic window was primary-pressed (or a classic popup opened)
     /// this frame, so an open library menu should dismiss. Consumed in `ui_library`.
     classic_clicked: bool,
@@ -554,14 +602,9 @@ pub struct LinAmpApp {
     /// Frames remaining in a graceful shutdown (set when the WM asks to close),
     /// used to tear down child viewports before the root to avoid a winit crash.
     quit_countdown: Option<u8>,
-    drag: Option<Dragging>,
-    /// While resizing the playlist, the grab offsets (width, height) in px.
-    resize_pl: Option<egui::Vec2>,
-    root_last: Option<(egui::Pos2, egui::Vec2)>,
     /// Last always-on-top state pushed to the root window (so we only send the
     /// window-level command when it changes).
     on_top_last: Option<bool>,
-    pl_menu_press: Option<classic::PlRegion>,
     prefs: Prefs,
     /// System-tray icon (kept alive for its lifetime) and the channel its clicks
     /// arrive on, drained once per frame (#40). `hidden_to_tray` tracks whether
@@ -691,7 +734,7 @@ fn crossfade_due(
 impl LinAmpApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&cc.egui_ctx);
-        let player = Player::new().expect("failed to open audio output device");
+        let player = Player::new();
         let viz = player.viz();
         let library = Library::open().ok();
         let fft = FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE);
@@ -714,34 +757,58 @@ impl LinAmpApp {
             repeat_one: false,
             seeking: false,
             seek_preview: 0.0,
-            eq_enabled: false,
-            eq_preamp_db: 0.0,
-            eq_bands: [0.0; 10],
+            eq: EqState {
+                enabled: false,
+                preamp_db: 0.0,
+                bands: [0.0; 10],
+                auto: false,
+                active: None,
+                presets: crate::config::EqPresets::load(),
+                save_name: None,
+            },
             view: View::Playlist,
             pl_search: String::new(),
             sort_key: SortKey::Custom,
-            lib_query: String::new(),
-            lib_search_at: None,
-            lib_results: Vec::new(),
-            lib_ratings: Vec::new(),
-            lib_col_fr: [0.28, 0.42],
-            lib_sort: None,
-            lib_pos: egui::Pos2::ZERO,
-            lib_pos_init: false,
-            lib_drag: None,
+            lib: LibraryViewState {
+                query: String::new(),
+                search_at: None,
+                results: Vec::new(),
+                ratings: Vec::new(),
+                rating_cache: None,
+                col_fr: [0.28, 0.42],
+                sort: None,
+                nav: crate::library::LibView::Audio,
+                artists: Vec::new(),
+                albums: Vec::new(),
+                sel_artists: Vec::new(),
+                sel_albums: Vec::new(),
+                sel_tracks: std::collections::BTreeSet::new(),
+                scan: None,
+                scan_text: String::new(),
+                menu_open: false,
+            },
+            geom: WindowGeom {
+                win_pos: [egui::pos2(100.0, 100.0); 3],
+                positions_init: false,
+                has_pos_memory: false,
+                lib_pos: egui::Pos2::ZERO,
+                lib_pos_init: false,
+                lib_drag: None,
+                main_shade: false,
+                eq_shade: false,
+                pl_shade: false,
+                app_focused: true,
+                foc_root: true,
+                foc_eq: false,
+                foc_pl: false,
+                foc_lib: false,
+                drag: None,
+                resize_pl: None,
+                root_last: None,
+            },
             lib_tex: None,
             lib_tex_sig: None,
-            shape_sig: [None; 3],
             shaped_any: false,
-            cur_cursor: [None; 3],
-            lib_nav: crate::library::LibView::Audio,
-            lib_artists: Vec::new(),
-            lib_albums: Vec::new(),
-            lib_sel_artists: Vec::new(),
-            lib_sel_albums: Vec::new(),
-            lib_sel_tracks: std::collections::BTreeSet::new(),
-            lib_scan: None,
-            lib_scan_text: String::new(),
             viz,
             viz_mode: VizMode::Spectrum,
             viz_bars: vec![0.0; VIZ_BANDS],
@@ -756,13 +823,16 @@ impl LinAmpApp {
             skins: Vec::new(),
             ui_mode: UiMode::Modern,
             classic: None,
-            classic_tex: None,
-            eq_tex: None,
-            pl_tex: None,
-            tex_fp: [0; 3],
-            active_region: None,
-            eq_active: None,
-            pressed_btn: None,
+            render: ClassicRenderState {
+                classic_tex: None,
+                eq_tex: None,
+                pl_tex: None,
+                shape_sig: [None; 3],
+                cur_cursor: [None; 3],
+                tex_fp: [0; 3],
+                active_region: None,
+                pressed_btn: None,
+            },
             classic_seek_preview: None,
             balance: 0.0,
             time_remaining: false,
@@ -772,45 +842,31 @@ impl LinAmpApp {
             mode_init: true,
             eq_visible: false,
             pl_visible: false,
-            eq_auto: false,
-            pl_first: 0,
-            pl_selection: HashSet::new(),
-            pl_anchor: None,
-            pl_lead: None,
-            pl_last_click: None,
-            pl_ctx_row: None,
-            popup: None,
-            pending_popup: None,
+            plview: PlaylistViewState {
+                first: 0,
+                selection: HashSet::new(),
+                anchor: None,
+                lead: None,
+                last_click: None,
+                ctx_row: None,
+                px_w: classic::MAIN_W as f32,
+                px_h: classic::PL_H as f32,
+                menu_press: None,
+            },
+            popups: PopupState {
+                cur: None,
+                pending: None,
+                fresh: false,
+                rounded: false,
+                rounded_h: None,
+                serial: 0,
+            },
             bookmarks: crate::config::Bookmarks::load(),
-            eq_presets: crate::config::EqPresets::load(),
-            eq_save_name: None,
-            popup_fresh: false,
-            popup_rounded: false,
-            popup_rounded_h: None,
-            popup_serial: 0,
-            main_shade: false,
-            eq_shade: false,
-            pl_shade: false,
             tb_last_click: None,
-            win_pos: [egui::pos2(100.0, 100.0); 3],
-            pl_px_h: classic::PL_H as f32,
-            pl_px_w: classic::MAIN_W as f32,
-            positions_init: false,
-            has_pos_memory: false,
-            app_focused: true,
-            foc_root: true,
-            foc_eq: false,
-            foc_pl: false,
-            foc_lib: false,
-            lib_menu_open: false,
             classic_clicked: false,
             session_sig: None,
             quit_countdown: None,
-            drag: None,
-            resize_pl: None,
-            root_last: None,
             on_top_last: None,
-            pl_menu_press: None,
             prefs,
             _tray: tray,
             tray_rx,
@@ -847,6 +903,13 @@ impl LinAmpApp {
             status: "Ready. Press L to open files.".to_string(),
         };
 
+        // A deviceless launch (no audio output device) still runs; say why playback
+        // does nothing until one is connected. poll_device reacquires one later.
+        if !app.player.has_device() {
+            app.status =
+                "No audio output device found; playback is off until one is connected.".into();
+        }
+
         // Restore the last session's playlist, volume and window layout. This
         // runs whether or not files were passed on the command line, so "Open
         // with" can enqueue into the current playlist and keep the window layout;
@@ -872,22 +935,22 @@ impl LinAmpApp {
                 app.playlist.load_all();
             }
             if let Some(w) = session.pl_width {
-                app.pl_px_w = w.max(classic::MAIN_W as f32);
+                app.plview.px_w = w.max(classic::MAIN_W as f32);
             }
             if let Some(h) = session.pl_height {
-                app.pl_px_h = h.max(87.0);
+                app.plview.px_h = h.max(87.0);
             }
             // Restore which windows were open and their collapsed/full state.
             // The saved window positions (if any) are applied just below and
             // placed on frame 1; absent them, positions_init docks the windows.
             app.eq_visible = session.eq_visible;
             app.pl_visible = session.pl_visible;
-            app.main_shade = session.main_shade;
-            app.eq_shade = session.eq_shade;
-            app.pl_shade = session.pl_shade;
+            app.geom.main_shade = session.main_shade;
+            app.geom.eq_shade = session.eq_shade;
+            app.geom.pl_shade = session.pl_shade;
             app.lib_visible = session.lib_visible;
             if let Some(fr) = session.lib_col_fr {
-                app.lib_col_fr = fr;
+                app.lib.col_fr = fr;
             }
             // Restore the saved window layout (absolute top-lefts). When present
             // it replaces the default dock arrangement; frame 1 clamps it on-
@@ -896,12 +959,12 @@ impl LinAmpApp {
                 let p = |o: Option<(f32, f32)>, d: egui::Pos2| {
                     o.map(|(x, y)| egui::pos2(x, y)).unwrap_or(d)
                 };
-                app.win_pos[0] = egui::pos2(x, y);
-                app.win_pos[1] = p(session.eq_pos, app.win_pos[0]);
-                app.win_pos[2] = p(session.pl_pos, app.win_pos[0]);
-                app.lib_pos = p(session.lib_pos, app.win_pos[0]);
-                app.lib_pos_init = true;
-                app.has_pos_memory = true;
+                app.geom.win_pos[0] = egui::pos2(x, y);
+                app.geom.win_pos[1] = p(session.eq_pos, app.geom.win_pos[0]);
+                app.geom.win_pos[2] = p(session.pl_pos, app.geom.win_pos[0]);
+                app.geom.lib_pos = p(session.lib_pos, app.geom.win_pos[0]);
+                app.geom.lib_pos_init = true;
+                app.geom.has_pos_memory = true;
             }
 
             // Files passed on the command line ("Open with", or files dropped on
@@ -937,11 +1000,11 @@ impl LinAmpApp {
         // Restore equalizer state from the last session and push it to the DSP.
         let eq_session = Session::load();
         if !eq_session.eq_bands.is_empty() {
-            app.eq_enabled = eq_session.eq_enabled;
-            app.eq_auto = eq_session.eq_auto;
-            app.eq_preamp_db = eq_session.eq_preamp;
+            app.eq.enabled = eq_session.eq_enabled;
+            app.eq.auto = eq_session.eq_auto;
+            app.eq.preamp_db = eq_session.eq_preamp;
             for (i, b) in eq_session.eq_bands.iter().take(10).enumerate() {
-                app.eq_bands[i] = *b;
+                app.eq.bands[i] = *b;
             }
             app.apply_eq();
         }
@@ -1381,9 +1444,9 @@ impl LinAmpApp {
         }
         // Where to insert: a drop on the (expanded) playlist window lands at the row
         // under the release point; every other target appends (row = None).
-        let drop_row = if win == Some(ClWin::Pl) && !self.pl_shade {
+        let drop_row = if win == Some(ClWin::Pl) && !self.geom.pl_shade {
             ctx.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()))
-                .map(|p| classic::pl_row_at(p.y / self.scale, self.pl_first))
+                .map(|p| classic::pl_row_at(p.y / self.scale, self.plview.first))
         } else {
             None
         };
@@ -1409,8 +1472,8 @@ impl LinAmpApp {
                 // Rows at/after the insertion point shifted down by `added`; keep the
                 // selection pointing at the same tracks (the dropped ones stay
                 // unselected).
-                self.pl_selection = self
-                    .pl_selection
+                self.plview.selection = self
+                    .plview.selection
                     .iter()
                     .map(|&i| if i >= at { i + added } else { i })
                     .collect();
@@ -1492,9 +1555,9 @@ impl LinAmpApp {
     fn toggle_library(&mut self) {
         self.lib_visible = !self.lib_visible;
         if self.lib_visible {
-            if !self.lib_pos_init {
-                self.lib_pos = self.library_default_pos();
-                self.lib_pos_init = true;
+            if !self.geom.lib_pos_init {
+                self.geom.lib_pos = self.library_default_pos();
+                self.geom.lib_pos_init = true;
             }
             self.refresh_library();
         }
@@ -1504,7 +1567,7 @@ impl LinAmpApp {
     /// Default position when the library is first opened: docked to the right edge
     /// of the main window, top-aligned with it.
     fn library_default_pos(&self) -> egui::Pos2 {
-        let base = self.win_pos[0];
+        let base = self.geom.win_pos[0];
         egui::pos2(base.x + classic::MAIN_W as f32 * self.scale, base.y)
     }
 
@@ -1557,12 +1620,15 @@ impl LinAmpApp {
         // Load the classic sprite sheets for the same skin. Drop every cached
         // window texture so all three re-composite with the new skin.
         self.classic = ClassicSkin::load(path).ok();
-        self.classic_tex = None;
-        self.eq_tex = None;
-        self.pl_tex = None;
-        // Reset cursors so a skin without custom cursors doesn't keep showing the
-        // previous skin's; the per-frame cursor update re-applies for the new skin
-        // if it ships any.
+        self.render.classic_tex = None;
+        self.render.eq_tex = None;
+        self.render.pl_tex = None;
+        // Destroy the previous skin's cached native cursors (Windows) so they don't
+        // leak across skin changes, then reset the desired cursors so a skin with
+        // none doesn't keep showing the old skin's; the per-frame cursor update
+        // re-applies for the new skin if it ships any.
+        #[cfg(windows)]
+        crate::wincursor::clear_cache();
         self.clear_skin_cursors();
         // Remember this skin for next launch.
         self.skin_path = Some(path.to_path_buf());
@@ -1579,7 +1645,7 @@ impl LinAmpApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
                     self.win_inner_size(ClWin::Main),
                 ));
-                self.root_last = None;
+                self.geom.root_last = None;
             }
             UiMode::Modern => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
@@ -1621,9 +1687,9 @@ impl LinAmpApp {
             .unwrap_or_else(|| self.player.position().as_secs_f32());
 
         MainState {
-            focused: self.app_focused,
+            focused: self.geom.app_focused,
             play,
-            pressed: self.pressed_btn,
+            pressed: self.render.pressed_btn,
             shuffle: self.shuffle,
             repeat: self.repeat_all,
             eq_on: self.eq_visible,
@@ -1724,14 +1790,14 @@ impl LinAmpApp {
             // Paused flashes the time (see `time_blink_hidden`), so keep repainting.
             || self.player.state() == PlayState::Paused
             || self.fade.is_some()
-            || self.drag.is_some()
+            || self.geom.drag.is_some()
             || self.classic_seek_preview.is_some()
             || self.pending_stream.is_some() // keep polling while a stream connects
-            || self.popup.is_some()
+            || self.popups.cur.is_some()
             || self.quit_countdown.is_some()
             // Keep repainting while a background scan runs so its progress and the
             // final refresh show up without waiting on the next input.
-            || self.lib_scan.is_some()
+            || self.lib.scan.is_some()
             || (self.player.state() == PlayState::Stopped
                 && self.viz_mode == VizMode::Spectrum
                 // Bars *and* peak markers, the peaks fall slower, so without
@@ -1745,10 +1811,10 @@ impl LinAmpApp {
 
     /// Height in native px of each classic window given shade state.
     fn main_h(&self) -> f32 {
-        if self.main_shade { 14.0 } else { classic::MAIN_H as f32 }
+        if self.geom.main_shade { 14.0 } else { classic::MAIN_H as f32 }
     }
     fn eq_h(&self) -> f32 {
-        if self.eq_shade { 14.0 } else { classic::EQ_H as f32 }
+        if self.geom.eq_shade { 14.0 } else { classic::EQ_H as f32 }
     }
     fn apply_classic_slider(&mut self, region: Btn, lx: f32) {
         match region {
@@ -1760,7 +1826,7 @@ impl LinAmpApp {
                     .map(|d| d.as_secs_f32())
                     .unwrap_or(0.0);
                 if dur > 0.0 {
-                    let frac = if self.main_shade {
+                    let frac = if self.geom.main_shade {
                         // Collapsed main bar uses the shorter mini-posbar track.
                         (lx - classic::SHADE_POS_X)
                             / (classic::SHADE_POS_W - classic::SHADE_POS_THUMB_W)
@@ -1898,7 +1964,7 @@ impl LinAmpApp {
     /// Rebuild the Media Library Bookmarks list after the bookmark store changes,
     /// so an open library on that view reflects the add/remove/clear immediately.
     fn refresh_bookmarks_view_if_shown(&mut self) {
-        if self.lib_nav == crate::library::LibView::Bookmarks {
+        if self.lib.nav == crate::library::LibView::Bookmarks {
             self.refresh_library();
         }
     }
@@ -1915,25 +1981,25 @@ impl LinAmpApp {
             current: self.playlist.current,
             volume: Some(self.player.volume()),
             balance: Some(self.balance),
-            pl_width: Some(self.pl_px_w),
-            pl_height: Some(self.pl_px_h),
-            eq_enabled: self.eq_enabled,
-            eq_auto: self.eq_auto,
-            eq_preamp: self.eq_preamp_db,
-            eq_bands: self.eq_bands.to_vec(),
+            pl_width: Some(self.plview.px_w),
+            pl_height: Some(self.plview.px_h),
+            eq_enabled: self.eq.enabled,
+            eq_auto: self.eq.auto,
+            eq_preamp: self.eq.preamp_db,
+            eq_bands: self.eq.bands.to_vec(),
             eq_visible: self.eq_visible,
             pl_visible: self.pl_visible,
-            main_shade: self.main_shade,
-            eq_shade: self.eq_shade,
-            pl_shade: self.pl_shade,
+            main_shade: self.geom.main_shade,
+            eq_shade: self.geom.eq_shade,
+            pl_shade: self.geom.pl_shade,
             lib_visible: self.lib_visible,
-            lib_col_fr: Some(self.lib_col_fr),
+            lib_col_fr: Some(self.lib.col_fr),
             // Remember the window layout once it's been established on frame 1.
-            main_pos: self.positions_init.then_some((self.win_pos[0].x, self.win_pos[0].y)),
-            eq_pos: self.positions_init.then_some((self.win_pos[1].x, self.win_pos[1].y)),
-            pl_pos: self.positions_init.then_some((self.win_pos[2].x, self.win_pos[2].y)),
-            lib_pos: (self.positions_init && self.lib_pos_init)
-                .then_some((self.lib_pos.x, self.lib_pos.y)),
+            main_pos: self.geom.positions_init.then_some((self.geom.win_pos[0].x, self.geom.win_pos[0].y)),
+            eq_pos: self.geom.positions_init.then_some((self.geom.win_pos[1].x, self.geom.win_pos[1].y)),
+            pl_pos: self.geom.positions_init.then_some((self.geom.win_pos[2].x, self.geom.win_pos[2].y)),
+            lib_pos: (self.geom.positions_init && self.geom.lib_pos_init)
+                .then_some((self.geom.lib_pos.x, self.geom.lib_pos.y)),
         }
     }
 
@@ -1955,7 +2021,7 @@ impl LinAmpApp {
         }
         // Don't churn the file every 300ms during a drag; the final resting
         // position is saved on the next cycle after the button is released.
-        if self.drag.is_some() || self.lib_drag.is_some() {
+        if self.geom.drag.is_some() || self.geom.lib_drag.is_some() {
             return;
         }
         // Change detection hashes every track path, so don't run it every frame.
@@ -2035,26 +2101,27 @@ impl LinAmpApp {
 
     fn make_eq_state(&self) -> classic::EqState {
         classic::EqState {
-            focused: self.app_focused,
-            on: self.eq_enabled,
-            auto: self.eq_auto,
-            pressed: self.eq_active,
-            preamp: (self.eq_preamp_db / 12.0).clamp(-1.0, 1.0),
-            bands: self.eq_bands.map(|d| (d / 12.0).clamp(-1.0, 1.0)),
+            focused: self.geom.app_focused,
+            on: self.eq.enabled,
+            auto: self.eq.auto,
+            pressed: self.eq.active,
+            preamp: (self.eq.preamp_db / 12.0).clamp(-1.0, 1.0),
+            bands: self.eq.bands.map(|d| (d / 12.0).clamp(-1.0, 1.0)),
         }
     }
 
-    fn build_pl_rows(&self) -> Vec<classic::PlRow> {
+    /// Build the playlist rows for the visible window `first..end` only (numbered
+    /// by absolute position), so a multi-thousand-track playlist doesn't format a
+    /// string per track every recomposite for rows that are never drawn.
+    fn build_pl_rows(&self, first: usize, end: usize) -> Vec<classic::PlRow> {
         let cur = self.playlist.current;
-        self.playlist
-            .tracks
-            .iter()
-            .enumerate()
+        (first..end)
+            .filter_map(|i| self.playlist.tracks.get(i).map(|t| (i, t)))
             .map(|(i, t)| {
                 (
                     format!("{}. {}", i + 1, t.display_name()),
                     Some(i) == cur,
-                    self.pl_selection.contains(&i),
+                    self.plview.selection.contains(&i),
                     t.duration.map(|d| d.as_secs_f32()),
                 )
             })
@@ -2062,9 +2129,9 @@ impl LinAmpApp {
     }
 
     fn pl_select_all(&mut self) {
-        self.pl_selection = (0..self.playlist.len()).collect();
-        self.pl_anchor = Some(0);
-        self.pl_lead = self.playlist.len().checked_sub(1);
+        self.plview.selection = (0..self.playlist.len()).collect();
+        self.plview.anchor = Some(0);
+        self.plview.lead = self.playlist.len().checked_sub(1);
     }
 
     /// Apply a selection gesture landing on `target`, honoring Ctrl and Shift.
@@ -2084,16 +2151,16 @@ impl LinAmpApp {
         let target = target.min(max);
         // Clamp a stale anchor (the list may have shrunk since it was set) so a
         // shift-range can't run past the end.
-        let anchor = self.pl_anchor.map(|a| a.min(max));
-        self.pl_anchor = Some(crate::selection::apply(
-            &mut self.pl_selection,
+        let anchor = self.plview.anchor.map(|a| a.min(max));
+        self.plview.anchor = Some(crate::selection::apply(
+            &mut self.plview.selection,
             anchor,
             target,
             ctrl,
             shift,
             ctrl_mode,
         ));
-        self.pl_lead = Some(target);
+        self.plview.lead = Some(target);
         self.pl_scroll_to(target);
     }
 
@@ -2105,8 +2172,8 @@ impl LinAmpApp {
         }
         let len = self.playlist.len() as i32;
         let from = self
-            .pl_lead
-            .or(self.pl_anchor)
+            .plview.lead
+            .or(self.plview.anchor)
             .map(|b| b as i32)
             // Nothing focused yet: enter from the near end.
             .unwrap_or(if delta < 0 { len } else { -1 });
@@ -2121,17 +2188,17 @@ impl LinAmpApp {
 
     /// Adjust the playlist scroll offset so row `idx` is visible.
     fn pl_scroll_to(&mut self, idx: usize) {
-        let visible = classic::pl_visible_rows(self.pl_px_h as u32).max(1);
-        if idx < self.pl_first {
-            self.pl_first = idx;
-        } else if idx >= self.pl_first + visible {
-            self.pl_first = idx + 1 - visible;
+        let visible = classic::pl_visible_rows(self.plview.px_h as u32).max(1);
+        if idx < self.plview.first {
+            self.plview.first = idx;
+        } else if idx >= self.plview.first + visible {
+            self.plview.first = idx + 1 - visible;
         }
     }
 
     fn pl_invert_selection(&mut self) {
-        self.pl_selection = (0..self.playlist.len())
-            .filter(|i| !self.pl_selection.contains(i))
+        self.plview.selection = (0..self.playlist.len())
+            .filter(|i| !self.plview.selection.contains(i))
             .collect();
     }
 
@@ -2139,28 +2206,28 @@ impl LinAmpApp {
     /// one (or to the front when nothing is playing), keeping their order. The
     /// moved block becomes the new selection.
     fn play_next_selected(&mut self) {
-        if self.pl_selection.is_empty() {
+        if self.plview.selection.is_empty() {
             return;
         }
-        let sel: Vec<usize> = self.pl_selection.iter().copied().collect();
+        let sel: Vec<usize> = self.plview.selection.iter().copied().collect();
         let (cur, start, count) =
             reorder_play_next(&mut self.playlist.tracks, self.playlist.current, &sel);
         if count == 0 {
             return;
         }
         self.playlist.current = cur;
-        self.pl_selection = (start..start + count).collect();
+        self.plview.selection = (start..start + count).collect();
         self.sort_key = SortKey::Custom;
     }
 
     /// Remove tracks: when `keep` is true keep only selected (crop), else remove
     /// the selected ones. Preserves the current track by path where possible.
     fn pl_remove(&mut self, keep: bool) {
-        if self.pl_selection.is_empty() {
+        if self.plview.selection.is_empty() {
             return;
         }
         let cur_path = self.playlist.current_track().map(|t| t.path.clone());
-        let sel = self.pl_selection.clone();
+        let sel = self.plview.selection.clone();
         let mut i = 0usize;
         self.playlist.tracks.retain(|_| {
             let selected = sel.contains(&i);
@@ -2171,12 +2238,12 @@ impl LinAmpApp {
                 !selected
             }
         });
-        self.pl_selection.clear();
-        self.pl_anchor = None;
-        self.pl_lead = None;
+        self.plview.selection.clear();
+        self.plview.anchor = None;
+        self.plview.lead = None;
         self.playlist.current =
             cur_path.and_then(|p| self.playlist.tracks.iter().position(|t| t.path == p));
-        self.pl_first = self.pl_first.min(self.playlist.len().saturating_sub(1));
+        self.plview.first = self.plview.first.min(self.playlist.len().saturating_sub(1));
         self.status = format!("{} track(s) in playlist.", self.playlist.len());
     }
 
@@ -2194,11 +2261,11 @@ impl LinAmpApp {
         use classic::EqRegion as R;
         match region {
             R::On => {
-                self.eq_enabled = !self.eq_enabled;
+                self.eq.enabled = !self.eq.enabled;
                 self.apply_eq();
             }
             R::Auto => {
-                self.eq_auto = !self.eq_auto;
+                self.eq.auto = !self.eq.auto;
                 self.apply_eq_auto_gain();
                 self.apply_eq();
             }
@@ -2218,10 +2285,10 @@ impl LinAmpApp {
     /// Apply a built-in preset (by index into [`eq::PRESETS`]).
     fn apply_eq_preset(&mut self, idx: usize) {
         if let Some((_, preamp, bands)) = crate::eq::PRESETS.get(idx) {
-            self.eq_bands = *bands;
-            self.eq_preamp_db = *preamp;
-            if !self.eq_enabled {
-                self.eq_enabled = true;
+            self.eq.bands = *bands;
+            self.eq.preamp_db = *preamp;
+            if !self.eq.enabled {
+                self.eq.enabled = true;
             }
             self.apply_eq_auto_gain();
             self.apply_eq();
@@ -2231,28 +2298,28 @@ impl LinAmpApp {
     /// Apply a user-named preset from the in-app library (by index).
     fn load_named_eq_preset(&mut self, idx: usize) {
         let Some((bands, preamp, name)) = self
-            .eq_presets
+            .eq.presets
             .items
             .get(idx)
             .map(|p| (p.bands, p.preamp, p.name.clone()))
         else {
             return;
         };
-        self.eq_bands = bands;
-        self.eq_preamp_db = preamp;
-        self.eq_auto = false; // an explicit preset is a manual override
-        self.eq_enabled = true;
+        self.eq.bands = bands;
+        self.eq.preamp_db = preamp;
+        self.eq.auto = false; // an explicit preset is a manual override
+        self.eq.enabled = true;
         self.apply_eq();
         self.status = format!("Loaded EQ preset: {name}");
     }
 
     /// Delete a saved preset from the in-app library (by index).
     fn delete_named_eq_preset(&mut self, idx: usize) {
-        let Some(name) = self.eq_presets.items.get(idx).map(|p| p.name.clone()) else {
+        let Some(name) = self.eq.presets.items.get(idx).map(|p| p.name.clone()) else {
             return;
         };
-        self.eq_presets.remove(&name);
-        self.eq_presets.save_to_disk();
+        self.eq.presets.remove(&name);
+        self.eq.presets.save_to_disk();
         self.status = format!("Deleted EQ preset: {name}");
     }
 
@@ -2262,9 +2329,9 @@ impl LinAmpApp {
         if name.is_empty() {
             return;
         }
-        self.eq_presets
-            .save_preset(name.clone(), self.eq_preamp_db, self.eq_bands);
-        self.eq_presets.save_to_disk();
+        self.eq.presets
+            .save_preset(name.clone(), self.eq.preamp_db, self.eq.bands);
+        self.eq.presets.save_to_disk();
         self.status = format!("Saved EQ preset: {name}");
     }
 
@@ -2280,10 +2347,10 @@ impl LinAmpApp {
         match std::fs::read(&path).map_err(anyhow::Error::from).and_then(|b| crate::eqf::parse(&b)) {
             Ok(presets) => match presets.into_iter().next() {
                 Some(p) => {
-                    self.eq_bands = p.bands;
-                    self.eq_preamp_db = p.preamp;
-                    self.eq_auto = false; // an explicit preset is a manual override
-                    self.eq_enabled = true;
+                    self.eq.bands = p.bands;
+                    self.eq.preamp_db = p.preamp;
+                    self.eq.auto = false; // an explicit preset is a manual override
+                    self.eq.enabled = true;
                     self.apply_eq();
                     self.status = format!("Loaded EQ preset: {}", p.name);
                 }
@@ -2305,8 +2372,8 @@ impl LinAmpApp {
         };
         let preset = crate::eqf::EqfPreset {
             name: "LinAmp".to_string(),
-            bands: self.eq_bands,
-            preamp: self.eq_preamp_db,
+            bands: self.eq.bands,
+            preamp: self.eq.preamp_db,
         };
         match std::fs::write(&path, crate::eqf::write(std::slice::from_ref(&preset))) {
             Ok(()) => self.status = "Saved EQ preset".into(),
@@ -2317,8 +2384,8 @@ impl LinAmpApp {
     /// When Auto is on, set the preamp to offset the loudest boosted band so the
     /// EQ is less likely to clip.
     fn apply_eq_auto_gain(&mut self) {
-        if self.eq_auto {
-            self.eq_preamp_db = crate::eq::auto_preamp(&self.eq_bands);
+        if self.eq.auto {
+            self.eq.preamp_db = crate::eq::auto_preamp(&self.eq.bands);
         }
     }
 
@@ -2327,10 +2394,10 @@ impl LinAmpApp {
             ClWin::Main => self.main_h(),
             ClWin::Eq => self.eq_h(),
             ClWin::Pl => {
-                if self.pl_shade {
+                if self.geom.pl_shade {
                     14.0
                 } else {
-                    self.pl_px_h
+                    self.plview.px_h
                 }
             }
         }
@@ -2338,7 +2405,7 @@ impl LinAmpApp {
 
     fn win_inner_size(&self, win: ClWin) -> egui::Vec2 {
         let w = match win {
-            ClWin::Pl if !self.pl_shade => self.pl_px_w,
+            ClWin::Pl if !self.geom.pl_shade => self.plview.px_w,
             _ => classic::MAIN_W as f32,
         };
         egui::vec2(w * self.scale, self.win_native_h(win) * self.scale)
@@ -2374,7 +2441,7 @@ impl LinAmpApp {
         if !self.lib_visible {
             return false;
         }
-        let lib = egui::Rect::from_min_size(self.lib_pos, self.lib_size());
+        let lib = egui::Rect::from_min_size(self.geom.lib_pos, self.lib_size());
         rects_docked(lib, self.win_rect_pts(0))
             || (self.eq_visible && rects_docked(lib, self.win_rect_pts(1)))
             || (self.pl_visible && rects_docked(lib, self.win_rect_pts(2)))
@@ -2390,7 +2457,7 @@ impl LinAmpApp {
         // borderless main window. Borderless with a skin-drawn title bar (like the
         // classic windows and the Library) so the skin cursor covers the whole
         // window, including the title bar, with no OS chrome to break it.
-        let default_pos = self.win_pos[0] + egui::vec2(24.0, 24.0);
+        let default_pos = self.geom.win_pos[0] + egui::vec2(24.0, 24.0);
         let pos = *self.prefs_pos.get_or_insert(default_pos);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
@@ -2562,7 +2629,7 @@ impl LinAmpApp {
                 if disable_cur {
                     self.clear_skin_cursors();
                 } else {
-                    self.cur_cursor = [None; 3];
+                    self.render.cur_cursor = [None; 3];
                 }
             }
         });
@@ -2729,7 +2796,7 @@ impl LinAmpApp {
         if self.jump_file.is_none() {
             return;
         }
-        let screen = self.win_pos[0] + egui::vec2(28.0, 28.0);
+        let screen = self.geom.win_pos[0] + egui::vec2(28.0, 28.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, Jump to file")
             .with_position(screen)
@@ -2846,7 +2913,7 @@ impl LinAmpApp {
         if self.jump_time.is_none() {
             return;
         }
-        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
+        let screen = self.geom.win_pos[0] + egui::vec2(40.0, 40.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, Jump to time")
             .with_position(screen)
@@ -2900,10 +2967,10 @@ impl LinAmpApp {
 
     /// "Save EQ preset as…": name the current EQ curve and store it in the library.
     fn ui_eq_save_name(&mut self, ctx: &egui::Context) {
-        if self.eq_save_name.is_none() {
+        if self.eq.save_name.is_none() {
             return;
         }
-        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
+        let screen = self.geom.win_pos[0] + egui::vec2(40.0, 40.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, Save EQ preset")
             .with_position(screen)
@@ -2917,7 +2984,7 @@ impl LinAmpApp {
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let name = {
-                    let buf = self.eq_save_name.as_mut().unwrap();
+                    let buf = self.eq.save_name.as_mut().unwrap();
                     ui.label("Preset name:");
                     let resp = ui.add(egui::TextEdit::singleline(buf).hint_text("My preset"));
                     resp.request_focus();
@@ -2948,7 +3015,7 @@ impl LinAmpApp {
             close = true;
         }
         if close {
-            self.eq_save_name = None;
+            self.eq.save_name = None;
         }
     }
 
@@ -3003,7 +3070,7 @@ impl LinAmpApp {
         if self.location_entry.is_none() {
             return;
         }
-        let screen = self.win_pos[0] + egui::vec2(40.0, 40.0);
+        let screen = self.geom.win_pos[0] + egui::vec2(40.0, 40.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, Open location")
             .with_position(screen)
@@ -3077,7 +3144,7 @@ impl LinAmpApp {
         if !self.mb_visible || !self.prefs.minibrowser_enabled {
             return;
         }
-        let screen = self.win_pos[0] + egui::vec2(60.0, 60.0);
+        let screen = self.geom.win_pos[0] + egui::vec2(60.0, 60.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, Minibrowser")
             .with_position(screen)
@@ -3165,12 +3232,12 @@ impl LinAmpApp {
         match region {
             classic::EqRegion::Preamp => {
                 // Dragging the preamp is a manual override, so it turns Auto off.
-                self.eq_auto = false;
-                self.eq_preamp_db = v * 12.0;
+                self.eq.auto = false;
+                self.eq.preamp_db = v * 12.0;
                 self.apply_eq();
             }
             classic::EqRegion::Band(i) if i < 10 => {
-                self.eq_bands[i] = v * 12.0;
+                self.eq.bands[i] = v * 12.0;
                 self.apply_eq_auto_gain();
                 self.apply_eq();
             }
@@ -3182,12 +3249,12 @@ impl LinAmpApp {
     fn reset_eq_slider(&mut self, region: classic::EqRegion) {
         match region {
             classic::EqRegion::Preamp => {
-                self.eq_auto = false; // a manual override, like dragging it
-                self.eq_preamp_db = 0.0;
+                self.eq.auto = false; // a manual override, like dragging it
+                self.eq.preamp_db = 0.0;
                 self.apply_eq();
             }
             classic::EqRegion::Band(i) if i < 10 => {
-                self.eq_bands[i] = 0.0;
+                self.eq.bands[i] = 0.0;
                 self.apply_eq_auto_gain();
                 self.apply_eq();
             }
@@ -3216,17 +3283,17 @@ impl LinAmpApp {
             return; // normal skin, never shaped, leave windows rectangular
         }
         let skin = self.theme.name.clone();
-        let main: &[Polygon] = if self.main_shade { &main_sr } else { &main_r };
+        let main: &[Polygon] = if self.geom.main_shade { &main_sr } else { &main_r };
         self.shape_one(0, "LinAmp", true, main, classic::MAIN_W, self.main_h() as u32, &skin);
-        let eq: &[Polygon] = if self.eq_shade { &eq_sr } else { &eq_r };
+        let eq: &[Polygon] = if self.geom.eq_shade { &eq_sr } else { &eq_r };
         let eqv = self.eq_visible;
         self.shape_one(1, "LinAmp Equalizer", eqv, eq, classic::MAIN_W, self.eq_h() as u32, &skin);
-        let (plw, plh) = if self.pl_shade {
+        let (plw, plh) = if self.geom.pl_shade {
             (classic::MAIN_W, 14)
         } else {
-            (self.pl_px_w as u32, self.pl_px_h as u32)
+            (self.plview.px_w as u32, self.plview.px_h as u32)
         };
-        let pl: &[Polygon] = if self.pl_shade { &[] } else { &pl_r };
+        let pl: &[Polygon] = if self.geom.pl_shade { &[] } else { &pl_r };
         let plv = self.pl_visible;
         self.shape_one(2, "LinAmp Playlist", plv, pl, plw, plh, &skin);
         self.shaped_any = true;
@@ -3245,14 +3312,14 @@ impl LinAmpApp {
         if !visible {
             // A hidden window's XID is gone; forget its shape so it re-applies when
             // shown again (the new window starts rectangular).
-            self.shape_sig[idx] = None;
+            self.render.shape_sig[idx] = None;
             return;
         }
         use std::hash::{Hash, Hasher};
         let mut hh = std::collections::hash_map::DefaultHasher::new();
         (skin, idx, self.scale.to_bits(), w, h, polys.is_empty()).hash(&mut hh);
         let sig = hh.finish();
-        if self.shape_sig[idx] == Some(sig) {
+        if self.render.shape_sig[idx] == Some(sig) {
             return;
         }
         let s = self.scale;
@@ -3273,7 +3340,7 @@ impl LinAmpApp {
                 .collect()
         };
         set_window_shape(title, &rects);
-        self.shape_sig[idx] = Some(sig);
+        self.render.shape_sig[idx] = Some(sig);
     }
 
     /// The skin cursor name for the region under native coords (nx, ny) of `win`.
@@ -3281,7 +3348,7 @@ impl LinAmpApp {
         use classic::{Btn, EqRegion, PlRegion};
         match win {
             ClWin::Main => {
-                if self.main_shade {
+                if self.geom.main_shade {
                     return "titlebar";
                 }
                 match classic::region_at(nx, ny) {
@@ -3293,7 +3360,7 @@ impl LinAmpApp {
                 }
             }
             ClWin::Eq => {
-                if self.eq_shade {
+                if self.geom.eq_shade {
                     return "eqtitle";
                 }
                 match classic::eq_region_at(nx, ny) {
@@ -3304,10 +3371,10 @@ impl LinAmpApp {
                 }
             }
             ClWin::Pl => {
-                if self.pl_shade {
+                if self.geom.pl_shade {
                     return "ptbar";
                 }
-                match classic::pl_region_at(nx, ny, self.pl_px_w, self.pl_px_h) {
+                match classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h) {
                     Some(PlRegion::TitleBar) => "ptbar",
                     Some(PlRegion::Resize) => "psize",
                     _ => "pnormal",
@@ -3335,7 +3402,7 @@ impl LinAmpApp {
         let nx = (hp.x - rect.left()) / self.scale;
         let ny = (hp.y - rect.top()) / self.scale;
         let name = self.cursor_name(win, nx, ny);
-        if self.cur_cursor[idx] == Some(name) {
+        if self.render.cur_cursor[idx] == Some(name) {
             return;
         }
         let title = match win {
@@ -3350,7 +3417,7 @@ impl LinAmpApp {
                 set_window_cursor(title, &format!("{skin}:{name}"), ci);
             }
         }
-        self.cur_cursor[idx] = Some(name);
+        self.render.cur_cursor[idx] = Some(name);
     }
 
     /// Apply the skin's base cursor to an auxiliary window (library, editor,
@@ -3400,7 +3467,7 @@ impl LinAmpApp {
         ] {
             unset_window_cursor(title);
         }
-        self.cur_cursor = [None; 3];
+        self.render.cur_cursor = [None; 3];
     }
 
     fn render_classic(&mut self, ctx: &egui::Context) {
@@ -3411,24 +3478,24 @@ impl LinAmpApp {
         // App-level focus: this frame's root focus OR'd with last frame's child
         // focus (children render later); hidden windows don't hold focus. The
         // shared active/inactive title-bar behaviour is in docs/ARCHITECTURE.md.
-        self.foc_root = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_root);
+        self.geom.foc_root = ctx.input(|i| i.viewport().focused).unwrap_or(self.geom.foc_root);
         if !self.eq_visible {
-            self.foc_eq = false;
+            self.geom.foc_eq = false;
         }
         if !self.pl_visible {
-            self.foc_pl = false;
+            self.geom.foc_pl = false;
         }
         if !self.lib_visible {
-            self.foc_lib = false;
+            self.geom.foc_lib = false;
         }
         // A classic popup menu is part of our app: keep the app considered focused
         // while one is open so the windows stay on their active title bars instead
         // of dimming (the popup is a separate OS window that may take focus).
-        self.app_focused = self.foc_root
-            || self.foc_eq
-            || self.foc_pl
-            || self.foc_lib
-            || self.popup.is_some();
+        self.geom.app_focused = self.geom.foc_root
+            || self.geom.foc_eq
+            || self.geom.foc_pl
+            || self.geom.foc_lib
+            || self.popups.cur.is_some();
 
         // Root viewport = main window.
         self.render_window(ctx, ClWin::Main);
@@ -3443,9 +3510,9 @@ impl LinAmpApp {
         self.poll_pending_stream();
 
         // Initialise window positions, once.
-        if !self.positions_init {
+        if !self.geom.positions_init {
             if let Some(r) = ctx.input(|i| i.viewport().outer_rect) {
-                if self.has_pos_memory {
+                if self.geom.has_pos_memory {
                     // Restore the saved layout. If it would sit (partly) off the
                     // current virtual desktop, example: after a resolution drop, nudge
                     // the whole visible cluster back on, prioritising the top-left so
@@ -3461,43 +3528,43 @@ impl LinAmpApp {
                         }
                         if self.lib_visible {
                             union = union
-                                .union(egui::Rect::from_min_size(self.lib_pos, self.lib_size()));
+                                .union(egui::Rect::from_min_size(self.geom.lib_pos, self.lib_size()));
                         }
                         let delta = egui::vec2(
                             nudge_onto(union.min.x, union.max.x, vr.min.x, vr.max.x),
                             nudge_onto(union.min.y, union.max.y, vr.min.y, vr.max.y),
                         );
-                        for p in self.win_pos.iter_mut() {
+                        for p in self.geom.win_pos.iter_mut() {
                             *p += delta;
                         }
-                        self.lib_pos += delta;
+                        self.geom.lib_pos += delta;
                     }
-                    self.root_last = None; // move the root window to the restored pos
+                    self.geom.root_last = None; // move the root window to the restored pos
                 } else {
-                    self.win_pos[0] = r.min;
+                    self.geom.win_pos[0] = r.min;
                     // Dock the EQ/playlist windows under the main one, honouring
                     // which are visible and their collapsed state.
                     self.restack();
                     // Seed the library position (docked right of main) if it was
                     // restored visible but never positioned.
-                    if !self.lib_pos_init {
-                        self.lib_pos = self.library_default_pos();
-                        self.lib_pos_init = true;
+                    if !self.geom.lib_pos_init {
+                        self.geom.lib_pos = self.library_default_pos();
+                        self.geom.lib_pos_init = true;
                     }
                 }
-                self.positions_init = true;
+                self.geom.positions_init = true;
             }
         }
 
         // Apply root position/size only when we changed them (avoids fighting OS).
         let size = self.win_inner_size(ClWin::Main);
-        let pos = self.win_pos[0];
-        if self.root_last != Some((pos, size)) {
+        let pos = self.geom.win_pos[0];
+        if self.geom.root_last != Some((pos, size)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-            if self.positions_init {
+            if self.geom.positions_init {
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
             }
-            self.root_last = Some((pos, size));
+            self.geom.root_last = Some((pos, size));
         }
 
         // Keep the root window's always-on-top level in sync (send only on change).
@@ -3511,7 +3578,7 @@ impl LinAmpApp {
             let builder = egui::ViewportBuilder::default()
                 .with_title("LinAmp Equalizer")
                 .with_inner_size(self.win_inner_size(ClWin::Eq))
-                .with_position(self.win_pos[1])
+                .with_position(self.geom.win_pos[1])
                 .with_decorations(false)
                 .with_resizable(false)
                 .with_taskbar(false)
@@ -3521,7 +3588,7 @@ impl LinAmpApp {
                 // Fire global shortcuts while this window has focus (keyboard
                 // input goes to the focused viewport, not the root).
                 self.handle_shortcuts(ctx, ClWin::Eq);
-                self.foc_eq = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_eq);
+                self.geom.foc_eq = ctx.input(|i| i.viewport().focused).unwrap_or(self.geom.foc_eq);
                 self.render_window(ctx, ClWin::Eq);
             });
         }
@@ -3531,7 +3598,7 @@ impl LinAmpApp {
             let builder = egui::ViewportBuilder::default()
                 .with_title("LinAmp Playlist")
                 .with_inner_size(self.win_inner_size(ClWin::Pl))
-                .with_position(self.win_pos[2])
+                .with_position(self.geom.win_pos[2])
                 .with_decorations(false)
                 .with_resizable(false)
                 .with_taskbar(false)
@@ -3539,7 +3606,7 @@ impl LinAmpApp {
             let id = egui::ViewportId::from_hash_of("linamp_pl");
             ctx.show_viewport_immediate(id, builder, |ctx, _| {
                 self.handle_shortcuts(ctx, ClWin::Pl);
-                self.foc_pl = ctx.input(|i| i.viewport().focused).unwrap_or(self.foc_pl);
+                self.geom.foc_pl = ctx.input(|i| i.viewport().focused).unwrap_or(self.geom.foc_pl);
                 self.render_window(ctx, ClWin::Pl);
             });
         }
@@ -3558,10 +3625,10 @@ impl LinAmpApp {
     /// down, or the one whose fly-out menu is currently open.
     fn pl_pressed_button(&self) -> Option<classic::PlRegion> {
         use classic::PlRegion as P;
-        if let Some(r) = self.pl_menu_press {
+        if let Some(r) = self.plview.menu_press {
             return Some(r);
         }
-        if let Some((kind, ClWin::Pl, _)) = self.popup {
+        if let Some((kind, ClWin::Pl, _)) = self.popups.cur {
             return match kind {
                 Popup::PlAdd => Some(P::AddMenu),
                 Popup::PlRem => Some(P::RemMenu),
@@ -3653,7 +3720,7 @@ impl LinAmpApp {
         // all filtering (and the preamp), matching Winamp's behaviour.
         self.player
             .eq()
-            .set(self.eq_enabled, self.eq_preamp_db, self.eq_bands);
+            .set(self.eq.enabled, self.eq.preamp_db, self.eq.bands);
     }
 }
 
@@ -3838,7 +3905,7 @@ impl eframe::App for LinAmpApp {
                 self.eq_visible = false;
                 self.pl_visible = false;
                 self.lib_visible = false;
-                self.popup = None;
+                self.popups.cur = None;
                 self.quit_countdown = Some(2);
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             }

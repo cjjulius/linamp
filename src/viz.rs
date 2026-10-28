@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use rodio::Source;
@@ -12,42 +12,47 @@ const CAP: usize = 8192;
 /// Shared, thread-safe window of recent audio samples. The rodio playback
 /// thread writes into it via [`TapSource`]; the UI thread reads snapshots.
 pub struct VizShared {
-    inner: Mutex<Ring>,
+    /// Lock-free ring of recent mono samples, each stored as f32 bits in its own
+    /// `AtomicU32`. The audio thread (single producer) writes and advances `pos`;
+    /// the UI thread (single consumer) reads a snapshot. Per-slot atomics keep it
+    /// free of data races and locks, so the audio callback never blocks. A
+    /// snapshot taken mid-write may mix a few old and new samples, which is fine
+    /// for a visualizer.
+    data: Box<[AtomicU32]>,
+    pos: AtomicUsize,
     sample_rate: AtomicU32,
-}
-
-struct Ring {
-    data: Vec<f32>,
-    pos: usize,
 }
 
 impl VizShared {
     pub fn new() -> Arc<Self> {
+        let data = (0..CAP)
+            .map(|_| AtomicU32::new(0))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Arc::new(Self {
-            inner: Mutex::new(Ring {
-                data: vec![0.0; CAP],
-                pos: 0,
-            }),
+            data,
+            pos: AtomicUsize::new(0),
             sample_rate: AtomicU32::new(44_100),
         })
     }
 
     fn push_batch(&self, samples: &[f32]) {
-        if let Ok(mut r) = self.inner.lock() {
-            for &s in samples {
-                let i = r.pos;
-                r.data[i] = s;
-                r.pos = (i + 1) % CAP;
-            }
+        // One writer (the audio thread), so loading pos once and advancing it
+        // locally is safe; the Release store publishes the written samples.
+        let mut p = self.pos.load(Ordering::Relaxed);
+        for &s in samples {
+            self.data[p].store(s.to_bits(), Ordering::Relaxed);
+            p = (p + 1) % CAP;
         }
+        self.pos.store(p, Ordering::Release);
     }
 
     /// Zero the buffer (called when a new track starts).
     pub fn clear(&self) {
-        if let Ok(mut r) = self.inner.lock() {
-            r.data.iter_mut().for_each(|x| *x = 0.0);
-            r.pos = 0;
+        for slot in self.data.iter() {
+            slot.store(0, Ordering::Relaxed);
         }
+        self.pos.store(0, Ordering::Release);
     }
 
     /// Copy the most recent `n` samples into `out`, oldest-first.
@@ -55,13 +60,10 @@ impl VizShared {
         let n = n.min(CAP);
         out.clear();
         out.reserve(n);
-        if let Ok(r) = self.inner.lock() {
-            for k in 0..n {
-                let idx = (r.pos + CAP - n + k) % CAP;
-                out.push(r.data[idx]);
-            }
-        } else {
-            out.extend(std::iter::repeat(0.0).take(n));
+        let p = self.pos.load(Ordering::Acquire);
+        for k in 0..n {
+            let idx = (p + CAP - n + k) % CAP;
+            out.push(f32::from_bits(self.data[idx].load(Ordering::Relaxed)));
         }
     }
 
@@ -231,5 +233,78 @@ mod tests {
         let bars = compute_bars(&vec![0.0f32; 1024], &*fft, 1024, 10, 44100);
         assert_eq!(bars.len(), 10);
         assert!(bars.iter().all(|b| *b <= 0.01));
+    }
+
+    #[test]
+    fn snapshot_is_oldest_first() {
+        let v = VizShared::new();
+        v.push_batch(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let mut out = Vec::new();
+        v.snapshot(&mut out, 3);
+        // The three most recent samples, oldest-first.
+        assert_eq!(out, vec![3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn snapshot_handles_ring_wraparound() {
+        let v = VizShared::new();
+        // Push more than the ring holds so the write cursor wraps past 0.
+        let data: Vec<f32> = (0..(CAP as i32 + 3)).map(|i| i as f32).collect();
+        v.push_batch(&data);
+        let mut out = Vec::new();
+        v.snapshot(&mut out, 3);
+        assert_eq!(out, vec![CAP as f32, (CAP + 1) as f32, (CAP + 2) as f32]);
+    }
+
+    #[test]
+    fn clear_zeroes_the_ring() {
+        let v = VizShared::new();
+        v.push_batch(&[1.0, 2.0, 3.0]);
+        v.clear();
+        let mut out = Vec::new();
+        v.snapshot(&mut out, 3);
+        assert_eq!(out, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn bars_on_short_input_are_zero() {
+        use rustfft::FftPlanner;
+        let fft = FftPlanner::<f32>::new().plan_fft_forward(1024);
+        // Fewer samples than the FFT size returns a zeroed band set, no panic.
+        let bars = compute_bars(&vec![0.0f32; 100], &*fft, 1024, 8, 44100);
+        assert_eq!(bars, vec![0.0; 8]);
+    }
+
+    #[test]
+    fn a_sine_lands_in_its_own_band() {
+        use rustfft::FftPlanner;
+        let (fft_size, bands, sr, freq) = (1024usize, 16usize, 44_100u32, 1000.0f32);
+        let samples: Vec<f32> = (0..fft_size)
+            .map(|i| (2.0 * PI * freq * i as f32 / sr as f32).sin())
+            .collect();
+        let fft = FftPlanner::<f32>::new().plan_fft_forward(fft_size);
+        let bars = compute_bars(&samples, &*fft, fft_size, bands, sr);
+
+        // The band that the log-spacing assigns to `freq`.
+        let nyquist = sr as f32 / 2.0;
+        let fmin = 40.0f32;
+        let fmax = nyquist.min(16_000.0).max(fmin + 1.0);
+        let expected = (0..bands)
+            .find(|&b| {
+                let f0 = fmin * (fmax / fmin).powf(b as f32 / bands as f32);
+                let f1 = fmin * (fmax / fmin).powf((b + 1) as f32 / bands as f32);
+                freq >= f0 && freq < f1
+            })
+            .unwrap();
+        let argmax = (0..bands)
+            .max_by(|&a, &b| bars[a].partial_cmp(&bars[b]).unwrap())
+            .unwrap();
+        // The peak lands in the expected band (allow one band for spectral leakage).
+        assert!(
+            (argmax as i32 - expected as i32).abs() <= 1,
+            "argmax={argmax} expected={expected} bars={bars:?}"
+        );
+        assert!(bars[expected] > 0.3, "bars={bars:?}");
+        assert!(bars[0] + 0.2 < bars[expected], "low band not below the peak: bars={bars:?}");
     }
 }

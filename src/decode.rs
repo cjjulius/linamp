@@ -35,6 +35,11 @@ pub struct SymphoniaSource {
     /// The current decoded packet's interleaved f32 samples, and our read cursor.
     samples: Vec<f32>,
     pos: usize,
+    /// Reused interleaved-sample buffer, rebuilt only when a packet's spec or
+    /// capacity changes (rare), so decoding doesn't allocate one per packet on the
+    /// audio thread. `sbuf_key` is the (capacity, rate, channels) it was built for.
+    sbuf: Option<SampleBuffer<f32>>,
+    sbuf_key: Option<(u64, u32, usize)>,
 }
 
 impl SymphoniaSource {
@@ -52,7 +57,16 @@ impl SymphoniaSource {
             match self.decoder.decode(&packet) {
                 Ok(decoded) => {
                     let spec = *decoded.spec();
-                    let mut sb = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+                    let cap = decoded.capacity() as u64;
+                    let key = (cap, spec.rate, spec.channels.count());
+                    // Reuse the buffer across packets; rebuild only when the spec or
+                    // capacity actually changes, so the audio thread doesn't
+                    // allocate a fresh SampleBuffer every packet.
+                    if self.sbuf_key != Some(key) {
+                        self.sbuf = Some(SampleBuffer::<f32>::new(cap, spec));
+                        self.sbuf_key = Some(key);
+                    }
+                    let sb = self.sbuf.as_mut().unwrap();
                     sb.copy_interleaved_ref(decoded);
                     self.samples.clear();
                     self.samples.extend_from_slice(sb.samples());
@@ -186,6 +200,8 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
         total_duration,
         samples,
         pos: 0,
+        sbuf: None,
+        sbuf_key: None,
     })
 }
 

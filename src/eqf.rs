@@ -120,4 +120,68 @@ mod tests {
         // header(27) + 0x1A!--(4) + name(257) + 11 values = 299 bytes for one preset.
         assert_eq!(bytes.len(), HEADER.len() + 4 + NAME_LEN + VALUES);
     }
+
+    #[test]
+    fn multi_preset_round_trip() {
+        let presets = vec![
+            EqfPreset { name: "One".into(), bands: [3.0; 10], preamp: 0.0 },
+            EqfPreset { name: "Two".into(), bands: [-6.0; 10], preamp: 2.0 },
+            EqfPreset { name: "Three".into(), bands: [0.0; 10], preamp: -3.0 },
+        ];
+        let got = parse(&write(&presets)).unwrap();
+        assert_eq!(got.len(), 3);
+        assert_eq!(
+            got.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+            ["One", "Two", "Three"]
+        );
+    }
+
+    #[test]
+    fn header_only_file_parses_to_no_presets() {
+        let got = parse(&write(&[])).unwrap();
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn trailing_partial_record_is_ignored() {
+        let p = EqfPreset { name: "x".into(), bands: [0.0; 10], preamp: 0.0 };
+        let mut bytes = write(std::slice::from_ref(&p));
+        bytes.extend_from_slice(&[1, 2, 3]); // a truncated trailing record
+        let got = parse(&bytes).unwrap();
+        // The complete preset parses; the trailing bytes (less than a full record) are skipped.
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "x");
+    }
+
+    #[test]
+    fn overlong_name_is_clipped_to_the_field() {
+        let p = EqfPreset { name: "a".repeat(400), bands: [0.0; 10], preamp: 0.0 };
+        let bytes = write(std::slice::from_ref(&p));
+        assert_eq!(bytes.len(), HEADER.len() + 4 + NAME_LEN + VALUES); // one record on disk
+        let got = parse(&bytes).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name.len(), NAME_LEN); // clipped to the 257-byte field
+    }
+
+    #[test]
+    fn embedded_null_terminates_the_name() {
+        let p = EqfPreset { name: "ab\0cd".into(), bands: [0.0; 10], preamp: 0.0 };
+        let got = parse(&write(std::slice::from_ref(&p))).unwrap();
+        assert_eq!(got[0].name, "ab"); // the null byte ends the name field
+    }
+
+    #[test]
+    fn parse_tolerates_non_utf8_name_bytes() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(HEADER);
+        bytes.push(0x1A);
+        bytes.extend_from_slice(b"!--");
+        let mut name = vec![0xFFu8]; // an invalid UTF-8 lead byte
+        name.resize(NAME_LEN, 0);
+        bytes.extend_from_slice(&name);
+        bytes.extend(std::iter::repeat(32u8).take(VALUES));
+        // A lossy decode keeps the record rather than erroring the whole file.
+        let got = parse(&bytes).unwrap();
+        assert_eq!(got.len(), 1);
+    }
 }

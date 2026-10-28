@@ -143,7 +143,7 @@ impl Tray {
         #[cfg(windows)]
         {
             let win = if enabled {
-                windows_impl::WinTray::spawn(ctx.clone(), tx, colors.clone()).ok()
+                windows_impl::WinTray::spawn(ctx.clone(), tx, colors.clone())
             } else {
                 None
             };
@@ -352,6 +352,9 @@ mod windows_impl {
     const WS_POPUP: u32 = 0x8000_0000;
     const SW_SHOWNA: i32 = 8;
     const OFF_SCREEN: i32 = -32000;
+    // Sentinel the tray thread publishes when its window fails to create, so spawn
+    // hands back no tray and Drop never joins a thread it can't signal.
+    const HWND_FAILED: isize = -1;
 
     const NIM_ADD: u32 = 0;
     const NIM_DELETE: u32 = 2;
@@ -557,6 +560,7 @@ mod windows_impl {
             reserved: *const core::ffi::c_void,
             count: *mut u32,
         ) -> isize;
+        fn RemoveFontMemResourceEx(h: isize) -> i32;
         #[allow(clippy::too_many_arguments)]
         fn CreateFontW(
             height: i32,
@@ -626,13 +630,15 @@ mod windows_impl {
     /// Load LinAmp's bundled UI font (Noto Sans) as a GDI font so the tray menu
     /// matches the app's own menus, sized to the system DPI. Returns 0 if the font
     /// can't be created, so the caller falls back to the system menu font.
-    unsafe fn load_menu_font() -> isize {
+    unsafe fn load_menu_font() -> (isize, isize) {
         const FW_NORMAL: i32 = 400;
         const DEFAULT_CHARSET: u32 = 1;
         const CLEARTYPE_QUALITY: u32 = 5;
         let bytes = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
         let mut count = 0u32;
-        AddFontMemResourceEx(
+        // Keep the resource handle so teardown can RemoveFontMemResourceEx it
+        // instead of leaking the embedded font on every tray (re)spawn.
+        let res = AddFontMemResourceEx(
             bytes.as_ptr() as *const core::ffi::c_void,
             bytes.len() as u32,
             std::ptr::null(),
@@ -643,7 +649,7 @@ mod windows_impl {
         let dpi = GetDpiForSystem().max(96) as f32;
         let height = -((crate::app::MENU_FONT_PT * dpi / 96.0).round() as i32);
         let face = wide("Noto Sans");
-        CreateFontW(
+        let font = CreateFontW(
             height,
             0,
             0,
@@ -658,7 +664,8 @@ mod windows_impl {
             CLEARTYPE_QUALITY,
             0,
             face.as_ptr(),
-        )
+        );
+        (font, res)
     }
 
     /// The menu font to draw with: the loaded Noto Sans, or the system menu font.
@@ -726,7 +733,8 @@ mod windows_impl {
         let dc = GetDC(0);
         let prev = SelectObject(dc, menu_font(font));
         let mut sz = SizeW { cx: 0, cy: 0 };
-        GetTextExtentPoint32W(dc, text.as_ptr(), label.chars().count() as i32, &mut sz);
+        // Length in UTF-16 units (text includes a trailing null), not scalar values.
+        GetTextExtentPoint32W(dc, text.as_ptr(), (text.len() - 1) as i32, &mut sz);
         SelectObject(dc, prev);
         ReleaseDC(0, dc);
         // Room for the text plus left/right padding; a row height close to the
@@ -823,7 +831,8 @@ mod windows_impl {
         DrawTextW(
             dis.h_dc,
             text.as_ptr(),
-            label.chars().count() as i32,
+            // UTF-16 unit count (text includes a trailing null), not scalar values.
+            (text.len() - 1) as i32,
             &mut tr,
             DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
         );
@@ -921,25 +930,38 @@ mod windows_impl {
             egui: egui::Context,
             tx: Sender<TrayAction>,
             colors: Arc<MenuColors>,
-        ) -> Result<Self, ()> {
+        ) -> Option<Self> {
             let hwnd_slot = Arc::new(AtomicIsize::new(0));
             let hwnd_for_thread = hwnd_slot.clone();
 
             let thread = std::thread::Builder::new()
                 .name("linamp-tray".into())
                 .spawn(move || unsafe { tray_thread(egui, tx, colors, hwnd_for_thread) })
-                .map_err(|_| ())?;
+                .ok()?;
 
-            // Wait briefly for the thread to publish its HWND so Drop can signal
-            // it. The thread stores the handle as its first act.
-            for _ in 0..200 {
-                if hwnd_slot.load(Ordering::Acquire) != 0 {
+            // Wait for the thread to publish its HWND (or the failure sentinel),
+            // its first act. Returning only once it's published means Drop always
+            // has a real handle to post WM_CLOSE to, so teardown can never join a
+            // thread it can't signal.
+            let mut hwnd = 0;
+            for _ in 0..500 {
+                hwnd = hwnd_slot.load(Ordering::Acquire);
+                if hwnd != 0 {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
+            if hwnd <= 0 {
+                // Window creation failed, or the thread never published in time.
+                // Join only when it signaled failure (then it is exiting); never
+                // block on a thread still starting with no way to stop it.
+                if hwnd == HWND_FAILED {
+                    let _ = thread.join();
+                }
+                return None;
+            }
 
-            Ok(WinTray {
+            Some(WinTray {
                 hwnd: hwnd_slot,
                 thread: Some(thread),
             })
@@ -1009,6 +1031,9 @@ mod windows_impl {
             std::ptr::null(),
         );
         if hwnd == 0 {
+            // Signal the failure so spawn hands back no tray and Drop never joins a
+            // thread it can't stop.
+            hwnd_slot.store(HWND_FAILED, Ordering::Release);
             return;
         }
 
@@ -1022,7 +1047,7 @@ mod windows_impl {
 
         // Hand the WndProc its context. No tray messages arrive until the icon
         // is added just below, so setting this after CreateWindow is safe.
-        let font = load_menu_font();
+        let (font, font_res) = load_menu_font();
         let ctx = Box::into_raw(Box::new(TrayCtx {
             tx,
             egui,
@@ -1071,7 +1096,13 @@ mod windows_impl {
         if font != 0 {
             DeleteObject(font);
         }
+        if font_res != 0 {
+            RemoveFontMemResourceEx(font_res);
+        }
+        // Clear the back-pointer before freeing the context, so a late message
+        // can't dereference a dangling pointer during DestroyWindow.
         let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayCtx;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         if !ctx_ptr.is_null() {
             drop(Box::from_raw(ctx_ptr));
         }

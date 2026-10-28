@@ -309,23 +309,8 @@ impl Playlist {
     /// selected. The order is not reproducible (seeded from the clock).
     pub fn randomize(&mut self) {
         let cur = self.current_path();
-        // xorshift64, a playlist shuffle needs no cryptographic quality.
-        let mut s = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0x9E37_79B9_7F4A_7C15)
-            | 1;
-        let mut next = || {
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            s
-        };
-        // Fisher-Yates.
-        for i in (1..self.tracks.len()).rev() {
-            let j = (next() % (i as u64 + 1)) as usize;
-            self.tracks.swap(i, j);
-        }
+        let tracks = &mut self.tracks;
+        fisher_yates(tracks.len(), |i, j| tracks.swap(i, j));
         self.reselect(cur);
     }
 
@@ -421,21 +406,7 @@ impl Playlist {
     fn refill_shuffle(&mut self) {
         let len = self.tracks.len();
         let mut order: Vec<usize> = (0..len).collect();
-        let mut s = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0x9E37_79B9_7F4A_7C15)
-            | 1;
-        let mut next = || {
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            s
-        };
-        for i in (1..len).rev() {
-            let j = (next() % (i as u64 + 1)) as usize;
-            order.swap(i, j);
-        }
+        fisher_yates(len, |i, j| order.swap(i, j));
         // Avoid immediately replaying the current track at the start of a new cycle.
         if len > 1 {
             if let Some(c) = self.current {
@@ -459,6 +430,28 @@ impl Playlist {
             }
         }
         self.tracks.len() - before
+    }
+}
+
+/// Clock-seeded Fisher-Yates over `0..len`, calling `swap(i, j)` for each step.
+/// Shared by the one-shot `randomize` and the shuffle-bag `refill_shuffle`; a
+/// playlist shuffle needs no cryptographic quality, so an xorshift64 seeded from
+/// the clock is fine.
+fn fisher_yates(len: usize, mut swap: impl FnMut(usize, usize)) {
+    let mut s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E37_79B9_7F4A_7C15)
+        | 1;
+    let mut next = || {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        s
+    };
+    for i in (1..len).rev() {
+        let j = (next() % (i as u64 + 1)) as usize;
+        swap(i, j);
     }
 }
 
@@ -663,6 +656,69 @@ mod tests {
         for s in ["Hello World", "Bằng Kiều", "café", "naïve", "Mötley Crüe"] {
             assert_eq!(repair_mojibake(s), s, "should not alter {s:?}");
         }
+    }
+
+    #[test]
+    fn repair_mojibake_is_idempotent() {
+        for correct in ["Bằng Kiều", "Những Ngày Đẹp Trời", "Café del Mar"] {
+            let garbled: String = correct.bytes().map(|b| b as char).collect();
+            let once = repair_mojibake(&garbled);
+            // Repairing an already-repaired string must leave it unchanged.
+            assert_eq!(repair_mojibake(&once), once, "not idempotent for {correct:?}");
+        }
+    }
+
+    #[test]
+    fn pls_save_round_trips_paths() {
+        let pls =
+            std::env::temp_dir().join(format!("linamp_pls_save_{}.pls", std::process::id()));
+        let tracks = [
+            Track::new(PathBuf::from("/music/a.mp3")),
+            Track::new(PathBuf::from("/music/b.flac")),
+        ];
+        save_playlist_file(&pls, &tracks).unwrap();
+        let text = std::fs::read_to_string(&pls).unwrap();
+        assert!(text.starts_with("[playlist]"));
+        assert!(text.contains("File1=") && text.contains("File2="));
+        assert!(text.contains("NumberOfEntries=2"));
+        assert!(text.contains("Version=2"));
+        // The written file parses back to the same track file names.
+        let got = parse_playlist_file(&pls);
+        let got_names: Vec<String> = got
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        assert!(got_names.iter().any(|n| n == "a.mp3"), "got {got_names:?}");
+        assert!(got_names.iter().any(|n| n == "b.flac"), "got {got_names:?}");
+        let _ = std::fs::remove_file(&pls);
+    }
+
+    #[test]
+    fn shuffle_steps_backward_to_the_previous_entry() {
+        let mut pl = pl_of(&["/a.mp3", "/b.mp3", "/c.mp3", "/d.mp3"], Some(0));
+        let first = pl.next_index(true, false).unwrap();
+        let _second = pl.next_index(true, false).unwrap();
+        // Stepping back through the shuffle bag returns the previously-played entry.
+        assert_eq!(pl.prev_index(true, false), Some(first));
+    }
+
+    #[test]
+    fn shuffle_bag_rebuilds_when_track_count_changes() {
+        let mut pl = pl_of(&["/a.mp3", "/b.mp3", "/c.mp3"], Some(0));
+        let _ = pl.next_index(true, false); // builds a three-entry bag
+        assert_eq!(pl.shuffle_order.len(), 3);
+        pl.add_file(PathBuf::from("/d.mp3")); // now four tracks
+        let idx = pl.next_index(true, false).unwrap(); // the stale bag must be rebuilt
+        assert_eq!(pl.shuffle_order.len(), 4);
+        assert!(idx < 4);
+    }
+
+    #[test]
+    fn move_tail_to_rejects_degenerate_counts() {
+        let mut pl = pl_of(&["/a.mp3", "/b.mp3"], None);
+        assert_eq!(pl.move_tail_to(0, 0), None); // nothing was appended
+        assert_eq!(pl.move_tail_to(99, 0), None); // count exceeds the length
+        assert_eq!(pl.len(), 2); // the list is untouched either way
     }
 
     #[test]

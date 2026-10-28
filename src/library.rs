@@ -80,20 +80,37 @@ impl Library {
                  PRAGMA user_version = 1;",
             )?;
         }
+        if ver < 2 {
+            // v2: indexes so the browse and smart-view queries don't full-scan and
+            // sort on a large library (the search LIKE '%..%' can't use one).
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_tracks_artist_album_title
+                     ON tracks(artist, album, title);
+                 CREATE INDEX IF NOT EXISTS idx_tracks_play_count  ON tracks(play_count);
+                 CREATE INDEX IF NOT EXISTS idx_tracks_date_added  ON tracks(date_added);
+                 CREATE INDEX IF NOT EXISTS idx_tracks_last_played ON tracks(last_played);
+                 CREATE INDEX IF NOT EXISTS idx_tracks_rating      ON tracks(rating);
+                 PRAGMA user_version = 2;",
+            )?;
+        }
         Ok(())
     }
 
     /// Insert or update a single track keyed by its path. `date_added`,
     /// `play_count`, `last_played` and `rating` are preserved across re-scans.
     pub fn upsert(&self, t: &Track) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO tracks
+        // prepare_cached reuses the compiled statement across the thousands of
+        // upserts a library scan runs, rather than re-parsing the SQL each call.
+        self.conn
+            .prepare_cached(
+                "INSERT INTO tracks
                 (path,title,artist,album,duration_secs,sample_rate,bitrate,channels,date_added)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
              ON CONFLICT(path) DO UPDATE SET
                 title=?2, artist=?3, album=?4, duration_secs=?5,
                 sample_rate=?6, bitrate=?7, channels=?8",
-            params![
+            )?
+            .execute(params![
                 t.path.to_string_lossy(),
                 t.title,
                 t.artist,
@@ -315,26 +332,36 @@ pub fn scan_folder_bg(dir: PathBuf) -> mpsc::Receiver<ScanMsg> {
         };
         let files = supported_files(&dir);
         let total = files.len();
-        // Commit in batches rather than one transaction for the whole scan: the
-        // WAL writer lock is released between batches, so the app connection's
-        // play/rating writes aren't starved out (and get silently dropped) during
-        // a long scan, and committed rows become visible as it progresses.
+        // Work in batches, reading each batch's tags OUTSIDE any transaction (the
+        // slow, blocking part) and then holding the WAL writer lock only for the
+        // inserts. Holding it across the tag reads would starve the app
+        // connection's play/rating writes (which then stall or get silently
+        // dropped) for the whole batch. Committed rows become visible as it goes.
         const BATCH: usize = 200;
-        let mut txn = lib.conn.unchecked_transaction().ok();
-        for (i, p) in files.iter().enumerate() {
-            let _ = lib.upsert(&Track::from_path(p.clone()));
-            if (i + 1) % BATCH == 0 {
-                if let Some(t) = txn.take() {
-                    let _ = t.commit();
+        let mut done = 0usize;
+        for chunk in files.chunks(BATCH) {
+            let mut tracks = Vec::with_capacity(chunk.len());
+            for p in chunk {
+                tracks.push(Track::from_path(p.clone()));
+                done += 1;
+                if done % 25 == 0 {
+                    let _ = tx.send(ScanMsg::Progress { done, total });
                 }
-                txn = lib.conn.unchecked_transaction().ok();
             }
-            if i % 25 == 0 {
-                let _ = tx.send(ScanMsg::Progress { done: i, total });
+            // Writer lock held only for the inserts (microseconds each).
+            match lib.conn.unchecked_transaction() {
+                Ok(txn) => {
+                    for t in &tracks {
+                        let _ = lib.upsert(t);
+                    }
+                    let _ = txn.commit();
+                }
+                Err(_) => {
+                    for t in &tracks {
+                        let _ = lib.upsert(t);
+                    }
+                }
             }
-        }
-        if let Some(t) = txn.take() {
-            let _ = t.commit();
         }
         let _ = tx.send(ScanMsg::Done(total));
     });
@@ -466,12 +493,12 @@ mod tests {
     fn migration_adds_columns_and_is_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
         let lib = Library::init(conn).unwrap();
-        // user_version advanced to 1, and the new columns are queryable.
+        // user_version advanced to the latest, and the new columns are queryable.
         let ver: i64 = lib
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(ver, 1);
+        assert_eq!(ver, 2);
         lib.conn
             .query_row("SELECT play_count, rating, date_added, last_played FROM tracks", [], |_| Ok(()))
             .ok();
@@ -560,5 +587,51 @@ mod tests {
         lib.upsert(&track("/m/a1.mp3", "Alice", "First", "One (remaster)")).unwrap();
         assert_eq!(lib.rating(Path::new("/m/a1.mp3")), 4);
         assert_eq!(lib.view(LibView::MostPlayed, 10).len(), 1);
+    }
+
+    #[test]
+    fn remove_paths_drops_only_those_rows() {
+        let lib = Library::open_in_memory();
+        seed(&lib); // four tracks
+        lib.remove_paths(&[PathBuf::from("/m/a1.mp3"), PathBuf::from("/m/b1.mp3")]);
+        assert_eq!(lib.count(), 2);
+        assert!(lib.track_for_path(Path::new("/m/a1.mp3")).is_none());
+        assert!(lib.track_for_path(Path::new("/m/a2.mp3")).is_some());
+        // Removing an unknown path is a harmless no-op.
+        lib.remove_paths(&[PathBuf::from("/m/nope.mp3")]);
+        assert_eq!(lib.count(), 2);
+    }
+
+    #[test]
+    fn recently_added_orders_newest_first() {
+        let lib = Library::open_in_memory();
+        seed(&lib);
+        // Give the rows distinct, known add times (upsert stamps them all with the
+        // current second otherwise, leaving same-second order undefined).
+        for (p, t) in [("/m/a1.mp3", 100i64), ("/m/a2.mp3", 300), ("/m/a3.mp3", 200), ("/m/b1.mp3", 50)] {
+            lib.conn
+                .execute("UPDATE tracks SET date_added = ?2 WHERE path = ?1", params![p, t])
+                .unwrap();
+        }
+        let order: Vec<String> = lib
+            .view(LibView::RecentlyAdded, 100)
+            .iter()
+            .map(|t| t.path.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(order, vec!["/m/a2.mp3", "/m/a3.mp3", "/m/a1.mp3", "/m/b1.mp3"]);
+    }
+
+    #[test]
+    fn search_matches_artist_and_album_and_respects_limit() {
+        let lib = Library::open_in_memory();
+        seed(&lib);
+        // Matches on the artist field (all three Alice tracks).
+        assert_eq!(lib.search("Alice", 100).len(), 3);
+        // Matches on the album field.
+        let by_album = lib.search("Second", 100);
+        assert_eq!(by_album.len(), 1);
+        assert_eq!(by_album[0].title, "Three");
+        // The LIMIT caps the result count.
+        assert_eq!(lib.search("Alice", 2).len(), 2);
     }
 }

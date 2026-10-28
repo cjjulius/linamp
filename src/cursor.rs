@@ -78,7 +78,12 @@ fn first_ani_frame(bytes: &[u8]) -> Option<Vec<u8>> {
                 if sid == b"icon" {
                     return Some(bytes.get(sbody..send)?.to_vec());
                 }
-                s = sbody + ssize + (ssize & 1);
+                // Advance to the next subchunk, word-aligned, guarding against a
+                // crafted size that would overflow the cursor.
+                match sbody.checked_add(ssize).and_then(|v| v.checked_add(ssize & 1)) {
+                    Some(next) => s = next,
+                    None => break,
+                }
             }
         }
         off = body + size + (size & 1);
@@ -348,5 +353,76 @@ mod tests {
         assert_eq!((cur.width, cur.height), (1, 1));
         assert_eq!(cur.argb, vec![0xFF_12_34_56]);
         assert_eq!(cur.xhot, 0); // clamped into the 1px image
+    }
+
+    /// A hand-built 2x2, 4-bit paletted cursor. Output pixel (0,0) is palette
+    /// index 1 (red), (1,0) is AND-masked transparent, and the bottom row is
+    /// index 0 (black). This is the classic Winamp cursor shape `image` can't read.
+    fn cur_2x2_4bpp() -> Vec<u8> {
+        let mut dib: Vec<u8> = Vec::new();
+        // BITMAPINFOHEADER.
+        dib.extend_from_slice(&40u32.to_le_bytes()); // size
+        dib.extend_from_slice(&2i32.to_le_bytes()); // width
+        dib.extend_from_slice(&4i32.to_le_bytes()); // height = 2 * cursor height (xor + and)
+        dib.extend_from_slice(&1u16.to_le_bytes()); // planes
+        dib.extend_from_slice(&4u16.to_le_bytes()); // bpp
+        dib.extend_from_slice(&0u32.to_le_bytes()); // compression
+        dib.extend_from_slice(&0u32.to_le_bytes()); // sizeImage
+        dib.extend_from_slice(&0i32.to_le_bytes()); // xppm
+        dib.extend_from_slice(&0i32.to_le_bytes()); // yppm
+        dib.extend_from_slice(&2u32.to_le_bytes()); // clrUsed = 2
+        dib.extend_from_slice(&0u32.to_le_bytes()); // clrImportant
+        // Palette (BGRA quads): index 0 black, index 1 red.
+        dib.extend_from_slice(&[0, 0, 0, 0]);
+        dib.extend_from_slice(&[0x00, 0x00, 0xFF, 0x00]);
+        // XOR bitmap, bottom-up, each row padded to 4 bytes (2 px = one 4-bit byte).
+        dib.extend_from_slice(&[0x00, 0, 0, 0]); // file row 0 = output row 1: [idx0, idx0]
+        dib.extend_from_slice(&[0x10, 0, 0, 0]); // file row 1 = output row 0: [idx1, idx0]
+        // AND mask, bottom-up, each row padded to 4 bytes (1 bit = transparent).
+        dib.extend_from_slice(&[0x00, 0, 0, 0]); // file row 0: both opaque
+        dib.extend_from_slice(&[0x40, 0, 0, 0]); // file row 1: x1 transparent
+        // ICO wrapper.
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(&[0, 0, 2, 0, 1, 0]); // ICONDIR: type=2 cursor, count=1
+        b.extend_from_slice(&[2, 2, 16, 0]); // entry: w=2, h=2, colors=16, reserved
+        b.extend_from_slice(&1u16.to_le_bytes()); // xhot
+        b.extend_from_slice(&1u16.to_le_bytes()); // yhot
+        b.extend_from_slice(&(dib.len() as u32).to_le_bytes()); // bytesInRes
+        b.extend_from_slice(&22u32.to_le_bytes()); // imageOffset = 6 + 16
+        b.extend_from_slice(&dib);
+        b
+    }
+
+    #[test]
+    fn decodes_4bpp_paletted_cursor_with_and_mask() {
+        let cur = parse(&cur_2x2_4bpp()).expect("decodes");
+        assert_eq!((cur.width, cur.height), (2, 2));
+        // red / transparent / black / black
+        assert_eq!(
+            cur.argb,
+            vec![0xFF_FF_00_00, 0x00_00_00_00, 0xFF_00_00_00, 0xFF_00_00_00]
+        );
+        assert_eq!((cur.xhot, cur.yhot), (1, 1));
+    }
+
+    #[test]
+    fn decodes_first_frame_of_an_ani() {
+        let cur_bytes = cur_2x2_4bpp();
+        let icon_size = cur_bytes.len() as u32;
+        let list_size = 4 + 4 + 4 + icon_size; // "fram" + "icon" + size + body
+        let riff_size = 4 + 4 + 4 + list_size; // "ACON" + "LIST" + size + list
+        let mut ani: Vec<u8> = Vec::new();
+        ani.extend_from_slice(b"RIFF");
+        ani.extend_from_slice(&riff_size.to_le_bytes());
+        ani.extend_from_slice(b"ACON");
+        ani.extend_from_slice(b"LIST");
+        ani.extend_from_slice(&list_size.to_le_bytes());
+        ani.extend_from_slice(b"fram");
+        ani.extend_from_slice(b"icon");
+        ani.extend_from_slice(&icon_size.to_le_bytes());
+        ani.extend_from_slice(&cur_bytes);
+        let cur = parse(&ani).expect("decodes the first frame");
+        assert_eq!((cur.width, cur.height), (2, 2));
+        assert_eq!(cur.argb[0], 0xFF_FF_00_00); // same red top-left pixel
     }
 }
