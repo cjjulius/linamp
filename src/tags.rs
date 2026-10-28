@@ -111,7 +111,15 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
         title: fix(&tag.title().map(|s| s.to_string()).unwrap_or_default()),
         artist: fix(&tag.artist().map(|s| s.to_string()).unwrap_or_default()),
         album: fix(&tag.album().map(|s| s.to_string()).unwrap_or_default()),
-        year: tag.year().map(|y| y.to_string()).unwrap_or_default(),
+        // Year lives in the TDRC recording-time frame (a full timestamp like
+        // "2024-05-01" reads as its 4-digit year); fall back to the Accessor year.
+        year: tag
+            .get_string(&ItemKey::RecordingDate)
+            .and_then(|s| s.get(0..4))
+            .filter(|y| y.chars().all(|c| c.is_ascii_digit()))
+            .map(|y| y.to_string())
+            .or_else(|| tag.year().map(|y| y.to_string()))
+            .unwrap_or_default(),
         genre: fix(&tag.genre().map(|s| s.to_string()).unwrap_or_default()),
         comment: fix(&tag.comment().map(|s| s.to_string()).unwrap_or_default()),
         composer: text(&ItemKey::Composer),
@@ -232,7 +240,12 @@ fn v1_text(s: &str, max: usize) -> Option<String> {
 
 /// Write the ID3 tags. For each of v1/v2: `Some` writes/updates it, `None`
 /// removes it. The ID3v2 tag is edited in place so other frames survive.
-pub fn write_id3(path: &Path, v1: Option<&Id3Fields>, v2: Option<&Id3Fields>) -> Result<()> {
+pub fn write_id3(
+    path: &Path,
+    v1: Option<&Id3Fields>,
+    v2: Option<&Id3Fields>,
+    id3v23: bool,
+) -> Result<()> {
     use lofty::config::WriteOptions;
     use lofty::file::TaggedFileExt;
     use lofty::tag::{Tag, TagExt, TagType};
@@ -251,7 +264,13 @@ pub fn write_id3(path: &Path, v1: Option<&Id3Fields>, v2: Option<&Id3Fields>) ->
                 .and_then(|t| t.tag(TagType::Id3v2).cloned());
             let mut tag = existing.unwrap_or_else(|| Tag::new(TagType::Id3v2));
             apply_v2(&mut tag, f);
-            tag.save_to_path(path, WriteOptions::default())
+            // Save through the concrete ID3v2 tag so the recording-time frame is a
+            // proper timestamp: lofty writes TDRC for 2.4 and splits it into TYER
+            // for 2.3 (a generic text TDRC would be dropped on a 2.3 write). 2.3 is
+            // the most compatible; 2.4 is the newer standard. Reading handles both.
+            use lofty::id3::v2::Id3v2Tag;
+            let id3: Id3v2Tag = tag.into();
+            id3.save_to_path(path, WriteOptions::new().use_id3v23(id3v23))
                 .with_context(|| format!("writing ID3v2 to {}", path.display()))?;
         }
         None => {
@@ -327,7 +346,20 @@ fn apply_v2(tag: &mut lofty::tag::Tag, f: &Id3Fields) {
     str_f!(f.album, set_album, remove_album);
     str_f!(f.genre, set_genre, remove_genre);
     str_f!(f.comment, set_comment, remove_comment);
-    num_f!(f.year, set_year, remove_year);
+    // Year goes to the TDRC recording-time frame: lofty writes it as TDRC for
+    // ID3v2.4 and splits it into TYER for ID3v2.3 (the generic `set_year` frame is
+    // dropped on a 2.3 write, so a plain year would vanish). Empty clears it; a
+    // non-numeric value is left as-is rather than dropped.
+    {
+        let y = f.year.trim();
+        if y.is_empty() {
+            tag.remove_year();
+            tag.remove_key(&ItemKey::RecordingDate);
+        } else if y.parse::<u32>().is_ok() {
+            tag.remove_year(); // drop any legacy TYER so the TDRC year is read
+            tag.insert_text(ItemKey::RecordingDate, y.to_string());
+        }
+    }
     num_f!(f.track, set_track, remove_track);
     num_f!(f.disc, set_disk, remove_disk);
     {
@@ -386,7 +418,7 @@ mod tests {
 
     #[test]
     fn write_rejects_unsupported() {
-        let err = write_id3(Path::new("x.flac"), None, None).unwrap_err();
+        let err = write_id3(Path::new("x.flac"), None, None, true).unwrap_err();
         assert!(err.to_string().contains("isn't supported"));
     }
 
@@ -490,7 +522,7 @@ mod tests {
             comment: "v1 comment".into(),
             ..Default::default()
         };
-        write_id3(&tmp, Some(&v1), Some(&v2)).unwrap();
+        write_id3(&tmp, Some(&v1), Some(&v2), true).unwrap();
 
         let (gv1, gv2) = read_id3(&tmp);
         let gv1 = gv1.expect("v1 present");
@@ -518,7 +550,7 @@ mod tests {
         assert_eq!(gv1.year, "1999");
 
         // Removing ID3v1 leaves ID3v2 intact.
-        write_id3(&tmp, None, Some(&v2)).unwrap();
+        write_id3(&tmp, None, Some(&v2), true).unwrap();
         let (gv1, gv2) = read_id3(&tmp);
         assert!(gv1.is_none());
         assert_eq!(gv2.unwrap().title, "V2 Title");
@@ -550,7 +582,7 @@ mod tests {
             comment: long.clone(),
             ..Default::default()
         };
-        write_id3(&tmp, Some(&v1), None).unwrap();
+        write_id3(&tmp, Some(&v1), None, true).unwrap();
 
         // Audio must survive: same (±1s) duration, still readable.
         let after = read_info(&tmp).length_secs;
@@ -562,6 +594,34 @@ mod tests {
         let gv1 = gv1.expect("v1 tag present and readable");
         // ID3v1 is a fixed 30-char (latin-1) field, so at most 30 characters survive.
         assert!(gv1.title.chars().count() <= V1_MAX_TEXT, "title: {:?}", gv1.title);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+
+
+    #[test]
+    fn id3v2_version_follows_the_pref() {
+        // The `id3v23` flag selects the ID3v2 major version written (2.3 vs 2.4),
+        // read back from the raw tag header (the 4th byte after "ID3").
+        let src = Path::new("music/Aria Nocturne - Crystal Harbor.mp3");
+        if !src.exists() {
+            return;
+        }
+        let major = |path: &Path| -> Option<u8> {
+            let b = std::fs::read(path).ok()?;
+            (b.len() >= 4 && &b[0..3] == b"ID3").then(|| b[3])
+        };
+        let v2 = Id3Fields { title: "V".into(), ..Default::default() };
+        let tmp = std::env::temp_dir().join("linamp_id3_version.mp3");
+
+        std::fs::copy(src, &tmp).unwrap();
+        write_id3(&tmp, None, Some(&v2), true).unwrap();
+        assert_eq!(major(&tmp), Some(3), "id3v23=true should write ID3v2.3");
+
+        std::fs::copy(src, &tmp).unwrap();
+        write_id3(&tmp, None, Some(&v2), false).unwrap();
+        assert_eq!(major(&tmp), Some(4), "id3v23=false should write ID3v2.4");
+
         let _ = std::fs::remove_file(&tmp);
     }
 }
