@@ -517,6 +517,14 @@ struct PopupState {
     serial: u64,
 }
 
+/// What a running fade-out settles into when it reaches silence: a full stop, or
+/// a pause (so pausing can fade out like stopping does, instead of cutting) (#171).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FadeEnd {
+    Stop,
+    Pause,
+}
+
 pub struct LinAmpApp {
     player: Player,
     playlist: Playlist,
@@ -581,8 +589,10 @@ pub struct LinAmpApp {
     time_blink_hidden: bool,
     /// Stop when the current track ends instead of advancing (Ctrl+V).
     stop_after_current: bool,
-    /// Remaining fade-out time in seconds while stopping with fade (Shift+V).
-    fade: Option<f32>,
+    /// Remaining fade-out time in seconds and what the fade ends in (stop or
+    /// pause) while fading out (Shift+V, or the "fade out when stopping or
+    /// pausing" preference).
+    fade: Option<(f32, FadeEnd)>,
     mode_init: bool,
     eq_visible: bool,
     pl_visible: bool,
@@ -1168,7 +1178,9 @@ impl LinAmpApp {
                     self.play_index(start);
                 }
             }
-            _ => self.player.toggle_pause(),
+            // Pausing fades out (when the pref is on); resuming is immediate.
+            PlayState::Playing => self.pause_playback(),
+            PlayState::Paused => self.player.toggle_pause(),
         }
     }
 
@@ -1880,11 +1892,24 @@ impl LinAmpApp {
     /// on (otherwise an immediate cut). Shift+V always forces a fade regardless.
     fn stop_playback(&mut self) {
         if self.prefs.fade_on_stop && self.player.state() != PlayState::Stopped {
-            self.fade = Some(self.prefs.fade_on_stop_secs);
+            self.fade = Some((self.prefs.fade_on_stop_secs, FadeEnd::Stop));
             self.status = "Fading out…".into();
         } else {
             self.player.stop();
             self.fade = None;
+        }
+    }
+
+    /// Pause playback, fading out first when the "fade out when stopping or
+    /// pausing" pref is on (otherwise an immediate pause). Mirrors `stop_playback`
+    /// so a pause from the tray, a button or a key fades like a stop instead of
+    /// cutting abruptly (#171). Resuming plays at full volume.
+    fn pause_playback(&mut self) {
+        if self.prefs.fade_on_stop && self.player.state() == PlayState::Playing {
+            self.fade = Some((self.prefs.fade_on_stop_secs, FadeEnd::Pause));
+            self.status = "Fading out…".into();
+        } else {
+            self.player.pause();
         }
     }
 
@@ -2045,7 +2070,7 @@ impl LinAmpApp {
         match region {
             Btn::Prev => self.prev(),
             Btn::Play => self.play_pause(),
-            Btn::Pause => self.player.pause(),
+            Btn::Pause => self.pause_playback(),
             Btn::Stop => self.stop_playback(),
             Btn::Next => self.next(),
             Btn::Eject => self.open_files(),
@@ -2691,14 +2716,14 @@ impl LinAmpApp {
     }
 
     fn prefs_page_playback(&mut self, ui: &mut egui::Ui) {
-        Self::pref_section(ui, "On stop", |ui| {
+        Self::pref_section(ui, "On stop or pause", |ui| {
             // Only genuine, persistent settings belong in Preferences. One-shot
             // actions ("Stop after current", Ctrl+V) and view toggles ("time
             // remaining", Ctrl+T) keep their shortcuts but are deliberately not
             // shown here, a settings checkbox implies it sticks, and they don't.
             let mut fade = self.prefs.fade_on_stop;
             let mut changed = ui
-                .checkbox(&mut fade, "Fade out when stopping (Shift+V)")
+                .checkbox(&mut fade, "Fade out when stopping or pausing (Shift+V to force)")
                 .changed();
             let mut secs = self.prefs.fade_on_stop_secs;
             ui.add_enabled_ui(fade, |ui| {
@@ -3943,16 +3968,20 @@ impl eframe::App for LinAmpApp {
 
         self.handle_shortcuts(ctx, ClWin::Main);
 
-        // Advance a running fade-out; stop when it reaches zero.
-        if let Some(t) = self.fade {
+        // Advance a running fade-out; stop or pause when it reaches zero, then
+        // reset the gain so a later resume or replay is at full volume.
+        if let Some((t, end)) = self.fade {
             let t = t - dt;
             if t <= 0.0 {
-                self.player.stop();
+                match end {
+                    FadeEnd::Stop => self.player.stop(),
+                    FadeEnd::Pause => self.player.pause(),
+                }
                 self.player.set_fade(1.0);
                 self.fade = None;
             } else {
                 self.player.set_fade(t / self.prefs.fade_on_stop_secs.max(0.1));
-                self.fade = Some(t);
+                self.fade = Some((t, end));
             }
         }
 
