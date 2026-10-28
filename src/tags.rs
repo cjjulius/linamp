@@ -24,6 +24,12 @@ pub struct Id3Fields {
     pub copyright: String,
     pub url: String,
     pub encoded_by: String,
+    /// Disc number, like `track` (plain `1` or `1/2`).
+    pub disc: String,
+    /// Beats per minute (plain integer).
+    pub bpm: String,
+    /// Part of a compilation (iTunes TCMP / `FlagCompilation`).
+    pub compilation: bool,
 }
 
 /// Read-only format / file info for the Basic Info tab.
@@ -123,6 +129,13 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
             .map(|s| fix(&s))
             .unwrap_or_default(),
         encoded_by: text(&ItemKey::EncodedBy),
+        disc: tag.disk().map(|d| d.to_string()).unwrap_or_default(),
+        bpm: text(&ItemKey::IntegerBpm),
+        // Any non-empty, non-"0" value counts as set (iTunes writes "1").
+        compilation: !matches!(
+            tag.get_string(&ItemKey::FlagCompilation),
+            None | Some("") | Some("0")
+        ),
     }
 }
 
@@ -316,11 +329,19 @@ fn apply_v2(tag: &mut lofty::tag::Tag, f: &Id3Fields) {
     str_f!(f.comment, set_comment, remove_comment);
     num_f!(f.year, set_year, remove_year);
     num_f!(f.track, set_track, remove_track);
+    num_f!(f.disc, set_disk, remove_disk);
     {
         key_f!(f.composer, ItemKey::Composer);
         key_f!(f.orig_artist, ItemKey::OriginalArtist);
         key_f!(f.copyright, ItemKey::CopyrightMessage);
         key_f!(f.encoded_by, ItemKey::EncodedBy);
+        key_f!(f.bpm, ItemKey::IntegerBpm);
+        // Compilation is a boolean flag; iTunes stores it as "1" (TCMP).
+        if f.compilation {
+            tag.insert_text(ItemKey::FlagCompilation, "1".to_string());
+        } else {
+            tag.remove_key(&ItemKey::FlagCompilation);
+        }
         // URL is a WOAS locator frame (not text).
         if f.url.trim().is_empty() {
             tag.remove_key(&ItemKey::AudioSourceUrl);
@@ -395,6 +416,9 @@ mod tests {
             copyright: "(c) 2024".into(),
             url: "https://example.com".into(),
             encoded_by: "LinAmp".into(),
+            disc: "2".into(),
+            bpm: "128".into(),
+            compilation: true,
         };
         let mut tag = Tag::new(TagType::Id3v2);
         apply_v2(&mut tag, &f);
@@ -452,6 +476,9 @@ mod tests {
             copyright: "(c) 2024".into(),
             url: "https://example.com".into(),
             encoded_by: "LinAmp".into(),
+            disc: "2".into(),
+            bpm: "128".into(),
+            compilation: true,
         };
         let v1 = Id3Fields {
             track: "3".into(),
@@ -482,6 +509,9 @@ mod tests {
         assert_eq!(gv2.copyright, "(c) 2024");
         assert_eq!(gv2.url, "https://example.com");
         assert_eq!(gv2.encoded_by, "LinAmp");
+        assert_eq!(gv2.disc, "2");
+        assert_eq!(gv2.bpm, "128");
+        assert!(gv2.compilation);
         // ID3v1 fields round-trip too.
         assert_eq!(gv1.title, "V1 Title");
         assert_eq!(gv1.artist, "V1 Artist");

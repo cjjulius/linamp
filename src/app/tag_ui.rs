@@ -332,6 +332,7 @@ impl super::LinAmpApp {
                                             ui.end_row();
                                         };
                                         row(ui, "Track", &mut f.track);
+                                        row(ui, "Disc", &mut f.disc);
                                         row(ui, "Title", &mut f.title);
                                         row(ui, "Artist", &mut f.artist);
                                         row(ui, "Album", &mut f.album);
@@ -347,6 +348,10 @@ impl super::LinAmpApp {
                                         row(ui, "Copyright", &mut f.copyright);
                                         row(ui, "URL", &mut f.url);
                                         row(ui, "Encoded by", &mut f.encoded_by);
+                                        row(ui, "BPM", &mut f.bpm);
+                                        ui.label("Compilation");
+                                        ui.checkbox(&mut f.compilation, "");
+                                        ui.end_row();
                                     });
                                 });
                                 (r1, r2)
