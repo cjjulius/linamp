@@ -114,6 +114,24 @@ on hand), consistent with the earlier Mint deferral.
   Verified: C now keeps the clock advancing through the fade then pauses
   (00:03 -> ~00:05), same as the button.
 
+## Broadened tag editing (`feat/tag-editing`, #89)
+
+Cross-platform (egui + lofty), QA'd on Windows. Confirm on Pop!_OS and Mint:
+
+- [ ] **Tag editor window sizing + off-screen clamp.** The window height is now
+  computed from the tallest tab's row count, and the window is clamped onto the
+  desktop via `virtual_desktop_rect` (which has an X11 path). Verify the editor
+  fits its content (no clipped bottom) for MP3 and for the single-column non-MP3
+  view, and that opening it near a screen edge keeps it on-screen.
+- [ ] **Non-MP3 and MP2/MP1 tag writing.** FLAC/Ogg/M4A show one "Tags" column;
+  MP2/MP1 use the ID3 v1/v2 tabs like MP3. Edit a field, save, reopen, and confirm
+  it stuck on each (lofty is cross-platform, so this should just work). Known gap:
+  the M4A compilation flag does not persist.
+- [ ] **Basic Info for all formats.** MIDI shows size, format (type + track count)
+  and length (via `midi::duration`); other audio shows duration/bitrate/sample
+  rate/channels; a read-only format (e.g. WAV) shows only the Basic Info tab (no
+  ID3 tab, no message). Spot-check a few.
+
 ## Notes
 
 - The code review and its resolution plan are in `docs/CODE-REVIEW.md`; the
