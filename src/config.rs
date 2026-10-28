@@ -59,6 +59,9 @@ pub struct Prefs {
     /// Enqueue adds them to the current playlist (the default), Clear replaces it
     /// with just the opened file(s). Either way the first opened item plays.
     pub open_with: OpenWith,
+    /// true = write ID3v2.3 tags (the most widely compatible, and Winamp's own
+    /// default); false = ID3v2.4. Reading handles both regardless.
+    pub id3v23: bool,
 }
 
 /// What launching LinAmp with file arguments ("Open with", or dropping files on
@@ -94,6 +97,7 @@ impl Default for Prefs {
             // "Open with" adds to the current playlist by default (classic
             // enqueue); the user can switch to replacing it in Preferences.
             open_with: OpenWith::Enqueue,
+            id3v23: true,
         }
     }
 }

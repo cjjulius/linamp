@@ -833,6 +833,40 @@ mod x11util {
         })
         .unwrap_or(false)
     }
+
+    // This module is Linux-only (cfg(all(unix, not(macos)))), so these tests build
+    // and run only on Linux, not on the Windows dev machine.
+    #[cfg(test)]
+    mod tests {
+        use super::rounded_rect_rects;
+
+        #[test]
+        fn rounded_rect_zero_radius_is_one_full_rect() {
+            // r == 0 collapses to a single full-size rect, not one rect per scanline.
+            assert_eq!(rounded_rect_rects(40, 20, 0), vec![(0, 0, 40, 20)]);
+            // A negative radius clamps to 0 and takes the same path.
+            assert_eq!(rounded_rect_rects(40, 20, -5), vec![(0, 0, 40, 20)]);
+        }
+
+        #[test]
+        fn rounded_rect_corner_inset_is_symmetric_top_to_bottom() {
+            let (w, h, r) = (30, 24, 6);
+            let rects = rounded_rect_rects(w, h, r);
+            // Every scanline produces a rect for these dims (no corner row is empty).
+            assert_eq!(rects.len(), h as usize);
+            for yy in 0..h as usize {
+                let top = rects[yy];
+                let bot = rects[h as usize - 1 - yy];
+                assert_eq!(top.0, bot.0, "x inset not mirrored at row {yy}");
+                assert_eq!(top.2, bot.2, "width not mirrored at row {yy}");
+                assert_eq!(top.1 as i32, yy as i32, "y should be the scanline index");
+            }
+            // The straight middle is full width; the corner rows are inset inward.
+            let mid = rects[h as usize / 2];
+            assert_eq!((mid.0, mid.2), (0, w as u16), "middle row should be full width");
+            assert!(rects[0].0 > 0 && (rects[0].2 as i32) < w, "top row should be inset");
+        }
+    }
 }
 
 /// Make EQ/playlist *owned* by the main window so they ride its z-order (rise

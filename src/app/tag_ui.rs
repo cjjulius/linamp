@@ -23,7 +23,126 @@ pub(super) struct TagEditor {
     v2_on: bool,
     tab: TagTab,
     editable: bool,
+    /// true for a format with a single native tag (FLAC/Ogg/M4A): the Id3 tab
+    /// shows one "Tags" column instead of the ID3v1/ID3v2 pair, and saving writes
+    /// that one tag.
+    single: bool,
     status: String,
+}
+
+/// Read a file's tags for the editor. MP3 keeps the ID3v1/v2 pair; other formats
+/// read their single native tag into `v2` (shown as one "Tags" column). Returns
+/// `(v1, v2, v1_on, v2_on, single)`.
+fn read_editor_tags(
+    path: &std::path::Path,
+) -> (crate::tags::Id3Fields, crate::tags::Id3Fields, bool, bool, bool) {
+    if crate::tags::uses_id3(path) {
+        let (v1, v2) = crate::tags::read_id3(path);
+        let (on1, on2) = (v1.is_some(), v2.is_some());
+        (v1.unwrap_or_default(), v2.unwrap_or_default(), on1, on2, false)
+    } else {
+        (Default::default(), crate::tags::read_single(path), false, true, true)
+    }
+}
+
+/// One grid row (label + field) in points, including the grid's vertical
+/// spacing. The editor renders at the default scale, so this is a constant.
+const TAG_ROW_H: f32 = 23.0;
+/// Fixed chrome height around the content box: the path field, the tab strip, the
+/// group-frame margins, the button row and the panel padding.
+const TAG_WINDOW_CHROME: f32 = 132.0;
+/// Extra height reserved for the save-error status line (editable files only).
+const TAG_STATUS_H: f32 = 24.0;
+
+/// Number of rows the Basic Info tab draws for this file (mirrors the conditional
+/// rows in the render), so a MIDI showing just Size + Format gets a small window.
+fn basic_info_rows(i: &crate::tags::FileInfo) -> f32 {
+    let mut n = 1.0; // Size
+    if !i.mpeg.is_empty() {
+        n += 1.0;
+    }
+    if i.length_secs > 0 {
+        n += 1.0;
+    }
+    if i.bitrate_kbps > 0 {
+        n += 1.0;
+    }
+    if i.sample_rate_hz > 0 {
+        n += 1.0;
+    }
+    if !i.channel_mode.is_empty() {
+        n += 1.0;
+    }
+    if i.is_mpeg {
+        n += 2.0; // Copyrighted, Original
+        if !i.emphasis.is_empty() {
+            n += 1.0;
+        }
+    }
+    n
+}
+
+/// Height of the content box, sized to the tallest tab. When editable the ID3 tab
+/// is tallest: 15 fields (see `tag_fields_grid`), the 2-line Comment counting as
+/// an extra row, plus a header row. Otherwise only the Basic Info tab shows, sized
+/// to its actual row count. Keep the ID3 count in step with the render code.
+fn tag_box_height(editable: bool, basic_rows: f32) -> f32 {
+    let rows = if editable { 17.0 } else { basic_rows };
+    rows * TAG_ROW_H
+}
+
+/// The genre dropdown shared by the ID3 tabs (closes on a keyboard pick).
+fn genre_combo(ui: &mut egui::Ui, salt: &str, val: &mut String) {
+    let combo = egui::ComboBox::from_id_salt(salt)
+        .selected_text(if val.is_empty() { ", ".into() } else { val.clone() })
+        .width(140.0)
+        .show_ui(ui, |ui| {
+            let mut picked = false;
+            for g in crate::tags::GENRES {
+                if ui.selectable_label(val == g, *g).clicked() {
+                    *val = (*g).to_string();
+                    picked = true;
+                }
+            }
+            picked
+        });
+    if combo.inner == Some(true) {
+        ui.memory_mut(|m| m.close_popup());
+        combo.response.request_focus();
+    }
+}
+
+/// The full field grid for an ID3v2 tag or a single native tag (FLAC/Ogg/M4A).
+/// `salt` keeps the grid and its genre combo uniquely identified per column.
+fn tag_fields_grid(ui: &mut egui::Ui, f: &mut crate::tags::Id3Fields, salt: &str) {
+    egui::Grid::new(salt).num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
+        let row = |ui: &mut egui::Ui, l: &str, v: &mut String| {
+            ui.label(l);
+            ui.add(egui::TextEdit::singleline(v).desired_width(170.0));
+            ui.end_row();
+        };
+        row(ui, "Track", &mut f.track);
+        row(ui, "Disc", &mut f.disc);
+        row(ui, "Title", &mut f.title);
+        row(ui, "Artist", &mut f.artist);
+        row(ui, "Album", &mut f.album);
+        row(ui, "Year", &mut f.year);
+        ui.label("Genre");
+        genre_combo(ui, &format!("{salt}_genre"), &mut f.genre);
+        ui.end_row();
+        ui.label("Comment");
+        ui.add(egui::TextEdit::multiline(&mut f.comment).desired_width(170.0).desired_rows(2));
+        ui.end_row();
+        row(ui, "Composer", &mut f.composer);
+        row(ui, "Orig. Artist", &mut f.orig_artist);
+        row(ui, "Copyright", &mut f.copyright);
+        row(ui, "URL", &mut f.url);
+        row(ui, "Encoded by", &mut f.encoded_by);
+        row(ui, "BPM", &mut f.bpm);
+        ui.label("Compilation");
+        ui.checkbox(&mut f.compilation, "");
+        ui.end_row();
+    });
 }
 
 impl super::LinAmpApp {
@@ -50,17 +169,12 @@ impl super::LinAmpApp {
             return;
         };
         let path = track.path.clone();
-        let (v1, v2) = crate::tags::read_id3(&path);
+        let (v1, v2, v1_on, v2_on, single) = read_editor_tags(&path);
         let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
-        let (v1_on, v2_on) = (v1.is_some(), v2.is_some());
-        let v1 = v1.unwrap_or_default();
-        let v2 = v2.unwrap_or_default();
-        let status = if editable {
-            String::new()
-        } else {
-            "Read-only: tag writing isn't supported for this format yet.".into()
-        };
+        // No read-only banner: a non-editable file simply shows the Basic Info tab
+        // alone (the ID3 tab is hidden). Status is for save errors only.
+        let status = String::new();
         self.tag_editor = Some(TagEditor {
             index,
             path,
@@ -71,6 +185,7 @@ impl super::LinAmpApp {
             v2_on,
             tab: TagTab::Basic,
             editable,
+            single,
             status,
         });
     }
@@ -79,17 +194,12 @@ impl super::LinAmpApp {
     /// not be in the playlist). `index` is a sentinel so saving doesn't touch a
     /// playlist row.
     pub(super) fn open_tag_editor_path(&mut self, path: std::path::PathBuf) {
-        let (v1, v2) = crate::tags::read_id3(&path);
+        let (v1, v2, v1_on, v2_on, single) = read_editor_tags(&path);
         let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
-        let (v1_on, v2_on) = (v1.is_some(), v2.is_some());
-        let v1 = v1.unwrap_or_default();
-        let v2 = v2.unwrap_or_default();
-        let status = if editable {
-            String::new()
-        } else {
-            "Read-only: tag writing isn't supported for this format yet.".into()
-        };
+        // No read-only banner: a non-editable file simply shows the Basic Info tab
+        // alone (the ID3 tab is hidden). Status is for save errors only.
+        let status = String::new();
         self.tag_editor = Some(TagEditor {
             index: usize::MAX,
             path,
@@ -100,6 +210,7 @@ impl super::LinAmpApp {
             v2_on,
             tab: TagTab::Basic,
             editable,
+            single,
             status,
         });
     }
@@ -107,7 +218,7 @@ impl super::LinAmpApp {
     /// Write the editor's tags back to the file and refresh the playlist row.
     /// Returns `true` when the write succeeded (so the caller can close).
     pub(super) fn save_tag_editor(&mut self) -> bool {
-        let (index, path, v1, v2, v1_on, v2_on) = match &self.tag_editor {
+        let (index, path, v1, v2, v1_on, v2_on, single) = match &self.tag_editor {
             Some(ed) if ed.editable => (
                 ed.index,
                 ed.path.clone(),
@@ -115,14 +226,21 @@ impl super::LinAmpApp {
                 ed.v2.clone(),
                 ed.v1_on,
                 ed.v2_on,
+                ed.single,
             ),
             _ => return false,
         };
-        let result = crate::tags::write_id3(
-            &path,
-            v1_on.then_some(&v1),
-            v2_on.then_some(&v2),
-        );
+        let result = if single {
+            // Non-MP3 formats carry one native tag, held in `v2`.
+            crate::tags::write_single(&path, &v2)
+        } else {
+            crate::tags::write_id3(
+                &path,
+                v1_on.then_some(&v1),
+                v2_on.then_some(&v2),
+                self.prefs.id3v23,
+            )
+        };
         if result.is_ok() {
             // Refresh the playlist row (when the edit came from the playlist).
             let mut refreshed = None;
@@ -161,14 +279,31 @@ impl super::LinAmpApp {
 
     /// The tag editor window (own viewport, like preferences / library).
     pub(super) fn ui_tag_editor(&mut self, ctx: &egui::Context) {
-        if self.tag_editor.is_none() {
+        let Some((editable, basic_rows)) = self
+            .tag_editor
+            .as_ref()
+            .map(|e| (e.editable, basic_info_rows(&e.info)))
+        else {
             return;
+        };
+        // Size the window to its tallest tab from the (fixed) row counts, so no
+        // content is clipped and the height doesn't jump when switching tabs. The
+        // ID3 tab is the tallest when the file is editable; otherwise only the
+        // Basic Info tab shows, sized to its own row count.
+        let box_h = tag_box_height(editable, basic_rows);
+        let win_h = box_h + TAG_WINDOW_CHROME + if editable { TAG_STATUS_H } else { 0.0 };
+        let size = egui::vec2(660.0, win_h);
+        // Keep the window on-screen: a tall editor opened near the bottom/right edge
+        // would otherwise spill off the desktop.
+        let mut screen = self.geom.win_pos[0] + egui::vec2(32.0, 32.0);
+        if let Some(vr) = virtual_desktop_rect(ctx) {
+            screen.x = screen.x.clamp(vr.min.x, (vr.max.x - size.x).max(vr.min.x));
+            screen.y = screen.y.clamp(vr.min.y, (vr.max.y - size.y).max(vr.min.y));
         }
-        let screen = self.geom.win_pos[0] + egui::vec2(32.0, 32.0);
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp, File Info")
             .with_position(screen)
-            .with_inner_size(egui::vec2(660.0, 470.0))
+            .with_inner_size(size)
             .with_resizable(false)
             .with_taskbar(false)
             .with_window_level(self.window_level());
@@ -218,10 +353,10 @@ impl super::LinAmpApp {
 
                 // Tab strip that sits on, and joins into, the content box below.
                 let top_round = egui::Rounding { nw: 4.0, ne: 4.0, sw: 0.0, se: 0.0 };
-                let tab_btn = |ui: &mut egui::Ui, label: &str, active: bool| {
+                let tab_btn = |ui: &mut egui::Ui, label: &str, pos: usize, active: bool| {
                     let fill = if active { panel } else { idle_fill };
                     ui.add(
-                        egui::Button::new(mnem(label, 0))
+                        egui::Button::new(mnem(label, pos))
                             .fill(fill)
                             .stroke(line)
                             .rounding(top_round)
@@ -233,21 +368,33 @@ impl super::LinAmpApp {
                 let (basic_resp, id3_resp) = ui
                     .horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        let b = tab_btn(ui, "Basic Info", ed.tab == TagTab::Basic);
-                        let i = tab_btn(ui, "ID3", ed.tab == TagTab::Id3);
+                        let b = tab_btn(ui, "Basic Info", 0, ed.tab == TagTab::Basic);
+                        // A non-editable file has no writable tag, so only Basic Info
+                        // shows: no second tab. The single-tag formats (FLAC/Ogg/M4A)
+                        // aren't ID3, so label their tab "Tags" to match its content.
+                        // Mnemonic: the "ID3" tab is Alt-I (underline the I), the "Tags"
+                        // tab is Alt-A (underline the a) since Alt-T is taken by the
+                        // "Copy to ID3v1" button on MP3.
+                        let (tag_label, tag_pos) = if ed.single { ("Tags", 1) } else { ("ID3", 0) };
+                        let i = on.then(|| tab_btn(ui, tag_label, tag_pos, ed.tab == TagTab::Id3));
                         (b, i)
                     })
                     .inner;
                 if basic_resp.clicked() {
                     ed.tab = TagTab::Basic;
                 }
-                if id3_resp.clicked() {
-                    ed.tab = TagTab::Id3;
+                if let Some(i) = &id3_resp {
+                    if i.clicked() {
+                        ed.tab = TagTab::Id3;
+                    }
+                }
+                if !on {
+                    ed.tab = TagTab::Basic;
                 }
 
                 let group = egui::Frame::group(ui.style()).fill(panel).show(ui, |ui| {
                     ui.set_min_width(624.0);
-                    ui.set_min_height(300.0);
+                    ui.set_min_height(box_h);
                     match ed.tab {
                         TagTab::Basic => {
                             egui::Grid::new("basic_grid")
@@ -260,43 +407,46 @@ impl super::LinAmpApp {
                                         ui.label(v);
                                         ui.end_row();
                                     };
+                                    // Show only rows with real data for this format,
+                                    // so a MIDI/WAV doesn't list 0 kbps, 0 Hz or the
+                                    // MP3-only copyright/emphasis flags.
                                     r("Size", format!("{} bytes", i.size_bytes));
-                                    r("Length", format!("{} seconds", i.length_secs));
-                                    r("Format", i.mpeg.clone());
-                                    r("Bitrate", format!("{} kbps", i.bitrate_kbps));
-                                    r("Sample rate", format!("{} Hz", i.sample_rate_hz));
-                                    r("Channels", i.channel_mode.clone());
-                                    r("Copyrighted", if i.copyrighted { "Yes" } else { "No" }.into());
-                                    r("Original", if i.original { "Yes" } else { "No" }.into());
-                                    r("Emphasis", i.emphasis.clone());
+                                    if !i.mpeg.is_empty() {
+                                        r("Format", i.mpeg.clone());
+                                    }
+                                    if i.length_secs > 0 {
+                                        r("Length", format!("{} seconds", i.length_secs));
+                                    }
+                                    if i.bitrate_kbps > 0 {
+                                        r("Bitrate", format!("{} kbps", i.bitrate_kbps));
+                                    }
+                                    if i.sample_rate_hz > 0 {
+                                        r("Sample rate", format!("{} Hz", i.sample_rate_hz));
+                                    }
+                                    if !i.channel_mode.is_empty() {
+                                        r("Channels", i.channel_mode.clone());
+                                    }
+                                    if i.is_mpeg {
+                                        r("Copyrighted", if i.copyrighted { "Yes" } else { "No" }.into());
+                                        r("Original", if i.original { "Yes" } else { "No" }.into());
+                                        if !i.emphasis.is_empty() {
+                                            r("Emphasis", i.emphasis.clone());
+                                        }
+                                    }
                                 });
                             None
                         }
+                        TagTab::Id3 if ed.single => {
+                            // One native tag (FLAC/Ogg Vorbis comments, MP4 atoms):
+                            // a single column, no ID3v1/ID3v2 split or copy buttons.
+                            ui.label(RichText::new("Tags").strong());
+                            ui.add_space(2.0);
+                            ui.add_enabled_ui(on, |ui| {
+                                tag_fields_grid(ui, &mut ed.v2, "single_grid");
+                            });
+                            None
+                        }
                         TagTab::Id3 => {
-                            let genre_combo = |ui: &mut egui::Ui, salt: &str, val: &mut String| {
-                                let combo = egui::ComboBox::from_id_salt(salt)
-                                    .selected_text(if val.is_empty() { ", ".into() } else { val.clone() })
-                                    .width(140.0)
-                                    .show_ui(ui, |ui| {
-                                        let mut picked = false;
-                                        for g in crate::tags::GENRES {
-                                            if ui.selectable_label(val == g, *g).clicked() {
-                                                *val = (*g).to_string();
-                                                picked = true;
-                                            }
-                                        }
-                                        picked
-                                    });
-                                if combo.inner == Some(true) {
-                                    // egui only auto-closes the popup on a mouse
-                                    // click, so close it ourselves for keyboard
-                                    // selection, and keep focus on the combo so the
-                                    // next Tab moves to the following field rather
-                                    // than jumping back to the top.
-                                    ui.memory_mut(|m| m.close_popup());
-                                    combo.response.request_focus();
-                                }
-                            };
                             let resps = ui.columns(2, |cols| {
                                 // ----- ID3v1 (left) -----
                                 let r1 = cols[0].checkbox(&mut ed.v1_on, mnem("ID3v1 Tag", 4));
@@ -324,30 +474,7 @@ impl super::LinAmpApp {
                                 // ----- ID3v2 (right) -----
                                 let r2 = cols[1].checkbox(&mut ed.v2_on, mnem("ID3v2 Tag", 4));
                                 cols[1].add_enabled_ui(on && ed.v2_on, |ui| {
-                                    egui::Grid::new("v2_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
-                                        let f = &mut ed.v2;
-                                        let row = |ui: &mut egui::Ui, l: &str, v: &mut String| {
-                                            ui.label(l);
-                                            ui.add(egui::TextEdit::singleline(v).desired_width(170.0));
-                                            ui.end_row();
-                                        };
-                                        row(ui, "Track", &mut f.track);
-                                        row(ui, "Title", &mut f.title);
-                                        row(ui, "Artist", &mut f.artist);
-                                        row(ui, "Album", &mut f.album);
-                                        row(ui, "Year", &mut f.year);
-                                        ui.label("Genre");
-                                        genre_combo(ui, "v2_genre", &mut f.genre);
-                                        ui.end_row();
-                                        ui.label("Comment");
-                                        ui.add(egui::TextEdit::multiline(&mut f.comment).desired_width(170.0).desired_rows(2));
-                                        ui.end_row();
-                                        row(ui, "Composer", &mut f.composer);
-                                        row(ui, "Orig. Artist", &mut f.orig_artist);
-                                        row(ui, "Copyright", &mut f.copyright);
-                                        row(ui, "URL", &mut f.url);
-                                        row(ui, "Encoded by", &mut f.encoded_by);
-                                    });
+                                    tag_fields_grid(ui, &mut ed.v2, "v2_grid");
                                 });
                                 (r1, r2)
                             });
@@ -358,10 +485,9 @@ impl super::LinAmpApp {
                 let checks = group.inner;
                 // Erase the seam under the active tab so it reads as one surface
                 // with the content box (the classic folder-tab join).
-                let active_rect = if ed.tab == TagTab::Basic {
-                    basic_resp.rect
-                } else {
-                    id3_resp.rect
+                let active_rect = match (&id3_resp, ed.tab) {
+                    (Some(i), TagTab::Id3) => i.rect,
+                    _ => basic_resp.rect,
                 };
                 // Span from the tab's own bottom edge to the box's top edge so
                 // the join holds even if the tab row is taller than the button.
@@ -382,31 +508,39 @@ impl super::LinAmpApp {
                 }
                 ui.add_space(4.0);
 
-                // Shortcuts: Alt-B/Alt-I pick the tab, Alt-1/2 toggle the tags,
-                // Alt-U update, Alt-C cancel, Alt-T/Alt-F copy to/from ID3v1 (read
-                // raw so a focused field doesn't swallow them). Each shortcut also
-                // moves keyboard focus to the control it acts on, so a following
-                // Tab continues from there.
-                let (k_basic, k_id3, k_v1, k_v2, k_up, k_cancel, k_to, k_from) = ctx.input(|i| {
-                    let a = i.modifiers.alt;
-                    (
-                        a && i.key_pressed(egui::Key::B),
-                        a && i.key_pressed(egui::Key::I),
-                        a && i.key_pressed(egui::Key::Num1),
-                        a && i.key_pressed(egui::Key::Num2),
-                        a && i.key_pressed(egui::Key::U),
-                        a && i.key_pressed(egui::Key::C),
-                        a && i.key_pressed(egui::Key::T),
-                        a && i.key_pressed(egui::Key::F),
-                    )
-                });
+                // Shortcuts: Alt-B picks Basic Info; the second tab is Alt-I for the
+                // "ID3" tab (MP3/MP2/MP1) or Alt-A for the "Tags" tab (FLAC/Ogg/M4A),
+                // matching the underlined letter. Alt-1/2 toggle the tags, Alt-U
+                // update, Alt-C cancel, Alt-T/Alt-F copy to/from ID3v1 (read raw so a
+                // focused field doesn't swallow them). Each shortcut also moves
+                // keyboard focus to the control it acts on, so a following Tab
+                // continues from there.
+                let (k_basic, k_id3, k_tags, k_v1, k_v2, k_up, k_cancel, k_to, k_from) =
+                    ctx.input(|i| {
+                        let a = i.modifiers.alt;
+                        (
+                            a && i.key_pressed(egui::Key::B),
+                            a && i.key_pressed(egui::Key::I),
+                            a && i.key_pressed(egui::Key::A),
+                            a && i.key_pressed(egui::Key::Num1),
+                            a && i.key_pressed(egui::Key::Num2),
+                            a && i.key_pressed(egui::Key::U),
+                            a && i.key_pressed(egui::Key::C),
+                            a && i.key_pressed(egui::Key::T),
+                            a && i.key_pressed(egui::Key::F),
+                        )
+                    });
                 if k_basic {
                     ed.tab = TagTab::Basic;
                     basic_resp.request_focus();
                 }
-                if k_id3 {
-                    ed.tab = TagTab::Id3;
-                    id3_resp.request_focus();
+                // The second tab's mnemonic depends on its label.
+                let k_second = if ed.single { k_tags } else { k_id3 };
+                if k_second {
+                    if let Some(i) = &id3_resp {
+                        ed.tab = TagTab::Id3;
+                        i.request_focus();
+                    }
                 }
                 let id3 = ed.tab == TagTab::Id3;
                 if on && id3 && k_v1 {
@@ -425,7 +559,9 @@ impl super::LinAmpApp {
                     do_save = true;
                 }
 
-                let can_copy = on && id3 && ed.v2_on;
+                // Copying to/from ID3v1 only applies to MP3 (the single-tag
+                // formats have no ID3v1).
+                let can_copy = on && id3 && ed.v2_on && !ed.single;
                 let mut do_copy_to = k_to && can_copy;
                 let mut do_copy_from = k_from && can_copy;
                 ui.horizontal(|ui| {
@@ -440,7 +576,7 @@ impl super::LinAmpApp {
                     if ui.button(mnem("Cancel", 0)).clicked() {
                         close = true;
                     }
-                    if id3 {
+                    if id3 && !ed.single {
                         ui.add_enabled_ui(can_copy, |ui| {
                             let to = ui.button(mnem("Copy to ID3v1", 5));
                             if to.clicked() {
