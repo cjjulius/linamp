@@ -7,19 +7,23 @@ them, and removed once the work has merged to main.
 
 ## Deferred test coverage (Phase 0)
 
-- [ ] **CD TOC reduction** (`src/cdda.rs`): extract a pure
+- [x] **CD TOC reduction** (`src/cdda.rs`): extract a pure
   `toc_from_entries(entries, leadout) -> Vec<CdTrack>` from `read_toc` (both the
   Linux and Windows paths) and unit-test it: a data-first disc, an audio/data mix,
   a single track running to the lead-out, and the zero-length guard. The
   extraction itself touches the device-read code, so validate end-to-end against a
-  real or emulated disc. (The real-disc read is confirmed: on Pop!_OS 2026-10-28 a
-  10-track audio CD read its TOC correctly, durations 3:37..6:33, total 49:21, and
-  played/skipped cleanly. Still to do: the pure-function extraction and its unit
-  tests.)
-- [ ] **`rounded_rect_rects`** (`src/app/platform_win.rs`, in the `x11util`
+  real or emulated disc. Done: added `TrackEntry` + `toc_from_entries` (named
+  `TrackEntry` to avoid the Linux `TocEntry` ioctl struct), both `read_toc` paths
+  now build entries and call it, and five unit tests cover single-to-lead-out,
+  leading data track, audio/data mix, zero-length drop, and data-only error. The
+  real-disc read is confirmed too: on Pop!_OS 2026-10-28 a 10-track audio CD read
+  its TOC correctly (durations 3:37..6:33, total 49:21) and played/skipped cleanly.
+- [x] **`rounded_rect_rects`** (`src/app/platform_win.rs`, in the `x11util`
   module): add unit tests (radius 0 is a single rect; corner inset is symmetric
   top/bottom). This module is Linux-only, so it does not compile on Windows and
-  the test must be added and run there.
+  the test must be added and run there. Done: added a `#[cfg(test)]` submodule in
+  `x11util` with the zero-radius single-rect case (incl. negative-radius clamp) and
+  the top/bottom inset symmetry case.
 
 ## Phase 1 fixes needing hardware verification
 
@@ -53,11 +57,11 @@ Cross-platform (egui + lofty), QA'd on Windows. Pop!_OS verified 2026-10-28:
   Pop!_OS: FLAC title edit wrote a Vorbis `TITLE=` comment to disk; MP2 title edit
   (ID3v2 enabled) wrote an ID3v2 `TIT2` frame (UTF-16) to disk. Both confirmed by
   reading the file bytes after Update. MP1 shares the MP2 path.
-  Finding (cross-platform, not fixed): for the single-tag formats the second tab
-  is still labelled "ID3" (`tag_ui.rs:374`) even though its content header and
-  fields are the generic "Tags" column; for FLAC/Ogg/M4A that label is wrong
-  (they are not ID3). The tab label should follow the single-tag flag like the
-  content does.
+  Finding (cross-platform, fixed): for the single-tag formats the second tab was
+  labelled "ID3" (`tag_ui.rs`) even though its content header and fields are the
+  generic "Tags" column; for FLAC/Ogg/M4A that label was wrong (they are not ID3).
+  The tab label now follows the `single` flag, so it reads "Tags" for those formats
+  and "ID3" for MP3/MP2/MP1. Verified: the FLAC editor now shows "Basic Info | Tags".
 - [x] **Basic Info for all formats.** MIDI shows size, format (type + track count)
   and length (via `midi::duration`); other audio shows duration/bitrate/sample
   rate/channels; a read-only format (e.g. WAV) shows only the Basic Info tab (no
