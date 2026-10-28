@@ -51,14 +51,17 @@ pub struct FileInfo {
 }
 
 /// Extensions LinAmp can currently *write* tags for. Reading isn't restricted.
-pub const EDITABLE_EXTS: &[&str] = &["mp3", "flac", "ogg", "oga", "opus", "m4a", "m4b", "mp4"];
+/// MP2/MP1 are MPEG audio too, so they carry ID3 tags like MP3.
+pub const EDITABLE_EXTS: &[&str] =
+    &["mp3", "mp2", "mp1", "mpa", "flac", "ogg", "oga", "opus", "m4a", "m4b", "mp4"];
 
-/// True when `path` uses ID3 tags (the v1/v2 model). Other editable formats
-/// (FLAC/Ogg Vorbis comments, MP4 atoms) carry a single native tag instead.
+/// True when `path` uses ID3 tags (the v1/v2 model), i.e. any MPEG audio layer.
+/// Other editable formats (FLAC/Ogg Vorbis comments, MP4 atoms) carry a single
+/// native tag instead.
 pub fn uses_id3(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("mp3"))
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "mp3" | "mp2" | "mp1" | "mpa"))
         .unwrap_or(false)
 }
 
@@ -547,10 +550,14 @@ mod tests {
 
 
 
+
+
     #[test]
     fn editable_exts() {
         assert!(can_edit(Path::new("song.mp3")));
         assert!(can_edit(Path::new("SONG.MP3")));
+        assert!(can_edit(Path::new("song.mp2"))); // MP2 is MPEG audio, ID3-taggable
+        assert!(uses_id3(Path::new("song.mp2")));
         assert!(can_edit(Path::new("song.flac")));
         assert!(can_edit(Path::new("tune.ogg")));
         assert!(can_edit(Path::new("tune.m4a")));
