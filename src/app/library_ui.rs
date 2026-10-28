@@ -31,8 +31,8 @@ pub(super) enum LibAction {
 pub(super) enum DynRow {
     /// A clickable row that runs `act` and closes the menu.
     Item { label: String, act: LibAction },
-    /// A row that opens the Rate flyout (the one nested menu), chained the way the
-    /// EQ-presets menu opens its delete list: the parent closes, the flyout opens.
+    /// A row that opens the Rate flyout (the one nested menu) in a second window
+    /// beside this menu; the parent stays open while the flyout is up.
     RateSub { label: String },
     Sep,
 }
