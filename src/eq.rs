@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use rodio::Source;
 
-/// Band centre frequencies (Hz), matching the classic Winamp 10-band EQ.
+/// Band centre frequencies (Hz), matching the classic 10-band EQ.
 pub const BAND_FREQS: [f32; 10] = [
     60.0, 170.0, 310.0, 600.0, 1000.0, 3000.0, 6000.0, 12000.0, 14000.0, 16000.0,
 ];

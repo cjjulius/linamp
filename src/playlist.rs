@@ -161,7 +161,7 @@ pub struct Playlist {
     pub current: Option<usize>,
     /// Shuffle "bag": a shuffled permutation of track indices and the position
     /// of the next entry to play, so shuffle plays every track once per cycle
-    /// (classic Winamp behaviour) rather than picking at random with replacement.
+    /// (the classic player behaviour) rather than picking at random with replacement.
     /// Rebuilt lazily when the track count changes or the cycle is exhausted.
     shuffle_order: Vec<usize>,
     shuffle_pos: usize,
@@ -276,7 +276,7 @@ impl Playlist {
 
     /// Remove tracks whose file no longer exists. Returns how many were removed.
     /// The currently-playing track stays selected if it survives (else `current`
-    /// clears). Classic Winamp's "remove missing files".
+    /// clears). The classic player's "remove missing files".
     pub fn remove_missing(&mut self) -> usize {
         let before = self.tracks.len();
         let cur = self.current_path();
@@ -292,7 +292,7 @@ impl Playlist {
         self.reselect(cur);
     }
 
-    /// Target index for a relative "jump N tracks", classic Winamp's numpad
+    /// Target index for a relative "jump N tracks", the classic player's numpad
     /// 1 and 3, which skip 10 songs back and forward. Counts from the current
     /// track (or the top when nothing is playing), clamps at the list ends and
     /// does not wrap. `None` for an empty list.

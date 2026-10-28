@@ -1,4 +1,4 @@
-//! Playlist multi-selection logic for the Winamp-style ctrl/shift gestures,
+//! Playlist multi-selection logic for the classic-style ctrl/shift gestures,
 //! kept pure (operating on a plain set + anchor) so it can be unit-tested
 //! without constructing the whole app.
 

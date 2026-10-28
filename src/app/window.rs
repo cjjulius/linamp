@@ -64,7 +64,7 @@ impl super::LinAmpApp {
         if secondary && win == ClWin::Main {
             if let Some(l) = local {
                 // Right-click on the Stop button opens the stop options (classic
-                // Winamp); anywhere else on the main window opens the Options menu.
+                // the classic player); anywhere else on the main window opens the Options menu.
                 let (nx, ny) = (l.x / self.scale, l.y / self.scale);
                 if !self.geom.main_shade && classic::region_at(nx, ny) == Some(Btn::Stop) {
                     self.open_popup_in(Popup::StopMenu, win, l);
@@ -85,7 +85,7 @@ impl super::LinAmpApp {
                 {
                     let row = classic::pl_row_at(ny, self.plview.first);
                     if row < self.playlist.len() {
-                        // Winamp rule: right-clicking a row outside the current
+                        // the classic rule: right-clicking a row outside the current
                         // selection selects just it; a row already in the
                         // selection keeps the whole multi-selection.
                         if !self.plview.selection.contains(&row) {
@@ -111,7 +111,7 @@ impl super::LinAmpApp {
             self.plview.first = (self.plview.first as i32 + step).clamp(0, max.max(0)) as usize;
         }
 
-        // Mouse wheel over the main window adjusts volume, like classic Winamp
+        // Mouse wheel over the main window adjusts volume, like the classic player
         // (scroll up louder, down quieter). The playlist uses the wheel to scroll;
         // the EQ window has no wheel action. Applies in shade mode too.
         if win == ClWin::Main && scroll != 0.0 {
@@ -119,7 +119,7 @@ impl super::LinAmpApp {
             self.player.set_volume(v);
         }
 
-        // Double-click an EQ band or preamp to reset it to 0 dB (flat), like Winamp
+        // Double-click an EQ band or preamp to reset it to 0 dB (flat), like the classic player
         // (#140). Uses egui's own double-click detection (fires on the second
         // release), which is reliable regardless of frame timing.
         if dbl_click && win == ClWin::Eq && !shaded {
@@ -133,7 +133,7 @@ impl super::LinAmpApp {
             }
         }
 
-        // Double-click the balance slider to re-centre it (#140), as Winamp does.
+        // Double-click the balance slider to re-centre it (#140), as the classic player does.
         if dbl_click && win == ClWin::Main && !shaded {
             if let Some(l) = local {
                 let (nx, ny) = (l.x / self.scale, l.y / self.scale);
@@ -408,7 +408,7 @@ impl super::LinAmpApp {
 
         if released {
             if self.geom.resize_pl.is_some() {
-                // Quantize to Winamp's 25px (width) / 29px (height) grid now the
+                // Quantize to the classic player's 25px (width) / 29px (height) grid now the
                 // drag is finished (#61).
                 let hstep = 29.0;
                 self.plview.px_h = ((self.plview.px_h / hstep).round() * hstep).max(87.0);
@@ -429,7 +429,7 @@ impl super::LinAmpApp {
                             } else {
                                 // Btn::Time toggles elapsed/remaining on a single
                                 // click via trigger_classic, matching classic
-                                // Winamp's time display behaviour.
+                                // the classic player's time display behaviour.
                                 self.trigger_classic(ctx, r);
                             }
                         }
@@ -762,7 +762,7 @@ impl super::LinAmpApp {
 }
 
 /// Volume after one mouse-wheel notch over the main window: scrolling up is
-/// louder, down is quieter, clamped to 0..=1 (classic Winamp main-window wheel
+/// louder, down is quieter, clamped to 0..=1 (the classic player main-window wheel
 /// behaviour). `step` is the per-notch change.
 pub(crate) fn wheel_volume(current: f32, scroll: f32, step: f32) -> f32 {
     let delta = if scroll > 0.0 {

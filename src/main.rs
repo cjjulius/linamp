@@ -102,7 +102,7 @@ fn main() -> eframe::Result<()> {
     }
 
     // Single-instance guard: hold an exclusive lock so a second launch exits instead
-    // of opening a rival set of classic windows (classic Winamp is single-instance,
+    // of opening a rival set of classic windows (the classic player is single-instance,
     // and two LinAmps fight over the audio device and window focus). The headless
     // flags above are exempt (they may run alongside a GUI). The OS frees the lock on
     // exit or crash, so a stale lock can never wedge startup.

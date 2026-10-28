@@ -559,7 +559,7 @@ pub fn pl_max_height(desktop_bottom: f32, top_y: f32, scale: f32) -> Option<f32>
     (max_h >= PL_MIN_H).then_some(max_h)
 }
 
-/// Format a playlist time like Winamp's bottom bar: `M:SS`, or `H:MM:SS` once it
+/// Format a playlist time like the classic player's bottom bar: `M:SS`, or `H:MM:SS` once it
 /// reaches an hour. Minutes/hours have no leading zero; seconds (and minutes
 /// inside an H:MM:SS) are zero-padded. Negative input clamps to zero.
 /// EQ slider sprite index (0 = top/boost .. 27 = bottom/cut) for value `v`
