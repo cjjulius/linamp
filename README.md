@@ -4,7 +4,7 @@
 
 A Winamp-inspired audio player for Linux and Windows, in Rust.
 
-Pixel-perfect classic skin with full `.wsz` skin support - 10-band EQ - live analyzer - playlist - full keyboard shortcut support
+Pixel-perfect classic skin with `.wsz` skin support - 10-band EQ - live analyzer - playlist - full keyboard shortcut support
 
 <img src="assets/screenshot.png" alt="LinAmp in the classic skin, main player, equalizer and playlist" width="380">
 
