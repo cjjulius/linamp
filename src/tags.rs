@@ -24,6 +24,12 @@ pub struct Id3Fields {
     pub copyright: String,
     pub url: String,
     pub encoded_by: String,
+    /// Disc number, like `track` (plain `1` or `1/2`).
+    pub disc: String,
+    /// Beats per minute (plain integer).
+    pub bpm: String,
+    /// Part of a compilation (iTunes TCMP / `FlagCompilation`).
+    pub compilation: bool,
 }
 
 /// Read-only format / file info for the Basic Info tab.
@@ -39,10 +45,25 @@ pub struct FileInfo {
     pub copyrighted: bool,
     pub original: bool,
     pub emphasis: String,
+    /// True for MPEG audio (MP3), the only format with the copyright/original/
+    /// emphasis flags; the Basic Info tab shows those rows only then.
+    pub is_mpeg: bool,
 }
 
 /// Extensions LinAmp can currently *write* tags for. Reading isn't restricted.
-pub const EDITABLE_EXTS: &[&str] = &["mp3"];
+/// MP2/MP1 are MPEG audio too, so they carry ID3 tags like MP3.
+pub const EDITABLE_EXTS: &[&str] =
+    &["mp3", "mp2", "mp1", "mpa", "flac", "ogg", "oga", "opus", "m4a", "m4b", "mp4"];
+
+/// True when `path` uses ID3 tags (the v1/v2 model), i.e. any MPEG audio layer.
+/// Other editable formats (FLAC/Ogg Vorbis comments, MP4 atoms) carry a single
+/// native tag instead.
+pub fn uses_id3(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "mp3" | "mp2" | "mp1" | "mpa"))
+        .unwrap_or(false)
+}
 
 /// ID3v1 text-field byte cap (title/artist/album/comment); year is 4.
 pub const V1_MAX_TEXT: usize = 30;
@@ -105,7 +126,15 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
         title: fix(&tag.title().map(|s| s.to_string()).unwrap_or_default()),
         artist: fix(&tag.artist().map(|s| s.to_string()).unwrap_or_default()),
         album: fix(&tag.album().map(|s| s.to_string()).unwrap_or_default()),
-        year: tag.year().map(|y| y.to_string()).unwrap_or_default(),
+        // Year lives in the TDRC recording-time frame (a full timestamp like
+        // "2024-05-01" reads as its 4-digit year); fall back to the Accessor year.
+        year: tag
+            .get_string(&ItemKey::RecordingDate)
+            .and_then(|s| s.get(0..4))
+            .filter(|y| y.chars().all(|c| c.is_ascii_digit()))
+            .map(|y| y.to_string())
+            .or_else(|| tag.year().map(|y| y.to_string()))
+            .unwrap_or_default(),
         genre: fix(&tag.genre().map(|s| s.to_string()).unwrap_or_default()),
         comment: fix(&tag.comment().map(|s| s.to_string()).unwrap_or_default()),
         composer: text(&ItemKey::Composer),
@@ -123,67 +152,188 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
             .map(|s| fix(&s))
             .unwrap_or_default(),
         encoded_by: text(&ItemKey::EncodedBy),
+        disc: tag.disk().map(|d| d.to_string()).unwrap_or_default(),
+        bpm: {
+            let b = tag
+                .get_string(&ItemKey::IntegerBpm)
+                .or_else(|| tag.get_string(&ItemKey::Bpm));
+            b.map(|s| s.to_string()).unwrap_or_default()
+        },
+        // Any non-empty, non-"0" value counts as set (iTunes writes "1").
+        compilation: !matches!(
+            tag.get_string(&ItemKey::FlagCompilation),
+            None | Some("") | Some("0")
+        ),
     }
 }
 
-/// Read MPEG format info for the Basic Info tab (best-effort; blank on failure).
+/// Read the single native tag of a non-ID3 file (FLAC/Ogg Vorbis comments, MP4
+/// atoms) into the shared field set. Returns the defaults when the file has no
+/// tag yet. The same `Id3Fields` is reused because every field maps to a
+/// format-agnostic `ItemKey`.
+pub fn read_single(path: &Path) -> Id3Fields {
+    use lofty::file::TaggedFileExt;
+    lofty::read_from_path(path)
+        .ok()
+        .and_then(|t| t.primary_tag().map(fields_from_tag))
+        .unwrap_or_default()
+}
+
+/// Write the single native tag of a non-ID3 file from the shared field set,
+/// preserving items we don't edit. The file's primary tag type is used (Vorbis
+/// comments for FLAC/Ogg, the MP4 item list for M4A), so the fields land in the
+/// format's own keys via lofty's `ItemKey` mapping.
+pub fn write_single(path: &Path, fields: &Id3Fields) -> Result<()> {
+    use lofty::config::WriteOptions;
+    use lofty::file::TaggedFileExt;
+    use lofty::tag::{Tag, TagExt};
+    let tagged = lofty::read_from_path(path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let mut tag = tagged
+        .primary_tag()
+        .cloned()
+        .unwrap_or_else(|| Tag::new(tagged.primary_tag_type()));
+    apply_v2(&mut tag, fields);
+    tag.save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("writing tags to {}", path.display()))?;
+    Ok(())
+}
+
+/// A friendly format name from the file extension, so the Basic Info tab names
+/// the format even for types lofty doesn't parse (MIDI, tracker modules).
+fn format_label(ext: &str) -> String {
+    match ext {
+        "mp3" | "mp2" | "mp1" | "mpa" => "MP3",
+        "flac" => "FLAC",
+        "ogg" | "oga" => "Ogg Vorbis",
+        "opus" => "Opus",
+        "m4a" | "m4b" | "mp4" => "MPEG-4 / AAC",
+        "wav" | "wave" => "WAV",
+        "aif" | "aiff" | "aifc" => "AIFF",
+        "mid" | "midi" | "rmi" | "kar" => "MIDI",
+        "mod" | "xm" | "it" | "s3m" | "mtm" | "umx" => "Tracker module",
+        "" => return String::new(),
+        other => return other.to_uppercase(),
+    }
+    .to_string()
+}
+
+fn channel_label(ch: u8) -> String {
+    match ch {
+        1 => "Mono".to_string(),
+        2 => "Stereo".to_string(),
+        n => format!("{n} channels"),
+    }
+}
+
+/// Read file / format info for the Basic Info tab (best-effort; fields stay blank
+/// when unavailable). Works for every format: a label comes from the extension,
+/// and duration / bitrate / sample rate / channels come from lofty for the audio
+/// formats it parses (MIDI and tracker modules get the label and size only).
 pub fn read_info(path: &Path) -> FileInfo {
     use lofty::config::ParseOptions;
     use lofty::file::AudioFile;
     use lofty::mpeg::{ChannelMode, Emphasis, Layer, MpegFile, MpegVersion};
 
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
     let mut info = FileInfo {
         path: path.display().to_string(),
         size_bytes: std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
+        mpeg: format_label(&ext),
         ..Default::default()
     };
-    // The MPEG parser only populates this for MPEG audio, but on any other file it
-    // scans the whole thing looking for frames before failing, seconds of freeze on
-    // a large .wav/.aiff when the tag editor opens. Only run it for MPEG extensions.
-    let is_mpeg = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "mp3" | "mp2" | "mp1" | "mpa"))
-        .unwrap_or(false);
+    let is_mpeg = matches!(ext.as_str(), "mp3" | "mp2" | "mp1" | "mpa");
     if is_mpeg {
+        info.is_mpeg = true;
+        // MP3 reads the MPEG-specific details (version/layer, channel mode, and the
+        // copyright/original/emphasis flags) the generic properties don't carry.
         if let Ok(mut f) = std::fs::File::open(path) {
-        if let Ok(mpeg) = MpegFile::read_from(&mut f, ParseOptions::new()) {
-            let p = mpeg.properties();
+            if let Ok(mpeg) = MpegFile::read_from(&mut f, ParseOptions::new()) {
+                let p = mpeg.properties();
+                info.length_secs = p.duration().as_secs();
+                info.bitrate_kbps = p.audio_bitrate();
+                info.sample_rate_hz = p.sample_rate();
+                let ver = match p.version() {
+                    MpegVersion::V1 => "MPEG-1",
+                    MpegVersion::V2 => "MPEG-2",
+                    MpegVersion::V2_5 => "MPEG-2.5",
+                    MpegVersion::V4 => "MPEG-4",
+                };
+                let layer = match p.layer() {
+                    Layer::Layer1 => "Layer 1",
+                    Layer::Layer2 => "Layer 2",
+                    Layer::Layer3 => "Layer 3",
+                };
+                info.mpeg = format!("{ver} {layer}");
+                info.channel_mode = match p.channel_mode() {
+                    ChannelMode::Stereo => "Stereo",
+                    ChannelMode::JointStereo => "Joint Stereo",
+                    ChannelMode::DualChannel => "Dual Channel",
+                    ChannelMode::SingleChannel => "Mono",
+                }
+                .to_string();
+                info.copyrighted = p.is_copyright();
+                info.original = p.is_original();
+                info.emphasis = match p.emphasis() {
+                    None => "None",
+                    Some(Emphasis::MS5015) => "50/15 ms",
+                    Some(Emphasis::Reserved) => "Reserved",
+                    Some(Emphasis::CCIT_J17) => "CCIT J.17",
+                }
+                .to_string();
+            }
+        }
+    } else if lofty_parses(&ext) {
+        // FLAC/Ogg/Opus/MP4/WAV/AIFF: lofty's own parser gives the generic audio
+        // properties fast (no frame scan).
+        if let Ok(tagged) = lofty::read_from_path(path) {
+            let p = tagged.properties();
             info.length_secs = p.duration().as_secs();
-            info.bitrate_kbps = p.audio_bitrate();
-            info.sample_rate_hz = p.sample_rate();
-            let ver = match p.version() {
-                MpegVersion::V1 => "MPEG-1",
-                MpegVersion::V2 => "MPEG-2",
-                MpegVersion::V2_5 => "MPEG-2.5",
-                MpegVersion::V4 => "MPEG-4",
-            };
-            let layer = match p.layer() {
-                Layer::Layer1 => "Layer 1",
-                Layer::Layer2 => "Layer 2",
-                Layer::Layer3 => "Layer 3",
-            };
-            info.mpeg = format!("{ver} {layer}");
-            info.channel_mode = match p.channel_mode() {
-                ChannelMode::Stereo => "Stereo",
-                ChannelMode::JointStereo => "Joint Stereo",
-                ChannelMode::DualChannel => "Dual Channel",
-                ChannelMode::SingleChannel => "Mono",
-            }
-            .to_string();
-            info.copyrighted = p.is_copyright();
-            info.original = p.is_original();
-            info.emphasis = match p.emphasis() {
-                None => "None",
-                Some(Emphasis::MS5015) => "50/15 ms",
-                Some(Emphasis::Reserved) => "Reserved",
-                Some(Emphasis::CCIT_J17) => "CCIT J.17",
-            }
-            .to_string();
+            info.bitrate_kbps = p.audio_bitrate().or_else(|| p.overall_bitrate()).unwrap_or(0);
+            info.sample_rate_hz = p.sample_rate().unwrap_or(0);
+            info.channel_mode = p.channels().map(channel_label).unwrap_or_default();
+        }
+    } else {
+        // MIDI and tracker modules aren't parsed by lofty, so reuse the same length
+        // readers the playlist uses (SoundFont-free), so at least the duration shows.
+        if let Some(d) = crate::midi::duration(path).or_else(|| crate::tracker::duration(path)) {
+            info.length_secs = d.as_secs();
+        }
+        // Enrich the MIDI Format row with the SMF type (0/1/2) and track count,
+        // a cheap 14-byte header read.
+        if matches!(ext.as_str(), "mid" | "midi" | "rmi" | "kar") {
+            if let Some((fmt, tracks)) = midi_header(path) {
+                info.mpeg = format!("MIDI (type {fmt}, {tracks} track(s))");
             }
         }
     }
     info
+}
+
+/// Read a Standard MIDI File header (`MThd`): the format type (0/1/2) and track
+/// count, for the Basic Info tab. `None` when the header isn't a valid `MThd`.
+fn midi_header(path: &Path) -> Option<(u16, u16)> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() < 14 || &bytes[0..4] != b"MThd" {
+        return None;
+    }
+    let fmt = u16::from_be_bytes([bytes[8], bytes[9]]);
+    let tracks = u16::from_be_bytes([bytes[10], bytes[11]]);
+    Some((fmt, tracks))
+}
+
+/// Whether lofty can parse this extension for audio properties (so we don't ask
+/// it to open MIDI / tracker modules it doesn't understand).
+fn lofty_parses(ext: &str) -> bool {
+    matches!(
+        ext,
+        "flac" | "ogg" | "oga" | "opus" | "spx" | "m4a" | "m4b" | "mp4"
+            | "aac" | "wav" | "wave" | "aif" | "aiff" | "aifc" | "ape" | "wv"
+    )
 }
 
 /// Prepare an ID3v1 text field: trim, drop if empty and cap to `max` bytes on a
@@ -219,7 +369,12 @@ fn v1_text(s: &str, max: usize) -> Option<String> {
 
 /// Write the ID3 tags. For each of v1/v2: `Some` writes/updates it, `None`
 /// removes it. The ID3v2 tag is edited in place so other frames survive.
-pub fn write_id3(path: &Path, v1: Option<&Id3Fields>, v2: Option<&Id3Fields>) -> Result<()> {
+pub fn write_id3(
+    path: &Path,
+    v1: Option<&Id3Fields>,
+    v2: Option<&Id3Fields>,
+    id3v23: bool,
+) -> Result<()> {
     use lofty::config::WriteOptions;
     use lofty::file::TaggedFileExt;
     use lofty::tag::{Tag, TagExt, TagType};
@@ -238,7 +393,13 @@ pub fn write_id3(path: &Path, v1: Option<&Id3Fields>, v2: Option<&Id3Fields>) ->
                 .and_then(|t| t.tag(TagType::Id3v2).cloned());
             let mut tag = existing.unwrap_or_else(|| Tag::new(TagType::Id3v2));
             apply_v2(&mut tag, f);
-            tag.save_to_path(path, WriteOptions::default())
+            // Save through the concrete ID3v2 tag so the recording-time frame is a
+            // proper timestamp: lofty writes TDRC for 2.4 and splits it into TYER
+            // for 2.3 (a generic text TDRC would be dropped on a 2.3 write). 2.3 is
+            // the most compatible; 2.4 is the newer standard. Reading handles both.
+            use lofty::id3::v2::Id3v2Tag;
+            let id3: Id3v2Tag = tag.into();
+            id3.save_to_path(path, WriteOptions::new().use_id3v23(id3v23))
                 .with_context(|| format!("writing ID3v2 to {}", path.display()))?;
         }
         None => {
@@ -314,13 +475,43 @@ fn apply_v2(tag: &mut lofty::tag::Tag, f: &Id3Fields) {
     str_f!(f.album, set_album, remove_album);
     str_f!(f.genre, set_genre, remove_genre);
     str_f!(f.comment, set_comment, remove_comment);
-    num_f!(f.year, set_year, remove_year);
+    // Year goes to the TDRC recording-time frame: lofty writes it as TDRC for
+    // ID3v2.4 and splits it into TYER for ID3v2.3 (the generic `set_year` frame is
+    // dropped on a 2.3 write, so a plain year would vanish). Empty clears it; a
+    // non-numeric value is left as-is rather than dropped.
+    {
+        let y = f.year.trim();
+        if y.is_empty() {
+            tag.remove_year();
+            tag.remove_key(&ItemKey::RecordingDate);
+        } else if y.parse::<u32>().is_ok() {
+            tag.remove_year(); // drop any legacy TYER so the TDRC year is read
+            tag.insert_text(ItemKey::RecordingDate, y.to_string());
+        }
+    }
     num_f!(f.track, set_track, remove_track);
+    num_f!(f.disc, set_disk, remove_disk);
     {
         key_f!(f.composer, ItemKey::Composer);
         key_f!(f.orig_artist, ItemKey::OriginalArtist);
         key_f!(f.copyright, ItemKey::CopyrightMessage);
         key_f!(f.encoded_by, ItemKey::EncodedBy);
+        // BPM: ID3v2 and MP4 use the integer frame (TBPM / tmpo), Vorbis comments
+        // use "BPM". Write both so whichever the format accepts is set (lofty drops
+        // the key it doesn't map).
+        if f.bpm.trim().is_empty() {
+            tag.remove_key(&ItemKey::IntegerBpm);
+            tag.remove_key(&ItemKey::Bpm);
+        } else {
+            tag.insert_text(ItemKey::IntegerBpm, f.bpm.clone());
+            tag.insert_text(ItemKey::Bpm, f.bpm.clone());
+        }
+        // Compilation is a boolean flag; iTunes stores it as "1" (TCMP).
+        if f.compilation {
+            tag.insert_text(ItemKey::FlagCompilation, "1".to_string());
+        } else {
+            tag.remove_key(&ItemKey::FlagCompilation);
+        }
         // URL is a WOAS locator frame (not text).
         if f.url.trim().is_empty() {
             tag.remove_key(&ItemKey::AudioSourceUrl);
@@ -355,18 +546,72 @@ mod tests {
         assert_eq!(v1_text("   ", V1_MAX_TEXT), None);
     }
 
+
+
+
+
+
+
     #[test]
     fn editable_exts() {
         assert!(can_edit(Path::new("song.mp3")));
         assert!(can_edit(Path::new("SONG.MP3")));
-        assert!(!can_edit(Path::new("song.flac")));
+        assert!(can_edit(Path::new("song.mp2"))); // MP2 is MPEG audio, ID3-taggable
+        assert!(uses_id3(Path::new("song.mp2")));
+        assert!(can_edit(Path::new("song.flac")));
+        assert!(can_edit(Path::new("tune.ogg")));
+        assert!(can_edit(Path::new("tune.m4a")));
+        assert!(!can_edit(Path::new("sound.wav")));
         assert!(!can_edit(Path::new("noext")));
+        // Only MP3 uses the ID3 v1/v2 model; the others carry a single tag.
+        assert!(uses_id3(Path::new("song.mp3")));
+        assert!(!uses_id3(Path::new("song.flac")));
     }
 
     #[test]
     fn write_rejects_unsupported() {
-        let err = write_id3(Path::new("x.flac"), None, None).unwrap_err();
+        let err = write_id3(Path::new("x.wav"), None, None, true).unwrap_err();
         assert!(err.to_string().contains("isn't supported"));
+    }
+
+
+
+    #[test]
+    fn apply_and_read_round_trips_across_tag_types() {
+        // The field mapping works for every editable format, since each field maps
+        // to a format-agnostic ItemKey. VorbisComments (FLAC/Ogg) and the MP4 item
+        // list are exercised in memory, so no audio file is needed.
+        use lofty::tag::{Tag, TagType};
+        let f = Id3Fields {
+            track: "4".into(),
+            title: "T".into(),
+            artist: "A".into(),
+            album: "Al".into(),
+            year: "2021".into(),
+            genre: "Jazz".into(),
+            comment: "c".into(),
+            composer: "Comp".into(),
+            disc: "1".into(),
+            bpm: "90".into(),
+            compilation: true,
+            ..Default::default()
+        };
+        for tt in [TagType::VorbisComments, TagType::Mp4Ilst] {
+            let mut tag = Tag::new(tt);
+            apply_v2(&mut tag, &f);
+            let g = fields_from_tag(&tag);
+            // Core fields every format maps round-trip.
+            assert_eq!(g.title, "T", "{tt:?}");
+            assert_eq!(g.artist, "A", "{tt:?}");
+            assert_eq!(g.album, "Al", "{tt:?}");
+            assert_eq!(g.year, "2021", "{tt:?}");
+            assert_eq!(g.track, "4", "{tt:?}");
+            assert_eq!(g.disc, "1", "{tt:?}");
+            assert_eq!(g.genre, "Jazz", "{tt:?}");
+            assert_eq!(g.composer, "Comp", "{tt:?}");
+            assert_eq!(g.bpm, "90", "{tt:?}");
+            assert!(g.compilation, "{tt:?}");
+        }
     }
 
     #[test]
@@ -395,6 +640,9 @@ mod tests {
             copyright: "(c) 2024".into(),
             url: "https://example.com".into(),
             encoded_by: "LinAmp".into(),
+            disc: "2".into(),
+            bpm: "128".into(),
+            compilation: true,
         };
         let mut tag = Tag::new(TagType::Id3v2);
         apply_v2(&mut tag, &f);
@@ -452,6 +700,9 @@ mod tests {
             copyright: "(c) 2024".into(),
             url: "https://example.com".into(),
             encoded_by: "LinAmp".into(),
+            disc: "2".into(),
+            bpm: "128".into(),
+            compilation: true,
         };
         let v1 = Id3Fields {
             track: "3".into(),
@@ -463,7 +714,7 @@ mod tests {
             comment: "v1 comment".into(),
             ..Default::default()
         };
-        write_id3(&tmp, Some(&v1), Some(&v2)).unwrap();
+        write_id3(&tmp, Some(&v1), Some(&v2), true).unwrap();
 
         let (gv1, gv2) = read_id3(&tmp);
         let gv1 = gv1.expect("v1 present");
@@ -482,13 +733,16 @@ mod tests {
         assert_eq!(gv2.copyright, "(c) 2024");
         assert_eq!(gv2.url, "https://example.com");
         assert_eq!(gv2.encoded_by, "LinAmp");
+        assert_eq!(gv2.disc, "2");
+        assert_eq!(gv2.bpm, "128");
+        assert!(gv2.compilation);
         // ID3v1 fields round-trip too.
         assert_eq!(gv1.title, "V1 Title");
         assert_eq!(gv1.artist, "V1 Artist");
         assert_eq!(gv1.year, "1999");
 
         // Removing ID3v1 leaves ID3v2 intact.
-        write_id3(&tmp, None, Some(&v2)).unwrap();
+        write_id3(&tmp, None, Some(&v2), true).unwrap();
         let (gv1, gv2) = read_id3(&tmp);
         assert!(gv1.is_none());
         assert_eq!(gv2.unwrap().title, "V2 Title");
@@ -520,7 +774,7 @@ mod tests {
             comment: long.clone(),
             ..Default::default()
         };
-        write_id3(&tmp, Some(&v1), None).unwrap();
+        write_id3(&tmp, Some(&v1), None, true).unwrap();
 
         // Audio must survive: same (±1s) duration, still readable.
         let after = read_info(&tmp).length_secs;
@@ -532,6 +786,34 @@ mod tests {
         let gv1 = gv1.expect("v1 tag present and readable");
         // ID3v1 is a fixed 30-char (latin-1) field, so at most 30 characters survive.
         assert!(gv1.title.chars().count() <= V1_MAX_TEXT, "title: {:?}", gv1.title);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+
+
+    #[test]
+    fn id3v2_version_follows_the_pref() {
+        // The `id3v23` flag selects the ID3v2 major version written (2.3 vs 2.4),
+        // read back from the raw tag header (the 4th byte after "ID3").
+        let src = Path::new("music/Aria Nocturne - Crystal Harbor.mp3");
+        if !src.exists() {
+            return;
+        }
+        let major = |path: &Path| -> Option<u8> {
+            let b = std::fs::read(path).ok()?;
+            (b.len() >= 4 && &b[0..3] == b"ID3").then(|| b[3])
+        };
+        let v2 = Id3Fields { title: "V".into(), ..Default::default() };
+        let tmp = std::env::temp_dir().join("linamp_id3_version.mp3");
+
+        std::fs::copy(src, &tmp).unwrap();
+        write_id3(&tmp, None, Some(&v2), true).unwrap();
+        assert_eq!(major(&tmp), Some(3), "id3v23=true should write ID3v2.3");
+
+        std::fs::copy(src, &tmp).unwrap();
+        write_id3(&tmp, None, Some(&v2), false).unwrap();
+        assert_eq!(major(&tmp), Some(4), "id3v23=false should write ID3v2.4");
+
         let _ = std::fs::remove_file(&tmp);
     }
 }

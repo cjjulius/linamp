@@ -49,6 +49,46 @@ impl CdTrack {
     }
 }
 
+/// One normalized entry from a disc TOC: a track number, its first sector, and
+/// whether it is a data track (skipped for CDDA playback). The platform `read_toc`
+/// builds these from its native TOC struct and hands them to [`toc_from_entries`].
+/// (Named `TrackEntry` to avoid clashing with the Linux `TocEntry` ioctl struct.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TrackEntry {
+    pub number: u8,
+    pub start_lba: u32,
+    pub is_data: bool,
+}
+
+/// Turn the raw TOC entries (in disc order) and the lead-out LBA into the list of
+/// playable audio tracks, shared by the Linux and Windows `read_toc`. Each audio
+/// track runs from its start to the next entry's start (or the lead-out for the
+/// last entry, data or audio alike), data tracks are dropped, and a track with a
+/// non-positive length is dropped too. Returns an error when no audio track is
+/// left, so a data-only disc reports "no audio tracks" rather than an empty list.
+pub(crate) fn toc_from_entries(entries: &[TrackEntry], leadout: u32) -> Result<Vec<CdTrack>> {
+    let mut out = Vec::new();
+    for (i, e) in entries.iter().enumerate() {
+        if e.is_data {
+            continue; // CDDA playback: audio tracks only
+        }
+        // A track ends where the next entry starts, even if that next entry is a
+        // data track; the last one ends at the lead-out.
+        let next = entries.get(i + 1).map(|n| n.start_lba).unwrap_or(leadout);
+        if next > e.start_lba {
+            out.push(CdTrack {
+                number: e.number,
+                start_lba: e.start_lba,
+                sectors: next - e.start_lba,
+            });
+        }
+    }
+    if out.is_empty() {
+        return Err(anyhow!("no audio tracks on the disc"));
+    }
+    Ok(out)
+}
+
 /// The pseudo-path the playlist uses to refer to a CD audio track, which has no
 /// file on disk: `cdda://<device>/<track>`, where `<device>` is the OS drive id
 /// (example: `D:` on Windows, `/dev/sr0` on Linux) and `<track>` is the track number.
@@ -660,29 +700,14 @@ mod linux {
             let mut entries = Vec::new();
             for t in hdr.trk0..=hdr.trk1 {
                 if let Some(e) = self.toc_entry(t) {
-                    let is_data = e.adr_ctrl & CDROM_DATA_TRACK != 0;
-                    entries.push((t, e.addr_lba, is_data));
-                }
-            }
-            let mut out = Vec::new();
-            for i in 0..entries.len() {
-                let (num, lba, is_data) = entries[i];
-                if is_data {
-                    continue; // CDDA playback: audio tracks only
-                }
-                let next = entries.get(i + 1).map(|x| x.1).unwrap_or(leadout);
-                if next > lba {
-                    out.push(CdTrack {
-                        number: num,
-                        start_lba: lba as u32,
-                        sectors: (next - lba) as u32,
+                    entries.push(TrackEntry {
+                        number: t,
+                        start_lba: e.addr_lba as u32,
+                        is_data: e.adr_ctrl & CDROM_DATA_TRACK != 0,
                     });
                 }
             }
-            if out.is_empty() {
-                return Err(anyhow!("no audio tracks on the disc"));
-            }
-            Ok(out)
+            toc_from_entries(&entries, leadout as u32)
         }
 
         fn read_sector(&mut self, lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]> {
@@ -917,26 +942,16 @@ mod windows {
             let count = (last - first + 1) as usize;
             // The lead-out entry (pseudo-track) sits just past the real tracks.
             let leadout = toc.track_data.get(count).map(lba).unwrap_or(0);
-            let mut out = Vec::new();
+            let mut entries = Vec::new();
             for i in 0..count {
                 let td = &toc.track_data[i];
-                if td.control_adr & CONTROL_DATA_TRACK != 0 {
-                    continue; // audio tracks only
-                }
-                let start = lba(td);
-                let next = toc.track_data.get(i + 1).map(lba).unwrap_or(leadout);
-                if next > start {
-                    out.push(CdTrack {
-                        number: first + i as u8,
-                        start_lba: start,
-                        sectors: next - start,
-                    });
-                }
+                entries.push(TrackEntry {
+                    number: first + i as u8,
+                    start_lba: lba(td),
+                    is_data: td.control_adr & CONTROL_DATA_TRACK != 0,
+                });
             }
-            if out.is_empty() {
-                return Err(anyhow!("no audio tracks on the disc"));
-            }
-            Ok(out)
+            toc_from_entries(&entries, leadout)
         }
 
         fn read_sector(&mut self, lba: u32) -> Result<[u8; CDDA_SECTOR_BYTES]> {
@@ -1025,6 +1040,58 @@ mod tests {
                    Duration::from_secs(1));
         let three_min = CdTrack { number: 2, start_lba: 0, sectors: 3 * 60 * 75 };
         assert_eq!(three_min.duration(), Duration::from_secs(180));
+    }
+
+    // Shorthand for a TOC entry in the toc_from_entries tests.
+    fn ent(number: u8, start_lba: u32, is_data: bool) -> TrackEntry {
+        TrackEntry { number, start_lba, is_data }
+    }
+
+    #[test]
+    fn toc_single_track_runs_to_the_leadout() {
+        let toc = toc_from_entries(&[ent(1, 0, false)], 1000).unwrap();
+        assert_eq!(toc, vec![CdTrack { number: 1, start_lba: 0, sectors: 1000 }]);
+    }
+
+    #[test]
+    fn toc_skips_a_leading_data_track() {
+        // Data track first (enhanced CD), then one audio track to the lead-out. The
+        // data track is dropped, and the audio track still ends at the lead-out.
+        let toc = toc_from_entries(&[ent(1, 0, true), ent(2, 500, false)], 2000).unwrap();
+        assert_eq!(toc, vec![CdTrack { number: 2, start_lba: 500, sectors: 1500 }]);
+    }
+
+    #[test]
+    fn toc_audio_data_mix_spans_each_track_to_the_next_entry() {
+        // Audio, audio, data, audio. Audio tracks end at the next entry's start even
+        // when that next entry is the data track; data tracks are dropped.
+        let toc = toc_from_entries(
+            &[ent(1, 0, false), ent(2, 300, false), ent(3, 800, true), ent(4, 1200, false)],
+            1500,
+        )
+        .unwrap();
+        assert_eq!(
+            toc,
+            vec![
+                CdTrack { number: 1, start_lba: 0, sectors: 300 },
+                CdTrack { number: 2, start_lba: 300, sectors: 500 }, // runs up to the data track at 800
+                CdTrack { number: 4, start_lba: 1200, sectors: 300 }, // runs to the lead-out
+            ]
+        );
+    }
+
+    #[test]
+    fn toc_drops_a_zero_length_track() {
+        // Two entries at the same LBA: the first has zero length (next == start) and
+        // is dropped; the second runs to the lead-out.
+        let toc = toc_from_entries(&[ent(1, 100, false), ent(2, 100, false)], 400).unwrap();
+        assert_eq!(toc, vec![CdTrack { number: 2, start_lba: 100, sectors: 300 }]);
+    }
+
+    #[test]
+    fn toc_data_only_disc_is_an_error() {
+        let err = toc_from_entries(&[ent(1, 0, true), ent(2, 500, true)], 1000);
+        assert!(err.is_err(), "a data-only disc has no audio tracks");
     }
 
     #[test]
