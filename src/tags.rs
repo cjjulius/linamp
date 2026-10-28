@@ -286,8 +286,7 @@ pub fn read_info(path: &Path) -> FileInfo {
         }
     } else if lofty_parses(&ext) {
         // FLAC/Ogg/Opus/MP4/WAV/AIFF: lofty's own parser gives the generic audio
-        // properties fast (no frame scan). MIDI and tracker modules aren't parsed,
-        // so they keep just the label and size above.
+        // properties fast (no frame scan).
         if let Ok(tagged) = lofty::read_from_path(path) {
             let p = tagged.properties();
             info.length_secs = p.duration().as_secs();
@@ -295,8 +294,33 @@ pub fn read_info(path: &Path) -> FileInfo {
             info.sample_rate_hz = p.sample_rate().unwrap_or(0);
             info.channel_mode = p.channels().map(channel_label).unwrap_or_default();
         }
+    } else {
+        // MIDI and tracker modules aren't parsed by lofty, so reuse the same length
+        // readers the playlist uses (SoundFont-free), so at least the duration shows.
+        if let Some(d) = crate::midi::duration(path).or_else(|| crate::tracker::duration(path)) {
+            info.length_secs = d.as_secs();
+        }
+        // Enrich the MIDI Format row with the SMF type (0/1/2) and track count,
+        // a cheap 14-byte header read.
+        if matches!(ext.as_str(), "mid" | "midi" | "rmi" | "kar") {
+            if let Some((fmt, tracks)) = midi_header(path) {
+                info.mpeg = format!("MIDI (type {fmt}, {tracks} track(s))");
+            }
+        }
     }
     info
+}
+
+/// Read a Standard MIDI File header (`MThd`): the format type (0/1/2) and track
+/// count, for the Basic Info tab. `None` when the header isn't a valid `MThd`.
+fn midi_header(path: &Path) -> Option<(u16, u16)> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() < 14 || &bytes[0..4] != b"MThd" {
+        return None;
+    }
+    let fmt = u16::from_be_bytes([bytes[8], bytes[9]]);
+    let tracks = u16::from_be_bytes([bytes[10], bytes[11]]);
+    Some((fmt, tracks))
 }
 
 /// Whether lofty can parse this extension for audio properties (so we don't ask
@@ -518,6 +542,8 @@ mod tests {
         assert!(out.is_ascii() && out == "Hello");
         assert_eq!(v1_text("   ", V1_MAX_TEXT), None);
     }
+
+
 
 
 
