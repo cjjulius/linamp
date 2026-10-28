@@ -353,10 +353,10 @@ impl super::LinAmpApp {
 
                 // Tab strip that sits on, and joins into, the content box below.
                 let top_round = egui::Rounding { nw: 4.0, ne: 4.0, sw: 0.0, se: 0.0 };
-                let tab_btn = |ui: &mut egui::Ui, label: &str, active: bool| {
+                let tab_btn = |ui: &mut egui::Ui, label: &str, pos: usize, active: bool| {
                     let fill = if active { panel } else { idle_fill };
                     ui.add(
-                        egui::Button::new(mnem(label, 0))
+                        egui::Button::new(mnem(label, pos))
                             .fill(fill)
                             .stroke(line)
                             .rounding(top_round)
@@ -368,12 +368,15 @@ impl super::LinAmpApp {
                 let (basic_resp, id3_resp) = ui
                     .horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        let b = tab_btn(ui, "Basic Info", ed.tab == TagTab::Basic);
+                        let b = tab_btn(ui, "Basic Info", 0, ed.tab == TagTab::Basic);
                         // A non-editable file has no writable tag, so only Basic Info
                         // shows: no second tab. The single-tag formats (FLAC/Ogg/M4A)
                         // aren't ID3, so label their tab "Tags" to match its content.
-                        let tag_label = if ed.single { "Tags" } else { "ID3" };
-                        let i = on.then(|| tab_btn(ui, tag_label, ed.tab == TagTab::Id3));
+                        // Mnemonic: the "ID3" tab is Alt-I (underline the I), the "Tags"
+                        // tab is Alt-A (underline the a) since Alt-T is taken by the
+                        // "Copy to ID3v1" button on MP3.
+                        let (tag_label, tag_pos) = if ed.single { ("Tags", 1) } else { ("ID3", 0) };
+                        let i = on.then(|| tab_btn(ui, tag_label, tag_pos, ed.tab == TagTab::Id3));
                         (b, i)
                     })
                     .inner;
@@ -505,29 +508,35 @@ impl super::LinAmpApp {
                 }
                 ui.add_space(4.0);
 
-                // Shortcuts: Alt-B/Alt-I pick the tab, Alt-1/2 toggle the tags,
-                // Alt-U update, Alt-C cancel, Alt-T/Alt-F copy to/from ID3v1 (read
-                // raw so a focused field doesn't swallow them). Each shortcut also
-                // moves keyboard focus to the control it acts on, so a following
-                // Tab continues from there.
-                let (k_basic, k_id3, k_v1, k_v2, k_up, k_cancel, k_to, k_from) = ctx.input(|i| {
-                    let a = i.modifiers.alt;
-                    (
-                        a && i.key_pressed(egui::Key::B),
-                        a && i.key_pressed(egui::Key::I),
-                        a && i.key_pressed(egui::Key::Num1),
-                        a && i.key_pressed(egui::Key::Num2),
-                        a && i.key_pressed(egui::Key::U),
-                        a && i.key_pressed(egui::Key::C),
-                        a && i.key_pressed(egui::Key::T),
-                        a && i.key_pressed(egui::Key::F),
-                    )
-                });
+                // Shortcuts: Alt-B picks Basic Info; the second tab is Alt-I for the
+                // "ID3" tab (MP3/MP2/MP1) or Alt-A for the "Tags" tab (FLAC/Ogg/M4A),
+                // matching the underlined letter. Alt-1/2 toggle the tags, Alt-U
+                // update, Alt-C cancel, Alt-T/Alt-F copy to/from ID3v1 (read raw so a
+                // focused field doesn't swallow them). Each shortcut also moves
+                // keyboard focus to the control it acts on, so a following Tab
+                // continues from there.
+                let (k_basic, k_id3, k_tags, k_v1, k_v2, k_up, k_cancel, k_to, k_from) =
+                    ctx.input(|i| {
+                        let a = i.modifiers.alt;
+                        (
+                            a && i.key_pressed(egui::Key::B),
+                            a && i.key_pressed(egui::Key::I),
+                            a && i.key_pressed(egui::Key::A),
+                            a && i.key_pressed(egui::Key::Num1),
+                            a && i.key_pressed(egui::Key::Num2),
+                            a && i.key_pressed(egui::Key::U),
+                            a && i.key_pressed(egui::Key::C),
+                            a && i.key_pressed(egui::Key::T),
+                            a && i.key_pressed(egui::Key::F),
+                        )
+                    });
                 if k_basic {
                     ed.tab = TagTab::Basic;
                     basic_resp.request_focus();
                 }
-                if k_id3 {
+                // The second tab's mnemonic depends on its label.
+                let k_second = if ed.single { k_tags } else { k_id3 };
+                if k_second {
                     if let Some(i) = &id3_resp {
                         ed.tab = TagTab::Id3;
                         i.request_focus();
