@@ -48,7 +48,16 @@ pub struct FileInfo {
 }
 
 /// Extensions LinAmp can currently *write* tags for. Reading isn't restricted.
-pub const EDITABLE_EXTS: &[&str] = &["mp3"];
+pub const EDITABLE_EXTS: &[&str] = &["mp3", "flac", "ogg", "oga", "opus", "m4a", "m4b", "mp4"];
+
+/// True when `path` uses ID3 tags (the v1/v2 model). Other editable formats
+/// (FLAC/Ogg Vorbis comments, MP4 atoms) carry a single native tag instead.
+pub fn uses_id3(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("mp3"))
+        .unwrap_or(false)
+}
 
 /// ID3v1 text-field byte cap (title/artist/album/comment); year is 4.
 pub const V1_MAX_TEXT: usize = 30;
@@ -138,13 +147,50 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
             .unwrap_or_default(),
         encoded_by: text(&ItemKey::EncodedBy),
         disc: tag.disk().map(|d| d.to_string()).unwrap_or_default(),
-        bpm: text(&ItemKey::IntegerBpm),
+        bpm: {
+            let b = tag
+                .get_string(&ItemKey::IntegerBpm)
+                .or_else(|| tag.get_string(&ItemKey::Bpm));
+            b.map(|s| s.to_string()).unwrap_or_default()
+        },
         // Any non-empty, non-"0" value counts as set (iTunes writes "1").
         compilation: !matches!(
             tag.get_string(&ItemKey::FlagCompilation),
             None | Some("") | Some("0")
         ),
     }
+}
+
+/// Read the single native tag of a non-ID3 file (FLAC/Ogg Vorbis comments, MP4
+/// atoms) into the shared field set. Returns the defaults when the file has no
+/// tag yet. The same `Id3Fields` is reused because every field maps to a
+/// format-agnostic `ItemKey`.
+pub fn read_single(path: &Path) -> Id3Fields {
+    use lofty::file::TaggedFileExt;
+    lofty::read_from_path(path)
+        .ok()
+        .and_then(|t| t.primary_tag().map(fields_from_tag))
+        .unwrap_or_default()
+}
+
+/// Write the single native tag of a non-ID3 file from the shared field set,
+/// preserving items we don't edit. The file's primary tag type is used (Vorbis
+/// comments for FLAC/Ogg, the MP4 item list for M4A), so the fields land in the
+/// format's own keys via lofty's `ItemKey` mapping.
+pub fn write_single(path: &Path, fields: &Id3Fields) -> Result<()> {
+    use lofty::config::WriteOptions;
+    use lofty::file::TaggedFileExt;
+    use lofty::tag::{Tag, TagExt};
+    let tagged = lofty::read_from_path(path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let mut tag = tagged
+        .primary_tag()
+        .cloned()
+        .unwrap_or_else(|| Tag::new(tagged.primary_tag_type()));
+    apply_v2(&mut tag, fields);
+    tag.save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("writing tags to {}", path.display()))?;
+    Ok(())
 }
 
 /// Read MPEG format info for the Basic Info tab (best-effort; blank on failure).
@@ -367,7 +413,16 @@ fn apply_v2(tag: &mut lofty::tag::Tag, f: &Id3Fields) {
         key_f!(f.orig_artist, ItemKey::OriginalArtist);
         key_f!(f.copyright, ItemKey::CopyrightMessage);
         key_f!(f.encoded_by, ItemKey::EncodedBy);
-        key_f!(f.bpm, ItemKey::IntegerBpm);
+        // BPM: ID3v2 and MP4 use the integer frame (TBPM / tmpo), Vorbis comments
+        // use "BPM". Write both so whichever the format accepts is set (lofty drops
+        // the key it doesn't map).
+        if f.bpm.trim().is_empty() {
+            tag.remove_key(&ItemKey::IntegerBpm);
+            tag.remove_key(&ItemKey::Bpm);
+        } else {
+            tag.insert_text(ItemKey::IntegerBpm, f.bpm.clone());
+            tag.insert_text(ItemKey::Bpm, f.bpm.clone());
+        }
         // Compilation is a boolean flag; iTunes stores it as "1" (TCMP).
         if f.compilation {
             tag.insert_text(ItemKey::FlagCompilation, "1".to_string());
@@ -412,14 +467,60 @@ mod tests {
     fn editable_exts() {
         assert!(can_edit(Path::new("song.mp3")));
         assert!(can_edit(Path::new("SONG.MP3")));
-        assert!(!can_edit(Path::new("song.flac")));
+        assert!(can_edit(Path::new("song.flac")));
+        assert!(can_edit(Path::new("tune.ogg")));
+        assert!(can_edit(Path::new("tune.m4a")));
+        assert!(!can_edit(Path::new("sound.wav")));
         assert!(!can_edit(Path::new("noext")));
+        // Only MP3 uses the ID3 v1/v2 model; the others carry a single tag.
+        assert!(uses_id3(Path::new("song.mp3")));
+        assert!(!uses_id3(Path::new("song.flac")));
     }
 
     #[test]
     fn write_rejects_unsupported() {
-        let err = write_id3(Path::new("x.flac"), None, None, true).unwrap_err();
+        let err = write_id3(Path::new("x.wav"), None, None, true).unwrap_err();
         assert!(err.to_string().contains("isn't supported"));
+    }
+
+
+
+    #[test]
+    fn apply_and_read_round_trips_across_tag_types() {
+        // The field mapping works for every editable format, since each field maps
+        // to a format-agnostic ItemKey. VorbisComments (FLAC/Ogg) and the MP4 item
+        // list are exercised in memory, so no audio file is needed.
+        use lofty::tag::{Tag, TagType};
+        let f = Id3Fields {
+            track: "4".into(),
+            title: "T".into(),
+            artist: "A".into(),
+            album: "Al".into(),
+            year: "2021".into(),
+            genre: "Jazz".into(),
+            comment: "c".into(),
+            composer: "Comp".into(),
+            disc: "1".into(),
+            bpm: "90".into(),
+            compilation: true,
+            ..Default::default()
+        };
+        for tt in [TagType::VorbisComments, TagType::Mp4Ilst] {
+            let mut tag = Tag::new(tt);
+            apply_v2(&mut tag, &f);
+            let g = fields_from_tag(&tag);
+            // Core fields every format maps round-trip.
+            assert_eq!(g.title, "T", "{tt:?}");
+            assert_eq!(g.artist, "A", "{tt:?}");
+            assert_eq!(g.album, "Al", "{tt:?}");
+            assert_eq!(g.year, "2021", "{tt:?}");
+            assert_eq!(g.track, "4", "{tt:?}");
+            assert_eq!(g.disc, "1", "{tt:?}");
+            assert_eq!(g.genre, "Jazz", "{tt:?}");
+            assert_eq!(g.composer, "Comp", "{tt:?}");
+            assert_eq!(g.bpm, "90", "{tt:?}");
+            assert!(g.compilation, "{tt:?}");
+        }
     }
 
     #[test]

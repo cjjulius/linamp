@@ -23,7 +23,80 @@ pub(super) struct TagEditor {
     v2_on: bool,
     tab: TagTab,
     editable: bool,
+    /// true for a format with a single native tag (FLAC/Ogg/M4A): the Id3 tab
+    /// shows one "Tags" column instead of the ID3v1/ID3v2 pair, and saving writes
+    /// that one tag.
+    single: bool,
     status: String,
+}
+
+/// Read a file's tags for the editor. MP3 keeps the ID3v1/v2 pair; other formats
+/// read their single native tag into `v2` (shown as one "Tags" column). Returns
+/// `(v1, v2, v1_on, v2_on, single)`.
+fn read_editor_tags(
+    path: &std::path::Path,
+) -> (crate::tags::Id3Fields, crate::tags::Id3Fields, bool, bool, bool) {
+    if crate::tags::uses_id3(path) {
+        let (v1, v2) = crate::tags::read_id3(path);
+        let (on1, on2) = (v1.is_some(), v2.is_some());
+        (v1.unwrap_or_default(), v2.unwrap_or_default(), on1, on2, false)
+    } else {
+        (Default::default(), crate::tags::read_single(path), false, true, true)
+    }
+}
+
+/// The genre dropdown shared by the ID3 tabs (closes on a keyboard pick).
+fn genre_combo(ui: &mut egui::Ui, salt: &str, val: &mut String) {
+    let combo = egui::ComboBox::from_id_salt(salt)
+        .selected_text(if val.is_empty() { ", ".into() } else { val.clone() })
+        .width(140.0)
+        .show_ui(ui, |ui| {
+            let mut picked = false;
+            for g in crate::tags::GENRES {
+                if ui.selectable_label(val == g, *g).clicked() {
+                    *val = (*g).to_string();
+                    picked = true;
+                }
+            }
+            picked
+        });
+    if combo.inner == Some(true) {
+        ui.memory_mut(|m| m.close_popup());
+        combo.response.request_focus();
+    }
+}
+
+/// The full field grid for an ID3v2 tag or a single native tag (FLAC/Ogg/M4A).
+/// `salt` keeps the grid and its genre combo uniquely identified per column.
+fn tag_fields_grid(ui: &mut egui::Ui, f: &mut crate::tags::Id3Fields, salt: &str) {
+    egui::Grid::new(salt).num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
+        let row = |ui: &mut egui::Ui, l: &str, v: &mut String| {
+            ui.label(l);
+            ui.add(egui::TextEdit::singleline(v).desired_width(170.0));
+            ui.end_row();
+        };
+        row(ui, "Track", &mut f.track);
+        row(ui, "Disc", &mut f.disc);
+        row(ui, "Title", &mut f.title);
+        row(ui, "Artist", &mut f.artist);
+        row(ui, "Album", &mut f.album);
+        row(ui, "Year", &mut f.year);
+        ui.label("Genre");
+        genre_combo(ui, &format!("{salt}_genre"), &mut f.genre);
+        ui.end_row();
+        ui.label("Comment");
+        ui.add(egui::TextEdit::multiline(&mut f.comment).desired_width(170.0).desired_rows(2));
+        ui.end_row();
+        row(ui, "Composer", &mut f.composer);
+        row(ui, "Orig. Artist", &mut f.orig_artist);
+        row(ui, "Copyright", &mut f.copyright);
+        row(ui, "URL", &mut f.url);
+        row(ui, "Encoded by", &mut f.encoded_by);
+        row(ui, "BPM", &mut f.bpm);
+        ui.label("Compilation");
+        ui.checkbox(&mut f.compilation, "");
+        ui.end_row();
+    });
 }
 
 impl super::LinAmpApp {
@@ -50,12 +123,9 @@ impl super::LinAmpApp {
             return;
         };
         let path = track.path.clone();
-        let (v1, v2) = crate::tags::read_id3(&path);
+        let (v1, v2, v1_on, v2_on, single) = read_editor_tags(&path);
         let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
-        let (v1_on, v2_on) = (v1.is_some(), v2.is_some());
-        let v1 = v1.unwrap_or_default();
-        let v2 = v2.unwrap_or_default();
         let status = if editable {
             String::new()
         } else {
@@ -71,6 +141,7 @@ impl super::LinAmpApp {
             v2_on,
             tab: TagTab::Basic,
             editable,
+            single,
             status,
         });
     }
@@ -79,12 +150,9 @@ impl super::LinAmpApp {
     /// not be in the playlist). `index` is a sentinel so saving doesn't touch a
     /// playlist row.
     pub(super) fn open_tag_editor_path(&mut self, path: std::path::PathBuf) {
-        let (v1, v2) = crate::tags::read_id3(&path);
+        let (v1, v2, v1_on, v2_on, single) = read_editor_tags(&path);
         let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
-        let (v1_on, v2_on) = (v1.is_some(), v2.is_some());
-        let v1 = v1.unwrap_or_default();
-        let v2 = v2.unwrap_or_default();
         let status = if editable {
             String::new()
         } else {
@@ -100,6 +168,7 @@ impl super::LinAmpApp {
             v2_on,
             tab: TagTab::Basic,
             editable,
+            single,
             status,
         });
     }
@@ -107,7 +176,7 @@ impl super::LinAmpApp {
     /// Write the editor's tags back to the file and refresh the playlist row.
     /// Returns `true` when the write succeeded (so the caller can close).
     pub(super) fn save_tag_editor(&mut self) -> bool {
-        let (index, path, v1, v2, v1_on, v2_on) = match &self.tag_editor {
+        let (index, path, v1, v2, v1_on, v2_on, single) = match &self.tag_editor {
             Some(ed) if ed.editable => (
                 ed.index,
                 ed.path.clone(),
@@ -115,15 +184,21 @@ impl super::LinAmpApp {
                 ed.v2.clone(),
                 ed.v1_on,
                 ed.v2_on,
+                ed.single,
             ),
             _ => return false,
         };
-        let result = crate::tags::write_id3(
-            &path,
-            v1_on.then_some(&v1),
-            v2_on.then_some(&v2),
-            self.prefs.id3v23,
-        );
+        let result = if single {
+            // Non-MP3 formats carry one native tag, held in `v2`.
+            crate::tags::write_single(&path, &v2)
+        } else {
+            crate::tags::write_id3(
+                &path,
+                v1_on.then_some(&v1),
+                v2_on.then_some(&v2),
+                self.prefs.id3v23,
+            )
+        };
         if result.is_ok() {
             // Refresh the playlist row (when the edit came from the playlist).
             let mut refreshed = None;
@@ -273,31 +348,17 @@ impl super::LinAmpApp {
                                 });
                             None
                         }
+                        TagTab::Id3 if ed.single => {
+                            // One native tag (FLAC/Ogg Vorbis comments, MP4 atoms):
+                            // a single column, no ID3v1/ID3v2 split or copy buttons.
+                            ui.label(RichText::new("Tags").strong());
+                            ui.add_space(2.0);
+                            ui.add_enabled_ui(on, |ui| {
+                                tag_fields_grid(ui, &mut ed.v2, "single_grid");
+                            });
+                            None
+                        }
                         TagTab::Id3 => {
-                            let genre_combo = |ui: &mut egui::Ui, salt: &str, val: &mut String| {
-                                let combo = egui::ComboBox::from_id_salt(salt)
-                                    .selected_text(if val.is_empty() { ", ".into() } else { val.clone() })
-                                    .width(140.0)
-                                    .show_ui(ui, |ui| {
-                                        let mut picked = false;
-                                        for g in crate::tags::GENRES {
-                                            if ui.selectable_label(val == g, *g).clicked() {
-                                                *val = (*g).to_string();
-                                                picked = true;
-                                            }
-                                        }
-                                        picked
-                                    });
-                                if combo.inner == Some(true) {
-                                    // egui only auto-closes the popup on a mouse
-                                    // click, so close it ourselves for keyboard
-                                    // selection, and keep focus on the combo so the
-                                    // next Tab moves to the following field rather
-                                    // than jumping back to the top.
-                                    ui.memory_mut(|m| m.close_popup());
-                                    combo.response.request_focus();
-                                }
-                            };
                             let resps = ui.columns(2, |cols| {
                                 // ----- ID3v1 (left) -----
                                 let r1 = cols[0].checkbox(&mut ed.v1_on, mnem("ID3v1 Tag", 4));
@@ -325,35 +386,7 @@ impl super::LinAmpApp {
                                 // ----- ID3v2 (right) -----
                                 let r2 = cols[1].checkbox(&mut ed.v2_on, mnem("ID3v2 Tag", 4));
                                 cols[1].add_enabled_ui(on && ed.v2_on, |ui| {
-                                    egui::Grid::new("v2_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
-                                        let f = &mut ed.v2;
-                                        let row = |ui: &mut egui::Ui, l: &str, v: &mut String| {
-                                            ui.label(l);
-                                            ui.add(egui::TextEdit::singleline(v).desired_width(170.0));
-                                            ui.end_row();
-                                        };
-                                        row(ui, "Track", &mut f.track);
-                                        row(ui, "Disc", &mut f.disc);
-                                        row(ui, "Title", &mut f.title);
-                                        row(ui, "Artist", &mut f.artist);
-                                        row(ui, "Album", &mut f.album);
-                                        row(ui, "Year", &mut f.year);
-                                        ui.label("Genre");
-                                        genre_combo(ui, "v2_genre", &mut f.genre);
-                                        ui.end_row();
-                                        ui.label("Comment");
-                                        ui.add(egui::TextEdit::multiline(&mut f.comment).desired_width(170.0).desired_rows(2));
-                                        ui.end_row();
-                                        row(ui, "Composer", &mut f.composer);
-                                        row(ui, "Orig. Artist", &mut f.orig_artist);
-                                        row(ui, "Copyright", &mut f.copyright);
-                                        row(ui, "URL", &mut f.url);
-                                        row(ui, "Encoded by", &mut f.encoded_by);
-                                        row(ui, "BPM", &mut f.bpm);
-                                        ui.label("Compilation");
-                                        ui.checkbox(&mut f.compilation, "");
-                                        ui.end_row();
-                                    });
+                                    tag_fields_grid(ui, &mut ed.v2, "v2_grid");
                                 });
                                 (r1, r2)
                             });
@@ -431,7 +464,9 @@ impl super::LinAmpApp {
                     do_save = true;
                 }
 
-                let can_copy = on && id3 && ed.v2_on;
+                // Copying to/from ID3v1 only applies to MP3 (the single-tag
+                // formats have no ID3v1).
+                let can_copy = on && id3 && ed.v2_on && !ed.single;
                 let mut do_copy_to = k_to && can_copy;
                 let mut do_copy_from = k_from && can_copy;
                 ui.horizontal(|ui| {
@@ -446,7 +481,7 @@ impl super::LinAmpApp {
                     if ui.button(mnem("Cancel", 0)).clicked() {
                         close = true;
                     }
-                    if id3 {
+                    if id3 && !ed.single {
                         ui.add_enabled_ui(can_copy, |ui| {
                             let to = ui.button(mnem("Copy to ID3v1", 5));
                             if to.clicked() {
