@@ -81,6 +81,20 @@ on hand), consistent with the earlier Mint deferral.
   playback ran smooth through PipeWire (ALSA plug-in sink-input, uncorked), the
   clock advanced, and the run log showed no xrun, underrun or error.
 
+## 2.x bug fixes (`fix/2x-bugs`)
+
+- [ ] **Always-on-top dialog trap: X11 equivalent (#172).** `set_windows_topmost`
+  (`src/app/platform_win.rs`) drops the topmost flag on every LinAmp window around
+  a blocking native dialog so it isn't trapped behind our always-on-top windows,
+  then restores it. It is Windows-only (SetWindowPos); on X11 it is a no-op.
+  Reproduce on Pop!_OS with always-on-top on (open a file/skin dialog and see
+  whether it is reachable), and if the trap exists, add the X11 version in
+  `x11util` (toggle `_NET_WM_STATE_ABOVE`, or lower/raise, around the dialog).
+- [ ] **Verify fade-on-pause on Linux (#171).** Pausing now fades out (then
+  pauses) when "fade out when stopping or pausing" is on, matching stop. Pure
+  cross-platform logic (no platform code), but confirm the tray and button pause
+  fade on PipeWire and resume at full volume.
+
 ## Notes
 
 - The code review and its resolution plan are in `docs/CODE-REVIEW.md`; the
