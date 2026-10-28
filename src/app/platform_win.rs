@@ -220,6 +220,27 @@ mod x11util {
         s
     }
 
+    /// A window's `_NET_WM_PID` (owning process id), or 0 if unset. Used to pick
+    /// out our own top-level windows by identity rather than by title.
+    unsafe fn wm_pid(xlib: &xlib::Xlib, d: *mut xlib::Display, w: xlib::Window) -> u32 {
+        let prop = intern(xlib, d, "_NET_WM_PID");
+        const XA_CARDINAL: xlib::Atom = 6;
+        let (mut ty, mut fmt): (xlib::Atom, c_int) = (0, 0);
+        let (mut nitems, mut after): (c_ulong, c_ulong) = (0, 0);
+        let mut data: *mut c_uchar = ptr::null_mut();
+        let st = (xlib.XGetWindowProperty)(
+            d, w, prop, 0, 1, 0, XA_CARDINAL, &mut ty, &mut fmt, &mut nitems, &mut after, &mut data,
+        );
+        let mut pid = 0u32;
+        if st == 0 && !data.is_null() && fmt == 32 && nitems >= 1 {
+            pid = *(data as *const c_ulong) as u32;
+        }
+        if !data.is_null() {
+            (xlib.XFree)(data as *mut _);
+        }
+        pid
+    }
+
     /// Error handler that swallows async X errors (example: a `BadWindow` from a
     /// window destroyed mid-scan) so a stray property query can never abort the
     /// process via Xlib's default handler.
@@ -537,7 +558,7 @@ mod x11util {
             let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
             let win = window_by_title(xlib, d, title);
             if win != 0 {
-                set_above(xlib, d, win);
+                set_above(xlib, d, win, true);
                 (xlib.XRaiseWindow)(d, win);
                 (xlib.XFlush)(d);
             }
@@ -545,13 +566,14 @@ mod x11util {
         });
     }
 
-    /// Add `_NET_WM_STATE_ABOVE` to `win` via the EWMH client message (same shape
-    /// as [`skip_taskbar`]). `_NET_WM_STATE_ADD` is idempotent.
-    unsafe fn set_above(xlib: &xlib::Xlib, d: *mut xlib::Display, win: xlib::Window) {
+    /// Add (`add`) or remove `_NET_WM_STATE_ABOVE` on `win` via the EWMH client
+    /// message (same shape as [`skip_taskbar`]). Both actions are idempotent.
+    unsafe fn set_above(xlib: &xlib::Xlib, d: *mut xlib::Display, win: xlib::Window, add: bool) {
         let root = (xlib.XDefaultRootWindow)(d);
         let net_wm_state = intern(xlib, d, "_NET_WM_STATE");
         let above = intern(xlib, d, "_NET_WM_STATE_ABOVE");
-        const NET_WM_STATE_ADD: c_long = 1;
+        // _NET_WM_STATE_ADD = 1 (float above), _NET_WM_STATE_REMOVE = 0 (normal).
+        let action: c_long = if add { 1 } else { 0 };
         let mut ev: xlib::XEvent = std::mem::zeroed();
         {
             let cm = &mut ev.client_message;
@@ -561,7 +583,7 @@ mod x11util {
             cm.window = win;
             cm.message_type = net_wm_state;
             cm.format = 32;
-            cm.data.set_long(0, NET_WM_STATE_ADD);
+            cm.data.set_long(0, action);
             cm.data.set_long(1, above as c_long);
             cm.data.set_long(2, 0);
             cm.data.set_long(3, 1); // source indication: normal application
@@ -569,6 +591,30 @@ mod x11util {
         }
         let mask = xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask;
         (xlib.XSendEvent)(d, root, 0, mask, &mut ev);
+    }
+
+    /// Add or remove `_NET_WM_STATE_ABOVE` on every LinAmp top-level window, to
+    /// suspend always-on-top around a blocking native dialog and restore it after
+    /// (#172). The xdg-desktop-portal file chooser is a normal-layer window with no
+    /// transient-for, so while our windows sit in the above layer it opens beneath
+    /// them and is partly unreachable. Dropping our above state lets it come forward;
+    /// re-adding it restores the pref. The Windows equivalent is `set_windows_topmost`.
+    pub fn set_group_above(above: bool) {
+        let our_pid = std::process::id();
+        with_conn(|xlib, d| unsafe {
+            // Guard the scan: a window another client destroyed mid-query would
+            // otherwise reach Xlib's fatal default handler.
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            // Match our own windows by _NET_WM_PID, a stable identity, rather than
+            // by title (a retitle would silently drop a window from the group).
+            for &w in &client_list(xlib, d) {
+                if wm_pid(xlib, d, w) == our_pid {
+                    set_above(xlib, d, w, above);
+                }
+            }
+            (xlib.XSync)(d, 0); // deliver any errors to ignore_err before restoring
+            (xlib.XSetErrorHandler)(prev);
+        });
     }
 
     /// Horizontal run rectangles filling a `w`×`h` rounded rectangle with corner
@@ -848,6 +894,61 @@ pub(crate) fn hide_popup_window() {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         x11util::unmap_window("LinAmp Menu");
+    }
+}
+
+/// Drop (or restore) always-on-top on every LinAmp window around a blocking
+/// native file dialog, so the dialog comes to the front instead of being trapped
+/// behind our topmost windows (#172). `on` restores topmost (true) or clears it
+/// (false). Pass true only when always-on-top is actually enabled. The menu popup
+/// is handled separately by `hide_popup_window`. Windows uses SetWindowPos; X11
+/// toggles `_NET_WM_STATE_ABOVE` on the window group (the portal file chooser
+/// otherwise opens beneath our above-layer windows). A no-op on other targets.
+pub(crate) fn set_windows_topmost(on: bool) {
+    #[cfg(windows)]
+    {
+        #[allow(non_snake_case)]
+        extern "system" {
+            fn SetWindowPos(
+                hwnd: isize,
+                after: isize,
+                x: i32,
+                y: i32,
+                cx: i32,
+                cy: i32,
+                flags: u32,
+            ) -> i32;
+        }
+        const HWND_TOPMOST: isize = -1;
+        const HWND_NOTOPMOST: isize = -2;
+        const SWP_NOSIZE: u32 = 0x0001;
+        const SWP_NOMOVE: u32 = 0x0002;
+        const SWP_NOACTIVATE: u32 = 0x0010;
+        let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        for title in [
+            "LinAmp",
+            "LinAmp Equalizer",
+            "LinAmp Playlist",
+            "LinAmp Library",
+            "LinAmp Preferences",
+            "LinAmp, File Info",
+            "LinAmp, Minibrowser",
+        ] {
+            let h = find_window(title);
+            if h != 0 {
+                unsafe {
+                    SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                }
+            }
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        x11util::set_group_above(on);
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+    {
+        let _ = on;
     }
 }
 

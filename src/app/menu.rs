@@ -312,7 +312,7 @@ impl super::LinAmpApp {
             ToggleStopAfter => self.stop_after_current = !self.stop_after_current,
             StopFade => {
                 if self.player.state() != PlayState::Stopped {
-                    self.fade = Some(self.prefs.fade_on_stop_secs);
+                    self.fade = Some((self.prefs.fade_on_stop_secs, FadeEnd::Stop));
                     self.status = "Fading out…".into();
                 }
             }
