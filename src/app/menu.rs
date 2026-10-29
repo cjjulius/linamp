@@ -380,8 +380,10 @@ impl super::LinAmpApp {
     /// clipped by the small main/playlist windows). Positioned at the click.
     pub(super) fn draw_popup_viewport(&mut self, ctx: &egui::Context) {
         let Some((kind, anchor)) = self.popups.cur else {
-            // No parent menu, so no flyout either (it is torn down by not drawing it).
+            // No parent menu, so no flyout either (its window is torn down by not
+            // drawing it this frame; it only lives while the parent menu is open).
             self.popups.sub = None;
+            self.popups.sub_visible = false;
             return;
         };
         let (w, h) = match kind {
@@ -792,14 +794,16 @@ impl super::LinAmpApp {
                                 self.apply_lib_action(a);
                             }
                             // Pointer over the flyout itself hovers neither a submenu row
-                            // nor another parent row, so it leaves the flyout open.
+                            // nor another parent row, so that case leaves the flyout as
+                            // it is (shown). Hovering a different item hides it, but the
+                            // window stays alive (sub is kept) so it is not recreated.
                             if let Some((kind, a)) = open_flyout {
                                 if let Some(children) = flyout_children {
                                     self.popups.sub_rows = children;
                                 }
                                 self.open_sub(kind, a);
                             } else if left_submenu {
-                                self.popups.sub = None;
+                                self.popups.sub_visible = false;
                             }
                         }
                         // The flyouts render in their own window (draw_sub_viewport),
@@ -864,6 +868,7 @@ impl super::LinAmpApp {
             self.popups.cur = None;
             self.popups.dynamic = None;
             self.popups.sub = None;
+            self.popups.sub_visible = false;
             // Chain to a queued popup (example: Options then Bookmarks) now this
             // one is gone.
             if let Some((k, p)) = self.popups.pending.take() {
@@ -880,9 +885,14 @@ impl super::LinAmpApp {
     /// border, rounded OS region) but is fixed-content. Closing it clears both
     /// windows so a click on a rating dismisses the whole menu.
     fn draw_sub_viewport(&mut self, ctx: &egui::Context, corner: f32, border: egui::Stroke) {
+        // `sub` stays set once a flyout has opened, so the window persists for the rest
+        // of the menu session; `sub_visible` says whether it is currently shown. Only a
+        // closed menu (sub cleared) tears the window down. Keep rendering it either way
+        // so it is never destroyed and recreated mid-session.
         let Some((kind, anchor)) = self.popups.sub else {
             return;
         };
+        let visible = self.popups.sub_visible && !self.popups.sub_fresh;
         let rate_rows = self.popups.rate_rows.clone();
         let sub_rows = self.popups.sub_rows.clone();
         // Size per flyout kind: the Rate widget is fixed (5 stars + Clear); a generic
@@ -922,7 +932,7 @@ impl super::LinAmpApp {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
-            .with_visible(!self.popups.sub_fresh)
+            .with_visible(visible)
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
@@ -997,25 +1007,34 @@ impl super::LinAmpApp {
         }
         self.popups.sub_fresh = false;
         if close {
-            // A rating click (or Escape) dismisses the whole menu, parent included.
+            // A flyout click (or Escape) dismisses the whole menu, parent included.
             self.popups.sub = None;
+            self.popups.sub_visible = false;
             self.popups.cur = None;
             self.popups.dynamic = None;
         }
     }
 
-    /// Open the one-level flyout beside the parent, if not already open there.
-    /// Idempotent so hovering the Rate row every frame does not re-trigger the
-    /// opening animation / re-round.
+    /// Show the one-level flyout beside the parent for `kind` at `anchor`.
+    ///
+    /// The flyout's OS window is created once (the first time any flyout opens this
+    /// menu session) and then kept alive, so moving the pointer on and off the
+    /// submenu rows only toggles its visibility here, never destroys and recreates it.
+    /// Recreating it each hover flashed a title bar for a frame on Windows (winit
+    /// applies `with_decorations(false)` a frame late on a new window). `sub_fresh`
+    /// (hide-on-create + round) therefore fires only on that first creation; a change
+    /// of kind keeps the same window but re-rounds it for the new size.
     fn open_sub(&mut self, kind: Popup, anchor: egui::Pos2) {
-        // Idempotent on the anchor: while the same flyout is open, sub-pixel jitter in
-        // the parent row's position (e.g. as the pointer moves down the list) must not
-        // re-open it. Re-opening sets `sub_fresh`, which hides the window for a frame
-        // then shows it again, so an anchor-sensitive check made the flyout flicker as
-        // the cursor moved over the row. Only a change of kind reopens it.
-        if !matches!(self.popups.sub, Some((k, _)) if k == kind) {
-            self.popups.sub = Some((kind, anchor));
+        let first_open = self.popups.sub.is_none();
+        let kind_changed = !matches!(self.popups.sub, Some((k, _)) if k == kind);
+        self.popups.sub = Some((kind, anchor));
+        self.popups.sub_visible = true;
+        if first_open {
+            // Brand-new window: hide its first frame while it is positioned/rounded.
             self.popups.sub_fresh = true;
+            self.popups.sub_rounded_h = None;
+        } else if kind_changed {
+            // Same window, different flyout: re-round for the new size, no re-create.
             self.popups.sub_rounded_h = None;
         }
     }
@@ -1036,6 +1055,7 @@ impl super::LinAmpApp {
         // never left on screen beside the new menu (it would otherwise linger when
         // the pointer moved off the parent before the new right-click).
         self.popups.sub = None;
+        self.popups.sub_visible = false;
         // New popup window: re-apply the rounded region on the next frame.
         self.popups.rounded = false;
         self.popups.rounded_h = None;
