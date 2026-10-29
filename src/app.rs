@@ -519,6 +519,11 @@ struct PopupState {
     sub: Option<(Popup, egui::Pos2)>,
     /// Opening frame for the flyout window (mirrors `fresh` for the parent).
     sub_fresh: bool,
+    /// Whether the (persistent) flyout window is currently shown. Once a flyout is
+    /// opened, its OS window is kept alive for the rest of the menu session and only
+    /// toggled visible/hidden as the pointer moves on and off the submenu rows, so it
+    /// is never recreated per hover (recreating it flashed a title bar on Windows).
+    sub_visible: bool,
     /// Window height the flyout's rounded region was last built for.
     sub_rounded_h: Option<f32>,
     fresh: bool,
@@ -885,6 +890,7 @@ impl LinAmpApp {
                 sub_rows: Vec::new(),
                 sub: None,
                 sub_fresh: false,
+                sub_visible: false,
                 sub_rounded_h: None,
                 fresh: false,
                 rounded: false,
