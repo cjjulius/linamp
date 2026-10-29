@@ -527,12 +527,9 @@ struct PopupState {
     /// Window height the flyout's rounded region was last built for.
     sub_rounded_h: Option<f32>,
     fresh: bool,
-    /// Whether the parent popup window has had its OS title bar stripped yet. The
-    /// window stays hidden until this is set, so winit's late-applied borderless
-    /// never shows a caption. Reset per open, latched once the strip succeeds.
-    destyled: bool,
     /// Whether the popup window's rounded region has been applied for the current
-    /// popup (applied once, retrying only until it succeeds).
+    /// popup (applied once, retrying only until it succeeds). The window stays hidden
+    /// until this is set so its clipped-away title bar is never revealed.
     rounded: bool,
     /// Window height the rounded-corner region was last built for, so it rebuilds
     /// only when a different-sized menu opens (#154).
@@ -897,7 +894,6 @@ impl LinAmpApp {
                 sub_visible: false,
                 sub_rounded_h: None,
                 fresh: false,
-                destyled: false,
                 rounded: false,
                 rounded_h: None,
                 serial: 0,

@@ -1156,69 +1156,6 @@ pub(crate) fn round_popup_window(title: &str, radius: i32, force: bool) -> bool 
     }
 }
 
-/// Strip the OS title bar / frame from the borderless popup window titled `title`,
-/// and report whether the window was found yet. winit honours `with_decorations(false)`
-/// a frame or two after it creates a window on Windows, so a freshly created popup
-/// briefly carries a standard caption. The caller keeps the window hidden until this
-/// returns true, so the (one-off) style change happens off-screen and the window only
-/// appears once it is truly borderless, never flashing a title bar. Only rewrites the
-/// style when a caption is actually present, so repeated calls settle to a cheap read.
-/// On platforms other than Windows there is nothing to strip, so it reports done.
-pub(crate) fn ensure_popup_borderless(title: &str) -> bool {
-    #[cfg(windows)]
-    unsafe {
-        #[allow(non_snake_case)]
-        extern "system" {
-            fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
-            fn SetWindowLongPtrW(hwnd: isize, index: i32, new: isize) -> isize;
-            fn SetWindowPos(
-                hwnd: isize,
-                after: isize,
-                x: i32,
-                y: i32,
-                cx: i32,
-                cy: i32,
-                flags: u32,
-            ) -> i32;
-        }
-        const GWL_STYLE: i32 = -16;
-        const DECOR: isize = 0x00C0_0000  // WS_CAPTION
-            | 0x0004_0000  // WS_THICKFRAME
-            | 0x0002_0000  // WS_MINIMIZEBOX
-            | 0x0001_0000  // WS_MAXIMIZEBOX
-            | 0x0008_0000; // WS_SYSMENU
-        const SWP_NOMOVE: u32 = 0x0002;
-        const SWP_NOSIZE: u32 = 0x0001;
-        const SWP_NOZORDER: u32 = 0x0004;
-        const SWP_NOACTIVATE: u32 = 0x0010;
-        const SWP_FRAMECHANGED: u32 = 0x0020;
-        let h = find_window(title);
-        if h == 0 {
-            return false; // Not created yet; keep it hidden and retry next frame.
-        }
-        let style = GetWindowLongPtrW(h, GWL_STYLE);
-        let stripped = style & !DECOR;
-        if stripped != style {
-            SetWindowLongPtrW(h, GWL_STYLE, stripped);
-            SetWindowPos(
-                h,
-                0,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-            );
-        }
-        true
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = title;
-        true
-    }
-}
-
 /// Keep the borderless context-menu popup above the main window's transient-for
 /// children on X11. The popup is created always-on-top, but on X11 the WM can
 /// still stack the `WM_TRANSIENT_FOR` children (EQ/playlist/library) over it, so
