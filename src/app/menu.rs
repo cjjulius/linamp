@@ -828,6 +828,10 @@ impl super::LinAmpApp {
             }
         });
 
+        // Strip any OS title bar/frame winit may briefly apply to this borderless
+        // window, each frame, so the menu never flashes a caption (it can otherwise
+        // show for a frame as the window is created or as its flyout opens).
+        ensure_popup_borderless("LinAmp Menu");
         // Round the window's corners to match the frame's rounding (scaled to
         // physical pixels for the current DPI). Applied once per popup, retried
         // each frame only until it succeeds, rather than rebuilt every frame.
@@ -982,6 +986,9 @@ impl super::LinAmpApp {
             }
         });
 
+        // Keep the flyout borderless too (it is shown/hidden as the pointer moves
+        // over the submenu rows, the moment the title-bar flash was most visible).
+        ensure_popup_borderless("LinAmp Submenu");
         let radius = (corner * ctx.pixels_per_point()).round() as i32;
         let size_changed = self.popups.sub_rounded_h != Some(h);
         if size_changed && round_popup_window("LinAmp Submenu", radius, true) {
