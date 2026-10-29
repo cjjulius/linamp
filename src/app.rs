@@ -464,8 +464,6 @@ struct LibraryViewState {
     /// Active background scan receiver + its latest progress text.
     scan: Option<std::sync::mpsc::Receiver<crate::library::ScanMsg>>,
     scan_text: String,
-    /// Whether the Library window's own menu is open.
-    menu_open: bool,
 }
 
 /// Window geometry and focus (C1): the classic windows' positions, the library
@@ -505,10 +503,22 @@ struct WindowGeom {
 /// and the rounded-region / fresh-window bookkeeping that keeps each menu sized
 /// correctly.
 struct PopupState {
-    /// The currently open popup (kind, owner window, click position).
-    cur: Option<(Popup, ClWin, egui::Pos2)>,
+    /// The currently open popup (kind + absolute screen anchor of its top-left).
+    cur: Option<(Popup, egui::Pos2)>,
     /// A popup to open once the current one closes (classic popups aren't nested).
-    pending: Option<(Popup, ClWin, egui::Pos2)>,
+    pending: Option<(Popup, egui::Pos2)>,
+    /// Rows for an open dynamic menu (`Popup::LibMenu`), built per click because
+    /// the library menus carry per-row names and the live selection.
+    dynamic: Option<Vec<library_ui::DynRow>>,
+    /// Library rows the Rate flyout (`Popup::LibRate`) acts on.
+    rate_rows: Vec<usize>,
+    /// The open one-level flyout (the Rate submenu): its kind and absolute screen
+    /// anchor. Drawn in a second viewport beside the parent, which stays open.
+    sub: Option<(Popup, egui::Pos2)>,
+    /// Opening frame for the flyout window (mirrors `fresh` for the parent).
+    sub_fresh: bool,
+    /// Window height the flyout's rounded region was last built for.
+    sub_rounded_h: Option<f32>,
     fresh: bool,
     /// Whether the popup window's rounded region has been applied for the current
     /// popup (applied once, retrying only until it succeeds).
@@ -607,9 +617,6 @@ pub struct LinAmpApp {
     /// Alt+I bookmarks, persisted to bookmarks.json.
     bookmarks: crate::config::Bookmarks,
     tb_last_click: Option<(ClWin, Instant)>,
-    /// One-shot: a classic window was primary-pressed (or a classic popup opened)
-    /// this frame, so an open library menu should dismiss. Consumed in `ui_library`.
-    classic_clicked: bool,
     /// Hash of the last-persisted session, so we only write on actual changes.
     session_sig: Option<u64>,
     /// Frames remaining in a graceful shutdown (set when the WM asks to close),
@@ -798,7 +805,6 @@ impl LinAmpApp {
                 sel_tracks: std::collections::BTreeSet::new(),
                 scan: None,
                 scan_text: String::new(),
-                menu_open: false,
             },
             geom: WindowGeom {
                 win_pos: [egui::pos2(100.0, 100.0); 3],
@@ -869,6 +875,11 @@ impl LinAmpApp {
             popups: PopupState {
                 cur: None,
                 pending: None,
+                dynamic: None,
+                rate_rows: Vec::new(),
+                sub: None,
+                sub_fresh: false,
+                sub_rounded_h: None,
                 fresh: false,
                 rounded: false,
                 rounded_h: None,
@@ -876,7 +887,6 @@ impl LinAmpApp {
             },
             bookmarks: crate::config::Bookmarks::load(),
             tb_last_click: None,
-            classic_clicked: false,
             session_sig: None,
             quit_countdown: None,
             on_top_last: None,
@@ -3535,6 +3545,7 @@ impl LinAmpApp {
             "LinAmp, Jump to file",
             "LinAmp, Jump to time",
             "LinAmp Menu",
+            "LinAmp Submenu",
         ] {
             unset_window_cursor(title);
         }
@@ -3699,7 +3710,9 @@ impl LinAmpApp {
         if let Some(r) = self.plview.menu_press {
             return Some(r);
         }
-        if let Some((kind, ClWin::Pl, _)) = self.popups.cur {
+        // The playlist fly-out kinds are only ever opened for the playlist window,
+        // so the kind alone identifies a pressed bottom-bar button.
+        if let Some((kind, _)) = self.popups.cur {
             return match kind {
                 Popup::PlAdd => Some(P::AddMenu),
                 Popup::PlRem => Some(P::RemMenu),
