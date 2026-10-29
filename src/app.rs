@@ -512,6 +512,8 @@ struct PopupState {
     dynamic: Option<Vec<library_ui::DynRow>>,
     /// Library rows the Rate flyout (`Popup::LibRate`) acts on.
     rate_rows: Vec<usize>,
+    /// Item rows for a generic flyout (`Popup::LibSub`), e.g. the Convert formats.
+    sub_rows: Vec<library_ui::DynRow>,
     /// The open one-level flyout (the Rate submenu): its kind and absolute screen
     /// anchor. Drawn in a second viewport beside the parent, which stays open.
     sub: Option<(Popup, egui::Pos2)>,
@@ -880,6 +882,7 @@ impl LinAmpApp {
                 pending: None,
                 dynamic: None,
                 rate_rows: Vec::new(),
+                sub_rows: Vec::new(),
                 sub: None,
                 sub_fresh: false,
                 sub_rounded_h: None,
@@ -1157,6 +1160,10 @@ impl LinAmpApp {
             match self.player.play_file(&track.path) {
                 Ok(()) => {
                     self.playlist.current = Some(i);
+                    // Scroll the playlist so the now-playing track is in view (it may
+                    // sit outside the current scroll window, e.g. after replacing the
+                    // list from the library).
+                    self.pl_scroll_to(i);
                     self.seek_preview = 0.0;
                     self.marquee_offset = 0.0;
                     self.apply_eq();
@@ -3963,6 +3970,10 @@ impl eframe::App for LinAmpApp {
             }
             if !done {
                 self.convert_rx = Some(rx);
+            } else {
+                // The worker indexed each converted file into the library as it went;
+                // re-query so they appear in the open library view (#185 QA).
+                self.refresh_library();
             }
         }
 
