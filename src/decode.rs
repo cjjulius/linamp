@@ -11,9 +11,11 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
+use opus::{Channels as OpusChannels, Decoder as OpusDecoder};
 use rodio::source::SeekError;
 use rodio::Source;
-use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
+use symphonia::core::codecs::audio::well_known::CODEC_ID_OPUS;
+use symphonia::core::codecs::audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions};
 use symphonia::core::codecs::CodecParameters;
 use symphonia::core::errors::Error as SymError;
 use symphonia::core::formats::probe::Hint;
@@ -22,21 +24,43 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::{Time, Timestamp};
 
-/// A lazy, seekable rodio `Source` backed by a symphonia decoder: packets are
-/// decoded on demand (not the whole file up front), so a long track isn't held in
-/// memory fully decoded, and `try_seek` maps to symphonia's seek (#163).
+/// Largest Opus frame: 120 ms at 48 kHz, per channel. libopus decodes any Opus
+/// packet into at most this many samples per channel, so a reused scratch buffer of
+/// this size (times the channel count) never overflows.
+const OPUS_MAX_FRAME: usize = 5760;
+
+/// The per-packet decoder behind a [`SymphoniaSource`]: symphonia for the formats it
+/// supports, or libopus for Opus. symphonia 0.6 demuxes Opus in Ogg/MP4/WebM but
+/// ships no Opus decoder, so we pull its demuxed packets and decode them with
+/// libopus (#181). The container demux and packet pump are shared either way.
+enum PacketDecoder {
+    Symphonia(Box<dyn AudioDecoder>),
+    /// libopus always decodes to 48 kHz; `channels` is 1 or 2. `scratch` is a reused
+    /// decode buffer sized for the largest Opus frame.
+    Opus {
+        dec: OpusDecoder,
+        channels: usize,
+        scratch: Vec<f32>,
+    },
+}
+
+/// A lazy, seekable rodio `Source` backed by a symphonia demuxer and either
+/// symphonia's or libopus's decoder: packets are decoded on demand (not the whole
+/// file up front), so a long track isn't held in memory fully decoded, and
+/// `try_seek` maps to symphonia's seek (#163).
 pub struct SymphoniaSource {
     format: Box<dyn FormatReader>,
-    decoder: Box<dyn AudioDecoder>,
+    decoder: PacketDecoder,
     track_id: u32,
     sample_rate: u32,
     channels: u16,
     total_duration: Option<Duration>,
     /// The current decoded packet's interleaved f32 samples, and our read cursor.
-    /// `copy_to_vec_interleaved` resizes this to each packet's length (symphonia 0.6
-    /// manages the conversion buffer for us, so no `SampleBuffer` is needed).
     samples: Vec<f32>,
     pos: usize,
+    /// Interleaved samples still to drop from the start of the stream (Opus encoder
+    /// delay / pre-skip from the OpusHead); 0 for every other codec.
+    preskip: usize,
 }
 
 impl SymphoniaSource {
@@ -52,18 +76,44 @@ impl SymphoniaSource {
             if packet.track_id != self.track_id {
                 continue;
             }
-            match self.decoder.decode(&packet) {
-                Ok(decoded) => {
-                    // Resizes `samples` to this packet's interleaved length and fills it.
-                    decoded.copy_to_vec_interleaved(&mut self.samples);
-                    self.pos = 0;
-                    if !self.samples.is_empty() {
-                        return true;
+            let filled = match &mut self.decoder {
+                PacketDecoder::Symphonia(d) => match d.decode(&packet) {
+                    Ok(decoded) => {
+                        // Resizes `samples` to the packet's interleaved length and fills it.
+                        decoded.copy_to_vec_interleaved(&mut self.samples);
+                        true
+                    }
+                    Err(SymError::DecodeError(_)) => false, // skip a bad frame
+                    Err(_) => return false,                 // fatal
+                },
+                PacketDecoder::Opus { dec, channels, scratch } => {
+                    match dec.decode_float(&packet.data, scratch, false) {
+                        Ok(frames) => {
+                            self.samples.clear();
+                            self.samples.extend_from_slice(&scratch[..frames * *channels]);
+                            true
+                        }
+                        Err(_) => false, // skip a bad Opus packet
                     }
                 }
-                Err(SymError::DecodeError(_)) => continue, // skip a bad frame
-                Err(_) => return false,
+            };
+            if filled {
+                self.drop_preskip();
+                self.pos = 0;
+                if !self.samples.is_empty() {
+                    return true;
+                }
             }
+        }
+    }
+
+    /// Drop any remaining Opus pre-skip from the front of the freshly filled
+    /// `samples` (a no-op once consumed, and for non-Opus where `preskip` is 0).
+    fn drop_preskip(&mut self) {
+        if self.preskip > 0 {
+            let drop = self.preskip.min(self.samples.len());
+            self.samples.drain(..drop);
+            self.preskip -= drop;
         }
     }
 }
@@ -109,7 +159,12 @@ impl Source for SymphoniaSource {
             SeekError::Other(Box::new(std::io::Error::other(e.to_string())))
         })?;
         // Drop decoder state built up before the seek, and the buffered packet.
-        self.decoder.reset();
+        match &mut self.decoder {
+            PacketDecoder::Symphonia(d) => d.reset(),
+            PacketDecoder::Opus { dec, .. } => {
+                let _ = dec.reset_state();
+            }
+        }
         self.samples.clear();
         self.pos = 0;
         Ok(())
@@ -145,14 +200,39 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
         Some(CodecParameters::Audio(p)) => p,
         _ => bail!("no audio codec parameters in {}", path.display()),
     };
-    let mut decoder = symphonia::default::get_codecs()
-        .make_audio_decoder(&audio_params, &AudioDecoderOptions::default())?;
+    // Opus: symphonia 0.6 demuxes the container but ships no Opus decoder, so decode
+    // its packets with libopus; every other codec goes through symphonia (#181).
+    let is_opus = audio_params.codec == CODEC_ID_OPUS;
+    let opus_channels = audio_params.channels.as_ref().map(|c| c.count()).unwrap_or(2);
+    let mut decoder = if is_opus {
+        if opus_channels == 0 || opus_channels > 2 {
+            bail!("unsupported Opus channel count ({opus_channels}) in {}", path.display());
+        }
+        let ch = if opus_channels == 1 { OpusChannels::Mono } else { OpusChannels::Stereo };
+        let dec = OpusDecoder::new(48_000, ch)
+            .map_err(|e| anyhow!("opus decoder init failed for {}: {e}", path.display()))?;
+        PacketDecoder::Opus {
+            dec,
+            channels: opus_channels,
+            scratch: vec![0.0; OPUS_MAX_FRAME * opus_channels],
+        }
+    } else {
+        PacketDecoder::Symphonia(
+            symphonia::default::get_codecs()
+                .make_audio_decoder(&audio_params, &AudioDecoderOptions::default())?,
+        )
+    };
 
     // The container's length, when it reports one (frames x time-base).
     let total_duration = container_duration(track.time_base, track.num_frames);
 
-    // Decode the first audio packet to learn the real spec and prime the buffer.
-    let (sample_rate, channels, samples) = loop {
+    // Opus carries encoder delay (pre-skip, at 48 kHz) to drop from the start; count
+    // it in interleaved samples. Zero for every other codec.
+    let mut preskip = if is_opus { opus_preskip(&audio_params) * opus_channels } else { 0 };
+
+    // Decode the first audio packet to learn the spec (symphonia) and prime the
+    // buffer. Opus is always 48 kHz with the channel count from the OpusHead.
+    let (sample_rate, channels, mut samples) = loop {
         let packet = match format.next_packet() {
             Ok(Some(p)) => p,
             Ok(None) => bail!("no audio in {}", path.display()),
@@ -161,21 +241,37 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
         if packet.track_id != track_id {
             continue;
         }
-        match decoder.decode(&packet) {
-            Ok(decoded) => {
-                let spec = decoded.spec();
-                let rate = spec.rate();
-                let ch = spec.channels().count() as u16;
-                let mut v: Vec<f32> = Vec::new();
-                decoded.copy_to_vec_interleaved(&mut v);
-                break (rate, ch, v);
+        match &mut decoder {
+            PacketDecoder::Symphonia(d) => match d.decode(&packet) {
+                Ok(decoded) => {
+                    let spec = decoded.spec();
+                    let rate = spec.rate();
+                    let ch = spec.channels().count() as u16;
+                    let mut v: Vec<f32> = Vec::new();
+                    decoded.copy_to_vec_interleaved(&mut v);
+                    break (rate, ch, v);
+                }
+                Err(SymError::DecodeError(_)) => continue,
+                Err(e) => bail!("decode error in {}: {e}", path.display()),
+            },
+            PacketDecoder::Opus { dec, channels, scratch } => {
+                match dec.decode_float(&packet.data, scratch, false) {
+                    Ok(frames) => {
+                        break (48_000, *channels as u16, scratch[..frames * *channels].to_vec())
+                    }
+                    Err(_) => continue, // skip a bad opening packet
+                }
             }
-            Err(SymError::DecodeError(_)) => continue,
-            Err(e) => bail!("decode error in {}: {e}", path.display()),
         }
     };
     if sample_rate == 0 || channels == 0 {
         bail!("no audio decoded from {}", path.display());
+    }
+    // Drop pre-skip from the primed samples; any remainder is dropped as fill() runs.
+    if preskip > 0 {
+        let drop = preskip.min(samples.len());
+        samples.drain(..drop);
+        preskip -= drop;
     }
 
     Ok(SymphoniaSource {
@@ -187,7 +283,20 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
         total_duration,
         samples,
         pos: 0,
+        preskip,
     })
+}
+
+/// Opus encoder delay (pre-skip) in samples at 48 kHz, read from the OpusHead in the
+/// track's extra data. Returns 0 when it is absent or too short to parse. OpusHead:
+/// "OpusHead"(8) + version(1) + channels(1) + pre_skip(2, little-endian) + ...
+fn opus_preskip(params: &AudioCodecParameters) -> usize {
+    match &params.extra_data {
+        Some(d) if d.len() >= 12 && &d[..8] == b"OpusHead" => {
+            u16::from_le_bytes([d[10], d[11]]) as usize
+        }
+        _ => 0,
+    }
 }
 
 /// The track length from the container alone (frames x time-base), without
@@ -248,11 +357,11 @@ mod tests {
 
     #[test]
     fn supported_exts_match_the_symphonia_registry() {
-        // Guard the SUPPORTED_EXTS list against advertising formats symphonia can't
-        // decode. The decoders we rely on must be registered, and Opus / WavPack
-        // (no decoder in symphonia 0.6 either, their features are non-functional
-        // stubs) must stay off the supported list, else a file is accepted into the
-        // playlist then fails to play.
+        // Guard the SUPPORTED_EXTS list against advertising formats we can't decode.
+        // The symphonia-registry decoders we rely on must be registered. Opus and
+        // WavPack have no decoder in symphonia 0.6 (their features are non-functional
+        // stubs), but Opus IS supported because crate::decode decodes it with libopus
+        // instead (#181); WavPack has no viable decoder, so it stays off the list.
         use symphonia::core::codecs::audio::well_known::{
             CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP3, CODEC_ID_OPUS,
             CODEC_ID_VORBIS, CODEC_ID_WAVPACK,
@@ -263,15 +372,34 @@ mod tests {
         ] {
             assert!(codecs.get_audio_decoder(c).is_some(), "expected a decoder for {c:?}");
         }
+        // symphonia itself still has no Opus/WavPack decoder; Opus is handled by libopus.
         for c in [CODEC_ID_OPUS, CODEC_ID_WAVPACK] {
             assert!(codecs.get_audio_decoder(c).is_none(), "unexpected decoder for {c:?}");
         }
-        for ext in ["opus", "wv"] {
-            assert!(
-                !crate::playlist::SUPPORTED_EXTS.contains(&ext),
-                "{ext} can't be decoded, so it must not be advertised as supported"
-            );
+        assert!(
+            crate::playlist::SUPPORTED_EXTS.contains(&"opus"),
+            "opus is decoded via libopus, so it must be advertised as supported"
+        );
+        assert!(
+            !crate::playlist::SUPPORTED_EXTS.contains(&"wv"),
+            "wavpack can't be decoded, so it must not be advertised as supported"
+        );
+    }
+
+    #[test]
+    fn open_file_decodes_and_seeks_an_opus() {
+        // Opus is demuxed by symphonia and decoded by libopus (#181). Uses the local
+        // qa sample when present (qa-music is gitignored, so this skips on CI).
+        let p = Path::new("qa-music/format-samples/hypno-this.opus");
+        if !p.exists() {
+            return;
         }
+        let mut src = open_file(p).expect("Opus should decode");
+        assert_eq!(src.sample_rate(), 48_000, "libopus decodes to 48 kHz");
+        assert!(src.channels() == 1 || src.channels() == 2);
+        assert!((&mut src).take(8192).count() > 0, "should yield audio");
+        src.try_seek(Duration::from_secs(1)).expect("Opus should seek");
+        assert!(src.next().is_some(), "should still decode after a seek");
     }
 
     #[test]
