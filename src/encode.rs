@@ -279,16 +279,31 @@ fn encode_mp3(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<(
     Ok(())
 }
 
-/// Copy the source file's primary tag onto the destination (lofty maps it to the
-/// destination format's tag type: ID3 for MP3, RIFF/ID3 for WAV).
+/// Copy the source file's primary tag onto the destination, re-mapped to the tag
+/// type the destination format actually supports. Writing the source's own tag
+/// type blindly fails for formats that reject it: an MP3's ID3v2 tag cannot go
+/// into an Ogg (Vorbis comments only), so without the re-map an OGG convert loses
+/// every tag (lofty errors with "format does not support it" and the caller
+/// swallows it). lofty's `ItemKey` is format-neutral, so copying the items into a
+/// fresh tag of the destination's native type maps them to that format's own
+/// frames/comments. AIFF/WAV/MP3 keep working since their native type is ID3.
 fn copy_tags(src: &Path, dst: &Path) -> Result<()> {
     use lofty::config::WriteOptions;
     use lofty::file::TaggedFileExt;
-    use lofty::tag::TagExt;
-    let tagged = lofty::read_from_path(src)?;
-    if let Some(tag) = tagged.primary_tag() {
-        tag.clone().save_to_path(dst, WriteOptions::default())?;
+    use lofty::tag::{Tag, TagExt};
+    let src_tagged = lofty::read_from_path(src)?;
+    let Some(src_tag) = src_tagged.primary_tag() else {
+        return Ok(());
+    };
+    let dst_type = lofty::read_from_path(dst)?.primary_tag_type();
+    let mut out = Tag::new(dst_type);
+    for item in src_tag.items() {
+        out.insert(item.clone());
     }
+    for pic in src_tag.pictures() {
+        out.push_picture(pic.clone());
+    }
+    out.save_to_path(dst, WriteOptions::default())?;
     Ok(())
 }
 
@@ -343,6 +358,42 @@ mod tests {
             assert_eq!(back.sample_rate(), 44_100, "{format:?} rate");
             assert_eq!(back.channels(), 2, "{format:?} channels");
             assert!((&mut back).take(4096).count() > 0, "{format:?} yields audio");
+            let _ = std::fs::remove_file(&out);
+        }
+        let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn convert_carries_tags_across_formats() {
+        // A source tagged with ID3 (as an MP3 or WAV is) must keep its tags when
+        // converted to a format whose native tag type differs. Regression for OGG
+        // converts silently dropping every tag because copy_tags wrote the source's
+        // ID3v2 straight onto the Ogg, which holds only Vorbis comments.
+        use lofty::config::WriteOptions;
+        use lofty::file::TaggedFileExt;
+        use lofty::tag::{Accessor, Tag, TagExt, TagType};
+        let dir = std::env::temp_dir();
+        let src = dir.join("linamp_tagcopy_src.wav");
+        write_source_wav(&src);
+        {
+            let mut t = Tag::new(TagType::Id3v2);
+            t.set_title("Aria Nocturne".to_string());
+            t.set_artist("Gundream".to_string());
+            t.set_album("Crystal Harbor".to_string());
+            t.save_to_path(&src, WriteOptions::default()).unwrap();
+        }
+        for (format, out) in [
+            (OutputFormat::Vorbis, dir.join("linamp_tagcopy_out.ogg")),
+            (OutputFormat::Aiff, dir.join("linamp_tagcopy_out.aiff")),
+        ] {
+            convert_file(&src, &out, format).unwrap_or_else(|e| panic!("{format:?}: {e}"));
+            let tagged = lofty::read_from_path(&out).unwrap();
+            let tag = tagged
+                .primary_tag()
+                .unwrap_or_else(|| panic!("{format:?}: no tag written"));
+            assert_eq!(tag.title().as_deref(), Some("Aria Nocturne"), "{format:?} title");
+            assert_eq!(tag.artist().as_deref(), Some("Gundream"), "{format:?} artist");
+            assert_eq!(tag.album().as_deref(), Some("Crystal Harbor"), "{format:?} album");
             let _ = std::fs::remove_file(&out);
         }
         let _ = std::fs::remove_file(&src);
