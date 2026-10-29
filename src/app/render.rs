@@ -126,6 +126,16 @@ impl super::LinAmpApp {
             self.step_viz();
         }
 
+        // Keep the scroll offset in range. Playing or enqueueing from the library
+        // changes the playlist length without touching the offset (only the scroll
+        // handler clamped it), so replacing a long, scrolled playlist with a shorter
+        // one could leave `first` past the end, where `first..end` is empty and the
+        // whole list renders blank even while a track plays. Clamp it here so the
+        // list is always visible.
+        if win == ClWin::Pl {
+            self.plview.first = classic::clamp_pl_first(self.plview.first, self.playlist.len());
+        }
+
         // Lazily read tags for the playlist rows about to be shown (on-view mode).
         if win == ClWin::Pl && !self.geom.pl_shade {
             let vis = classic::pl_visible_rows(self.plview.px_h as u32);
