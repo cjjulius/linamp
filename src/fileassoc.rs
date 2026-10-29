@@ -48,6 +48,7 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         "mp3" | "mp1" | "mp2" | "mpa" => "audio/mpeg",
         "flac" => "audio/flac",
         "ogg" | "oga" => "audio/ogg",
+        "opus" => "audio/opus",
         "wav" => "audio/x-wav",
         "m4a" | "m4b" | "mp4" => "audio/mp4",
         "aac" => "audio/aac",

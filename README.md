@@ -88,7 +88,8 @@ Ubuntu-based (Pop!_OS, Mint); audio goes to PipeWire via ALSA. See
 
 ## Build from source
 
-Install [Rust](https://rustup.rs), then:
+Install [Rust](https://rustup.rs) and [CMake](https://cmake.org/download/) (CMake
+builds the bundled libopus for Opus decoding), then:
 
 ```bash
 cargo build --release
@@ -97,8 +98,9 @@ cargo build --release
 
 Pass files or folders to open them: `linamp song.flac album/`.
 
-- Windows builds with no extra setup.
-- Linux needs a few system libraries (ALSA, GTK, X11/Wayland), see
+- Windows needs CMake on PATH (for example `winget install Kitware.CMake`); no
+  other setup.
+- Linux needs CMake plus a few system libraries (ALSA, GTK, X11/Wayland), see
   [LINUX.md](LINUX.md). Audio targets PipeWire via ALSA.
 
 Packaging the installers (Inno Setup / tarball) is documented in
