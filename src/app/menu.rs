@@ -461,10 +461,11 @@ impl super::LinAmpApp {
             .with_resizable(false)
             .with_taskbar(false)
             // The OS window is created at a default spot and only then moved to
-            // `screen`, which flashes a frame at the wrong place. Keep it hidden on
-            // its opening frame (while it gets positioned/sized) and reveal it next
-            // frame, so the menu only ever appears where it was clicked.
-            .with_visible(!self.popups.fresh)
+            // `screen`, which flashes a frame at the wrong place. Keep it hidden while
+            // it gets positioned/sized AND until its OS title bar has been stripped
+            // (`destyled`), so the menu only ever appears where it was clicked and never
+            // flashes winit's late-applied caption.
+            .with_visible(!self.popups.fresh && self.popups.destyled)
             // Always on top: the EQ/playlist/library windows are *owned* by the main
             // window (group_child_windows), which keeps them above sibling windows,
             // and clicking one re-raises it, so only a system-topmost popup stays
@@ -857,10 +858,16 @@ impl super::LinAmpApp {
             raise_popup_window("LinAmp Menu");
         }
 
-        if self.popups.fresh {
-            // The opening frame drew the menu hidden (see `with_visible` above);
-            // request the next frame now so it's revealed immediately rather than
-            // waiting on the next input event.
+        // Strip the OS title bar while the window is still hidden, then reveal it. Done
+        // once per open (latched), so it never rewrites the style of the shown window
+        // (which would flicker); the window stays hidden until this succeeds.
+        if !self.popups.destyled && ensure_popup_borderless("LinAmp Menu") {
+            self.popups.destyled = true;
+        }
+        if self.popups.fresh || !self.popups.destyled {
+            // The window is still hidden (opening frame, or title bar not yet stripped);
+            // request the next frame now so it's revealed as soon as it's ready rather
+            // than waiting on the next input event.
             ctx.request_repaint();
         }
         self.popups.fresh = false;
@@ -1056,9 +1063,11 @@ impl super::LinAmpApp {
         // the pointer moved off the parent before the new right-click).
         self.popups.sub = None;
         self.popups.sub_visible = false;
-        // New popup window: re-apply the rounded region on the next frame.
+        // New popup window: re-apply the rounded region and re-strip the OS title bar
+        // (kept hidden until that is done) on the next frame.
         self.popups.rounded = false;
         self.popups.rounded_h = None;
+        self.popups.destyled = false;
         // Fresh viewport id per open, so the menu never inherits a reused window's
         // size on a re-right-click (#154).
         self.popups.serial = self.popups.serial.wrapping_add(1);
