@@ -27,6 +27,9 @@ pub enum OutputFormat {
     Mp3,
     /// Ogg Vorbis via libvorbis (lossy, open, smaller than MP3 at equal quality).
     Vorbis,
+    /// Opus in Ogg via libopus (lossy, open, best quality at low bitrates). Always
+    /// encoded at 48 kHz (Opus's native rate), resampling other rates with rubato.
+    Opus,
     /// 16-bit PCM WAV (`hound`, lossless, uncompressed).
     Wav,
     /// 16-bit PCM AIFF (lossless, uncompressed; the Apple-world counterpart of WAV).
@@ -38,6 +41,7 @@ impl OutputFormat {
     pub const ALL: &'static [OutputFormat] = &[
         OutputFormat::Mp3,
         OutputFormat::Vorbis,
+        OutputFormat::Opus,
         OutputFormat::Wav,
         OutputFormat::Aiff,
     ];
@@ -47,6 +51,7 @@ impl OutputFormat {
         match self {
             OutputFormat::Mp3 => "mp3",
             OutputFormat::Vorbis => "ogg",
+            OutputFormat::Opus => "opus",
             OutputFormat::Wav => "wav",
             OutputFormat::Aiff => "aiff",
         }
@@ -60,6 +65,7 @@ pub fn convert_file(src: &Path, dst: &Path, format: OutputFormat) -> Result<()> 
     match format {
         OutputFormat::Mp3 => encode_mp3(dst, &samples, rate, channels)?,
         OutputFormat::Vorbis => encode_vorbis(dst, &samples, rate, channels)?,
+        OutputFormat::Opus => encode_opus(dst, &samples, rate, channels)?,
         OutputFormat::Wav => encode_wav(dst, &samples, rate, channels)?,
         OutputFormat::Aiff => encode_aiff(dst, &samples, rate, channels)?,
     }
@@ -238,6 +244,163 @@ fn encode_vorbis(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Resul
     Ok(())
 }
 
+/// Resample planar f32 (one buffer per channel) from `from_rate` to 48 kHz with a sinc
+/// resampler, returning planar 48 kHz. Opus only accepts 8/12/16/24/48 kHz, so other
+/// rates are brought to 48 kHz first. The resampler's leading delay is dropped and the
+/// result trimmed to the ideal output length so it stays aligned and correctly sized.
+fn resample_to_48k(planar: &[Vec<f32>], from_rate: u32) -> Result<Vec<Vec<f32>>> {
+    use rubato::{
+        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    };
+    let channels = planar.len();
+    let params = SincInterpolationParameters {
+        sinc_len: 256,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Linear,
+        oversampling_factor: 256,
+        window: WindowFunction::BlackmanHarris2,
+    };
+    const CHUNK: usize = 4096;
+    let ratio = 48_000.0 / from_rate as f64;
+    let mut rs = SincFixedIn::<f32>::new(ratio, 2.0, params, CHUNK, channels)
+        .map_err(|e| anyhow::anyhow!("resampler init: {e}"))?;
+    let delay = rs.output_delay();
+    let total = planar.first().map(|c| c.len()).unwrap_or(0);
+    let expected = (total as f64 * ratio).round() as usize;
+    let need = delay + expected;
+    let mut out: Vec<Vec<f32>> = vec![Vec::new(); channels];
+    // Feed fixed CHUNK frames per call (what SincFixedIn requires), padding past the end
+    // with zeros, until enough output is produced to cover the delay plus the real length.
+    let mut pos = 0usize;
+    let cap = total + 10 * CHUNK; // guard against a non-terminating feed
+    while out.first().map(|c| c.len()).unwrap_or(0) < need && pos < cap {
+        let chunk: Vec<Vec<f32>> = planar
+            .iter()
+            .map(|ch| {
+                let mut c = vec![0.0f32; CHUNK];
+                for (i, slot) in c.iter_mut().enumerate() {
+                    if let Some(&s) = ch.get(pos + i) {
+                        *slot = s;
+                    }
+                }
+                c
+            })
+            .collect();
+        let got = rs
+            .process(&chunk, None)
+            .map_err(|e| anyhow::anyhow!("resample: {e}"))?;
+        for (ci, g) in got.into_iter().enumerate() {
+            out[ci].extend(g);
+        }
+        pos += CHUNK;
+    }
+    for ch in &mut out {
+        if delay < ch.len() {
+            ch.drain(0..delay);
+        }
+        ch.truncate(expected);
+    }
+    Ok(out)
+}
+
+/// Opus in Ogg via libopus. Opus runs at 48 kHz, so resample other rates first, then
+/// encode 20 ms frames and mux them into an Ogg stream with the required OpusHead (its
+/// pre-skip is the encoder lookahead our decoder drops) and OpusTags pages. symphonia's
+/// ogg reader plus our libopus decode path read the result (checked by the round-trip test).
+fn encode_opus(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<()> {
+    use ogg::{PacketWriteEndInfo, PacketWriter};
+    use opus::{Application, Channels, Encoder};
+    if channels == 0 || channels > 2 {
+        bail!("Opus export supports mono or stereo, not {channels} channels");
+    }
+    let n = channels as usize;
+
+    // De-interleave, then bring to 48 kHz (Opus's only encode rate) if needed.
+    let mut planar: Vec<Vec<f32>> = vec![Vec::with_capacity(samples.len() / n); n];
+    for frame in samples.chunks_exact(n) {
+        for (c, &s) in frame.iter().enumerate() {
+            planar[c].push(s);
+        }
+    }
+    let planar = if rate == 48_000 {
+        planar
+    } else {
+        resample_to_48k(&planar, rate)?
+    };
+
+    // Re-interleave at 48 kHz for the encoder (encode_float takes interleaved input).
+    let frames = planar.first().map(|c| c.len()).unwrap_or(0);
+    let mut inter: Vec<f32> = Vec::with_capacity(frames * n);
+    for i in 0..frames {
+        for ch in &planar {
+            inter.push(ch.get(i).copied().unwrap_or(0.0));
+        }
+    }
+
+    let ch_enum = if n == 1 { Channels::Mono } else { Channels::Stereo };
+    let mut enc = Encoder::new(48_000, ch_enum, Application::Audio)
+        .map_err(|e| anyhow::anyhow!("opus init: {e}"))?;
+    // Pre-skip = the encoder's lookahead (at 48 kHz); the decoder drops this many leading
+    // samples. ~312 is the usual value if the query ever fails.
+    let pre_skip = enc.get_lookahead().unwrap_or(312).max(0) as u64;
+
+    let file = std::fs::File::create(dst).with_context(|| format!("create {}", dst.display()))?;
+    let mut pw = PacketWriter::new(file);
+    let serial: u32 = 0x4c69_6e41; // any fixed serial is fine for a single stream.
+
+    // OpusHead: magic, version, channels, pre-skip (u16 LE), input rate (u32 LE),
+    // output gain (i16 LE), channel-mapping family (0 for mono/stereo). Its own page.
+    let mut head = Vec::with_capacity(19);
+    head.extend_from_slice(b"OpusHead");
+    head.push(1);
+    head.push(n as u8);
+    head.extend_from_slice(&(pre_skip as u16).to_le_bytes());
+    head.extend_from_slice(&rate.to_le_bytes());
+    head.extend_from_slice(&0i16.to_le_bytes());
+    head.push(0);
+    pw.write_packet(head, serial, PacketWriteEndInfo::EndPage, 0)
+        .context("write OpusHead")?;
+
+    // OpusTags: magic, vendor string, comment count (0). Tags are copied afterwards by
+    // copy_tags (lofty maps them to the Vorbis comments Opus uses). Its own page.
+    let mut tags = Vec::new();
+    tags.extend_from_slice(b"OpusTags");
+    let vendor = b"LinAmp";
+    tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+    tags.extend_from_slice(vendor);
+    tags.extend_from_slice(&0u32.to_le_bytes());
+    pw.write_packet(tags, serial, PacketWriteEndInfo::EndPage, 0)
+        .context("write OpusTags")?;
+
+    // Audio: 20 ms frames (960 samples/channel at 48 kHz). Granule accumulates the 48 kHz
+    // sample count; the decoder plays granule - pre_skip samples. Pad the final frame.
+    const FRAME: usize = 960;
+    let per_frame = FRAME * n;
+    let mut packet = vec![0u8; 4000];
+    let mut granule: u64 = 0;
+    let frame_count = inter.len().div_ceil(per_frame).max(1);
+    for fi in 0..frame_count {
+        let start = fi * per_frame;
+        let mut pcm = vec![0.0f32; per_frame];
+        if start < inter.len() {
+            let end = (start + per_frame).min(inter.len());
+            pcm[..end - start].copy_from_slice(&inter[start..end]);
+        }
+        let len = enc
+            .encode_float(&pcm, &mut packet)
+            .map_err(|e| anyhow::anyhow!("opus encode: {e}"))?;
+        granule += FRAME as u64;
+        let info = if fi + 1 == frame_count {
+            PacketWriteEndInfo::EndStream
+        } else {
+            PacketWriteEndInfo::NormalPacket
+        };
+        pw.write_packet(packet[..len].to_vec(), serial, info, granule)
+            .context("write opus packet")?;
+    }
+    Ok(())
+}
+
 fn encode_mp3(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<()> {
     use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushNoGap, MonoPcm, Quality};
     if channels == 0 || channels > 2 {
@@ -348,6 +511,7 @@ mod tests {
         for (format, out) in [
             (OutputFormat::Mp3, dir.join("linamp_encode_out.mp3")),
             (OutputFormat::Vorbis, dir.join("linamp_encode_out.ogg")),
+            (OutputFormat::Opus, dir.join("linamp_encode_out.opus")),
             (OutputFormat::Wav, dir.join("linamp_encode_out.wav")),
             (OutputFormat::Aiff, dir.join("linamp_encode_out.aiff")),
         ] {
@@ -355,7 +519,10 @@ mod tests {
             assert!(out.exists() && std::fs::metadata(&out).unwrap().len() > 0);
             let mut back = crate::decode::open_file(&out)
                 .unwrap_or_else(|e| panic!("{format:?} output did not decode: {e}"));
-            assert_eq!(back.sample_rate(), 44_100, "{format:?} rate");
+            // Opus only runs at 48 kHz, so its output is resampled from the 44.1 kHz
+            // source; every other format keeps the source rate.
+            let expect_rate = if format == OutputFormat::Opus { 48_000 } else { 44_100 };
+            assert_eq!(back.sample_rate(), expect_rate, "{format:?} rate");
             assert_eq!(back.channels(), 2, "{format:?} channels");
             assert!((&mut back).take(4096).count() > 0, "{format:?} yields audio");
             let _ = std::fs::remove_file(&out);
