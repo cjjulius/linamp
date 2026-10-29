@@ -102,43 +102,48 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // Single-instance guard: hold an exclusive lock so a second launch exits instead
-    // of opening a rival set of classic windows (the classic player is single-instance,
-    // and two LinAmps fight over the audio device and window focus). The headless
-    // flags above are exempt (they may run alongside a GUI). The OS frees the lock on
-    // exit or crash, so a stale lock can never wedge startup.
-    let _instance_lock = match acquire_instance_lock() {
+    // Instance model (#193): the lock holder is the "primary" (first launched). It
+    // owns the open-request queue, so files always land in one deterministic instance.
+    // A launch that passes files (Open with) always routes them to the primary and
+    // exits, never opening a rival window. A bare second launch (no files) is a
+    // deliberate request for another instance and runs as a secondary. The OS frees
+    // the lock on exit or crash, so a stale lock can never wedge startup.
+    let launch_files: Vec<std::path::PathBuf> = {
+        // Resolve each path against this launcher's cwd: the primary has a different
+        // cwd, so a relative path (from a terminal launch) would otherwise resolve
+        // against the wrong directory once handed over.
+        let cwd = std::env::current_dir().ok();
+        args.iter()
+            .skip(1)
+            .map(|a| {
+                let p = std::path::PathBuf::from(a);
+                match &cwd {
+                    Some(cwd) if p.is_relative() => cwd.join(p),
+                    _ => p,
+                }
+            })
+            .collect()
+    };
+    let (_instance_lock, is_primary) = match acquire_instance_lock() {
         Instance::AlreadyRunning => {
-            // Another LinAmp is already running (single instance). Hand it any
-            // files passed on the command line (Open with) through the open-request
-            // queue so it opens them, then exit. The running instance polls the
-            // queue and applies them per the "Open with" preference. Resolve each
-            // path against this launcher's working directory first: the running
-            // instance has a different cwd, so a relative path (from a terminal
-            // launch) would otherwise be opened against the wrong directory.
-            let cwd = std::env::current_dir().ok();
-            let files: Vec<std::path::PathBuf> = args
-                .iter()
-                .skip(1)
-                .map(|a| {
-                    let p = std::path::PathBuf::from(a);
-                    match &cwd {
-                        Some(cwd) if p.is_relative() => cwd.join(p),
-                        _ => p,
-                    }
-                })
-                .collect();
-            openq::enqueue(&files);
-            return Ok(());
+            // A primary is already running. Hand it any files (Open with) through the
+            // queue, which only the primary drains, so they open in that one instance.
+            if !launch_files.is_empty() {
+                openq::enqueue(&launch_files);
+                return Ok(());
+            }
+            // No files: this is a deliberate second launch, so run as a secondary.
+            (None, false)
         }
         Instance::Acquired(file) => {
-            // This launch owns the single instance. Drop any stale open-requests a
-            // previous (crashed) instance left behind, so they aren't replayed as
-            // our startup files before the window begins polling the queue.
+            // This launch owns the lock, so it is the primary. Drop any stale
+            // open-requests a previous (crashed) primary left behind, so they aren't
+            // replayed as our startup files before the window begins polling the queue.
             openq::clear();
-            Some(file)
+            (Some(file), true)
         }
-        Instance::Unavailable => None,
+        // Locking unavailable (e.g. data dir not writable): act as primary, best-effort.
+        Instance::Unavailable => (None, true),
     };
 
     // Register LinAmp as a candidate handler for its audio types (#166), so it
@@ -177,7 +182,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "LinAmp",
         options,
-        Box::new(|cc| Ok(Box::new(LinAmpApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(LinAmpApp::new(cc, is_primary)))),
     )
 }
 
