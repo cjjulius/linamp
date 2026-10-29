@@ -462,10 +462,11 @@ impl super::LinAmpApp {
             .with_taskbar(false)
             // The OS window is created at a default spot and only then moved to
             // `screen`, which flashes a frame at the wrong place. Keep it hidden while
-            // it gets positioned/sized AND until its OS title bar has been stripped
-            // (`destyled`), so the menu only ever appears where it was clicked and never
-            // flashes winit's late-applied caption.
-            .with_visible(!self.popups.fresh && self.popups.destyled)
+            // it gets positioned/sized AND until its rounded region is applied
+            // (`rounded`). winit keeps WS_CAPTION in the borderless window's style; the
+            // rounded region clips that title bar out of view, so revealing before the
+            // region is set would show the caption for a frame. Only reveal once clipped.
+            .with_visible(!self.popups.fresh && self.popups.rounded)
             // Always on top: the EQ/playlist/library windows are *owned* by the main
             // window (group_child_windows), which keeps them above sibling windows,
             // and clicking one re-raises it, so only a system-topmost popup stays
@@ -858,16 +859,10 @@ impl super::LinAmpApp {
             raise_popup_window("LinAmp Menu");
         }
 
-        // Strip the OS title bar while the window is still hidden, then reveal it. Done
-        // once per open (latched), so it never rewrites the style of the shown window
-        // (which would flicker); the window stays hidden until this succeeds.
-        if !self.popups.destyled && ensure_popup_borderless("LinAmp Menu") {
-            self.popups.destyled = true;
-        }
-        if self.popups.fresh || !self.popups.destyled {
-            // The window is still hidden (opening frame, or title bar not yet stripped);
-            // request the next frame now so it's revealed as soon as it's ready rather
-            // than waiting on the next input event.
+        if self.popups.fresh || !self.popups.rounded {
+            // The window is still hidden (opening frame, or rounded region not yet
+            // applied); request the next frame now so it's revealed as soon as it's
+            // ready rather than waiting on the next input event.
             ctx.request_repaint();
         }
         self.popups.fresh = false;
@@ -940,6 +935,11 @@ impl super::LinAmpApp {
             .with_resizable(false)
             .with_taskbar(false)
             .with_visible(visible)
+            // Show the flyout without activating it: taking activation makes Windows
+            // briefly repaint the parent menu's default (non-client) frame, which is the
+            // title-bar flash. The parent keeps focus (it handles Escape) and the flyout
+            // still receives clicks. (No-op where winit ignores it, e.g. X11.)
+            .with_active(false)
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
@@ -1063,11 +1063,10 @@ impl super::LinAmpApp {
         // the pointer moved off the parent before the new right-click).
         self.popups.sub = None;
         self.popups.sub_visible = false;
-        // New popup window: re-apply the rounded region and re-strip the OS title bar
-        // (kept hidden until that is done) on the next frame.
+        // New popup window: re-apply the rounded region (kept hidden until it is) on
+        // the next frame.
         self.popups.rounded = false;
         self.popups.rounded_h = None;
-        self.popups.destyled = false;
         // Fresh viewport id per open, so the menu never inherits a reused window's
         // size on a re-right-click (#154).
         self.popups.serial = self.popups.serial.wrapping_add(1);
