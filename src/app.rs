@@ -637,6 +637,10 @@ pub struct LinAmpApp {
     /// Status messages from a background rip/convert job (#183), polled each frame;
     /// present while a conversion runs, cleared when the worker thread finishes.
     convert_rx: Option<std::sync::mpsc::Receiver<String>>,
+    /// Whether this process is the primary instance (holds the instance lock). Only
+    /// the primary drains the open-request queue, so files handed over by other
+    /// launches always land in one deterministic instance (#193).
+    is_primary: bool,
     /// System-tray icon (kept alive for its lifetime) and the channel its clicks
     /// arrive on, drained once per frame (#40). `hidden_to_tray` tracks whether
     /// the window is currently hidden so a tray left-click toggles it.
@@ -763,7 +767,7 @@ fn crossfade_due(
 }
 
 impl LinAmpApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, is_primary: bool) -> Self {
         install_fonts(&cc.egui_ctx);
         let player = Player::new();
         let viz = player.viz();
@@ -905,6 +909,7 @@ impl LinAmpApp {
             on_top_last: None,
             prefs,
             convert_rx: None,
+            is_primary,
             _tray: tray,
             tray_rx,
             _media_keys: media_keys,
@@ -3984,11 +3989,11 @@ impl eframe::App for LinAmpApp {
             }
         }
 
-        // Files forwarded from a second "Open with" launch (#166): a second
-        // instance can't run beside this one (single instance), so it dropped the
-        // paths in the open-request queue. Poll it (throttled) and open them per
-        // the "Open with" pref, bringing the window forward.
-        if now.duration_since(self.last_open_check).as_millis() >= 250 {
+        // Files forwarded from another launch "Open with" (#166): that launch dropped
+        // the paths in the open-request queue. Only the primary instance drains it, so
+        // handed-over files always land in one deterministic instance (#193). Poll it
+        // (throttled) and open them per the "Open with" pref, bringing the window forward.
+        if self.is_primary && now.duration_since(self.last_open_check).as_millis() >= 250 {
             self.last_open_check = now;
             let opened = crate::openq::drain();
             if !opened.is_empty() {
