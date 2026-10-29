@@ -13,33 +13,30 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Result};
 use rodio::source::SeekError;
 use rodio::Source;
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{Decoder, DecoderOptions};
+use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
+use symphonia::core::codecs::CodecParameters;
 use symphonia::core::errors::Error as SymError;
-use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
-use symphonia::core::units::Time;
+use symphonia::core::units::{Time, Timestamp};
 
 /// A lazy, seekable rodio `Source` backed by a symphonia decoder: packets are
 /// decoded on demand (not the whole file up front), so a long track isn't held in
 /// memory fully decoded, and `try_seek` maps to symphonia's seek (#163).
 pub struct SymphoniaSource {
     format: Box<dyn FormatReader>,
-    decoder: Box<dyn Decoder>,
+    decoder: Box<dyn AudioDecoder>,
     track_id: u32,
     sample_rate: u32,
     channels: u16,
     total_duration: Option<Duration>,
     /// The current decoded packet's interleaved f32 samples, and our read cursor.
+    /// `copy_to_vec_interleaved` resizes this to each packet's length (symphonia 0.6
+    /// manages the conversion buffer for us, so no `SampleBuffer` is needed).
     samples: Vec<f32>,
     pos: usize,
-    /// Reused interleaved-sample buffer, rebuilt only when a packet's spec or
-    /// capacity changes (rare), so decoding doesn't allocate one per packet on the
-    /// audio thread. `sbuf_key` is the (capacity, rate, channels) it was built for.
-    sbuf: Option<SampleBuffer<f32>>,
-    sbuf_key: Option<(u64, u32, usize)>,
 }
 
 impl SymphoniaSource {
@@ -48,28 +45,17 @@ impl SymphoniaSource {
     fn fill(&mut self) -> bool {
         loop {
             let packet = match self.format.next_packet() {
-                Ok(p) => p,
+                Ok(Some(p)) => p,
+                Ok(None) => return false, // end of stream
                 Err(_) => return false,
             };
-            if packet.track_id() != self.track_id {
+            if packet.track_id != self.track_id {
                 continue;
             }
             match self.decoder.decode(&packet) {
                 Ok(decoded) => {
-                    let spec = *decoded.spec();
-                    let cap = decoded.capacity() as u64;
-                    let key = (cap, spec.rate, spec.channels.count());
-                    // Reuse the buffer across packets; rebuild only when the spec or
-                    // capacity actually changes, so the audio thread doesn't
-                    // allocate a fresh SampleBuffer every packet.
-                    if self.sbuf_key != Some(key) {
-                        self.sbuf = Some(SampleBuffer::<f32>::new(cap, spec));
-                        self.sbuf_key = Some(key);
-                    }
-                    let sb = self.sbuf.as_mut().unwrap();
-                    sb.copy_interleaved_ref(decoded);
-                    self.samples.clear();
-                    self.samples.extend_from_slice(sb.samples());
+                    // Resizes `samples` to this packet's interleaved length and fills it.
+                    decoded.copy_to_vec_interleaved(&mut self.samples);
                     self.pos = 0;
                     if !self.samples.is_empty() {
                         return true;
@@ -112,15 +98,15 @@ impl Source for SymphoniaSource {
         self.total_duration
     }
     fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        // symphonia 0.6's Time is (seconds, nanos); build it from the Duration
+        // (try_new only fails on nanos >= 1e9, which a Duration never is).
+        let time = Time::try_new(pos.as_secs() as i64, pos.subsec_nanos()).unwrap_or(Time::ZERO);
         let to = SeekTo::Time {
-            time: Time::from(pos.as_secs_f64()),
+            time,
             track_id: Some(self.track_id),
         };
         self.format.seek(SeekMode::Accurate, to).map_err(|e| {
-            SeekError::Other(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            )))
+            SeekError::Other(Box::new(std::io::Error::other(e.to_string())))
         })?;
         // Drop decoder state built up before the seek, and the buffered packet.
         self.decoder.reset();
@@ -144,44 +130,45 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
         hint.with_extension(ext);
     }
 
-    let probed = symphonia::default::get_probe().format(
+    let mut format = symphonia::default::get_probe().probe(
         &hint,
         mss,
-        &FormatOptions::default(),
-        &MetadataOptions::default(),
+        FormatOptions::default(),
+        MetadataOptions::default(),
     )?;
-    let mut format = probed.format;
     let track = format
-        .default_track()
+        .default_track(TrackType::Audio)
         .ok_or_else(|| anyhow!("file has no audio track"))?
         .clone();
     let track_id = track.id;
-    let mut decoder =
-        symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
+    let audio_params = match track.codec_params {
+        Some(CodecParameters::Audio(p)) => p,
+        _ => bail!("no audio codec parameters in {}", path.display()),
+    };
+    let mut decoder = symphonia::default::get_codecs()
+        .make_audio_decoder(&audio_params, &AudioDecoderOptions::default())?;
 
     // The container's length, when it reports one (frames x time-base).
-    let total_duration = match (track.codec_params.time_base, track.codec_params.n_frames) {
-        (Some(tb), Some(n)) => {
-            let t = tb.calc_time(n);
-            Some(Duration::new(t.seconds, (t.frac * 1e9) as u32))
-        }
-        _ => None,
-    };
+    let total_duration = container_duration(track.time_base, track.num_frames);
 
     // Decode the first audio packet to learn the real spec and prime the buffer.
     let (sample_rate, channels, samples) = loop {
-        let packet = format
-            .next_packet()
-            .map_err(|e| anyhow!("no audio in {}: {e}", path.display()))?;
-        if packet.track_id() != track_id {
+        let packet = match format.next_packet() {
+            Ok(Some(p)) => p,
+            Ok(None) => bail!("no audio in {}", path.display()),
+            Err(e) => return Err(anyhow!("no audio in {}: {e}", path.display())),
+        };
+        if packet.track_id != track_id {
             continue;
         }
         match decoder.decode(&packet) {
             Ok(decoded) => {
-                let spec = *decoded.spec();
-                let mut sb = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
-                sb.copy_interleaved_ref(decoded);
-                break (spec.rate, spec.channels.count() as u16, sb.samples().to_vec());
+                let spec = decoded.spec();
+                let rate = spec.rate();
+                let ch = spec.channels().count() as u16;
+                let mut v: Vec<f32> = Vec::new();
+                decoded.copy_to_vec_interleaved(&mut v);
+                break (rate, ch, v);
             }
             Err(SymError::DecodeError(_)) => continue,
             Err(e) => bail!("decode error in {}: {e}", path.display()),
@@ -200,8 +187,6 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
         total_duration,
         samples,
         pos: 0,
-        sbuf: None,
-        sbuf_key: None,
     })
 }
 
@@ -216,22 +201,28 @@ pub fn probe_duration(path: &Path) -> Option<Duration> {
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
     }
-    let probed = symphonia::default::get_probe()
-        .format(
+    let format = symphonia::default::get_probe()
+        .probe(
             &hint,
             mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+            FormatOptions::default(),
+            MetadataOptions::default(),
         )
         .ok()?;
-    let track = probed.format.default_track()?;
-    match (track.codec_params.time_base, track.codec_params.n_frames) {
-        (Some(tb), Some(n)) => {
-            let t = tb.calc_time(n);
-            Some(Duration::new(t.seconds, (t.frac * 1e9) as u32))
-        }
-        _ => None,
-    }
+    let track = format.default_track(TrackType::Audio)?;
+    container_duration(track.time_base, track.num_frames)
+}
+
+/// A track length from its container time-base and frame count, if both are known.
+/// symphonia 0.6's `calc_time` takes a `Timestamp` and returns an `Option<Time>`,
+/// which is (seconds, nanos); convert that to a `std::time::Duration`.
+fn container_duration(
+    time_base: Option<symphonia::core::units::TimeBase>,
+    num_frames: Option<u64>,
+) -> Option<Duration> {
+    let (tb, n) = (time_base?, num_frames?);
+    let t = tb.calc_time(Timestamp::try_from(n).ok()?)?;
+    Some(Duration::from_nanos(t.as_nanos().max(0) as u64))
 }
 
 #[cfg(test)]
@@ -259,20 +250,21 @@ mod tests {
     fn supported_exts_match_the_symphonia_registry() {
         // Guard the SUPPORTED_EXTS list against advertising formats symphonia can't
         // decode. The decoders we rely on must be registered, and Opus / WavPack
-        // (no decoder in symphonia 0.5) must stay off the supported list, else a
-        // file is accepted into the playlist then fails to play.
-        use symphonia::core::codecs::{
-            CODEC_TYPE_AAC, CODEC_TYPE_ALAC, CODEC_TYPE_FLAC, CODEC_TYPE_MP3,
-            CODEC_TYPE_OPUS, CODEC_TYPE_VORBIS, CODEC_TYPE_WAVPACK,
+        // (no decoder in symphonia 0.6 either, their features are non-functional
+        // stubs) must stay off the supported list, else a file is accepted into the
+        // playlist then fails to play.
+        use symphonia::core::codecs::audio::well_known::{
+            CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP3, CODEC_ID_OPUS,
+            CODEC_ID_VORBIS, CODEC_ID_WAVPACK,
         };
         let codecs = symphonia::default::get_codecs();
         for c in [
-            CODEC_TYPE_MP3, CODEC_TYPE_AAC, CODEC_TYPE_VORBIS, CODEC_TYPE_FLAC, CODEC_TYPE_ALAC,
+            CODEC_ID_MP3, CODEC_ID_AAC, CODEC_ID_VORBIS, CODEC_ID_FLAC, CODEC_ID_ALAC,
         ] {
-            assert!(codecs.get_codec(c).is_some(), "expected a decoder for {c:?}");
+            assert!(codecs.get_audio_decoder(c).is_some(), "expected a decoder for {c:?}");
         }
-        for c in [CODEC_TYPE_OPUS, CODEC_TYPE_WAVPACK] {
-            assert!(codecs.get_codec(c).is_none(), "unexpected decoder for {c:?}");
+        for c in [CODEC_ID_OPUS, CODEC_ID_WAVPACK] {
+            assert!(codecs.get_audio_decoder(c).is_none(), "unexpected decoder for {c:?}");
         }
         for ext in ["opus", "wv"] {
             assert!(
