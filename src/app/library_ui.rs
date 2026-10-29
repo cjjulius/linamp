@@ -1435,6 +1435,11 @@ impl super::LinAmpApp {
     /// Rip/convert the given library rows to `format` (#183). Asks for an output
     /// folder, then converts off the UI thread, reporting progress via `convert_rx`.
     fn convert_tracks(&mut self, rows: &[usize], format: crate::encode::OutputFormat) {
+        // One conversion at a time: ignore a new request while a job is running.
+        if self.convert_rx.is_some() {
+            self.status = "A conversion is already running.".into();
+            return;
+        }
         let paths: Vec<std::path::PathBuf> = rows
             .iter()
             .filter_map(|&i| self.lib.results.get(i).map(|t| t.path.clone()))
@@ -1458,7 +1463,7 @@ impl super::LinAmpApp {
             for (i, src) in paths.iter().enumerate() {
                 let _ = tx.send(format!("Converting {}/{}\u{2026}", i + 1, total));
                 let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("track");
-                let dst = dir.join(format!("{stem}.{}", format.ext()));
+                let dst = unique_path(&dir, stem, format.ext());
                 match crate::encode::convert_file(src, &dst, format) {
                     Ok(()) => ok += 1,
                     Err(e) => {
@@ -1474,4 +1479,20 @@ impl super::LinAmpApp {
             });
         });
     }
+}
+
+/// An output path in `dir` named `stem.ext`, suffixed " (n)" if that name is taken,
+/// so a conversion never silently overwrites an existing file.
+fn unique_path(dir: &std::path::Path, stem: &str, ext: &str) -> std::path::PathBuf {
+    let first = dir.join(format!("{stem}.{ext}"));
+    if !first.exists() {
+        return first;
+    }
+    for n in 1.. {
+        let p = dir.join(format!("{stem} ({n}).{ext}"));
+        if !p.exists() {
+            return p;
+        }
+    }
+    unreachable!()
 }
