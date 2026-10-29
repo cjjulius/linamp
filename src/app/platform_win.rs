@@ -720,15 +720,20 @@ mod x11util {
             static WIN_CACHE: RefCell<std::collections::HashMap<String, xlib::Window>> =
                 RefCell::new(std::collections::HashMap::new());
         }
+        // Scope to this process's windows (#193): with multiple instances running the
+        // titles are not unique, so matching by title alone would return another
+        // instance's window and cross window ownership between instances. Match on
+        // _NET_WM_PID as well, the same identity the transient-for grouping uses.
+        let me = std::process::id();
         WIN_CACHE.with(|c| {
             if let Some(&w) = c.borrow().get(title) {
-                if w != 0 && wm_name(xlib, d, w) == title {
+                if w != 0 && wm_name(xlib, d, w) == title && wm_pid(xlib, d, w) == me {
                     return w;
                 }
             }
             let win = client_list(xlib, d)
                 .into_iter()
-                .find(|&c| wm_name(xlib, d, c) == title)
+                .find(|&c| wm_name(xlib, d, c) == title && wm_pid(xlib, d, c) == me)
                 .unwrap_or(0);
             let mut cache = c.borrow_mut();
             if win != 0 {
@@ -991,21 +996,60 @@ pub(crate) fn set_windows_topmost(on: bool) {
     }
 }
 
-/// A NUL-terminated UTF-16 string for the Win32 `*W` APIs.
-#[cfg(windows)]
-pub(crate) fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
 
-/// Find a top-level window by exact title, or 0 when it isn't present. The single
-/// place that declares `FindWindowW`. Windows only.
+/// Find *this process's* top-level window by exact title, or 0 when it isn't present.
+///
+/// Must be process-scoped: with multiple instances running (#193) the window titles
+/// are not unique, so a plain `FindWindowW` (which matches any process's window) would
+/// let one instance re-parent or close another instance's same-titled windows. That is
+/// how window ownership got crossed between instances (closing one instance's window
+/// closed another's EQ/playlist). Enumerate top-level windows and return the first one
+/// whose title matches AND whose owning process is this one. Windows only.
 #[cfg(windows)]
 pub(crate) fn find_window(title: &str) -> isize {
     #[allow(non_snake_case)]
     extern "system" {
-        fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+        fn EnumWindows(cb: extern "system" fn(isize, isize) -> i32, lparam: isize) -> i32;
+        fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
+        fn GetCurrentProcessId() -> u32;
+        fn GetWindowTextW(hwnd: isize, buf: *mut u16, max: i32) -> i32;
     }
-    unsafe { FindWindowW(std::ptr::null(), wide(title).as_ptr()) }
+
+    // State handed to the enum callback by pointer (lparam): the title to match (UTF-16,
+    // no NUL), this process id, and the matched window out.
+    struct Ctx {
+        want: Vec<u16>,
+        pid: u32,
+        found: isize,
+    }
+
+    extern "system" fn enum_cb(hwnd: isize, lparam: isize) -> i32 {
+        unsafe {
+            let ctx = &mut *(lparam as *mut Ctx);
+            let mut wpid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut wpid);
+            if wpid != ctx.pid {
+                return 1; // other process; keep enumerating
+            }
+            let mut buf = [0u16; 256];
+            let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32) as usize;
+            if buf[..n] == ctx.want[..] {
+                ctx.found = hwnd;
+                return 0; // stop enumeration
+            }
+            1
+        }
+    }
+
+    let mut ctx = Ctx {
+        want: title.encode_utf16().collect(),
+        pid: unsafe { GetCurrentProcessId() },
+        found: 0,
+    };
+    unsafe {
+        EnumWindows(enum_cb, &mut ctx as *mut Ctx as isize);
+    }
+    ctx.found
 }
 
 /// Show or hide the taskbar button for the top-level window titled `title`, at
@@ -1275,13 +1319,3 @@ pub(crate) fn unset_window_cursor(title: &str) {
     }
 }
 
-// `wide` is a Win32-only helper, so its test only builds on Windows.
-#[cfg(all(test, windows))]
-mod tests {
-    #[test]
-    fn wide_is_nul_terminated_utf16() {
-        let w = super::wide("Hi");
-        assert_eq!(w, vec![0x48, 0x69, 0]);
-        assert_eq!(*w.last().unwrap(), 0);
-    }
-}
