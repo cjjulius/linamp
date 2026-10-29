@@ -10,7 +10,7 @@ repository = "https://github.com/cjjulius/linamp"
 [dependencies]
 eframe = { version = "0.29", default-features = true }
 egui = "0.29"
-rodio = { version = "0.20", default-features = false, features = ["symphonia-all"] }
+rodio = { version = "0.20", default-features = false }
 lofty = "0.21"
 rfd = "0.15"
 walkdir = "2"
@@ -25,9 +25,11 @@ serde_json = "1"
 # HTTP(S) client for streaming "Open location" URLs (internet radio / remote
 # files). Blocking, pure-Rust TLS; used only on a background decode thread.
 ureq = "2"
-# Direct symphonia decode of a non-seekable network stream (rodio's Decoder
-# needs Read+Seek, which a live stream isn't). Versions track rodio's symphonia.
-symphonia = { version = "0.5", default-features = false, features = ["mp1", "mp2", "mp3", "aac", "isomp4", "ogg", "vorbis", "flac", "pcm", "alac", "wav", "aiff", "adpcm"] }
+# The sole decode path: symphonia directly, for both local files (src/decode.rs)
+# and non-seekable network streams (src/stream.rs). rodio's own Decoder is unused,
+# so rodio pulls no symphonia of its own (no symphonia-* features above), keeping a
+# single symphonia 0.6 in the tree rather than a second 0.5 copy.
+symphonia = { version = "0.6", default-features = false, features = ["mp1", "mp2", "mp3", "aac", "isomp4", "ogg", "vorbis", "flac", "pcm", "alac", "wav", "aiff", "adpcm"] }
 # Open a URL in the user's default browser (the Minibrowser's "nod" action).
 open = "5"
 rustysynth = "1.3.8"
