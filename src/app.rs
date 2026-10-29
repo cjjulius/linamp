@@ -641,6 +641,14 @@ pub struct LinAmpApp {
     /// the primary drains the open-request queue, so files handed over by other
     /// launches always land in one deterministic instance (#193).
     is_primary: bool,
+    /// The instance lock, held once this process has become primary by taking it over
+    /// (the launch-time primary holds its own copy in `main`). Keeping the handle alive
+    /// holds the lock; the OS frees it when this instance exits so the next can take over.
+    instance_lock: Option<std::fs::File>,
+    /// Where the instance lock lives, so a secondary can poll to take over if the primary exits.
+    lock_path: std::path::PathBuf,
+    /// Last time a secondary polled the instance lock to take over the primary role (#193).
+    last_lock_try: Instant,
     /// System-tray icon (kept alive for its lifetime) and the channel its clicks
     /// arrive on, drained once per frame (#40). `hidden_to_tray` tracks whether
     /// the window is currently hidden so a tray left-click toggles it.
@@ -910,6 +918,9 @@ impl LinAmpApp {
             prefs,
             convert_rx: None,
             is_primary,
+            instance_lock: None,
+            lock_path: crate::instance_lock_path(),
+            last_lock_try: Instant::now(),
             _tray: tray,
             tray_rx,
             _media_keys: media_keys,
@@ -3986,6 +3997,18 @@ impl eframe::App for LinAmpApp {
                 // The worker indexed each converted file into the library as it went;
                 // re-query so they appear in the open library view (#185 QA).
                 self.refresh_library();
+            }
+        }
+
+        // Primary handover (#193): a secondary polls the instance lock, and when the
+        // primary exits and frees it, takes over as the new primary so the open-request
+        // queue keeps draining (files handed over meanwhile are still pending, not lost).
+        if !self.is_primary && now.duration_since(self.last_lock_try) >= Duration::from_secs(2) {
+            self.last_lock_try = now;
+            if let Some(lock) = crate::try_lock_instance(&self.lock_path) {
+                self.instance_lock = Some(lock);
+                self.is_primary = true;
+                self.status = "Now the primary instance.".into();
             }
         }
 
