@@ -30,12 +30,17 @@ pub(super) enum LibAction {
 /// One row of a dynamic popup menu (the Media Library context menus). Built per
 /// right-click, held in `PopupState.dynamic`, and drawn by `draw_popup_viewport`.
 /// Unlike the fixed classic menus these rows carry owned, per-click labels.
+#[derive(Clone)]
 pub(super) enum DynRow {
     /// A clickable row that runs `act` and closes the menu.
     Item { label: String, act: LibAction },
     /// A row that opens the Rate flyout (the one nested menu) in a second window
     /// beside this menu; the parent stays open while the flyout is up.
     RateSub { label: String },
+    /// A row that opens a flyout of its own `children` (Item/Sep rows) in a second
+    /// window beside this menu, e.g. the "Convert to" format list. The parent stays
+    /// open while the flyout is up.
+    Sub { label: String, children: Vec<DynRow> },
     Sep,
 }
 
@@ -1124,12 +1129,19 @@ impl super::LinAmpApp {
                                             menu.push(DynRow::Item { label: "Edit tags\u{2026}".into(), act: LibAction::EditTags(i) });
                                             menu.push(DynRow::Item { label: "Explore folder".into(), act: LibAction::Explore(i) });
                                             menu.push(DynRow::Sep);
-                                            for fmt in crate::encode::OutputFormat::ALL {
-                                                menu.push(DynRow::Item {
-                                                    label: format!("Convert to {}\u{2026}", fmt.ext().to_uppercase()),
+                                            // One "Convert to" row with the formats in a flyout, so the
+                                            // common (non-converting) case isn't a wall of Convert items.
+                                            let convert_children = crate::encode::OutputFormat::ALL
+                                                .iter()
+                                                .map(|fmt| DynRow::Item {
+                                                    label: fmt.ext().to_uppercase(),
                                                     act: LibAction::Convert(rows.clone(), *fmt),
-                                                });
-                                            }
+                                                })
+                                                .collect();
+                                            menu.push(DynRow::Sub {
+                                                label: "Convert to".into(),
+                                                children: convert_children,
+                                            });
                                             menu.push(DynRow::Sep);
                                             menu.push(DynRow::Item { label: remove_label.into(), act: LibAction::Remove(rows.clone()) });
                                             act.open_menu = Some((anchor, menu, rows.clone()));
@@ -1173,6 +1185,15 @@ impl super::LinAmpApp {
                                             if ui.button("Clear rating").clicked() {
                                                 act.lib_action = Some(LibAction::Rate(rows.clone(), 0));
                                                 ui.close_menu();
+                                            }
+                                        });
+                                        ui.menu_button("Convert to", |ui| {
+                                            for fmt in crate::encode::OutputFormat::ALL {
+                                                if ui.button(fmt.ext().to_uppercase()).clicked() {
+                                                    act.lib_action =
+                                                        Some(LibAction::Convert(rows.clone(), *fmt));
+                                                    ui.close_menu();
+                                                }
                                             }
                                         });
                                         if ui.button("Edit tags\u{2026}").clicked() {
@@ -1447,6 +1468,12 @@ impl super::LinAmpApp {
         if paths.is_empty() {
             return;
         }
+        // Close the classic popup first, or it stays on top and overlaps (and, being
+        // always-on-top, freezes out) the folder picker while the modal dialog is up.
+        // Every other dialog opener does this; the convert path was missing it.
+        super::hide_popup_window();
+        self.popups.cur = None;
+        self.popups.sub = None;
         let Some(dir) = self.pick_dialog(|| rfd::FileDialog::new().pick_folder()) else {
             return;
         };
@@ -1458,6 +1485,9 @@ impl super::LinAmpApp {
             format.ext().to_uppercase()
         );
         std::thread::spawn(move || {
+            // Index converted outputs into the library so they show up there, on the
+            // worker's own connection (shared WAL db); the UI refreshes once done.
+            let lib = crate::library::Library::open().ok();
             let total = paths.len();
             let (mut ok, mut failed) = (0usize, 0usize);
             for (i, src) in paths.iter().enumerate() {
@@ -1465,7 +1495,12 @@ impl super::LinAmpApp {
                 let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("track");
                 let dst = unique_path(&dir, stem, format.ext());
                 match crate::encode::convert_file(src, &dst, format) {
-                    Ok(()) => ok += 1,
+                    Ok(()) => {
+                        ok += 1;
+                        if let Some(lib) = &lib {
+                            let _ = lib.upsert(&crate::playlist::Track::from_path(dst));
+                        }
+                    }
                     Err(e) => {
                         failed += 1;
                         eprintln!("convert failed for {}: {e}", src.display());

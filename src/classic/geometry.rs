@@ -543,6 +543,14 @@ pub fn pl_visible_rows(height: u32) -> usize {
     ((height as i32 - PL_LIST_Y - 38 - 1).max(0) / PL_ROW_H) as usize
 }
 
+/// Clamp a playlist scroll offset so it never points past the last row. An offset
+/// at or beyond the length makes the visible range (`first..end`) empty, which would
+/// render the whole list blank, so callers that change the playlist length must
+/// re-clamp. Returns 0 for an empty list.
+pub fn clamp_pl_first(first: usize, len: usize) -> usize {
+    first.min(len.saturating_sub(1))
+}
+
 /// Smallest playlist height, in unscaled skin pixels (two title rows + a usable
 /// list area); mirrors the floor applied while resizing.
 pub const PL_MIN_H: f32 = 87.0;

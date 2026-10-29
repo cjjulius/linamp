@@ -228,6 +228,20 @@ mod tests {
     }
 
     #[test]
+    fn playlist_first_clamps_into_range() {
+        // An offset within range is untouched.
+        assert_eq!(clamp_pl_first(0, 10), 0);
+        assert_eq!(clamp_pl_first(5, 10), 5);
+        assert_eq!(clamp_pl_first(9, 10), 9);
+        // An offset past the end (e.g. after a long playlist is replaced by a short
+        // one) clamps to the last row so the list never renders blank.
+        assert_eq!(clamp_pl_first(9, 1), 0);
+        assert_eq!(clamp_pl_first(50, 3), 2);
+        // An empty playlist clamps to 0.
+        assert_eq!(clamp_pl_first(7, 0), 0);
+    }
+
+    #[test]
     fn eq_sprite_index_maps_and_snaps() {
         let full: Vec<i32> = (0..28).collect();
         assert_eq!(eq_sprite_index(1.0, &full), Some(0)); // boost to top
