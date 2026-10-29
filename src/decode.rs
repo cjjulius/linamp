@@ -419,6 +419,31 @@ mod tests {
     }
 
     #[test]
+    fn open_file_decodes_audio_from_video_containers() {
+        // #180: read the audio track from video containers (and the CAF container)
+        // via the same symphonia-demux path. Uses the local qa samples when present
+        // (qa-music is gitignored, so this skips on CI). webm exercises both the mkv
+        // feature and the Opus path (VP8 + Opus) together.
+        for f in [
+            "qa-music/format-samples/hypno-this.mp4",  // H.264 + AAC
+            "qa-music/format-samples/hypno-this.mov",  // H.264 + AAC
+            "qa-music/format-samples/hypno-this.mkv",  // H.264 + AAC
+            "qa-music/format-samples/hypno-this.webm", // VP8 + Opus
+            "qa-music/format-samples/hypno-this.ogv",  // Theora + Vorbis
+            "qa-music/format-samples/hypno-this.caf",  // ALAC in CAF
+        ] {
+            let p = Path::new(f);
+            if !p.exists() {
+                continue;
+            }
+            let mut src = open_file(p).unwrap_or_else(|e| panic!("{f}: {e}"));
+            assert!(src.sample_rate() >= 8000, "{f}: sample rate");
+            assert!(src.channels() >= 1, "{f}: channels");
+            assert!((&mut src).take(4096).count() > 0, "{f}: should yield audio");
+        }
+    }
+
+    #[test]
     fn open_file_errors_instead_of_panicking_on_a_non_audio_file() {
         // A missing file surfaces an error rather than panicking.
         assert!(open_file(Path::new("definitely-not-here.mp2")).is_err());

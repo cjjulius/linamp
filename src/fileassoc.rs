@@ -53,6 +53,14 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         "m4a" | "m4b" | "mp4" => "audio/mp4",
         "aac" => "audio/aac",
         "aiff" | "aif" => "audio/x-aiff",
+        // Video containers opened for their audio track (#180), plus CAF.
+        "mov" => "video/quicktime",
+        "m4v" => "video/x-m4v",
+        "3gp" => "video/3gpp",
+        "mkv" => "video/x-matroska",
+        "webm" => "video/webm",
+        "ogv" => "video/ogg",
+        "caf" => "audio/x-caf",
         "mid" | "midi" => "audio/midi",
         // Tracker modules, taught to the MIME database by MIME_PACKAGE_XML.
         "mod" => "audio/x-mod",
