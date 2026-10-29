@@ -189,12 +189,12 @@ fn decode_loop(
     sample_tx: SyncSender<f32>,
     title: SharedTitle,
 ) {
-    use symphonia::core::audio::SampleBuffer;
-    use symphonia::core::codecs::DecoderOptions;
-    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::codecs::audio::AudioDecoderOptions;
+    use symphonia::core::codecs::CodecParameters;
+    use symphonia::core::formats::probe::Hint;
+    use symphonia::core::formats::{FormatOptions, TrackType};
     use symphonia::core::io::{MediaSourceStream, ReadOnlySource};
     use symphonia::core::meta::MetadataOptions;
-    use symphonia::core::probe::Hint;
 
     // Connect (blocking) on this background thread so the UI never stalls. Ask
     // for ICY metadata so radio streams can report their current song. A connect
@@ -230,20 +230,19 @@ fn decode_loop(
     };
     let mss = MediaSourceStream::new(Box::new(ReadOnlySource::new(reader)), Default::default());
 
-    let probed = match symphonia::default::get_probe().format(
+    let mut format = match symphonia::default::get_probe().probe(
         &hint,
         mss,
-        &FormatOptions::default(),
-        &MetadataOptions::default(),
+        FormatOptions::default(),
+        MetadataOptions::default(),
     ) {
-        Ok(p) => p,
+        Ok(f) => f,
         Err(e) => {
             let _ = info_tx.send(Err(format!("unsupported stream: {e}")));
             return;
         }
     };
-    let mut format = probed.format;
-    let track = match format.default_track() {
+    let track = match format.default_track(TrackType::Audio) {
         Some(t) => t.clone(),
         None => {
             let _ = info_tx.send(Err("stream has no audio track".into()));
@@ -251,27 +250,36 @@ fn decode_loop(
         }
     };
     let track_id = track.id;
-    let mut decoder =
-        match symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())
-        {
-            Ok(d) => d,
-            Err(e) => {
-                let _ = info_tx.send(Err(format!("no decoder for stream: {e}")));
-                return;
-            }
-        };
+    let audio_params = match track.codec_params {
+        Some(CodecParameters::Audio(p)) => p,
+        _ => {
+            let _ = info_tx.send(Err("stream has no audio codec parameters".into()));
+            return;
+        }
+    };
+    let mut decoder = match symphonia::default::get_codecs()
+        .make_audio_decoder(&audio_params, &AudioDecoderOptions::default())
+    {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = info_tx.send(Err(format!("no decoder for stream: {e}")));
+            return;
+        }
+    };
 
     // Sample rate / channels are taken from the first decoded packet's spec and
-    // reported to the caller before any samples flow. `sbuf` being Some doubles as
-    // "the handshake has been sent", so there is no separate flag.
-    let mut sbuf: Option<SampleBuffer<f32>> = None;
+    // reported to the caller before any samples flow. `started` tracks that the
+    // handshake was sent (and that any audio was produced at all).
+    let mut started = false;
+    let mut samples: Vec<f32> = Vec::new();
 
     loop {
         let packet = match format.next_packet() {
-            Ok(p) => p,
-            Err(_) => break, // end of stream or read error
+            Ok(Some(p)) => p,
+            Ok(None) => break, // end of stream
+            Err(_) => break,   // read error
         };
-        if packet.track_id() != track_id {
+        if packet.track_id != track_id {
             continue;
         }
         let decoded = match decoder.decode(&packet) {
@@ -281,18 +289,18 @@ fn decode_loop(
             Err(_) => break,
         };
 
-        let spec = *decoded.spec();
-        if sbuf.is_none() {
-            let sample_rate = spec.rate;
-            let channels = spec.channels.count() as u16;
+        if !started {
+            let spec = decoded.spec();
+            let sample_rate = spec.rate();
+            let channels = spec.channels().count() as u16;
             if info_tx.send(Ok((sample_rate, channels))).is_err() {
                 return; // caller gave up already
             }
-            sbuf = Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
+            started = true;
         }
-        let sbuf = sbuf.as_mut().unwrap();
-        sbuf.copy_interleaved_ref(decoded);
-        for &s in sbuf.samples() {
+        // Resizes `samples` to this packet's interleaved length and fills it.
+        decoded.copy_to_vec_interleaved(&mut samples);
+        for &s in &samples {
             // Blocks when the buffer is full (backpressure); fails once the
             // audio side drops the receiver, which is our cue to stop.
             if sample_tx.send(s).is_err() {
@@ -303,7 +311,7 @@ fn decode_loop(
 
     // Stream ended before (or without) producing audio: make sure the caller
     // isn't left waiting on the handshake.
-    if sbuf.is_none() {
+    if !started {
         let _ = info_tx.send(Err("stream ended before any audio".into()));
     }
 }
