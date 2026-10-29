@@ -230,8 +230,10 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
         )
     };
 
-    // The container's length, when it reports one (frames x time-base).
-    let total_duration = container_duration(track.time_base, track.num_frames);
+    // The container's length, when it reports one (frames x time-base), falling back to
+    // the media-info duration for containers that report it there (Matroska #197).
+    let total_duration = container_duration(track.time_base, track.num_frames)
+        .or_else(|| media_duration(format.as_ref()));
 
     // Opus carries encoder delay (pre-skip, at 48 kHz) to drop from the start; count
     // it in interleaved samples. Zero for every other codec.
@@ -336,6 +338,7 @@ pub fn probe_duration(path: &Path) -> Option<Duration> {
         .ok()?;
     let track = format.default_track(TrackType::Audio)?;
     container_duration(track.time_base, track.num_frames)
+        .or_else(|| media_duration(format.as_ref()))
 }
 
 /// A track length from its container time-base and frame count, if both are known.
@@ -347,6 +350,16 @@ fn container_duration(
 ) -> Option<Duration> {
     let (tb, n) = (time_base?, num_frames?);
     let t = tb.calc_time(Timestamp::try_from(n).ok()?)?;
+    Some(Duration::from_nanos(t.as_nanos().max(0) as u64))
+}
+
+/// The media length from the format's container-level info, as a fallback when the
+/// track carries no frame count. Matroska (`.mkv`/`.webm`) reports its duration on the
+/// media info (the Segment Info Duration), not per-track `num_frames`, so those files
+/// showed no length without this (#197).
+fn media_duration(fmt: &dyn symphonia::core::formats::FormatReader) -> Option<Duration> {
+    let mi = fmt.media_info();
+    let t = mi.time_base?.calc_duration(mi.duration?)?;
     Some(Duration::from_nanos(t.as_nanos().max(0) as u64))
 }
 
