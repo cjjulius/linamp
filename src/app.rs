@@ -4033,6 +4033,15 @@ impl eframe::App for LinAmpApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.hide_to_tray(ctx);
             } else {
+                // Persist this instance's prefs and layout as it closes, so with
+                // multiple instances the last one to close is the one restored next
+                // launch, matching its settings (incl. skin) and window placement
+                // (#193). Prefs otherwise only save on change, so without this the
+                // persisted config would be "last to change", not "last to close".
+                // Save before the teardown below hides the child windows, which must
+                // not be recorded as the closed layout.
+                self.prefs.save();
+                self.build_session().save();
                 self.eq_visible = false;
                 self.pl_visible = false;
                 self.lib_visible = false;
