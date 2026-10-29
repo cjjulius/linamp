@@ -216,15 +216,24 @@ fn encode_vorbis(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Resul
     let mut builder = VorbisEncoderBuilder::new(rate, ch, file)?;
     let mut encoder = builder.build()?;
 
-    // De-interleave into one buffer per channel (what encode_audio_block wants).
+    // Feed libvorbis in modest per-channel blocks (it is built to be driven
+    // incrementally; the docs call ~1024 samples a reasonable block size), rather
+    // than handing it the whole track at once. De-interleave each block into one
+    // buffer per channel, reusing the buffers across blocks to bound memory.
+    const BLOCK_FRAMES: usize = 4096;
     let n = channels as usize;
-    let mut planar: Vec<Vec<f32>> = vec![Vec::with_capacity(samples.len() / n); n];
-    for frame in samples.chunks_exact(n) {
-        for (c, &s) in frame.iter().enumerate() {
-            planar[c].push(s);
+    let mut planar: Vec<Vec<f32>> = vec![Vec::with_capacity(BLOCK_FRAMES); n];
+    for block in samples.chunks(BLOCK_FRAMES * n) {
+        for p in planar.iter_mut() {
+            p.clear();
         }
+        for frame in block.chunks_exact(n) {
+            for (c, &s) in frame.iter().enumerate() {
+                planar[c].push(s);
+            }
+        }
+        encoder.encode_audio_block(&planar)?;
     }
-    encoder.encode_audio_block(&planar)?;
     encoder.finish()?;
     Ok(())
 }
