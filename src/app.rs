@@ -626,6 +626,9 @@ pub struct LinAmpApp {
     /// window-level command when it changes).
     on_top_last: Option<bool>,
     prefs: Prefs,
+    /// Status messages from a background rip/convert job (#183), polled each frame;
+    /// present while a conversion runs, cleared when the worker thread finishes.
+    convert_rx: Option<std::sync::mpsc::Receiver<String>>,
     /// System-tray icon (kept alive for its lifetime) and the channel its clicks
     /// arrive on, drained once per frame (#40). `hidden_to_tray` tracks whether
     /// the window is currently hidden so a tray left-click toggles it.
@@ -891,6 +894,7 @@ impl LinAmpApp {
             quit_countdown: None,
             on_top_last: None,
             prefs,
+            convert_rx: None,
             _tray: tray,
             tray_rx,
             _media_keys: media_keys,
@@ -3941,6 +3945,25 @@ impl eframe::App for LinAmpApp {
         let media_actions: Vec<_> = self.media_keys_rx.try_iter().collect();
         for action in media_actions {
             self.handle_tray_action(ctx, action);
+        }
+
+        // Rip/convert progress (#183): a background job sends status lines; show the
+        // latest in the status area and drop the channel once the worker finishes.
+        if let Some(rx) = self.convert_rx.take() {
+            let mut done = false;
+            loop {
+                match rx.try_recv() {
+                    Ok(msg) => self.status = msg,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        done = true;
+                        break;
+                    }
+                }
+            }
+            if !done {
+                self.convert_rx = Some(rx);
+            }
         }
 
         // Files forwarded from a second "Open with" launch (#166): a second

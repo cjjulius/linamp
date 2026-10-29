@@ -23,6 +23,8 @@ pub(super) enum LibAction {
     Explore(usize),
     Remove(Vec<usize>),
     SelectAll,
+    /// Convert the given rows to a file in a chosen format (#183).
+    Convert(Vec<usize>, crate::encode::OutputFormat),
 }
 
 /// One row of a dynamic popup menu (the Media Library context menus). Built per
@@ -1122,6 +1124,13 @@ impl super::LinAmpApp {
                                             menu.push(DynRow::Item { label: "Edit tags\u{2026}".into(), act: LibAction::EditTags(i) });
                                             menu.push(DynRow::Item { label: "Explore folder".into(), act: LibAction::Explore(i) });
                                             menu.push(DynRow::Sep);
+                                            for fmt in crate::encode::OutputFormat::ALL {
+                                                menu.push(DynRow::Item {
+                                                    label: format!("Convert to {}\u{2026}", fmt.ext().to_uppercase()),
+                                                    act: LibAction::Convert(rows.clone(), *fmt),
+                                                });
+                                            }
+                                            menu.push(DynRow::Sep);
                                             menu.push(DynRow::Item { label: remove_label.into(), act: LibAction::Remove(rows.clone()) });
                                             act.open_menu = Some((anchor, menu, rows.clone()));
                                         }
@@ -1417,6 +1426,73 @@ impl super::LinAmpApp {
                 self.lib.sel_tracks.clear();
                 self.refresh_library();
             }
+            LibAction::Convert(rows, format) => {
+                self.convert_tracks(&rows, format);
+            }
         }
     }
+
+    /// Rip/convert the given library rows to `format` (#183). Asks for an output
+    /// folder, then converts off the UI thread, reporting progress via `convert_rx`.
+    fn convert_tracks(&mut self, rows: &[usize], format: crate::encode::OutputFormat) {
+        // One conversion at a time: ignore a new request while a job is running.
+        if self.convert_rx.is_some() {
+            self.status = "A conversion is already running.".into();
+            return;
+        }
+        let paths: Vec<std::path::PathBuf> = rows
+            .iter()
+            .filter_map(|&i| self.lib.results.get(i).map(|t| t.path.clone()))
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        let Some(dir) = self.pick_dialog(|| rfd::FileDialog::new().pick_folder()) else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        self.convert_rx = Some(rx);
+        self.status = format!(
+            "Converting {} file(s) to {}\u{2026}",
+            paths.len(),
+            format.ext().to_uppercase()
+        );
+        std::thread::spawn(move || {
+            let total = paths.len();
+            let (mut ok, mut failed) = (0usize, 0usize);
+            for (i, src) in paths.iter().enumerate() {
+                let _ = tx.send(format!("Converting {}/{}\u{2026}", i + 1, total));
+                let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("track");
+                let dst = unique_path(&dir, stem, format.ext());
+                match crate::encode::convert_file(src, &dst, format) {
+                    Ok(()) => ok += 1,
+                    Err(e) => {
+                        failed += 1;
+                        eprintln!("convert failed for {}: {e}", src.display());
+                    }
+                }
+            }
+            let _ = tx.send(if failed == 0 {
+                format!("Converted {ok} file(s) to {}.", format.ext().to_uppercase())
+            } else {
+                format!("Converted {ok} file(s), {failed} failed.")
+            });
+        });
+    }
+}
+
+/// An output path in `dir` named `stem.ext`, suffixed " (n)" if that name is taken,
+/// so a conversion never silently overwrites an existing file.
+fn unique_path(dir: &std::path::Path, stem: &str, ext: &str) -> std::path::PathBuf {
+    let first = dir.join(format!("{stem}.{ext}"));
+    if !first.exists() {
+        return first;
+    }
+    for n in 1.. {
+        let p = dir.join(format!("{stem} ({n}).{ext}"));
+        if !p.exists() {
+            return p;
+        }
+    }
+    unreachable!()
 }
