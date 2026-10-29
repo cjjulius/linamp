@@ -33,6 +33,9 @@ pub(super) enum Popup {
     /// (`draw_sub_viewport`), which stays open, so it is the one case of two popup
     /// windows up at once rather than the single-popup `pending` chain.
     LibRate,
+    /// A generic one-level flyout (e.g. "Convert to"), drawn beside the parent like
+    /// `LibRate` but rendering the item rows in `PopupState.sub_rows`.
+    LibSub,
 }
 
 /// The action a fixed popup-menu row performs when clicked. Pairing each row
@@ -377,8 +380,10 @@ impl super::LinAmpApp {
     /// clipped by the small main/playlist windows). Positioned at the click.
     pub(super) fn draw_popup_viewport(&mut self, ctx: &egui::Context) {
         let Some((kind, anchor)) = self.popups.cur else {
-            // No parent menu, so no flyout either (it is torn down by not drawing it).
+            // No parent menu, so no flyout either (its window is torn down by not
+            // drawing it this frame; it only lives while the parent menu is open).
             self.popups.sub = None;
+            self.popups.sub_visible = false;
             return;
         };
         let (w, h) = match kind {
@@ -392,7 +397,9 @@ impl super::LinAmpApp {
                     .count() as i32;
                 let seps = rows.iter().filter(|r| matches!(r, DynRow::Sep)).count() as i32;
                 let labels = rows.iter().filter_map(|r| match r {
-                    DynRow::Item { label, .. } | DynRow::RateSub { label } => Some(label.as_str()),
+                    DynRow::Item { label, .. }
+                    | DynRow::RateSub { label }
+                    | DynRow::Sub { label, .. } => Some(label.as_str()),
                     DynRow::Sep => None,
                 });
                 let w = menu_text_width(ctx, labels, true).clamp(180.0, 360.0);
@@ -454,10 +461,18 @@ impl super::LinAmpApp {
             .with_resizable(false)
             .with_taskbar(false)
             // The OS window is created at a default spot and only then moved to
-            // `screen`, which flashes a frame at the wrong place. Keep it hidden on
-            // its opening frame (while it gets positioned/sized) and reveal it next
-            // frame, so the menu only ever appears where it was clicked.
-            .with_visible(!self.popups.fresh)
+            // `screen`, which flashes a frame at the wrong place. Keep it hidden on its
+            // opening frame while it gets positioned/sized. On Windows also keep it
+            // hidden until its rounded region is applied (`rounded`): winit keeps
+            // WS_CAPTION in the borderless window's style and the region clips that title
+            // bar out of view, so revealing before the region is set would flash the
+            // caption for a frame. That gate must be Windows-only: on X11 the rounding
+            // helper finds the window via _NET_CLIENT_LIST, which only lists *mapped*
+            // windows, so gating the reveal on `rounded` there would deadlock (hidden ->
+            // not listed -> never rounded -> never shown). X11 borderless windows have no
+            // caption to clip, so reveal once positioned and let the shape apply a frame
+            // later.
+            .with_visible(!self.popups.fresh && (self.popups.rounded || !cfg!(windows)))
             // Always on top: the EQ/playlist/library windows are *owned* by the main
             // window (group_child_windows), which keeps them above sibling windows,
             // and clicking one re-raises it, so only a system-topmost popup stays
@@ -736,11 +751,19 @@ impl super::LinAmpApp {
                             // borrow on the row list ends.
                             let rows = self.popups.dynamic.take().unwrap_or_default();
                             let mut chosen: Option<LibAction> = None;
-                            // Hovering the Rate row opens its flyout beside this menu;
-                            // hovering any other row closes it, so the flyout tracks the
-                            // pointer like a real submenu while the parent stays open.
-                            let mut sub_anchor: Option<egui::Pos2> = None;
-                            let mut leave_rate = false;
+                            // Hovering a submenu row (Rate, or Convert's format list)
+                            // opens its flyout beside this menu; hovering any other row
+                            // closes it, so the flyout tracks the pointer like a real
+                            // submenu while the parent stays open.
+                            let mut open_flyout: Option<(Popup, egui::Pos2)> = None;
+                            let mut flyout_children: Option<Vec<DynRow>> = None;
+                            let mut left_submenu = false;
+                            // Flyout anchored at the parent's right edge, aligned to the
+                            // hovered row (overlapping the 1px border so the two read as
+                            // one menu).
+                            let anchor_for = |rect: egui::Rect| {
+                                egui::pos2(screen.x + w - 2.0, screen.y + rect.top() - MENU_MARGIN)
+                            };
                             for r in &rows {
                                 match r {
                                     DynRow::Sep => {
@@ -753,20 +776,20 @@ impl super::LinAmpApp {
                                             close = true;
                                         }
                                         if resp.hovered() {
-                                            leave_rate = true;
+                                            left_submenu = true;
                                         }
                                     }
                                     DynRow::RateSub { label } => {
                                         let resp = menu_item_resp(ui, label, "", true);
                                         if resp.hovered() || resp.clicked() {
-                                            // Anchor the flyout at the parent's right
-                                            // edge, aligned to this row (overlapping the
-                                            // 1px border so the two read as one menu).
-                                            let r = resp.rect;
-                                            sub_anchor = Some(egui::pos2(
-                                                screen.x + w - 2.0,
-                                                screen.y + r.top() - MENU_MARGIN,
-                                            ));
+                                            open_flyout = Some((Popup::LibRate, anchor_for(resp.rect)));
+                                        }
+                                    }
+                                    DynRow::Sub { label, children } => {
+                                        let resp = menu_item_resp(ui, label, "", true);
+                                        if resp.hovered() || resp.clicked() {
+                                            open_flyout = Some((Popup::LibSub, anchor_for(resp.rect)));
+                                            flyout_children = Some(children.clone());
                                         }
                                     }
                                 }
@@ -778,17 +801,22 @@ impl super::LinAmpApp {
                             if let Some(a) = chosen {
                                 self.apply_lib_action(a);
                             }
-                            // Pointer over the flyout itself hovers neither Rate nor
-                            // another parent row, so it leaves the flyout open.
-                            if let Some(a) = sub_anchor {
-                                self.open_sub(Popup::LibRate, a);
-                            } else if leave_rate {
-                                self.popups.sub = None;
+                            // Pointer over the flyout itself hovers neither a submenu row
+                            // nor another parent row, so that case leaves the flyout as
+                            // it is (shown). Hovering a different item hides it, but the
+                            // window stays alive (sub is kept) so it is not recreated.
+                            if let Some((kind, a)) = open_flyout {
+                                if let Some(children) = flyout_children {
+                                    self.popups.sub_rows = children;
+                                }
+                                self.open_sub(kind, a);
+                            } else if left_submenu {
+                                self.popups.sub_visible = false;
                             }
                         }
-                        // The Rate flyout renders in its own window (draw_sub_viewport),
+                        // The flyouts render in their own window (draw_sub_viewport),
                         // never as the parent popup.
-                        Popup::LibRate => {}
+                        Popup::LibRate | Popup::LibSub => {}
                     }
                 });
             // Outline just inside the window edge, a stroke centred on the edge
@@ -837,10 +865,10 @@ impl super::LinAmpApp {
             raise_popup_window("LinAmp Menu");
         }
 
-        if self.popups.fresh {
-            // The opening frame drew the menu hidden (see `with_visible` above);
-            // request the next frame now so it's revealed immediately rather than
-            // waiting on the next input event.
+        if self.popups.fresh || !self.popups.rounded {
+            // The window is still hidden (opening frame, or rounded region not yet
+            // applied); request the next frame now so it's revealed as soon as it's
+            // ready rather than waiting on the next input event.
             ctx.request_repaint();
         }
         self.popups.fresh = false;
@@ -848,6 +876,7 @@ impl super::LinAmpApp {
             self.popups.cur = None;
             self.popups.dynamic = None;
             self.popups.sub = None;
+            self.popups.sub_visible = false;
             // Chain to a queued popup (example: Options then Bookmarks) now this
             // one is gone.
             if let Some((k, p)) = self.popups.pending.take() {
@@ -864,11 +893,35 @@ impl super::LinAmpApp {
     /// border, rounded OS region) but is fixed-content. Closing it clears both
     /// windows so a click on a rating dismisses the whole menu.
     fn draw_sub_viewport(&mut self, ctx: &egui::Context, corner: f32, border: egui::Stroke) {
-        let Some((_kind, anchor)) = self.popups.sub else {
+        // `sub` stays set once a flyout has opened, so the window persists for the rest
+        // of the menu session; `sub_visible` says whether it is currently shown. Only a
+        // closed menu (sub cleared) tears the window down. Keep rendering it either way
+        // so it is never destroyed and recreated mid-session.
+        let Some((kind, anchor)) = self.popups.sub else {
             return;
         };
+        let visible = self.popups.sub_visible && !self.popups.sub_fresh;
         let rate_rows = self.popups.rate_rows.clone();
-        let (w, h) = (160.0_f32, popup_height(6, 0));
+        let sub_rows = self.popups.sub_rows.clone();
+        // Size per flyout kind: the Rate widget is fixed (5 stars + Clear); a generic
+        // Sub sizes to its own item rows.
+        let (w, h) = match kind {
+            Popup::LibSub => {
+                let items = sub_rows.iter().filter(|r| !matches!(r, DynRow::Sep)).count() as i32;
+                let seps = sub_rows.iter().filter(|r| matches!(r, DynRow::Sep)).count() as i32;
+                let labels = sub_rows.iter().filter_map(|r| match r {
+                    DynRow::Item { label, .. }
+                    | DynRow::RateSub { label }
+                    | DynRow::Sub { label, .. } => Some(label.as_str()),
+                    DynRow::Sep => None,
+                });
+                (
+                    menu_text_width(ctx, labels, true).clamp(120.0, 300.0),
+                    popup_height(items.max(1), seps),
+                )
+            }
+            _ => (160.0_f32, popup_height(6, 0)),
+        };
         let mut screen = anchor;
         if let Some(vr) = virtual_desktop_rect(ctx) {
             // Prefer flipping to the parent's left edge when the right edge would
@@ -887,7 +940,12 @@ impl super::LinAmpApp {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
-            .with_visible(!self.popups.sub_fresh)
+            .with_visible(visible)
+            // Show the flyout without activating it: taking activation makes Windows
+            // briefly repaint the parent menu's default (non-client) frame, which is the
+            // title-bar flash. The parent keeps focus (it handles Escape) and the flyout
+            // still receives clicks. (No-op where winit ignores it, e.g. X11.)
+            .with_active(false)
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             let style = ctx.style();
@@ -901,15 +959,38 @@ impl super::LinAmpApp {
                 )
                 .show(ctx, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    for s in 1..=5i64 {
-                        if menu_item(ui, &"\u{2605}".repeat(s as usize), "") {
-                            self.apply_lib_action(LibAction::Rate(rate_rows.clone(), s));
-                            close = true;
+                    match kind {
+                        Popup::LibSub => {
+                            // A generic flyout: draw its item rows; a click runs the
+                            // action and dismisses the whole menu.
+                            for r in &sub_rows {
+                                match r {
+                                    DynRow::Sep => {
+                                        ui.separator();
+                                    }
+                                    DynRow::Item { label, act } => {
+                                        if menu_item(ui, label, "") {
+                                            self.apply_lib_action(act.clone());
+                                            close = true;
+                                        }
+                                    }
+                                    // Flyouts are one level deep; nested submenus aren't drawn.
+                                    DynRow::RateSub { .. } | DynRow::Sub { .. } => {}
+                                }
+                            }
                         }
-                    }
-                    if menu_item(ui, "Clear rating", "") {
-                        self.apply_lib_action(LibAction::Rate(rate_rows.clone(), 0));
-                        close = true;
+                        _ => {
+                            for s in 1..=5i64 {
+                                if menu_item(ui, &"\u{2605}".repeat(s as usize), "") {
+                                    self.apply_lib_action(LibAction::Rate(rate_rows.clone(), s));
+                                    close = true;
+                                }
+                            }
+                            if menu_item(ui, "Clear rating", "") {
+                                self.apply_lib_action(LibAction::Rate(rate_rows.clone(), 0));
+                                close = true;
+                            }
+                        }
                     }
                 });
             let vr = ctx.screen_rect().shrink(1.0);
@@ -939,20 +1020,34 @@ impl super::LinAmpApp {
         }
         self.popups.sub_fresh = false;
         if close {
-            // A rating click (or Escape) dismisses the whole menu, parent included.
+            // A flyout click (or Escape) dismisses the whole menu, parent included.
             self.popups.sub = None;
+            self.popups.sub_visible = false;
             self.popups.cur = None;
             self.popups.dynamic = None;
         }
     }
 
-    /// Open the one-level flyout beside the parent, if not already open there.
-    /// Idempotent so hovering the Rate row every frame does not re-trigger the
-    /// opening animation / re-round.
+    /// Show the one-level flyout beside the parent for `kind` at `anchor`.
+    ///
+    /// The flyout's OS window is created once (the first time any flyout opens this
+    /// menu session) and then kept alive, so moving the pointer on and off the
+    /// submenu rows only toggles its visibility here, never destroys and recreates it.
+    /// Recreating it each hover flashed a title bar for a frame on Windows (winit
+    /// applies `with_decorations(false)` a frame late on a new window). `sub_fresh`
+    /// (hide-on-create + round) therefore fires only on that first creation; a change
+    /// of kind keeps the same window but re-rounds it for the new size.
     fn open_sub(&mut self, kind: Popup, anchor: egui::Pos2) {
-        if self.popups.sub != Some((kind, anchor)) {
-            self.popups.sub = Some((kind, anchor));
+        let first_open = self.popups.sub.is_none();
+        let kind_changed = !matches!(self.popups.sub, Some((k, _)) if k == kind);
+        self.popups.sub = Some((kind, anchor));
+        self.popups.sub_visible = true;
+        if first_open {
+            // Brand-new window: hide its first frame while it is positioned/rounded.
             self.popups.sub_fresh = true;
+            self.popups.sub_rounded_h = None;
+        } else if kind_changed {
+            // Same window, different flyout: re-round for the new size, no re-create.
             self.popups.sub_rounded_h = None;
         }
     }
@@ -973,7 +1068,9 @@ impl super::LinAmpApp {
         // never left on screen beside the new menu (it would otherwise linger when
         // the pointer moved off the parent before the new right-click).
         self.popups.sub = None;
-        // New popup window: re-apply the rounded region on the next frame.
+        self.popups.sub_visible = false;
+        // New popup window: re-apply the rounded region (kept hidden until it is) on
+        // the next frame.
         self.popups.rounded = false;
         self.popups.rounded_h = None;
         // Fresh viewport id per open, so the menu never inherits a reused window's

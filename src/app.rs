@@ -512,16 +512,24 @@ struct PopupState {
     dynamic: Option<Vec<library_ui::DynRow>>,
     /// Library rows the Rate flyout (`Popup::LibRate`) acts on.
     rate_rows: Vec<usize>,
+    /// Item rows for a generic flyout (`Popup::LibSub`), e.g. the Convert formats.
+    sub_rows: Vec<library_ui::DynRow>,
     /// The open one-level flyout (the Rate submenu): its kind and absolute screen
     /// anchor. Drawn in a second viewport beside the parent, which stays open.
     sub: Option<(Popup, egui::Pos2)>,
     /// Opening frame for the flyout window (mirrors `fresh` for the parent).
     sub_fresh: bool,
+    /// Whether the (persistent) flyout window is currently shown. Once a flyout is
+    /// opened, its OS window is kept alive for the rest of the menu session and only
+    /// toggled visible/hidden as the pointer moves on and off the submenu rows, so it
+    /// is never recreated per hover (recreating it flashed a title bar on Windows).
+    sub_visible: bool,
     /// Window height the flyout's rounded region was last built for.
     sub_rounded_h: Option<f32>,
     fresh: bool,
     /// Whether the popup window's rounded region has been applied for the current
-    /// popup (applied once, retrying only until it succeeds).
+    /// popup (applied once, retrying only until it succeeds). The window stays hidden
+    /// until this is set so its clipped-away title bar is never revealed.
     rounded: bool,
     /// Window height the rounded-corner region was last built for, so it rebuilds
     /// only when a different-sized menu opens (#154).
@@ -880,8 +888,10 @@ impl LinAmpApp {
                 pending: None,
                 dynamic: None,
                 rate_rows: Vec::new(),
+                sub_rows: Vec::new(),
                 sub: None,
                 sub_fresh: false,
+                sub_visible: false,
                 sub_rounded_h: None,
                 fresh: false,
                 rounded: false,
@@ -1157,6 +1167,10 @@ impl LinAmpApp {
             match self.player.play_file(&track.path) {
                 Ok(()) => {
                     self.playlist.current = Some(i);
+                    // Scroll the playlist so the now-playing track is in view (it may
+                    // sit outside the current scroll window, e.g. after replacing the
+                    // list from the library).
+                    self.pl_scroll_to(i);
                     self.seek_preview = 0.0;
                     self.marquee_offset = 0.0;
                     self.apply_eq();
@@ -3963,6 +3977,10 @@ impl eframe::App for LinAmpApp {
             }
             if !done {
                 self.convert_rx = Some(rx);
+            } else {
+                // The worker indexed each converted file into the library as it went;
+                // re-query so they appear in the open library view (#185 QA).
+                self.refresh_library();
             }
         }
 
