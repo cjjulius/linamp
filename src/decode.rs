@@ -203,7 +203,14 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
     // Opus: symphonia 0.6 demuxes the container but ships no Opus decoder, so decode
     // its packets with libopus; every other codec goes through symphonia (#181).
     let is_opus = audio_params.codec == CODEC_ID_OPUS;
-    let opus_channels = audio_params.channels.as_ref().map(|c| c.count()).unwrap_or(2);
+    // Prefer symphonia's parsed channel count; fall back to the OpusHead's own
+    // channel byte, then to stereo, so a mono file is never decoded as stereo.
+    let opus_channels = audio_params
+        .channels
+        .as_ref()
+        .map(|c| c.count())
+        .or_else(|| opus_head_channels(&audio_params))
+        .unwrap_or(2);
     let mut decoder = if is_opus {
         if opus_channels == 0 || opus_channels > 2 {
             bail!("unsupported Opus channel count ({opus_channels}) in {}", path.display());
@@ -296,6 +303,15 @@ fn opus_preskip(params: &AudioCodecParameters) -> usize {
             u16::from_le_bytes([d[10], d[11]]) as usize
         }
         _ => 0,
+    }
+}
+
+/// Opus channel count from the OpusHead (byte 9) in the track's extra data, used
+/// only when symphonia did not already parse the channel count.
+fn opus_head_channels(params: &AudioCodecParameters) -> Option<usize> {
+    match &params.extra_data {
+        Some(d) if d.len() >= 10 && &d[..8] == b"OpusHead" => Some(d[9] as usize),
+        _ => None,
     }
 }
 
