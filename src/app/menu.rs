@@ -2,6 +2,7 @@
 //! windows composited by egui).
 
 use super::*;
+use super::library_ui::{DynRow, LibAction};
 
 /// Popup menus in classic mode (options + the playlist bottom-bar fly-outs).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -23,6 +24,15 @@ pub(super) enum Popup {
     Bookmarks,
     /// Delete-a-saved-EQ-preset list (opened from the EQ Presets menu).
     EqDelete,
+    /// The Media Library context menu (artist / album / track). Its rows are
+    /// built per click and carried in `PopupState.dynamic`; this is the library
+    /// half of the menu system, consolidated onto the classic popup window (#116).
+    LibMenu,
+    /// The Rate flyout opened from the track menu, acting on
+    /// `PopupState.rate_rows`. Drawn in its own second window beside the parent
+    /// (`draw_sub_viewport`), which stays open, so it is the one case of two popup
+    /// windows up at once rather than the single-popup `pending` chain.
+    LibRate,
 }
 
 /// The action a fixed popup-menu row performs when clicked. Pairing each row
@@ -206,12 +216,45 @@ pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
     (width, height)
 }
 
+/// Widest menu label in points at the shared menu font, plus the row padding
+/// (`menu_item` insets the label 8px from each edge); `arrow_col` reserves room
+/// for a submenu indicator on the right. Used to size the dynamic library menus,
+/// whose labels vary per click, before their window is built.
+fn menu_text_width<'a>(
+    ctx: &egui::Context,
+    labels: impl Iterator<Item = &'a str>,
+    arrow_col: bool,
+) -> f32 {
+    let font = egui::FontId::proportional(crate::app::MENU_FONT_PT);
+    let mut wmax = 0.0_f32;
+    for l in labels {
+        let w = ctx.fonts(|f| {
+            f.layout_no_wrap(l.to_string(), font.clone(), egui::Color32::WHITE).size().x
+        });
+        wmax = wmax.max(w);
+    }
+    wmax + 8.0 + 8.0 + MENU_MARGIN * 2.0 + if arrow_col { 16.0 } else { 0.0 }
+}
+
 /// A context-menu row: `label` on the left, dimmed `shortcut` on the right, full
 /// width so shortcuts align to the menu's right edge. Returns true when clicked.
 /// Colours match an egui `Button` (and so the Media Library's context menus), 
 /// the themed override text colour and the standard hover highlight, so every
 /// menu shares one look across skins.
 pub(super) fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
+    menu_item_resp(ui, label, shortcut, false).clicked()
+}
+
+/// `menu_item` that returns the full `Response` (so a caller can read `hovered()`
+/// and the row rect) and can draw a submenu arrow. `arrow` replaces the shortcut
+/// column with a filled right-pointing triangle, drawn with the painter rather
+/// than a glyph so it renders on every skin's font.
+pub(super) fn menu_item_resp(
+    ui: &mut egui::Ui,
+    label: &str,
+    shortcut: &str,
+    arrow: bool,
+) -> egui::Response {
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 18.0), egui::Sense::click());
     let vis = ui.visuals().widgets.style(&resp).clone();
@@ -244,7 +287,17 @@ pub(super) fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool 
             weak,
         );
     }
-    resp.clicked()
+    if arrow {
+        let cx = rect.right() - 10.0;
+        let cy = rect.center().y;
+        let tri = vec![
+            egui::pos2(cx, cy - 4.0),
+            egui::pos2(cx + 5.0, cy),
+            egui::pos2(cx, cy + 4.0),
+        ];
+        p.add(egui::Shape::convex_polygon(tri, text_color, egui::Stroke::NONE));
+    }
+    resp
 }
 
 impl super::LinAmpApp {
@@ -323,10 +376,28 @@ impl super::LinAmpApp {
     /// Render the open popup menu in its own borderless window (so it is never
     /// clipped by the small main/playlist windows). Positioned at the click.
     pub(super) fn draw_popup_viewport(&mut self, ctx: &egui::Context) {
-        let Some((kind, owner, pos)) = self.popups.cur else {
+        let Some((kind, anchor)) = self.popups.cur else {
+            // No parent menu, so no flyout either (it is torn down by not drawing it).
+            self.popups.sub = None;
             return;
         };
         let (w, h) = match kind {
+            Popup::LibMenu => {
+                // Built per click: size from the stored rows, and widen to fit the
+                // longest (per-track) label so an artist/album name is never clipped.
+                let rows = self.popups.dynamic.as_deref().unwrap_or(&[]);
+                let items = rows
+                    .iter()
+                    .filter(|r| !matches!(r, DynRow::Sep))
+                    .count() as i32;
+                let seps = rows.iter().filter(|r| matches!(r, DynRow::Sep)).count() as i32;
+                let labels = rows.iter().filter_map(|r| match r {
+                    DynRow::Item { label, .. } | DynRow::RateSub { label } => Some(label.as_str()),
+                    DynRow::Sep => None,
+                });
+                let w = menu_text_width(ctx, labels, true).clamp(180.0, 360.0);
+                (w, popup_height(items, seps))
+            }
             Popup::Options => {
                 // 11 fixed items + the optional Minibrowser toggle + the "Open Audio
                 // CD" item (Linux + Windows) (#160), 3 separators. Computed here (not
@@ -357,7 +428,7 @@ impl super::LinAmpApp {
             }
             _ => popup_dims(kind),
         };
-        let mut screen = self.geom.win_pos[win_idx(owner)] + pos.to_vec2();
+        let mut screen = anchor;
         // Keep the menu fully on the desktop: a tall menu (example: the empty-area
         // menu) opened near the bottom/right edge would otherwise spill off-screen
         // with its lower entries unreachable.
@@ -476,7 +547,7 @@ impl super::LinAmpApp {
                             if item(ui, "Bookmarks…") {
                                 // Classic popups aren't nested; open the list once
                                 // this menu closes.
-                                self.popups.pending = Some((Popup::Bookmarks, owner, pos));
+                                self.popups.pending = Some((Popup::Bookmarks, anchor));
                                 close = true;
                             }
                             // The Minibrowser is an opt-in "Optional Features" extra.
@@ -572,7 +643,7 @@ impl super::LinAmpApp {
                                 if !saved.is_empty() && item(ui, "Delete a saved preset…") {
                                     // Classic popups aren't nested; open the delete
                                     // list once this menu closes.
-                                    self.popups.pending = Some((Popup::EqDelete, owner, pos));
+                                    self.popups.pending = Some((Popup::EqDelete, anchor));
                                     close = true;
                                 }
                                 if item(ui, "Import preset (.eqf)…") {
@@ -658,6 +729,66 @@ impl super::LinAmpApp {
                                     }
                                 });
                         }
+                        Popup::LibMenu => {
+                            // The Media Library context menu: data-driven rows built
+                            // at the click (per-track names, the live selection). Take
+                            // the chosen action out first, then apply it after the
+                            // borrow on the row list ends.
+                            let rows = self.popups.dynamic.take().unwrap_or_default();
+                            let mut chosen: Option<LibAction> = None;
+                            // Hovering the Rate row opens its flyout beside this menu;
+                            // hovering any other row closes it, so the flyout tracks the
+                            // pointer like a real submenu while the parent stays open.
+                            let mut sub_anchor: Option<egui::Pos2> = None;
+                            let mut leave_rate = false;
+                            for r in &rows {
+                                match r {
+                                    DynRow::Sep => {
+                                        ui.separator();
+                                    }
+                                    DynRow::Item { label, act } => {
+                                        let resp = menu_item_resp(ui, label, "", false);
+                                        if resp.clicked() {
+                                            chosen = Some(act.clone());
+                                            close = true;
+                                        }
+                                        if resp.hovered() {
+                                            leave_rate = true;
+                                        }
+                                    }
+                                    DynRow::RateSub { label } => {
+                                        let resp = menu_item_resp(ui, label, "", true);
+                                        if resp.hovered() || resp.clicked() {
+                                            // Anchor the flyout at the parent's right
+                                            // edge, aligned to this row (overlapping the
+                                            // 1px border so the two read as one menu).
+                                            let r = resp.rect;
+                                            sub_anchor = Some(egui::pos2(
+                                                screen.x + w - 2.0,
+                                                screen.y + r.top() - MENU_MARGIN,
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            // Put the rows back so a non-closing frame keeps drawing them.
+                            if !close {
+                                self.popups.dynamic = Some(rows);
+                            }
+                            if let Some(a) = chosen {
+                                self.apply_lib_action(a);
+                            }
+                            // Pointer over the flyout itself hovers neither Rate nor
+                            // another parent row, so it leaves the flyout open.
+                            if let Some(a) = sub_anchor {
+                                self.open_sub(Popup::LibRate, a);
+                            } else if leave_rate {
+                                self.popups.sub = None;
+                            }
+                        }
+                        // The Rate flyout renders in its own window (draw_sub_viewport),
+                        // never as the parent popup.
+                        Popup::LibRate => {}
                     }
                 });
             // Outline just inside the window edge, a stroke centred on the edge
@@ -688,7 +819,7 @@ impl super::LinAmpApp {
         // Rebuild the region when first opened, and if a different-sized menu opens
         // into the same serial, so the rounded corners track the window size.
         let size_changed = self.popups.rounded_h != Some(h);
-        if (!self.popups.rounded || size_changed) && round_popup_window(radius, self.popups.fresh || size_changed) {
+        if (!self.popups.rounded || size_changed) && round_popup_window("LinAmp Menu", radius, self.popups.fresh || size_changed) {
             self.popups.rounded = true;
             self.popups.rounded_h = Some(h);
         }
@@ -699,11 +830,11 @@ impl super::LinAmpApp {
         // recreated window never keeps a square corner.
         #[cfg(all(unix, not(target_os = "macos")))]
         {
-            let _ = round_popup_window(radius, self.popups.fresh);
+            let _ = round_popup_window("LinAmp Menu", radius, self.popups.fresh);
             // Always-on-top isn't enough on X11: the main window's transient-for
             // children (EQ/playlist/library) can stack over the popup, so it opens
             // behind them. Raise it each frame while it's open to keep it visible.
-            raise_popup_window();
+            raise_popup_window("LinAmp Menu");
         }
 
         if self.popups.fresh {
@@ -715,25 +846,152 @@ impl super::LinAmpApp {
         self.popups.fresh = false;
         if close {
             self.popups.cur = None;
-            // Chain to a queued popup (example: Options then Bookmarks) now this one is gone.
-            if let Some((k, w, p)) = self.popups.pending.take() {
-                self.open_popup_in(k, w, p);
+            self.popups.dynamic = None;
+            self.popups.sub = None;
+            // Chain to a queued popup (example: Options then Bookmarks) now this
+            // one is gone.
+            if let Some((k, p)) = self.popups.pending.take() {
+                self.open_popup_at(k, p);
             }
+        }
+
+        // The Rate flyout, if open, draws in its own window beside this one.
+        self.draw_sub_viewport(ctx, corner, border);
+    }
+
+    /// Render the open flyout (the Rate submenu) in a second borderless window
+    /// beside the parent menu. Mirrors the parent's chrome (rounded fill, inset
+    /// border, rounded OS region) but is fixed-content. Closing it clears both
+    /// windows so a click on a rating dismisses the whole menu.
+    fn draw_sub_viewport(&mut self, ctx: &egui::Context, corner: f32, border: egui::Stroke) {
+        let Some((_kind, anchor)) = self.popups.sub else {
+            return;
+        };
+        let rate_rows = self.popups.rate_rows.clone();
+        let (w, h) = (160.0_f32, popup_height(6, 0));
+        let mut screen = anchor;
+        if let Some(vr) = virtual_desktop_rect(ctx) {
+            // Prefer flipping to the parent's left edge when the right edge would
+            // run off-screen, rather than just clamping onto the parent.
+            if screen.x + w > vr.max.x {
+                screen.x = (anchor.x - w - 4.0).max(vr.min.x);
+            }
+            screen.y = screen.y.min(vr.max.y - h).max(vr.min.y);
+        }
+        let mut close = false;
+        let id = egui::ViewportId::from_hash_of(("linamp_popup_sub", self.popups.serial));
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp Submenu")
+            .with_position(screen)
+            .with_inner_size(egui::vec2(w, h))
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_taskbar(false)
+            .with_visible(!self.popups.sub_fresh)
+            .with_window_level(egui::WindowLevel::AlwaysOnTop);
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            let style = ctx.style();
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::popup(&style)
+                        .stroke(egui::Stroke::NONE)
+                        .rounding(corner)
+                        .shadow(egui::epaint::Shadow::NONE)
+                        .inner_margin(egui::Margin::same(MENU_MARGIN)),
+                )
+                .show(ctx, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    for s in 1..=5i64 {
+                        if menu_item(ui, &"\u{2605}".repeat(s as usize), "") {
+                            self.apply_lib_action(LibAction::Rate(rate_rows.clone(), s));
+                            close = true;
+                        }
+                    }
+                    if menu_item(ui, "Clear rating", "") {
+                        self.apply_lib_action(LibAction::Rate(rate_rows.clone(), 0));
+                        close = true;
+                    }
+                });
+            let vr = ctx.screen_rect().shrink(1.0);
+            ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("linamp_submenu_border"),
+            ))
+            .rect_stroke(vr, egui::Rounding::same(corner - 1.0), border);
+            self.apply_base_cursor(ctx, "LinAmp Submenu");
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                close = true;
+            }
+        });
+
+        let radius = (corner * ctx.pixels_per_point()).round() as i32;
+        let size_changed = self.popups.sub_rounded_h != Some(h);
+        if size_changed && round_popup_window("LinAmp Submenu", radius, true) {
+            self.popups.sub_rounded_h = Some(h);
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let _ = round_popup_window("LinAmp Submenu", radius, self.popups.sub_fresh);
+            raise_popup_window("LinAmp Submenu");
+        }
+        if self.popups.sub_fresh {
+            ctx.request_repaint();
+        }
+        self.popups.sub_fresh = false;
+        if close {
+            // A rating click (or Escape) dismisses the whole menu, parent included.
+            self.popups.sub = None;
+            self.popups.cur = None;
+            self.popups.dynamic = None;
         }
     }
 
+    /// Open the one-level flyout beside the parent, if not already open there.
+    /// Idempotent so hovering the Rate row every frame does not re-trigger the
+    /// opening animation / re-round.
+    fn open_sub(&mut self, kind: Popup, anchor: egui::Pos2) {
+        if self.popups.sub != Some((kind, anchor)) {
+            self.popups.sub = Some((kind, anchor));
+            self.popups.sub_fresh = true;
+            self.popups.sub_rounded_h = None;
+        }
+    }
+
+    /// Open a classic popup anchored at a click inside a classic window, given in
+    /// that window's local (viewport) coordinates.
     pub(super) fn open_popup_in(&mut self, kind: Popup, win: ClWin, local: egui::Pos2) {
-        self.popups.cur = Some((kind, win, local));
+        let anchor = self.geom.win_pos[win_idx(win)] + local.to_vec2();
+        self.open_popup_at(kind, anchor);
+    }
+
+    /// Open a popup at an absolute screen position. The library menus anchor here
+    /// directly (their window is outside the classic `win_pos` array).
+    pub(super) fn open_popup_at(&mut self, kind: Popup, anchor: egui::Pos2) {
+        self.popups.cur = Some((kind, anchor));
         self.popups.fresh = true;
+        // A new menu supersedes any open flyout from the previous one, so it is
+        // never left on screen beside the new menu (it would otherwise linger when
+        // the pointer moved off the parent before the new right-click).
+        self.popups.sub = None;
         // New popup window: re-apply the rounded region on the next frame.
         self.popups.rounded = false;
         self.popups.rounded_h = None;
         // Fresh viewport id per open, so the menu never inherits a reused window's
         // size on a re-right-click (#154).
         self.popups.serial = self.popups.serial.wrapping_add(1);
-        // Opening a classic popup dismisses an open Media Library menu, so the two
-        // menu systems are never up at once.
-        self.classic_clicked = true;
+    }
+
+    /// Open the data-driven Media Library context menu at an absolute screen
+    /// position, with the rows to draw and the track rows the Rate flyout targets.
+    pub(super) fn open_lib_menu(
+        &mut self,
+        anchor: egui::Pos2,
+        rows: Vec<DynRow>,
+        rate_rows: Vec<usize>,
+    ) {
+        self.popups.dynamic = Some(rows);
+        self.popups.rate_rows = rate_rows;
+        self.open_popup_at(Popup::LibMenu, anchor);
     }
 }
 

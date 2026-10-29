@@ -43,15 +43,9 @@ impl super::LinAmpApp {
             ClWin::Pl => self.geom.pl_shade,
         };
 
-        // A primary press on any classic window also dismisses an open Media
-        // Library menu (its own OS window never sees the click). Keyed on the
-        // primary press only, the same gesture that dismisses a classic popup, 
-        // so the library's own right-click (secondary) doesn't trip it.
-        if pressed {
-            self.classic_clicked = true;
-        }
-
-        // Clicking any main window dismisses an open menu (click-away).
+        // Clicking any classic window dismisses an open menu (click-away). The
+        // library's context menu is now a classic popup too, so this one path
+        // closes whichever menu is up, including one opened from the library.
         if pressed && self.popups.cur.is_some() && !self.popups.fresh {
             self.popups.cur = None;
         }
