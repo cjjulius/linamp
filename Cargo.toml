@@ -1,6 +1,6 @@
 [package]
 name = "linamp"
-version = "0.5.19"
+version = "0.5.20"
 edition = "2021"
 description = "LinAmp - a Winamp-inspired audio player for Linux and Windows, built in Rust"
 authors = ["LinAmp contributors"]
@@ -45,6 +45,8 @@ arboard = "3"
 # rip/convert work (#185) can reuse, keeping one libopus in the tree. libopus is
 # BSD-3; the crate is MIT/Apache and vendors + builds it (needs cmake at build).
 opus = "0.4.0"
+hound = "3.5.1"
+mp3lame-encoder = "0.2.5"
 
 # Linux/X11 only: query the global cursor position (XQueryPointer) so classic
 # windows can be dragged and docked as a group, matching the Windows behaviour.

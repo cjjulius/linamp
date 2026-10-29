@@ -9,6 +9,7 @@ mod config;
 mod cursor;
 mod decode;
 mod dock;
+mod encode;
 mod eq;
 mod eqf;
 mod fileassoc;
