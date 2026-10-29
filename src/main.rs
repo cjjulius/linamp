@@ -216,7 +216,7 @@ fn acquire_instance_lock_at(path: &std::path::Path) -> Instance {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let file = match std::fs::OpenOptions::new().create(true).write(true).open(path) {
+    let file = match std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(path) {
         Ok(f) => f,
         Err(_) => return Instance::Unavailable,
     };
@@ -227,13 +227,39 @@ fn acquire_instance_lock_at(path: &std::path::Path) -> Instance {
     }
 }
 
-/// The real single-instance lock, in LinAmp's data directory (next to config.json).
-fn acquire_instance_lock() -> Instance {
-    let path = dirs::data_local_dir()
+/// The instance lock's path, in LinAmp's data directory (next to config.json). The
+/// lock holder is the primary instance (#193); secondaries re-check it to take over.
+pub(crate) fn instance_lock_path() -> std::path::PathBuf {
+    dirs::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("LinAmp")
-        .join("instance.lock");
-    acquire_instance_lock_at(&path)
+        .join("instance.lock")
+}
+
+/// The real single-instance lock, in LinAmp's data directory (next to config.json).
+fn acquire_instance_lock() -> Instance {
+    acquire_instance_lock_at(&instance_lock_path())
+}
+
+/// Try to grab the instance lock at `path` without blocking, returning the locked
+/// file handle on success. A secondary instance calls this periodically so that when
+/// the primary exits (freeing the lock) it can take over as the new primary (#193):
+/// keep the returned handle alive to hold the lock. `None` means another instance
+/// still holds it, or the lock dir is unwritable.
+pub(crate) fn try_lock_instance(path: &std::path::Path) -> Option<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    match file.try_lock() {
+        Ok(()) => Some(file),
+        Err(_) => None,
+    }
 }
 
 #[cfg(test)]
@@ -258,6 +284,26 @@ mod tests {
         assert!(
             matches!(acquire_instance_lock_at(&p), Instance::Acquired(_)),
             "the lock is free again after the first holder exits"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn try_lock_instance_hands_over_when_the_holder_drops() {
+        let p = std::env::temp_dir().join("linamp_handover_test.lock");
+        let _ = std::fs::remove_file(&p);
+        // The first caller becomes primary.
+        let held = try_lock_instance(&p).expect("first caller acquires the lock");
+        // A secondary polling while the primary holds it gets nothing.
+        assert!(
+            try_lock_instance(&p).is_none(),
+            "a secondary cannot take the lock while the primary holds it"
+        );
+        // The primary exits (handle dropped): the next poll takes over as primary.
+        drop(held);
+        assert!(
+            try_lock_instance(&p).is_some(),
+            "a secondary takes over once the primary releases the lock"
         );
         let _ = std::fs::remove_file(&p);
     }
