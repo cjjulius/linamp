@@ -461,12 +461,18 @@ impl super::LinAmpApp {
             .with_resizable(false)
             .with_taskbar(false)
             // The OS window is created at a default spot and only then moved to
-            // `screen`, which flashes a frame at the wrong place. Keep it hidden while
-            // it gets positioned/sized AND until its rounded region is applied
-            // (`rounded`). winit keeps WS_CAPTION in the borderless window's style; the
-            // rounded region clips that title bar out of view, so revealing before the
-            // region is set would show the caption for a frame. Only reveal once clipped.
-            .with_visible(!self.popups.fresh && self.popups.rounded)
+            // `screen`, which flashes a frame at the wrong place. Keep it hidden on its
+            // opening frame while it gets positioned/sized. On Windows also keep it
+            // hidden until its rounded region is applied (`rounded`): winit keeps
+            // WS_CAPTION in the borderless window's style and the region clips that title
+            // bar out of view, so revealing before the region is set would flash the
+            // caption for a frame. That gate must be Windows-only: on X11 the rounding
+            // helper finds the window via _NET_CLIENT_LIST, which only lists *mapped*
+            // windows, so gating the reveal on `rounded` there would deadlock (hidden ->
+            // not listed -> never rounded -> never shown). X11 borderless windows have no
+            // caption to clip, so reveal once positioned and let the shape apply a frame
+            // later.
+            .with_visible(!self.popups.fresh && (self.popups.rounded || !cfg!(windows)))
             // Always on top: the EQ/playlist/library windows are *owned* by the main
             // window (group_child_windows), which keeps them above sibling windows,
             // and clicking one re-raises it, so only a system-topmost popup stays
