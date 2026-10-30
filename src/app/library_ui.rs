@@ -23,8 +23,8 @@ pub(super) enum LibAction {
     Explore(usize),
     Remove(Vec<usize>),
     SelectAll,
-    /// Convert the given rows to a file in a chosen format (#183).
-    Convert(Vec<usize>, crate::encode::OutputFormat),
+    /// Enqueue the given rows for conversion, using the global Preferences settings.
+    Convert(Vec<usize>),
 }
 
 /// One row of a dynamic popup menu (the Media Library context menus). Built per
@@ -38,8 +38,10 @@ pub(super) enum DynRow {
     /// beside this menu; the parent stays open while the flyout is up.
     RateSub { label: String },
     /// A row that opens a flyout of its own `children` (Item/Sep rows) in a second
-    /// window beside this menu, e.g. the "Convert to" format list. The parent stays
-    /// open while the flyout is up.
+    /// window beside this menu. The parent stays open while the flyout is up. Kept (and
+    /// its rendering with it) for the upcoming Audio CD rip menu, which reuses this
+    /// generic flyout; currently nothing constructs it.
+    #[allow(dead_code)]
     Sub { label: String, children: Vec<DynRow> },
     Sep,
 }
@@ -113,6 +115,16 @@ impl super::LinAmpApp {
         // without a library; the search box filters it in place.
         if self.lib.nav == crate::library::LibView::Bookmarks {
             self.refresh_bookmarks_view(&q);
+            return;
+        }
+        // The conversion queue is a live view built from the worker's job list, not a
+        // DB query. Clear the DB-backed panes so a stale selection from the previous
+        // view can't drive the bottom bar's Play/Enqueue while this node is shown.
+        if self.lib.nav == crate::library::LibView::Converting {
+            self.lib.results.clear();
+            self.lib.sel_tracks.clear();
+            self.lib.artists.clear();
+            self.lib.albums.clear();
             return;
         }
         if self.library.is_none() {
@@ -284,6 +296,64 @@ impl super::LinAmpApp {
             self.lib.scan_text.clear();
             self.refresh_library();
         }
+    }
+
+    /// Drain the conversion worker's progress into the job list: update each job's
+    /// state and progress, drop cancelled rows, and refresh the library when a job
+    /// finishes so the output appears under Audio.
+    pub(super) fn poll_convert(&mut self) {
+        use crate::convert_queue::{ConvertMsg, JobState};
+        let Some(worker) = &self.convert_worker else {
+            return;
+        };
+        let mut finished = false;
+        let mut msgs = Vec::new();
+        while let Some(m) = worker.try_recv() {
+            msgs.push(m);
+        }
+        for m in msgs {
+            match m {
+                ConvertMsg::Started(id) => {
+                    if let Some(j) = self.job_mut(id) {
+                        j.state = JobState::Converting;
+                    }
+                }
+                ConvertMsg::Progress(id, f) => {
+                    if let Some(j) = self.job_mut(id) {
+                        j.progress = f;
+                    }
+                }
+                ConvertMsg::Done(id) => {
+                    if let Some(j) = self.job_mut(id) {
+                        j.state = JobState::Done;
+                        j.progress = 1.0;
+                    }
+                    finished = true;
+                }
+                ConvertMsg::Failed(id, e) => {
+                    if let Some(j) = self.job_mut(id) {
+                        j.state = JobState::Failed(e);
+                    }
+                }
+                ConvertMsg::Cancelled(id) => {
+                    // A cancelled job is removed from the list entirely (its partial
+                    // output, if any, was already deleted by the worker).
+                    self.lib.convert_queue.retain(|j| j.id != id);
+                }
+            }
+        }
+        if finished {
+            // The worker indexed each finished output into the library as it went;
+            // re-query so they appear in the open library view.
+            self.refresh_library();
+        }
+        // A burst of cancellations can empty the queue; fall back off the node then.
+        self.reset_nav_if_queue_empty();
+    }
+
+    /// Find a queued job by id.
+    fn job_mut(&mut self, id: u64) -> Option<&mut crate::convert_queue::ConvertJob> {
+        self.lib.convert_queue.iter_mut().find(|j| j.id == id)
     }
 
     /// The media library + search, in its own window (the classic UI has no
@@ -729,6 +799,23 @@ impl super::LinAmpApp {
                 {
                     act.nav_click = Some(LibView::Bookmarks);
                 }
+                // The conversion queue appears under a Jobs header only while it has
+                // rows (active or finished), matching the "don't show it when idle,
+                // keep it to see the result" behaviour.
+                if !self.lib.convert_queue.is_empty() {
+                    ui.add_space(6.0 * s);
+                    ui.label(RichText::new("Jobs").color(dim).size(11.0 * s));
+                    let n = self.lib.convert_queue.len();
+                    if ui
+                        .selectable_label(
+                            self.lib.nav == LibView::Converting,
+                            RichText::new(format!("Converting ({n})")),
+                        )
+                        .clicked()
+                    {
+                        act.nav_click = Some(LibView::Converting);
+                    }
+                }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| match &self.library {
                     Some(lib) => {
                         ui.label(RichText::new(format!("{} tracks", lib.count())).color(dim).size(11.0 * s));
@@ -744,6 +831,16 @@ impl super::LinAmpApp {
         let list_fill = cx.list_fill;
         let browsing = cx.browsing;
         let s = cx.s;
+        // The conversion queue has its own pane (Artist/Title/Location/Progress),
+        // distinct from the DB-backed track table.
+        if self.lib.nav == crate::library::LibView::Converting {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none().fill(list_fill).inner_margin(egui::Margin::same(2.0 * s)))
+                .show_inside(ui, |ui| {
+                    self.ui_lib_convert_queue(ui, cx, act);
+                });
+            return;
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(list_fill))
             .show_inside(ui, |ui| {
@@ -899,6 +996,134 @@ impl super::LinAmpApp {
                             });
     }
 
+    /// The conversion-queue pane: a themed Artist / Title / Location / Progress table
+    /// with a filling progress bar per row, plus a toolbar to clear finished rows.
+    /// Right-click a row to cancel (queued/running) or remove (finished). Colours come
+    /// from the same [`LibCx`] as the track table, so it follows the skin (or the
+    /// fallback theme when the skin defines none).
+    fn ui_lib_convert_queue(&mut self, ui: &mut egui::Ui, cx: &LibCx, _act: &mut LibActs) {
+        use crate::convert_queue::JobState;
+        let s = cx.s;
+        let row_col = cx.row_col;
+        let sel_bg = cx.sel_bg;
+        let header_bg = cx.header_bg;
+        let header_fg = cx.header_fg;
+        let dim = cx.dim;
+        let accent = cx.accent;
+        let fail_col = Color32::from_rgb(210, 90, 80);
+
+        // Toolbar: a summary and a Clear completed button.
+        let mut clear_finished = false;
+        let any_finished = self.lib.convert_queue.iter().any(|j| j.state.is_finished());
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("{} in queue", self.lib.convert_queue.len()))
+                    .color(dim)
+                    .size(11.0 * s),
+            );
+            if any_finished && ui.button("Clear completed").clicked() {
+                clear_finished = true;
+            }
+        });
+        ui.add_space(2.0 * s);
+
+        // Column layout: Progress is a fixed column on the right; Artist/Title/Location
+        // split the remaining body. Reserve the scrollbar gutter so header and rows
+        // share one layout.
+        let w = ui.available_width();
+        let sb = ui.spacing().scroll.bar_width + 2.0 * s;
+        let prog_w = 130.0 * s;
+        let body = (w - prog_w - 12.0 * s - sb).max(150.0 * s);
+        let (aw, tw, lw) = (body * 0.30, body * 0.30, body * 0.40);
+        let prog_off = 2.0 * s + body + 6.0 * s;
+
+        // Header.
+        paint_track_row(ui, 15.0 * s, true, header_bg, s, |rect, paint| {
+            let mut x = rect.left() + 2.0 * s;
+            for (label, cw) in [("Artist", aw), ("Title", tw), ("Location", lw)] {
+                paint(x, cw, label, header_fg, false);
+                x += cw;
+            }
+            paint(rect.left() + prog_off, prog_w, "Progress", header_fg, false);
+        });
+
+        let mut cancel_id: Option<u64> = None;
+        egui::ScrollArea::vertical()
+            .id_salt("lib_convert_queue")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for job in &self.lib.convert_queue {
+                    let loc = job.location.display().to_string();
+                    let (status, frac, bar_col, text_col) = match &job.state {
+                        JobState::Queued => ("Queued".to_string(), 0.0, accent, row_col),
+                        JobState::Converting => (
+                            format!("{}%", (job.progress * 100.0).round() as i32),
+                            job.progress.clamp(0.0, 1.0),
+                            accent,
+                            row_col,
+                        ),
+                        JobState::Done => ("Done".to_string(), 1.0, accent, row_col),
+                        JobState::Failed(_) => ("Failed".to_string(), 0.0, fail_col, fail_col),
+                    };
+                    let resp = paint_track_row(ui, 16.0 * s, false, sel_bg, s, |rect, paint| {
+                        let mut x = rect.left() + 2.0 * s;
+                        paint(x, aw, &job.artist, row_col, false);
+                        x += aw;
+                        paint(x, tw, &job.title, row_col, false);
+                        x += tw;
+                        paint(x, lw, &loc, row_col, false);
+                    });
+
+                    // Progress bar in the Progress column.
+                    let row = resp.rect;
+                    let pad = 2.0 * s;
+                    let bar = egui::Rect::from_min_size(
+                        egui::pos2(row.left() + prog_off, row.top() + pad),
+                        egui::vec2(prog_w - 4.0 * s, (row.height() - 2.0 * pad).max(1.0)),
+                    );
+                    let painter = ui.painter();
+                    // Track (faint) then the filled portion.
+                    let track = Color32::from_rgba_unmultiplied(dim.r(), dim.g(), dim.b(), 60);
+                    painter.rect_filled(bar, 2.0 * s, track);
+                    let fw = bar.width() * frac;
+                    if fw > 0.5 {
+                        let fill = egui::Rect::from_min_size(bar.min, egui::vec2(fw, bar.height()));
+                        painter.rect_filled(fill, 2.0 * s, bar_col);
+                    }
+                    painter.rect_stroke(bar, 2.0 * s, egui::Stroke::new(1.0 * s, dim));
+                    painter.text(
+                        bar.center(),
+                        egui::Align2::CENTER_CENTER,
+                        &status,
+                        egui::FontId::proportional(10.0 * s),
+                        text_col,
+                    );
+
+                    let finished = job.state.is_finished();
+                    let id = job.id;
+                    resp.context_menu(|ui| {
+                        ui.set_min_width(140.0);
+                        let label = if finished { "Remove" } else { "Cancel" };
+                        if ui.button(label).clicked() {
+                            cancel_id = Some(id);
+                            ui.close_menu();
+                        }
+                        if any_finished && ui.button("Clear completed").clicked() {
+                            clear_finished = true;
+                            ui.close_menu();
+                        }
+                    });
+                }
+            });
+
+        if let Some(id) = cancel_id {
+            self.cancel_convert_job(id);
+        }
+        if clear_finished {
+            self.clear_finished_conversions();
+        }
+    }
+
     fn ui_lib_tracks(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
         use crate::library::LibView;
         let s = cx.s;
@@ -1038,6 +1263,10 @@ impl super::LinAmpApp {
                                             LibView::RecentlyAdded => "No tracks have been added recently.",
                                             LibView::Audio => "No tracks match the selected artist/album.",
                                             LibView::Bookmarks => "No bookmarks yet.",
+                                            // The Converting node is only shown while
+                                            // the queue has rows, so this arm is unused
+                                            // in practice; the queue has its own pane.
+                                            LibView::Converting => "No conversions.",
                                         }
                                     };
                                     ui.label(RichText::new(msg).color(dim).italics());
@@ -1129,18 +1358,15 @@ impl super::LinAmpApp {
                                             menu.push(DynRow::Item { label: "Edit tags\u{2026}".into(), act: LibAction::EditTags(i) });
                                             menu.push(DynRow::Item { label: "Explore folder".into(), act: LibAction::Explore(i) });
                                             menu.push(DynRow::Sep);
-                                            // One "Convert to" row with the formats in a flyout, so the
-                                            // common (non-converting) case isn't a wall of Convert items.
-                                            let convert_children = crate::encode::OutputFormat::ALL
-                                                .iter()
-                                                .map(|fmt| DynRow::Item {
-                                                    label: fmt.ext().to_uppercase(),
-                                                    act: LibAction::Convert(rows.clone(), *fmt),
-                                                })
-                                                .collect();
-                                            menu.push(DynRow::Sub {
-                                                label: "Convert to".into(),
-                                                children: convert_children,
+                                            // A single Convert action using the global Preferences
+                                            // settings (format shown in the label); it enqueues the
+                                            // selected rows onto the conversion queue.
+                                            menu.push(DynRow::Item {
+                                                label: format!(
+                                                    "Convert to {}",
+                                                    self.prefs.convert_format.display()
+                                                ),
+                                                act: LibAction::Convert(rows.clone()),
                                             });
                                             menu.push(DynRow::Sep);
                                             menu.push(DynRow::Item { label: remove_label.into(), act: LibAction::Remove(rows.clone()) });
@@ -1187,15 +1413,16 @@ impl super::LinAmpApp {
                                                 ui.close_menu();
                                             }
                                         });
-                                        ui.menu_button("Convert to", |ui| {
-                                            for fmt in crate::encode::OutputFormat::ALL {
-                                                if ui.button(fmt.ext().to_uppercase()).clicked() {
-                                                    act.lib_action =
-                                                        Some(LibAction::Convert(rows.clone(), *fmt));
-                                                    ui.close_menu();
-                                                }
-                                            }
-                                        });
+                                        if ui
+                                            .button(format!(
+                                                "Convert to {}",
+                                                self.prefs.convert_format.display()
+                                            ))
+                                            .clicked()
+                                        {
+                                            act.lib_action = Some(LibAction::Convert(rows.clone()));
+                                            ui.close_menu();
+                                        }
                                         if ui.button("Edit tags\u{2026}").clicked() {
                                             act.lib_action = Some(LibAction::EditTags(i));
                                             ui.close_menu();
@@ -1447,72 +1674,120 @@ impl super::LinAmpApp {
                 self.lib.sel_tracks.clear();
                 self.refresh_library();
             }
-            LibAction::Convert(rows, format) => {
-                self.convert_tracks(&rows, format);
+            LibAction::Convert(rows) => {
+                self.convert_tracks(&rows);
             }
         }
     }
 
-    /// Rip/convert the given library rows to `format` (#183). Asks for an output
-    /// folder, then converts off the UI thread, reporting progress via `convert_rx`.
-    fn convert_tracks(&mut self, rows: &[usize], format: crate::encode::OutputFormat) {
-        // One conversion at a time: ignore a new request while a job is running.
-        if self.convert_rx.is_some() {
-            self.status = "A conversion is already running.".into();
-            return;
-        }
-        let paths: Vec<std::path::PathBuf> = rows
+    /// Enqueue the selected library rows onto the conversion queue, using the global
+    /// Preferences convert settings. Resolves the output folder (prompting once if it
+    /// is unset and saving the choice as the default), builds one job per row, hands
+    /// them to the background worker, and switches the nav to the Converting node. The
+    /// worker converts them one at a time off the UI thread; `poll_convert` feeds its
+    /// progress back into the job list.
+    fn convert_tracks(&mut self, rows: &[usize]) {
+        // Gather (source, artist, title) for each selected row up front.
+        let picked: Vec<(std::path::PathBuf, String, String)> = rows
             .iter()
-            .filter_map(|&i| self.lib.results.get(i).map(|t| t.path.clone()))
+            .filter_map(|&i| self.lib.results.get(i))
+            .map(|t| (t.path.clone(), t.artist.clone(), t.title.clone()))
             .collect();
-        if paths.is_empty() {
+        if picked.is_empty() {
             return;
         }
-        // Close the classic popup first, or it stays on top and overlaps (and, being
-        // always-on-top, freezes out) the folder picker while the modal dialog is up.
-        // Every other dialog opener does this; the convert path was missing it.
-        super::hide_popup_window();
-        self.popups.cur = None;
-        self.popups.sub = None;
-        let Some(dir) = self.pick_dialog(|| rfd::FileDialog::new().pick_folder()) else {
-            return;
-        };
-        let (tx, rx) = std::sync::mpsc::channel::<String>();
-        self.convert_rx = Some(rx);
-        self.status = format!(
-            "Converting {} file(s) to {}\u{2026}",
-            paths.len(),
-            format.ext().to_uppercase()
-        );
-        std::thread::spawn(move || {
-            // Index converted outputs into the library so they show up there, on the
-            // worker's own connection (shared WAL db); the UI refreshes once done.
-            let lib = crate::library::Library::open().ok();
-            let total = paths.len();
-            let (mut ok, mut failed) = (0usize, 0usize);
-            for (i, src) in paths.iter().enumerate() {
-                let _ = tx.send(format!("Converting {}/{}\u{2026}", i + 1, total));
-                let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("track");
-                let dst = unique_path(&dir, stem, format.ext());
-                match crate::encode::convert_file(src, &dst, format) {
-                    Ok(()) => {
-                        ok += 1;
-                        if let Some(lib) = &lib {
-                            let _ = lib.upsert(&crate::playlist::Track::from_path(dst));
-                        }
-                    }
-                    Err(e) => {
-                        failed += 1;
-                        eprintln!("convert failed for {}: {e}", src.display());
-                    }
-                }
+        let settings = self.prefs.convert_settings();
+        let ext = settings.format.ext();
+
+        // Output folder: the saved default, or prompt once and remember it.
+        let dir = match self.prefs.convert_dir.clone() {
+            Some(d) => d,
+            None => {
+                // Close the classic popup first, or it stays on top and overlaps (and,
+                // being always-on-top, freezes out) the folder picker.
+                super::hide_popup_window();
+                self.popups.cur = None;
+                self.popups.sub = None;
+                let Some(d) = self.pick_dialog(|| rfd::FileDialog::new().pick_folder()) else {
+                    return;
+                };
+                self.prefs.convert_dir = Some(d.clone());
+                self.prefs.save();
+                d
             }
-            let _ = tx.send(if failed == 0 {
-                format!("Converted {ok} file(s) to {}.", format.ext().to_uppercase())
-            } else {
-                format!("Converted {ok} file(s), {failed} failed.")
+        };
+
+        // Build the jobs and specs (assign ids with the running counter).
+        let n = picked.len();
+        let mut specs = Vec::with_capacity(n);
+        let mut jobs = Vec::with_capacity(n);
+        for (src, artist, title) in picked {
+            let id = self.lib.convert_next_id;
+            self.lib.convert_next_id += 1;
+            let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("track");
+            let dst = unique_path(&dir, stem, ext);
+            specs.push(crate::convert_queue::JobSpec { id, src: src.clone(), dst, settings });
+            jobs.push(crate::convert_queue::ConvertJob {
+                id,
+                artist,
+                title,
+                location: src,
+                progress: 0.0,
+                state: crate::convert_queue::JobState::Queued,
             });
-        });
+        }
+
+        // Hand the specs to the worker (created on first use).
+        if self.convert_worker.is_none() {
+            self.convert_worker = Some(crate::convert_queue::ConvertWorker::new());
+        }
+        if let Some(worker) = &self.convert_worker {
+            for s in specs {
+                worker.enqueue(s);
+            }
+        }
+        self.lib.convert_queue.extend(jobs);
+        // Jump to the Converting node so the user sees progress.
+        self.lib.nav = crate::library::LibView::Converting;
+        self.lib.sel_tracks.clear();
+        self.status = format!("Queued {n} file(s) for conversion to {}.", ext.to_uppercase());
+    }
+
+    /// Cancel a queued/running conversion by id (removes the row; the worker deletes
+    /// any partial output).
+    fn cancel_convert_job(&mut self, id: u64) {
+        if let Some(worker) = &self.convert_worker {
+            worker.cancel(id);
+        }
+        // Remove queued rows immediately for a responsive UI; a running job's row is
+        // removed when the worker confirms with Cancelled (after cleaning its file).
+        use crate::convert_queue::JobState;
+        let running = self
+            .lib
+            .convert_queue
+            .iter()
+            .any(|j| j.id == id && j.state == JobState::Converting);
+        if !running {
+            self.lib.convert_queue.retain(|j| j.id != id);
+        }
+        self.reset_nav_if_queue_empty();
+    }
+
+    /// Drop finished (done or failed) rows from the conversion queue.
+    fn clear_finished_conversions(&mut self) {
+        self.lib.convert_queue.retain(|j| !j.state.is_finished());
+        self.reset_nav_if_queue_empty();
+    }
+
+    /// When the queue empties while the Converting node is selected, the node
+    /// disappears, so fall back to the Audio view.
+    fn reset_nav_if_queue_empty(&mut self) {
+        if self.lib.convert_queue.is_empty()
+            && self.lib.nav == crate::library::LibView::Converting
+        {
+            self.lib.nav = crate::library::LibView::Audio;
+            self.refresh_library();
+        }
     }
 }
 
