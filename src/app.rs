@@ -435,6 +435,9 @@ struct PlaylistViewState {
     px_h: f32,
     /// Bottom-bar menu button currently held / with its menu open.
     menu_press: Option<classic::PlRegion>,
+    /// True while the right-edge scrollbar thumb is being dragged, so the cursor drives
+    /// the scroll offset each frame and the thumb shows its pressed sprite.
+    scroll_drag: bool,
 }
 
 /// Media Library 3-pane browser, search, sort, selection and background-scan
@@ -928,6 +931,7 @@ impl LinAmpApp {
                 px_w: classic::MAIN_W as f32,
                 px_h: classic::PL_H as f32,
                 menu_press: None,
+                scroll_drag: false,
             },
             popups: PopupState {
                 cur: None,
@@ -3875,6 +3879,9 @@ impl LinAmpApp {
     /// down, or the one whose fly-out menu is currently open.
     fn pl_pressed_button(&self) -> Option<classic::PlRegion> {
         use classic::PlRegion as P;
+        if self.plview.scroll_drag {
+            return Some(P::Scroll);
+        }
         if let Some(r) = self.plview.menu_press {
             return Some(r);
         }

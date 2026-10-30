@@ -750,6 +750,13 @@ impl ClassicSkin {
                 y += 29;
             }
 
+            // Always-visible scrollbar thumb in the right frame. Fixed-size handle sprite
+            // (PLEDIT 52,53 8x18; pressed 61,53); its position reflects the scroll offset.
+            let tsx = if st.pressed == Some(PlRegion::Scroll) { 61 } else { 52 };
+            let ty = pl_scroll_thumb_y(st.scroll_first, st.total_rows, pl_visible_rows(height), height as f32)
+                .round() as i32;
+            blit(&mut c, p, w - 15, ty, tsx, 53, 8, 18);
+
             // Bottom bar: left corner (Add/Rem/Sel/Misc), the tiled stretch, then
             // the right corner (mini-player / List / time). Stretch tiles the 4px
             // plain column at pledit x126 (a wider slice duplicates the buttons).
@@ -828,6 +835,13 @@ impl ClassicSkin {
                 title_w = tx - PL_LIST_X - 6; // leave a gap before the time
             }
             self.draw_text_tinted(&mut c, text, PL_LIST_X, ry, title_w.max(0), col);
+        }
+
+        // Skins without PLEDIT art get a synthesized always-visible scrollbar thumb from
+        // the skin colours, so the scrollbar is present in every skin.
+        if self.bmp("pledit.bmp").is_none() {
+            let ty = pl_scroll_thumb_y(st.scroll_first, st.total_rows, visible, height as f32).round() as i32;
+            fill_rect(&mut c, w - 13, ty, 7, PL_SCROLL_THUMB_H, st.colors.normal);
         }
         c
     }
@@ -1303,6 +1317,8 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
             },
             rows: &rows,
             first: 0,
+            scroll_first: 0,
+            total_rows: rows.len(),
             pressed: None,
             elapsed_secs: 73.0, // 1:13, matching the main display
             cur_duration: 325.0,

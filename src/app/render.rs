@@ -286,6 +286,8 @@ impl super::LinAmpApp {
                         colors,
                         rows: &rows,
                         first: 0,
+                        scroll_first: self.plview.first,
+                        total_rows: self.playlist.len(),
                         pressed: self.pl_pressed_button(),
                         elapsed_secs,
                         cur_duration,

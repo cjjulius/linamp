@@ -459,6 +459,8 @@ pub enum PlRegion {
     MiscMenu,
     ListMenu,
     Resize,
+    /// The right-edge scrollbar channel, where the thumb travels.
+    Scroll,
     // Mini-player transport buttons in the bottom-right sprite.
     MiniPrev,
     MiniPlay,
@@ -505,6 +507,11 @@ pub fn pl_region_at(x: f32, y: f32, width: f32, height: f32) -> Option<PlRegion>
     if x >= width - 20.0 && y >= height - 20.0 {
         return Some(PlRegion::Resize);
     }
+    // Right-edge scrollbar channel (the thumb lives in the right frame), checked before
+    // the list so a click on the far right scrolls rather than selecting a row.
+    if x >= width - 16.0 && y >= 20.0 && y < height - 38.0 {
+        return Some(PlRegion::Scroll);
+    }
     if y < height - 38.0 {
         return Some(PlRegion::List);
     }
@@ -546,9 +553,53 @@ pub fn pl_visible_rows(height: u32) -> usize {
 /// Clamp a playlist scroll offset so it never points past the last row. An offset
 /// at or beyond the length makes the visible range (`first..end`) empty, which would
 /// render the whole list blank, so callers that change the playlist length must
-/// re-clamp. Returns 0 for an empty list.
+/// re-clamp. Returns 0 for an empty list. This is the loose clamp used on render and
+/// after a delete, so the "blank space at the bottom after deleting" case is allowed to
+/// persist; a scroll gesture re-applies the tighter [`max_pl_first`] clamp.
 pub fn clamp_pl_first(first: usize, len: usize) -> usize {
     first.min(len.saturating_sub(1))
+}
+
+/// Fixed height (native px) of the scrollbar thumb sprite (PLEDIT.BMP 52,53 8x18).
+pub(crate) const PL_SCROLL_THUMB_H: i32 = 18;
+
+/// The furthest a scroll offset may advance from a scroll gesture: the last row rests at
+/// the bottom with no blank rows past it (retro Winamp behaviour). 0 when the list fits
+/// the window.
+pub fn max_pl_first(len: usize, visible: usize) -> usize {
+    len.saturating_sub(visible)
+}
+
+/// (top, travel) of the scrollbar thumb's vertical range for a PL window `height` px: the
+/// thumb top moves from just under the title bar to `thumb_h` above the bottom bar.
+fn pl_scroll_track(height: f32) -> (f32, f32) {
+    let top = PL_LIST_Y as f32;
+    let bottom = height - 38.0;
+    let travel = (bottom - top - PL_SCROLL_THUMB_H as f32).max(0.0);
+    (top, travel)
+}
+
+/// Top y (native px) of the fixed-size scrollbar thumb for scroll offset `first`. Pinned
+/// to the top when the list fits (nothing to scroll).
+pub fn pl_scroll_thumb_y(first: usize, len: usize, visible: usize, height: f32) -> f32 {
+    let (top, travel) = pl_scroll_track(height);
+    let max = max_pl_first(len, visible);
+    if max == 0 {
+        return top;
+    }
+    top + (first.min(max) as f32 / max as f32) * travel
+}
+
+/// Scroll offset for the thumb dragged to window-y `y`, the inverse of
+/// [`pl_scroll_thumb_y`]; centres the thumb on the cursor. 0 when the list fits.
+pub fn pl_scroll_first_at(y: f32, len: usize, visible: usize, height: f32) -> usize {
+    let max = max_pl_first(len, visible);
+    let (top, travel) = pl_scroll_track(height);
+    if max == 0 || travel <= 0.0 {
+        return 0;
+    }
+    let frac = ((y - top - PL_SCROLL_THUMB_H as f32 / 2.0) / travel).clamp(0.0, 1.0);
+    (frac * max as f32).round() as usize
 }
 
 /// Smallest playlist height, in unscaled skin pixels (two title rows + a usable
