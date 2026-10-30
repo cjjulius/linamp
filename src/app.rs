@@ -438,6 +438,14 @@ struct PlaylistViewState {
     /// True while the right-edge scrollbar thumb is being dragged, so the cursor drives
     /// the scroll offset each frame and the thumb shows its pressed sprite.
     scroll_drag: bool,
+    /// Cursor-to-thumb-top offset captured when the scrollbar is grabbed, so the drag is
+    /// relative (the thumb follows the cursor from where it was grabbed) instead of
+    /// jumping the thumb to the cursor on the first click.
+    scroll_grab_dy: f32,
+    /// The furthest offset this drag may reach: the normal scroll max, or the current
+    /// offset if it already sits past it (after a resize or a delete left blank space), so
+    /// the user can drag up through that range at their own speed.
+    scroll_drag_max: usize,
 }
 
 /// Media Library 3-pane browser, search, sort, selection and background-scan
@@ -932,6 +940,8 @@ impl LinAmpApp {
                 px_h: classic::PL_H as f32,
                 menu_press: None,
                 scroll_drag: false,
+                scroll_grab_dy: 0.0,
+                scroll_drag_max: 0,
             },
             popups: PopupState {
                 cur: None,
@@ -2322,12 +2332,25 @@ impl LinAmpApp {
         self.pl_select_with(target, ctrl, shift, crate::selection::CtrlMode::Add);
     }
 
-    /// Drive the playlist scroll offset from a scrollbar cursor y (unscaled px),
-    /// centring the thumb on the cursor. Shared by the initial grab and the drag.
-    fn pl_scroll_to_cursor(&mut self, ny: f32) {
+    /// Grab the scrollbar at cursor y (unscaled px) without moving it: record where on the
+    /// thumb it was grabbed and how far this drag may reach, so a plain click never jumps
+    /// the view. The drag itself runs through [`pl_scroll_drag`].
+    fn pl_scroll_grab(&mut self, ny: f32) {
+        let len = self.playlist.len();
         let visible = classic::pl_visible_rows(self.plview.px_h as u32);
+        let thumb_y = classic::pl_scroll_thumb_y(self.plview.first, len, self.plview.px_h);
+        self.plview.scroll_grab_dy = ny - thumb_y;
+        self.plview.scroll_drag_max = classic::max_pl_first(len, visible).max(self.plview.first);
+        self.plview.scroll_drag = true;
+    }
+
+    /// Move the scroll offset while the scrollbar is dragged: keep the grab point under the
+    /// cursor (relative drag) and clamp to this drag's reach.
+    fn pl_scroll_drag(&mut self, ny: f32) {
+        let len = self.playlist.len();
+        let thumb_y = ny - self.plview.scroll_grab_dy;
         self.plview.first =
-            classic::pl_scroll_first_at(ny, self.playlist.len(), visible, self.plview.px_h);
+            classic::pl_scroll_first_at(thumb_y, len, self.plview.px_h).min(self.plview.scroll_drag_max);
     }
 
     /// Adjust the playlist scroll offset so row `idx` is visible.

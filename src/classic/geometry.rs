@@ -579,27 +579,33 @@ fn pl_scroll_track(height: f32) -> (f32, f32) {
     (top, travel)
 }
 
-/// Top y (native px) of the fixed-size scrollbar thumb for scroll offset `first`. Pinned
-/// to the top when the list fits (nothing to scroll).
-pub fn pl_scroll_thumb_y(first: usize, len: usize, visible: usize, height: f32) -> f32 {
+/// Top y (native px) of the fixed-size scrollbar thumb for scroll offset `first`. The
+/// thumb is anchored to the topmost displayed row (`first / (len - 1)`), so it depends
+/// only on the scroll position, not the window height: resizing the playlist leaves the
+/// thumb where it is instead of making it jump. Pinned to the top when the list has one
+/// row or fewer.
+pub fn pl_scroll_thumb_y(first: usize, len: usize, height: f32) -> f32 {
     let (top, travel) = pl_scroll_track(height);
-    let max = max_pl_first(len, visible);
-    if max == 0 {
+    if len <= 1 {
         return top;
     }
-    top + (first.min(max) as f32 / max as f32) * travel
+    let frac = (first as f32 / (len - 1) as f32).clamp(0.0, 1.0);
+    top + frac * travel
 }
 
-/// Scroll offset for the thumb dragged to window-y `y`, the inverse of
-/// [`pl_scroll_thumb_y`]; centres the thumb on the cursor. 0 when the list fits.
-pub fn pl_scroll_first_at(y: f32, len: usize, visible: usize, height: f32) -> usize {
-    let max = max_pl_first(len, visible);
-    let (top, travel) = pl_scroll_track(height);
-    if max == 0 || travel <= 0.0 {
+/// The scroll offset a thumb whose top sits at window-y `thumb_y` represents, the inverse
+/// of [`pl_scroll_thumb_y`]. The caller clamps the result to the scrollable range; this is
+/// the raw topmost-row the thumb points at.
+pub fn pl_scroll_first_at(thumb_y: f32, len: usize, height: f32) -> usize {
+    if len <= 1 {
         return 0;
     }
-    let frac = ((y - top - PL_SCROLL_THUMB_H as f32 / 2.0) / travel).clamp(0.0, 1.0);
-    (frac * max as f32).round() as usize
+    let (top, travel) = pl_scroll_track(height);
+    if travel <= 0.0 {
+        return 0;
+    }
+    let frac = ((thumb_y - top) / travel).clamp(0.0, 1.0);
+    (frac * (len - 1) as f32).round() as usize
 }
 
 /// Smallest playlist height, in unscaled skin pixels (two title rows + a usable
