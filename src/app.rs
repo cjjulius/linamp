@@ -464,6 +464,11 @@ struct LibraryViewState {
     sel_artists: Vec<String>,
     sel_albums: Vec<String>,
     sel_tracks: std::collections::BTreeSet<usize>,
+    /// Fixed end of a Shift-range in the track list (the row a plain or Ctrl click
+    /// last landed on), so Shift-click selects the contiguous span to it, matching
+    /// the playlist window. None until the first click; cleared when the result set
+    /// changes.
+    sel_anchor: Option<usize>,
     /// Active background scan receiver + its latest progress text.
     scan: Option<std::sync::mpsc::Receiver<crate::library::ScanMsg>>,
     scan_text: String,
@@ -834,6 +839,7 @@ impl LinAmpApp {
                 sel_artists: Vec::new(),
                 sel_albums: Vec::new(),
                 sel_tracks: std::collections::BTreeSet::new(),
+                sel_anchor: None,
                 scan: None,
                 scan_text: String::new(),
                 convert_queue: Vec::new(),

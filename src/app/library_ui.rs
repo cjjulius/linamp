@@ -75,7 +75,9 @@ struct LibActs {
     nav_click: Option<crate::library::LibView>,
     artist_click: Option<(Option<String>, bool)>,
     album_click: Option<(Option<String>, bool)>,
-    track_click: Option<(usize, bool)>,
+    /// (row, ctrl, shift) for a track-list click; Shift extends a range from the
+    /// anchor, matching the playlist window.
+    track_click: Option<(usize, bool, bool)>,
     dbl_track: Option<usize>,
     rate: Option<i64>,
     do_play: bool,
@@ -123,6 +125,7 @@ impl super::LinAmpApp {
         if self.lib.nav == crate::library::LibView::Converting {
             self.lib.results.clear();
             self.lib.sel_tracks.clear();
+            self.lib.sel_anchor = None;
             self.lib.artists.clear();
             self.lib.albums.clear();
             return;
@@ -1307,14 +1310,16 @@ impl super::LinAmpApp {
                                         paint(rect.left() + time_off, dur_w, &d, tc, true);
                                     });
                                     if resp.clicked() {
-                                        let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
-                                        act.track_click = Some((i, ctrl));
+                                        let (ctrl, shift) = ui.input(|i| {
+                                            (i.modifiers.command || i.modifiers.ctrl, i.modifiers.shift)
+                                        });
+                                        act.track_click = Some((i, ctrl, shift));
                                     }
                                     // Right-click selects the row it targets (unless it's
                                     // already part of the selection) so the menu's target
                                     // is highlighted.
                                     if resp.secondary_clicked() && !selected {
-                                        act.track_click = Some((i, false));
+                                        act.track_click = Some((i, false, false));
                                     }
                                     if resp.double_clicked() {
                                         act.dbl_track = Some(i);
@@ -1518,14 +1523,32 @@ impl super::LinAmpApp {
             apply_sel(&mut self.lib.sel_albums, name, ctrl);
             self.refresh_library_selection();
         }
-        if let Some((i, ctrl)) = track_click {
-            if ctrl {
-                if !self.lib.sel_tracks.insert(i) {
-                    self.lib.sel_tracks.remove(&i);
-                }
-            } else {
+        if let Some((i, ctrl, shift)) = track_click {
+            // Reuse the playlist window's gesture logic so Ctrl toggles, Shift
+            // selects the contiguous range from the anchor, and a plain click
+            // replaces. selection::apply works on a HashSet; convert the ordered
+            // BTreeSet across the call (selections are small) so Enqueue still
+            // walks rows in display order.
+            if self.lib.results.is_empty() {
                 self.lib.sel_tracks.clear();
-                self.lib.sel_tracks.insert(i);
+                self.lib.sel_anchor = None;
+            } else {
+                let max = self.lib.results.len() - 1;
+                let target = i.min(max);
+                // Clamp a stale anchor so a Shift-range can't run past the end.
+                let anchor = self.lib.sel_anchor.map(|a| a.min(max));
+                let mut hs: std::collections::HashSet<usize> =
+                    self.lib.sel_tracks.iter().copied().collect();
+                let new_anchor = crate::selection::apply(
+                    &mut hs,
+                    anchor,
+                    target,
+                    ctrl,
+                    shift,
+                    crate::selection::CtrlMode::Toggle,
+                );
+                self.lib.sel_tracks = hs.into_iter().collect();
+                self.lib.sel_anchor = Some(new_anchor);
             }
         }
         if let Some(r) = rate {
@@ -1608,6 +1631,7 @@ impl super::LinAmpApp {
         match act {
             LibAction::SelectAll => {
                 self.lib.sel_tracks = (0..self.lib.results.len()).collect();
+                self.lib.sel_anchor = (!self.lib.results.is_empty()).then_some(0);
             }
             LibAction::Play(rows) => {
                 let ts = rows_to_tracks(self, &rows);
@@ -1672,6 +1696,7 @@ impl super::LinAmpApp {
                     lib.remove_paths(&paths);
                 }
                 self.lib.sel_tracks.clear();
+                self.lib.sel_anchor = None;
                 self.refresh_library();
             }
             LibAction::Convert(rows) => {
