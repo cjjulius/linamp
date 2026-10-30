@@ -100,7 +100,11 @@ impl super::LinAmpApp {
         }
 
         if win == ClWin::Pl && !shaded && scroll != 0.0 {
-            let max = self.playlist.len().saturating_sub(1) as i32;
+            // Clamp to the last-row-at-bottom position so the wheel can't scroll past the
+            // last song. A scroll gesture also snaps away any blank space left by deleting
+            // at the bottom (the loose render clamp lets that persist until then).
+            let visible = classic::pl_visible_rows(self.plview.px_h as u32);
+            let max = classic::max_pl_first(self.playlist.len(), visible) as i32;
             let step = if scroll > 0.0 { -3 } else { 3 };
             self.plview.first = (self.plview.first as i32 + step).clamp(0, max.max(0)) as usize;
         }
@@ -237,6 +241,18 @@ impl super::LinAmpApp {
                                     self.geom.resize_pl =
                                         Some(egui::vec2(self.plview.px_w - nx, self.plview.px_h - ny))
                                 }
+                                Some(P::Scroll) => {
+                                    // Grab the scrollbar: jump to the clicked position and
+                                    // then track the cursor while the button is held.
+                                    self.plview.scroll_drag = true;
+                                    let visible = classic::pl_visible_rows(self.plview.px_h as u32);
+                                    self.plview.first = classic::pl_scroll_first_at(
+                                        ny,
+                                        self.playlist.len(),
+                                        visible,
+                                        self.plview.px_h,
+                                    );
+                                }
                                 Some(P::List) => {
                                     let row = classic::pl_row_at(ny, self.plview.first);
                                     if row < self.playlist.len() {
@@ -366,6 +382,15 @@ impl super::LinAmpApp {
                         _ => self.apply_eq_slider(er, ny),
                     }
                 }
+                if self.plview.scroll_drag {
+                    let visible = classic::pl_visible_rows(self.plview.px_h as u32);
+                    self.plview.first = classic::pl_scroll_first_at(
+                        ny,
+                        self.playlist.len(),
+                        visible,
+                        self.plview.px_h,
+                    );
+                }
                 if let Some(grab) = self.geom.resize_pl {
                     // Resize smoothly during the drag; the 25/29px grid is applied
                     // only on release (#61), so the rows don't re-flow and jiggle
@@ -412,6 +437,7 @@ impl super::LinAmpApp {
                     (((self.plview.px_w - min_w) / wstep).round() * wstep + min_w).max(min_w);
             }
             self.geom.resize_pl = None;
+            self.plview.scroll_drag = false;
             if let Some(l) = local {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;

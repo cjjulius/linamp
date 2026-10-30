@@ -120,7 +120,13 @@ pub struct PlState<'a> {
     pub colors: PlColors,
     pub rows: &'a [PlRow],
     pub first: usize,
-    /// Bottom-bar menu button currently held / with its menu open.
+    /// The real scroll offset (index of the first visible row) and the total row count,
+    /// used to place the always-visible scrollbar thumb. `rows` is pre-sliced to the
+    /// visible window with `first` 0, so these carry the full picture the thumb needs.
+    pub scroll_first: usize,
+    pub total_rows: usize,
+    /// Bottom-bar menu button currently held / with its menu open (or the scrollbar while
+    /// it is being dragged, for the pressed thumb sprite).
     pub pressed: Option<PlRegion>,
     /// Elapsed time of the current track, in seconds (0 when stopped).
     pub elapsed_secs: f32,
@@ -239,6 +245,52 @@ mod tests {
         assert_eq!(clamp_pl_first(50, 3), 2);
         // An empty playlist clamps to 0.
         assert_eq!(clamp_pl_first(7, 0), 0);
+    }
+
+    #[test]
+    fn max_pl_first_stops_last_row_at_the_bottom() {
+        // 10 rows, 4 visible: the furthest scroll shows rows 6..10, so first maxes at 6
+        // (no blank rows past the last song).
+        assert_eq!(max_pl_first(10, 4), 6);
+        // A list that fits the window cannot scroll.
+        assert_eq!(max_pl_first(4, 4), 0);
+        assert_eq!(max_pl_first(3, 4), 0);
+        assert_eq!(max_pl_first(0, 4), 0);
+    }
+
+    #[test]
+    fn pl_scrollbar_thumb_position_round_trips() {
+        // A window tall enough for a real track area; 100 rows, far more than fit.
+        let height = 200.0;
+        let visible = pl_visible_rows(height as u32);
+        let len = 100;
+        let max = max_pl_first(len, visible);
+        assert!(max > 0);
+        // first=0 pins the thumb to the top of the track.
+        let top_y = pl_scroll_thumb_y(0, len, visible, height);
+        // The max offset pushes the thumb to the bottom of its travel.
+        let bot_y = pl_scroll_thumb_y(max, len, visible, height);
+        assert!(bot_y > top_y);
+        // Grabbing near the top maps back to 0, near the bottom to max.
+        assert_eq!(pl_scroll_first_at(top_y, len, visible, height), 0);
+        assert_eq!(pl_scroll_first_at(bot_y + 100.0, len, visible, height), max);
+        // A list that fits never scrolls and the thumb stays at the top.
+        assert_eq!(pl_scroll_first_at(9999.0, visible, visible, height), 0);
+        assert_eq!(
+            pl_scroll_thumb_y(0, visible, visible, height),
+            pl_scroll_thumb_y(0, visible, visible, height)
+        );
+    }
+
+    #[test]
+    fn pl_region_at_hits_the_scrollbar_on_the_right_edge() {
+        // The right-edge channel in the list area is the scrollbar, not a list row.
+        assert_eq!(
+            pl_region_at(275.0 - 8.0, 100.0, 275.0, 180.0),
+            Some(PlRegion::Scroll)
+        );
+        // Just left of the channel is still the list.
+        assert_eq!(pl_region_at(100.0, 100.0, 275.0, 180.0), Some(PlRegion::List));
     }
 
     #[test]
@@ -521,6 +573,8 @@ mod tests {
             colors,
             rows: &rows,
             first: 0,
+            scroll_first: 0,
+            total_rows: rows.len(),
             pressed: None,
             elapsed_secs: 0.0,
             cur_duration: 0.0,
