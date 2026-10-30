@@ -6,6 +6,7 @@ mod balance;
 mod cdda;
 mod classic;
 mod config;
+mod convert_queue;
 mod cursor;
 mod decode;
 mod dock;

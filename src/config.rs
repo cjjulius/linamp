@@ -62,6 +62,15 @@ pub struct Prefs {
     /// true = write ID3v2.3 tags (the most widely compatible, and the classic player's own
     /// default); false = ID3v2.4. Reading handles both regardless.
     pub id3v23: bool,
+    /// Rip / convert output settings, global for now (one setting applied to every
+    /// conversion). Format, the bitrate for the lossy formats, and an optional target
+    /// sample rate (None = keep the source rate). See [`crate::encode::ConvertSettings`].
+    pub convert_format: crate::encode::OutputFormat,
+    pub convert_bitrate_kbps: u32,
+    pub convert_sample_rate: Option<u32>,
+    /// Where converted files are written. `None` until the user picks a folder (then
+    /// the convert action prompts once and stores it here as the default).
+    pub convert_dir: Option<PathBuf>,
 }
 
 /// What launching LinAmp with file arguments ("Open with", or dropping files on
@@ -98,6 +107,23 @@ impl Default for Prefs {
             // enqueue); the user can switch to replacing it in Preferences.
             open_with: OpenWith::Enqueue,
             id3v23: true,
+            // Default convert settings: MP3 at 192 kbps, keeping the source rate,
+            // output folder unset until the user picks one.
+            convert_format: crate::encode::OutputFormat::Mp3,
+            convert_bitrate_kbps: crate::encode::DEFAULT_BITRATE_KBPS,
+            convert_sample_rate: None,
+            convert_dir: None,
+        }
+    }
+}
+
+impl Prefs {
+    /// The current conversion settings assembled from the saved preference fields.
+    pub fn convert_settings(&self) -> crate::encode::ConvertSettings {
+        crate::encode::ConvertSettings {
+            format: self.convert_format,
+            bitrate_kbps: self.convert_bitrate_kbps,
+            sample_rate: self.convert_sample_rate,
         }
     }
 }
