@@ -766,6 +766,19 @@ impl super::LinAmpApp {
         use crate::library::LibView;
         let s = cx.s;
         let dim = cx.dim;
+        // Poll attached optical drives (throttled) so one shows under Devices as soon as
+        // it is plugged in. Keep the library repainting while open so the poll ticks even
+        // when the user is idle.
+        let now = std::time::Instant::now();
+        let due = self
+            .lib
+            .devices_poll
+            .is_none_or(|t| now.duration_since(t).as_secs_f32() >= 2.0);
+        if due {
+            self.lib.devices = crate::cdda::list_drives();
+            self.lib.devices_poll = Some(now);
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
         // The library uses one black list background across the nav and the track
         // pane, so give the nav panel the list fill, not the lighter window panel fill.
         let nav_frame = egui::Frame::none()
@@ -799,8 +812,19 @@ impl super::LinAmpApp {
                 let header = |ui: &mut egui::Ui, label: &str| {
                     ui.label(RichText::new(label).color(row_col).font(font.clone()));
                 };
+                // An indented child row job; the leading space keeps the gutter clear for
+                // the painted tree guide.
+                let child_job = |label: &str, txt: Color32| {
+                    let mut job = egui::text::LayoutJob::default();
+                    job.append(
+                        label,
+                        15.0 * s,
+                        egui::text::TextFormat { font_id: font.clone(), color: txt, ..Default::default() },
+                    );
+                    job
+                };
 
-                // Local Media, then its smart views with a painted dashed tree guide.
+                // Local Media, then its smart views with a painted tree guide.
                 header(ui, "Local Media");
                 let views = [
                     ("Audio", LibView::Audio),
@@ -814,55 +838,27 @@ impl super::LinAmpApp {
                 for (label, v) in views {
                     let selected = self.lib.nav == v;
                     let txt = if selected { sel_col } else { row_col };
-                    let mut job = egui::text::LayoutJob::default();
-                    // Leading space leaves the gutter clear for the painted tree.
-                    job.append(
-                        label,
-                        16.0 * s,
-                        egui::text::TextFormat { font_id: font.clone(), color: txt, ..Default::default() },
-                    );
-                    let resp = ui.selectable_label(selected, job);
+                    let resp = ui.selectable_label(selected, child_job(label, txt));
                     if resp.clicked() {
                         act.nav_click = Some(v);
                     }
                     kid_rects.push(resp.rect);
                 }
-                // Paint the gray tree over the gutter: a continuous dashed vertical trunk
-                // down the group, with a short dashed horizontal tick into each child,
-                // matching the classic Media Library.
-                if let (Some(first), Some(last)) = (kid_rects.first(), kid_rects.last()) {
-                    let painter = ui.painter();
-                    let stroke = egui::Stroke::new(1.0 * s, dash_col);
-                    let gx = first.left() + 6.0 * s;
-                    let dashed_v = |y0: f32, y1: f32| {
-                        let (dash, gap) = (2.0 * s, 2.0 * s);
-                        let mut y = y0;
-                        while y < y1 {
-                            let y2 = (y + dash).min(y1);
-                            painter.line_segment([egui::pos2(gx, y), egui::pos2(gx, y2)], stroke);
-                            y += dash + gap;
-                        }
-                    };
-                    let dashed_h = |cy: f32| {
-                        let (dash, gap) = (2.0 * s, 1.5 * s);
-                        let xend = gx + 8.0 * s;
-                        let mut x = gx;
-                        while x < xend {
-                            let x2 = (x + dash).min(xend);
-                            painter.line_segment([egui::pos2(x, cy), egui::pos2(x2, cy)], stroke);
-                            x += dash + gap;
-                        }
-                    };
-                    dashed_v(first.top() + 2.0 * s, last.center().y);
-                    for r in &kid_rects {
-                        dashed_h(r.center().y);
-                    }
-                }
+                paint_nav_tree(ui.painter(), &kid_rects, dash_col, s);
 
-                // Top-level siblings of Local Media. Playlists has no view yet, and an
-                // Audio CD mounts under Devices in Part 2; both are headings for now.
+                // Playlists has no view yet; a heading for now.
                 header(ui, "Playlists");
+
+                // Devices: each attached optical drive (polled above), so one shows as
+                // soon as it is plugged in. Clicking opens its rip screen in Part 2; for
+                // now the entries are informational.
                 header(ui, "Devices");
+                let mut dev_rects: Vec<egui::Rect> = Vec::with_capacity(self.lib.devices.len());
+                for dev in &self.lib.devices {
+                    let label = crate::cdda::drive_label(dev);
+                    dev_rects.push(ui.label(child_job(&label, row_col)).rect);
+                }
+                paint_nav_tree(ui.painter(), &dev_rects, dash_col, s);
 
                 // A top-level selectable view (no tree guide).
                 let mut leaf = |ui: &mut egui::Ui, label: &str, v: LibView| {
@@ -2012,5 +2008,32 @@ impl super::LinAmpApp {
             self.lib.nav = crate::library::LibView::Audio;
             self.refresh_library();
         }
+    }
+}
+
+/// Paint the gray tree guide for a group of child nav rows: a dashed vertical trunk down
+/// the group, plus a short solid horizontal tick into each child at its centre. The solid
+/// tick keeps the corner joined to the trunk even where a trunk dash falls in a gap, so
+/// the trunk and label read as one connected branch (the classic Media Library look).
+fn paint_nav_tree(painter: &egui::Painter, rows: &[egui::Rect], col: Color32, s: f32) {
+    let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
+        return;
+    };
+    let stroke = egui::Stroke::new(1.0 * s, col);
+    let gx = (first.left() + 6.0 * s).round() + 0.5; // crisp 1px trunk
+    let tick_end = first.left() + 13.0 * s; // reaches just left of the label
+    // Dashed vertical trunk from the first child down to the last child's centre.
+    let (dash, gap) = (2.0 * s, 2.0 * s);
+    let bottom = last.center().y;
+    let mut y = first.top() + 1.0 * s;
+    while y < bottom {
+        let y2 = (y + dash).min(bottom);
+        painter.line_segment([egui::pos2(gx, y), egui::pos2(gx, y2)], stroke);
+        y += dash + gap;
+    }
+    // Solid short tick connecting the trunk to each child label.
+    for r in rows {
+        let cy = r.center().y.round() + 0.5;
+        painter.line_segment([egui::pos2(gx, cy), egui::pos2(tick_end, cy)], stroke);
     }
 }

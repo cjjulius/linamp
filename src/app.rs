@@ -485,6 +485,12 @@ struct LibraryViewState {
     /// the pane scale at use). Clamped so it can't shrink below the "Progress" header
     /// label. In-memory, resets on restart.
     convert_prog_w: f32,
+    /// Optical drives attached, as device ids (drive letters on Windows, /dev/srN on
+    /// Linux), shown under Devices. Polled while the library is open so a drive appears
+    /// when it is plugged in.
+    devices: Vec<String>,
+    /// When the device list was last polled, to throttle the scan to a couple of seconds.
+    devices_poll: Option<std::time::Instant>,
 }
 
 /// Window geometry and focus (C1): the classic windows' positions, the library
@@ -854,6 +860,8 @@ impl LinAmpApp {
                 convert_next_id: 0,
                 convert_col_fr: [0.30, 0.30],
                 convert_prog_w: 130.0,
+                devices: Vec::new(),
+                devices_poll: None,
             },
             geom: WindowGeom {
                 win_pos: [egui::pos2(100.0, 100.0); 3],
