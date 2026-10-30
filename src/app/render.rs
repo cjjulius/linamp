@@ -291,7 +291,11 @@ impl super::LinAmpApp {
                         rows: &rows,
                         first: 0,
                         scroll_first: self.plview.first,
-                        total_rows: self.playlist.len(),
+                        scroll_range: if self.plview.scroll_drag {
+                            self.plview.scroll_drag_max
+                        } else {
+                            classic::max_pl_first(self.playlist.len(), vis)
+                        },
                         pressed: self.pl_pressed_button(),
                         elapsed_secs,
                         cur_duration,

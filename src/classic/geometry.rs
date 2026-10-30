@@ -579,41 +579,37 @@ fn pl_scroll_track(height: f32) -> (f32, f32) {
     (top, travel)
 }
 
-/// Top y (native px) of the fixed-size scrollbar thumb for scroll offset `first`. The
-/// thumb is at the top when nothing is scrolled off the top (`first == 0`), and at the
-/// bottom whenever the end of the list is visible, i.e. the last row is on screen
-/// (`first + visible >= len`, which `first >= max_pl_first` captures). In between it is
-/// proportional to how far down the scrollable range you are. So growing the window with a
-/// non-zero offset walks the thumb down to the bottom as the end comes into view and keeps
-/// it there past the end (blank rows below), while the list itself stays put, matching a
-/// physical scrollbar.
-pub fn pl_scroll_thumb_y(first: usize, len: usize, visible: usize, height: f32) -> f32 {
+/// Top y (native px) of the fixed-size scrollbar thumb for scroll offset `first` over a
+/// scroll `range` (the number of offsets 0..=range the thumb spans). The thumb is at the
+/// top for `first == 0`, proportional through the range, and at the bottom for
+/// `first >= range`. The caller picks the range: at rest it is `max_pl_first` (so the
+/// thumb sits at the bottom whenever the end of the list is visible, `first >= max_pl_first`,
+/// including the blank-row case where `first > max_pl_first` clamps to the bottom); during a
+/// drag it is the offset grabbed, so the thumb tracks the cursor smoothly through the blank
+/// rows instead of snapping. A zero range (whole list fits) is top at 0, bottom otherwise.
+pub fn pl_scroll_thumb_y(first: usize, range: usize, height: f32) -> f32 {
     let (top, travel) = pl_scroll_track(height);
-    let max = max_pl_first(len, visible);
-    let frac = if first >= max {
-        // The end of the list is visible: pin to the bottom, unless we are also at the
-        // very top (whole list fits and nothing is scrolled off), which stays at the top.
+    let frac = if range == 0 {
         if first == 0 {
             0.0
         } else {
             1.0
         }
     } else {
-        first as f32 / max as f32
+        (first as f32 / range as f32).min(1.0)
     };
     top + frac * travel
 }
 
-/// The scroll offset a thumb whose top sits at window-y `thumb_y` represents, the inverse
-/// of [`pl_scroll_thumb_y`], already clamped to the scrollable range. 0 when the list fits.
-pub fn pl_scroll_first_at(thumb_y: f32, len: usize, visible: usize, height: f32) -> usize {
-    let max = max_pl_first(len, visible);
+/// The scroll offset a thumb whose top sits at window-y `thumb_y` represents over `range`,
+/// the inverse of [`pl_scroll_thumb_y`], clamped to `0..=range`. 0 when the range is zero.
+pub fn pl_scroll_first_at(thumb_y: f32, range: usize, height: f32) -> usize {
     let (top, travel) = pl_scroll_track(height);
-    if max == 0 || travel <= 0.0 {
+    if range == 0 || travel <= 0.0 {
         return 0;
     }
     let frac = ((thumb_y - top) / travel).clamp(0.0, 1.0);
-    (frac * max as f32).round() as usize
+    (frac * range as f32).round() as usize
 }
 
 /// Smallest playlist height, in unscaled skin pixels (two title rows + a usable
