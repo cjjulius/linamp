@@ -8,7 +8,7 @@
 //! finished output, and the UI refreshes the library when a job completes.
 
 use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -104,12 +104,36 @@ pub fn short_fail_reason(raw: &str) -> String {
     }
 }
 
-/// What the UI hands the worker to convert.
+/// What the UI hands the worker to convert. The destination is given as a folder and a
+/// file stem (not a full path): the worker picks the final path just before it writes,
+/// so two different sources with the same name don't collide. The extension comes from
+/// `settings.format`.
 pub struct JobSpec {
     pub id: u64,
     pub src: PathBuf,
-    pub dst: PathBuf,
+    pub dir: PathBuf,
+    pub stem: String,
     pub settings: ConvertSettings,
+}
+
+/// A destination in `dir` for `stem.ext` that does not collide with a file already on
+/// disk, bumping to "stem (1).ext", "stem (2).ext", and so on. Called in the worker just
+/// before each conversion: because the queue is serial, an earlier job's output already
+/// exists by then, so two different sources that share a name (two `song.flac` in
+/// different folders, or an album's `01.flac` across discs) convert to distinct files
+/// instead of the second overwriting the first.
+fn unique_output(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let first = dir.join(format!("{stem}.{ext}"));
+    if !first.exists() {
+        return first;
+    }
+    for n in 1.. {
+        let p = dir.join(format!("{stem} ({n}).{ext}"));
+        if !p.exists() {
+            return p;
+        }
+    }
+    unreachable!()
 }
 
 /// Progress messages the worker sends back to the UI.
@@ -220,12 +244,16 @@ fn worker_loop(
             }
         };
         let cancel = || is_cancelled(&cancel_set, id);
+        // Resolve the output path now, not at enqueue time: an earlier same-named job has
+        // already written its file, so this one gets a distinct name instead of clobbering.
+        let ext = spec.settings.format.ext();
+        let dst = unique_output(&spec.dir, &spec.stem, ext);
         let outcome =
-            encode::convert_file_cb(&spec.src, &spec.dst, spec.settings, &mut progress, &cancel);
+            encode::convert_file_cb(&spec.src, &dst, spec.settings, &mut progress, &cancel);
         match outcome {
             Ok(ConvertOutcome::Completed) => {
                 if let Some(lib) = &lib {
-                    let _ = lib.upsert(&crate::playlist::Track::from_path(spec.dst.clone()));
+                    let _ = lib.upsert(&crate::playlist::Track::from_path(dst.clone()));
                 }
                 let _ = msg_tx.send(ConvertMsg::Done(id));
             }
@@ -258,6 +286,28 @@ mod tests {
         assert!(!JobState::Converting.is_finished());
         assert!(JobState::Done.is_finished());
         assert!(JobState::Failed("x".into()).is_finished());
+    }
+
+    #[test]
+    fn unique_output_does_not_clobber_same_named_outputs() {
+        // Two different sources that share a name (e.g. two song.flac) convert to the
+        // same folder and format. Because the worker resolves the path serially, once the
+        // first output exists the second must get a distinct name, not overwrite it.
+        let dir = std::env::temp_dir().join(format!("linamp_uniq_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::remove_file(dir.join("song.ogg"));
+        let _ = std::fs::remove_file(dir.join("song (1).ogg"));
+
+        let p1 = unique_output(&dir, "song", "ogg");
+        assert_eq!(p1, dir.join("song.ogg"));
+        std::fs::write(&p1, b"first output").unwrap(); // first job wrote its file
+
+        let p2 = unique_output(&dir, "song", "ogg");
+        assert_ne!(p1, p2, "second same-named output must not reuse the first path");
+        assert_eq!(p2, dir.join("song (1).ogg"));
+
+        let _ = std::fs::remove_file(&p1);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]

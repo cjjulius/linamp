@@ -1947,9 +1947,10 @@ impl super::LinAmpApp {
         for (src, artist, title) in picked {
             let id = self.lib.convert_next_id;
             self.lib.convert_next_id += 1;
-            let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("track");
-            let dst = unique_path(&dir, stem, ext);
-            specs.push(crate::convert_queue::JobSpec { id, src: src.clone(), dst, settings });
+            let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("track").to_string();
+            // The worker resolves the final path (dir + stem + format) just before it
+            // writes, so same-named sources in one batch don't overwrite each other.
+            specs.push(crate::convert_queue::JobSpec { id, src: src.clone(), dir: dir.clone(), stem, settings });
             jobs.push(crate::convert_queue::ConvertJob {
                 id,
                 artist,
@@ -2012,20 +2013,4 @@ impl super::LinAmpApp {
             self.refresh_library();
         }
     }
-}
-
-/// An output path in `dir` named `stem.ext`, suffixed " (n)" if that name is taken,
-/// so a conversion never silently overwrites an existing file.
-fn unique_path(dir: &std::path::Path, stem: &str, ext: &str) -> std::path::PathBuf {
-    let first = dir.join(format!("{stem}.{ext}"));
-    if !first.exists() {
-        return first;
-    }
-    for n in 1.. {
-        let p = dir.join(format!("{stem} ({n}).{ext}"));
-        if !p.exists() {
-            return p;
-        }
-    }
-    unreachable!()
 }
