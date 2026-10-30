@@ -2322,6 +2322,14 @@ impl LinAmpApp {
         self.pl_select_with(target, ctrl, shift, crate::selection::CtrlMode::Add);
     }
 
+    /// Drive the playlist scroll offset from a scrollbar cursor y (unscaled px),
+    /// centring the thumb on the cursor. Shared by the initial grab and the drag.
+    fn pl_scroll_to_cursor(&mut self, ny: f32) {
+        let visible = classic::pl_visible_rows(self.plview.px_h as u32);
+        self.plview.first =
+            classic::pl_scroll_first_at(ny, self.playlist.len(), visible, self.plview.px_h);
+    }
+
     /// Adjust the playlist scroll offset so row `idx` is visible.
     fn pl_scroll_to(&mut self, idx: usize) {
         let visible = classic::pl_visible_rows(self.plview.px_h as u32).max(1);

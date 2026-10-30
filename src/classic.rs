@@ -283,6 +283,21 @@ mod tests {
     }
 
     #[test]
+    fn delete_at_bottom_blank_persists_until_scroll() {
+        // Scrolled to the bottom of a 10-row list with 4 visible: first = 6.
+        let visible = 4;
+        let first = max_pl_first(10, visible);
+        assert_eq!(first, 6);
+        // Delete the last two rows (len 8). The loose clamp used on render/after a delete
+        // keeps `first` where it is, so the blank space at the bottom remains.
+        assert_eq!(clamp_pl_first(first, 8), 6);
+        // A scroll gesture applies the tighter clamp, which pulls `first` back so the last
+        // row rests at the bottom (snapping the blank space away).
+        assert_eq!(max_pl_first(8, visible), 4);
+        assert!(max_pl_first(8, visible) < clamp_pl_first(first, 8));
+    }
+
+    #[test]
     fn pl_region_at_hits_the_scrollbar_on_the_right_edge() {
         // The right-edge channel in the list area is the scrollbar, not a list row.
         assert_eq!(
