@@ -1035,7 +1035,21 @@ impl super::LinAmpApp {
         // scrollbar gutter so header and rows share one layout.
         let w = ui.available_width();
         let sb = ui.spacing().scroll.bar_width + 2.0 * s;
-        let prog_w = 130.0 * s;
+        // Progress is user-resizable but can't shrink below its header label. Measure
+        // "Progress" in the row font and add the same left/right padding paint() uses.
+        let label_w = ui.fonts(|f| {
+            f.layout_no_wrap(
+                "Progress".to_owned(),
+                egui::FontId::proportional(12.0 * s),
+                header_fg,
+            )
+            .size()
+            .x
+        });
+        let min_prog = label_w + 9.0 * s; // lpad (3) + gap (6) from paint()
+        // Keep the flexible body usable: cap Progress so Artist/Title/Location keep room.
+        let max_prog = (w - 150.0 * s - 12.0 * s - sb).max(min_prog);
+        let prog_w = (self.lib.convert_prog_w * s).clamp(min_prog, max_prog);
         let body = (w - prog_w - 12.0 * s - sb).max(150.0 * s);
         let fa = self.lib.convert_col_fr[0];
         let ft = self.lib.convert_col_fr[1];
@@ -1087,6 +1101,27 @@ impl super::LinAmpApp {
             let t = (self.lib.convert_col_fr[1] + col_dx[1]).clamp(0.12, 0.70);
             if self.lib.convert_col_fr[0] + t <= 0.88 {
                 self.lib.convert_col_fr[1] = t;
+            }
+        }
+        // Divider between Location and Progress, sitting in the 6px gap. Dragging it
+        // left widens Progress (down to the "Progress" label width), right narrows it.
+        {
+            let bx = hdr.rect.left() + 2.0 * s + body + 3.0 * s;
+            let hit = egui::Rect::from_min_max(
+                egui::pos2(bx - 3.0 * s, hdr.rect.top()),
+                egui::pos2(bx + 3.0 * s, hdr.rect.bottom()),
+            );
+            let dr = ui.interact(hit, ui.id().with("cvt_prog_div"), egui::Sense::drag());
+            let hot = dr.hovered() || dr.dragged();
+            if hot {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            let stroke = egui::Stroke::new(1.0_f32, if hot { row_col } else { dim });
+            ui.painter().vline(bx, hdr.rect.y_range(), stroke);
+            if dr.dragged() && s > 0.0 {
+                // Moving the divider left (negative dx) grows Progress. Store unscaled.
+                let next = self.lib.convert_prog_w - dr.drag_delta().x / s;
+                self.lib.convert_prog_w = next.clamp(min_prog / s, max_prog / s);
             }
         }
 

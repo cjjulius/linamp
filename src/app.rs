@@ -478,9 +478,13 @@ struct LibraryViewState {
     /// Monotonic id for the next queued conversion, matching jobs to worker messages.
     convert_next_id: u64,
     /// User-resizable Converting-pane column fractions [artist, title]; Location takes
-    /// the remainder (Progress is a fixed column). Separate from `col_fr` because the
-    /// panes have different columns. In-memory, so it resets on restart.
+    /// the remainder. Separate from `col_fr` because the panes have different columns.
+    /// In-memory, so it resets on restart.
     convert_col_fr: [f32; 2],
+    /// User-resizable Progress-column width, in unscaled logical points (multiplied by
+    /// the pane scale at use). Clamped so it can't shrink below the "Progress" header
+    /// label. In-memory, resets on restart.
+    convert_prog_w: f32,
 }
 
 /// Window geometry and focus (C1): the classic windows' positions, the library
@@ -849,6 +853,7 @@ impl LinAmpApp {
                 convert_queue: Vec::new(),
                 convert_next_id: 0,
                 convert_col_fr: [0.30, 0.30],
+                convert_prog_w: 130.0,
             },
             geom: WindowGeom {
                 win_pos: [egui::pos2(100.0, 100.0); 3],
