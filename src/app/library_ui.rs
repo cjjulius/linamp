@@ -765,40 +765,53 @@ impl super::LinAmpApp {
     fn ui_lib_nav(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
         use crate::library::LibView;
         let s = cx.s;
-        let panel_frame = cx.panel_frame.clone();
         let dim = cx.dim;
+        // The library uses one black list background across the nav and the track
+        // pane, so give the nav panel the list fill, not the lighter window panel fill.
+        let nav_frame = egui::Frame::none()
+            .fill(cx.list_fill)
+            .inner_margin(egui::Margin::same(4.0 * s));
         // ---- left: nav tree -----------------------------------------------
         egui::SidePanel::left("lib_nav")
             .resizable(false)
             .exact_width(140.0 * s)
-            .frame(panel_frame)
+            .frame(nav_frame)
             .show_inside(ui, |ui| {
                 ui.add_space(2.0 * s);
-                // Match the skin's library colours (green item text on the panel's
-                // black) and mark the hierarchy with a gray dash guide, like the
-                // classic Media Library. Selected rows use the skin selection colours.
+                // Green item text on the black list background, with a gray vertical
+                // dash guide for the hierarchy, like the classic Media Library. Selected
+                // rows use the skin selection colours.
                 ui.visuals_mut().selection.bg_fill = cx.sel_bg;
                 ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
+                // Flush the selectable rows to the left margin so top-level nodes line
+                // up with the plain headers (button padding would otherwise indent them,
+                // which is why Bookmarks sat in a notch).
+                ui.spacing_mut().button_padding.x = 0.0;
                 let row_col = cx.row_col;
                 let sel_col = cx.sel_col;
+                // A neutral gray for the tree guide, from the skin's dim colour
+                // desaturated to its luminance so it reads gray, not green.
+                let gl = (0.299 * dim.r() as f32 + 0.587 * dim.g() as f32 + 0.114 * dim.b() as f32) as u8;
+                let dash_col = Color32::from_gray(gl.clamp(96, 180));
                 let font = egui::FontId::proportional(13.0 * s);
 
                 // A top-level parent label (a heading, not itself a view).
                 let header = |ui: &mut egui::Ui, label: &str| {
                     ui.label(RichText::new(label).color(row_col).font(font.clone()));
                 };
-                // A selectable node at `depth` (0 = top level). A gray dash guide marks
-                // the nesting; clicking selects the view.
+                // A selectable node at `depth` (0 = top level). Children carry a gray
+                // vertical dash guide: a "|" per level that stacks down the rows into a
+                // dashed line, with a short tick into the label. Clicking selects it.
                 let mut node = |ui: &mut egui::Ui, label: &str, depth: usize, v: LibView| {
                     let selected = self.lib.nav == v;
                     let txt = if selected { sel_col } else { row_col };
                     let mut job = egui::text::LayoutJob::default();
                     if depth > 0 {
-                        let guide = format!("{}{} ", "   ".repeat(depth - 1), "----".repeat(depth));
+                        let guide = format!(" {}|- ", "|   ".repeat(depth - 1));
                         job.append(
                             &guide,
                             0.0,
-                            egui::text::TextFormat { font_id: font.clone(), color: dim, ..Default::default() },
+                            egui::text::TextFormat { font_id: font.clone(), color: dash_col, ..Default::default() },
                         );
                     }
                     job.append(
