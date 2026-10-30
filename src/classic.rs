@@ -286,6 +286,29 @@ mod tests {
     }
 
     #[test]
+    fn pl_scrollbar_thumb_sits_at_bottom_when_the_end_is_visible() {
+        let height = 200.0;
+        let len = 100;
+        let visible = pl_visible_rows(height as u32);
+        let max = max_pl_first(len, visible);
+        let top_y = pl_scroll_thumb_y(0, len, visible, height);
+        let bot_y = pl_scroll_thumb_y(max, len, visible, height);
+
+        // Growing the window with a non-zero offset walks the thumb down and lands it at
+        // the bottom once the end is visible (first >= max), then holds it there past the
+        // end (blank rows), even as the whole list fits.
+        let mid = pl_scroll_thumb_y(max / 2, len, visible, height);
+        assert!(top_y < mid && mid < bot_y);
+        assert_eq!(pl_scroll_thumb_y(max, len, visible, height), bot_y);
+        assert_eq!(pl_scroll_thumb_y(max + 30, len, visible, height), bot_y);
+        // The whole list fits (visible >= len): first 0 stays at the top (nothing above),
+        // but any non-zero offset (blank rows below) puts the thumb at the bottom.
+        let fits = len + 5;
+        assert_eq!(pl_scroll_thumb_y(0, len, fits, height), top_y);
+        assert_eq!(pl_scroll_thumb_y(3, len, fits, height), bot_y);
+    }
+
+    #[test]
     fn delete_at_bottom_blank_persists_until_scroll() {
         // Scrolled to the bottom of a 10-row list with 4 visible: first = 6.
         let visible = 4;

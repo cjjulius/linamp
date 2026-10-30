@@ -580,18 +580,28 @@ fn pl_scroll_track(height: f32) -> (f32, f32) {
 }
 
 /// Top y (native px) of the fixed-size scrollbar thumb for scroll offset `first`. The
-/// thumb spans the scrollable range (`first / max_pl_first`), so it reaches the bottom of
-/// its travel exactly when the list is scrolled as far down as it goes (the last row at
-/// the bottom), not when the topmost row is the last row. The track therefore ends before
-/// the playlist does. Pinned to the top when the list fits (nothing to scroll); an offset
-/// past the max (blank space left by a resize or delete) clamps to the bottom.
+/// thumb is at the top when nothing is scrolled off the top (`first == 0`), and at the
+/// bottom whenever the end of the list is visible, i.e. the last row is on screen
+/// (`first + visible >= len`, which `first >= max_pl_first` captures). In between it is
+/// proportional to how far down the scrollable range you are. So growing the window with a
+/// non-zero offset walks the thumb down to the bottom as the end comes into view and keeps
+/// it there past the end (blank rows below), while the list itself stays put, matching a
+/// physical scrollbar.
 pub fn pl_scroll_thumb_y(first: usize, len: usize, visible: usize, height: f32) -> f32 {
     let (top, travel) = pl_scroll_track(height);
     let max = max_pl_first(len, visible);
-    if max == 0 {
-        return top;
-    }
-    top + (first.min(max) as f32 / max as f32) * travel
+    let frac = if first >= max {
+        // The end of the list is visible: pin to the bottom, unless we are also at the
+        // very top (whole list fits and nothing is scrolled off), which stays at the top.
+        if first == 0 {
+            0.0
+        } else {
+            1.0
+        }
+    } else {
+        first as f32 / max as f32
+    };
+    top + frac * travel
 }
 
 /// The scroll offset a thumb whose top sits at window-y `thumb_y` represents, the inverse
