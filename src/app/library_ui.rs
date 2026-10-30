@@ -774,50 +774,64 @@ impl super::LinAmpApp {
             .frame(panel_frame)
             .show_inside(ui, |ui| {
                 ui.add_space(2.0 * s);
-                ui.label(RichText::new("Local Media").color(dim).size(11.0 * s));
-                let mut nav = |ui: &mut egui::Ui, label: &str, v: LibView| {
-                    let indent = egui::RichText::new(format!("   {label}"));
-                    if ui.selectable_label(self.lib.nav == v, indent).clicked() {
+                // Match the skin's library colours (green item text on the panel's
+                // black) and mark the hierarchy with a gray dash guide, like the
+                // classic Media Library. Selected rows use the skin selection colours.
+                ui.visuals_mut().selection.bg_fill = cx.sel_bg;
+                ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
+                let row_col = cx.row_col;
+                let sel_col = cx.sel_col;
+                let font = egui::FontId::proportional(13.0 * s);
+
+                // A top-level parent label (a heading, not itself a view).
+                let header = |ui: &mut egui::Ui, label: &str| {
+                    ui.label(RichText::new(label).color(row_col).font(font.clone()));
+                };
+                // A selectable node at `depth` (0 = top level). A gray dash guide marks
+                // the nesting; clicking selects the view.
+                let mut node = |ui: &mut egui::Ui, label: &str, depth: usize, v: LibView| {
+                    let selected = self.lib.nav == v;
+                    let txt = if selected { sel_col } else { row_col };
+                    let mut job = egui::text::LayoutJob::default();
+                    if depth > 0 {
+                        let guide = format!("{}{} ", "   ".repeat(depth - 1), "----".repeat(depth));
+                        job.append(
+                            &guide,
+                            0.0,
+                            egui::text::TextFormat { font_id: font.clone(), color: dim, ..Default::default() },
+                        );
+                    }
+                    job.append(
+                        label,
+                        0.0,
+                        egui::text::TextFormat { font_id: font.clone(), color: txt, ..Default::default() },
+                    );
+                    if ui.selectable_label(selected, job).clicked() {
                         act.nav_click = Some(v);
                     }
                 };
-                nav(ui, "Audio", LibView::Audio);
-                ui.add_space(4.0 * s);
-                ui.label(RichText::new("Views").color(dim).size(11.0 * s));
-                nav(ui, "Most Played", LibView::MostPlayed);
-                nav(ui, "Recently Added", LibView::RecentlyAdded);
-                nav(ui, "Recently Played", LibView::RecentlyPlayed);
-                nav(ui, "Never Played", LibView::NeverPlayed);
-                nav(ui, "Top Rated", LibView::TopRated);
-                ui.add_space(6.0 * s);
-                ui.label(RichText::new("Playlists").color(dim).size(11.0 * s).italics());
-                ui.add_space(6.0 * s);
-                // A real, clickable view now (the same bookmarks as Options > Bookmarks).
-                if ui
-                    .selectable_label(
-                        self.lib.nav == LibView::Bookmarks,
-                        RichText::new("Bookmarks"),
-                    )
-                    .clicked()
-                {
-                    act.nav_click = Some(LibView::Bookmarks);
-                }
-                // The conversion queue appears under a Jobs header only while it has
-                // rows (active or finished), matching the "don't show it when idle,
-                // keep it to see the result" behaviour.
+
+                // Local Media and its smart views.
+                header(ui, "Local Media");
+                node(ui, "Audio", 1, LibView::Audio);
+                node(ui, "Most Played", 1, LibView::MostPlayed);
+                node(ui, "Recently Added", 1, LibView::RecentlyAdded);
+                node(ui, "Recently Played", 1, LibView::RecentlyPlayed);
+                node(ui, "Never Played", 1, LibView::NeverPlayed);
+                node(ui, "Top Rated", 1, LibView::TopRated);
+
+                // Top-level siblings of Local Media. Playlists has no view yet, and an
+                // Audio CD mounts under Devices in Part 2; both are headings for now.
+                header(ui, "Playlists");
+                header(ui, "Devices");
+
+                node(ui, "Bookmarks", 0, LibView::Bookmarks);
+
+                // The conversion queue appears only while it has rows (active or
+                // finished), kept visible so a finished run can still be seen.
                 if !self.lib.convert_queue.is_empty() {
-                    ui.add_space(6.0 * s);
-                    ui.label(RichText::new("Jobs").color(dim).size(11.0 * s));
                     let n = self.lib.convert_queue.len();
-                    if ui
-                        .selectable_label(
-                            self.lib.nav == LibView::Converting,
-                            RichText::new(format!("Converting ({n})")),
-                        )
-                        .clicked()
-                    {
-                        act.nav_click = Some(LibView::Converting);
-                    }
+                    node(ui, &format!("Converting ({n})"), 0, LibView::Converting);
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| match &self.library {
                     Some(lib) => {
