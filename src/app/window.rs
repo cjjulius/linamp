@@ -100,13 +100,18 @@ impl super::LinAmpApp {
         }
 
         if win == ClWin::Pl && !shaded && scroll != 0.0 {
-            // Clamp to the last-row-at-bottom position so the wheel can't scroll past the
-            // last song. A scroll gesture also snaps away any blank space left by deleting
-            // at the bottom (the loose render clamp lets that persist until then).
+            // Scrolling up is always free down to the top. Scrolling down stops with the
+            // last song at the bottom (max_pl_first), but if the offset already sits past
+            // that (blank space left by a resize or a delete), down holds it there rather
+            // than snapping up; a few wheel-ups then ease it back into range.
             let visible = classic::pl_visible_rows(self.plview.px_h as u32);
-            let max = classic::max_pl_first(self.playlist.len(), visible) as i32;
-            let step = if scroll > 0.0 { -3 } else { 3 };
-            self.plview.first = (self.plview.first as i32 + step).clamp(0, max.max(0)) as usize;
+            let max = classic::max_pl_first(self.playlist.len(), visible);
+            let first = self.plview.first;
+            self.plview.first = if scroll > 0.0 {
+                first.saturating_sub(3)
+            } else {
+                (first + 3).min(max.max(first))
+            };
         }
 
         // Mouse wheel over the main window adjusts volume, like the classic player
@@ -242,10 +247,9 @@ impl super::LinAmpApp {
                                         Some(egui::vec2(self.plview.px_w - nx, self.plview.px_h - ny))
                                 }
                                 Some(P::Scroll) => {
-                                    // Grab the scrollbar: jump to the clicked position and
-                                    // then track the cursor while the button is held.
-                                    self.plview.scroll_drag = true;
-                                    self.pl_scroll_to_cursor(ny);
+                                    // Grab the scrollbar where it is (no jump) and track the
+                                    // cursor relatively while the button is held.
+                                    self.pl_scroll_grab(ny);
                                 }
                                 Some(P::List) => {
                                     let row = classic::pl_row_at(ny, self.plview.first);
@@ -377,7 +381,7 @@ impl super::LinAmpApp {
                     }
                 }
                 if self.plview.scroll_drag {
-                    self.pl_scroll_to_cursor(ny);
+                    self.pl_scroll_drag(ny);
                 }
                 if let Some(grab) = self.geom.resize_pl {
                     // Resize smoothly during the drag; the 25/29px grid is applied
