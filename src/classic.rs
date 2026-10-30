@@ -259,27 +259,30 @@ mod tests {
     }
 
     #[test]
-    fn pl_scrollbar_thumb_anchors_to_topmost_row() {
+    fn pl_scrollbar_thumb_reaches_bottom_at_full_scroll() {
         let height = 200.0;
         let len = 100;
-        // first=0 pins the thumb to the top; the last topmost row sends it to the bottom.
-        let top_y = pl_scroll_thumb_y(0, len, height);
-        let mid_y = pl_scroll_thumb_y(50, len, height);
-        let bot_y = pl_scroll_thumb_y(len - 1, len, height);
-        assert!(top_y < mid_y && mid_y < bot_y);
-        // The thumb position is the inverse of the grab mapping (topmost-row anchored).
-        assert_eq!(pl_scroll_first_at(top_y, len, height), 0);
-        assert_eq!(pl_scroll_first_at(mid_y, len, height), 50);
-        assert_eq!(pl_scroll_first_at(bot_y, len, height), len - 1);
-        // Resize-stable: the thumb sits at the same fraction of its travel for a given
-        // offset regardless of the window height (no `visible` in the formula).
-        let frac = |h: f32| {
-            let (t, travel) = (PL_LIST_Y as f32, h - 38.0 - PL_LIST_Y as f32 - 18.0);
-            (pl_scroll_thumb_y(40, len, h) - t) / travel
-        };
-        assert!((frac(150.0) - frac(300.0)).abs() < 1e-3);
-        // A list of one row or fewer never scrolls; the thumb stays at the top.
-        assert_eq!(pl_scroll_first_at(9999.0, 1, height), 0);
+        let visible = pl_visible_rows(height as u32);
+        let max = max_pl_first(len, visible);
+        assert!(max > 0 && max < len - 1, "the list overflows but the last row isn't the top");
+        // first=0 pins the thumb to the top; the max scroll offset (last row at the bottom)
+        // sends it to the very bottom of the track, even though the topmost row isn't the
+        // last row.
+        let top_y = pl_scroll_thumb_y(0, len, visible, height);
+        let bot_y = pl_scroll_thumb_y(max, len, visible, height);
+        assert!(bot_y > top_y);
+        assert_eq!(pl_scroll_first_at(top_y, len, visible, height), 0);
+        assert_eq!(pl_scroll_first_at(bot_y, len, visible, height), max);
+        // Grabbing below the bottom still clamps to the max scroll, not past it.
+        assert_eq!(pl_scroll_first_at(bot_y + 100.0, len, visible, height), max);
+        // An offset past the max (blank space from a resize/delete) pins the thumb to the
+        // bottom rather than overflowing the track.
+        assert_eq!(
+            pl_scroll_thumb_y(max + 20, len, visible, height),
+            pl_scroll_thumb_y(max, len, visible, height)
+        );
+        // A list that fits never scrolls; the thumb stays at the top.
+        assert_eq!(pl_scroll_first_at(9999.0, visible, visible, height), 0);
     }
 
     #[test]
