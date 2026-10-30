@@ -240,10 +240,12 @@ impl super::LinAmpApp {
                         ClWin::Pl => {
                             use classic::PlRegion as P;
                             match classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h) {
-                                Some(P::Close) => self.close_window(ctx, ClWin::Pl),
-                                // The title-bar collapse button windowshades the playlist,
-                                // the same as double-clicking the title bar.
-                                Some(P::Shade) => self.toggle_shade(ClWin::Pl),
+                                // Close and the collapse (windowshade) button press in while
+                                // held and only act on release if the cursor is still over
+                                // them (so you can press, slide off, and release to cancel).
+                                Some(r @ (P::Close | P::Shade)) => {
+                                    self.plview.title_press = Some(r);
+                                }
                                 Some(P::TitleBar) => self.start_drag(ctx, win, screen_cursor),
                                 Some(P::Resize) => {
                                     self.geom.resize_pl =
@@ -502,9 +504,10 @@ impl super::LinAmpApp {
                     }
                 }
                 if win == ClWin::Pl {
+                    use classic::PlRegion as P;
+                    let at = classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h);
                     if let Some(r) = self.plview.menu_press.take() {
-                        if classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h) == Some(r) {
-                            use classic::PlRegion as P;
+                        if at == Some(r) {
                             let kind = match r {
                                 P::AddMenu => Popup::PlAdd,
                                 P::RemMenu => Popup::PlRem,
@@ -515,18 +518,29 @@ impl super::LinAmpApp {
                             self.open_popup_in(kind, ClWin::Pl, l);
                         }
                     }
+                    // Fire a held title-bar button only if released over it.
+                    if let Some(r) = self.plview.title_press.take() {
+                        if at == Some(r) {
+                            match r {
+                                P::Close => self.close_window(ctx, ClWin::Pl),
+                                P::Shade => self.toggle_shade(ClWin::Pl),
+                                _ => {}
+                            }
+                        }
+                    }
                 }
             }
             self.render.active_region = None;
             self.eq.active = None;
             self.plview.menu_press = None;
+            self.plview.title_press = None;
         }
 
         if win == ClWin::Main {
             self.render.pressed_btn = if down {
                 match self.render.active_region {
                     Some(b @ (Btn::Prev | Btn::Play | Btn::Pause | Btn::Stop | Btn::Next | Btn::Eject
-                    | Btn::Shuffle | Btn::Repeat | Btn::Seek | Btn::Volume | Btn::Balance)) => Some(b),
+                    | Btn::Shuffle | Btn::Repeat | Btn::Seek | Btn::Volume | Btn::Balance | Btn::Close)) => Some(b),
                     _ => None,
                 }
             } else {
