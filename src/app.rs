@@ -435,6 +435,10 @@ struct PlaylistViewState {
     px_h: f32,
     /// Bottom-bar menu button currently held / with its menu open.
     menu_press: Option<classic::PlRegion>,
+    /// Title-bar button being held (Close or Shade): the action fires on release only if
+    /// the cursor is still over it, so it shows the pressed sprite and can be cancelled by
+    /// moving off before releasing.
+    title_press: Option<classic::PlRegion>,
     /// True while the right-edge scrollbar thumb is being dragged, so the cursor drives
     /// the scroll offset each frame and the thumb shows its pressed sprite.
     scroll_drag: bool,
@@ -939,6 +943,7 @@ impl LinAmpApp {
                 px_w: classic::MAIN_W as f32,
                 px_h: classic::PL_H as f32,
                 menu_press: None,
+                title_press: None,
                 scroll_drag: false,
                 scroll_grab_dy: 0.0,
                 scroll_drag_max: 0,
@@ -3912,6 +3917,9 @@ impl LinAmpApp {
         use classic::PlRegion as P;
         if self.plview.scroll_drag {
             return Some(P::Scroll);
+        }
+        if let Some(r) = self.plview.title_press {
+            return Some(r);
         }
         if let Some(r) = self.plview.menu_press {
             return Some(r);

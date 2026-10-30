@@ -117,7 +117,9 @@ impl ClassicSkin {
             blit(&mut c, tb, 0, 0, 27, sy, 275, 14);
             blit_btn(&mut c, tb, Btn::Minimize, 9, 0); // minimize
             blit(&mut c, tb, 254, 3, 0, 18, 9, 9); // shade (not a hit-tested Btn)
-            blit_btn(&mut c, tb, Btn::Close, 18, 0); // close
+            // Close: pressed sprite (one row down) while the button is held.
+            let close_sy = if st.pressed == Some(Btn::Close) { 9 } else { 0 };
+            blit_btn(&mut c, tb, Btn::Close, 18, close_sy); // close
 
             // Clutterbar (O/A/I/D/V) column: the normal strip, then "lit" overlays
             // for the active toggles and whichever button is being pressed.
@@ -626,6 +628,10 @@ impl ClassicSkin {
             let ty = if st.focused { 134 } else { 149 };
             blit(&mut c, e, 0, 0, 0, ty, 275, 14); // title bar
             blit(&mut c, e, 264, 3, 0, 116, 9, 9); // close
+            // EQMAIN ships no pressed-close sprite, so darken the box while it is held.
+            if st.pressed == Some(EqRegion::Close) {
+                darken_rect(&mut c, 264, 3, 9, 9, 0.55);
+            }
 
             // On button.
             let (ox, oy) = match (st.on, st.pressed == Some(EqRegion::On)) {
@@ -772,7 +778,15 @@ impl ClassicSkin {
             }
             blit(&mut c, p, 0, by, 0, 72, 125, 38); // bottom-left
             blit(&mut c, p, w - 150, by, 126, 72, 150, 38); // bottom-right
-            blit(&mut c, p, w - 11, 3, 52, 42, 9, 9); // close
+            // The normal close X and collapse button are baked into the top-right corner
+            // sprite; only overlay the pressed close sprite (52,42) while Close is held, and
+            // darken the collapse box while Shade is held, so they press in like the others.
+            if st.pressed == Some(PlRegion::Close) {
+                blit(&mut c, p, w - 11, 3, 52, 42, 9, 9); // close (pressed)
+            }
+            if st.pressed == Some(PlRegion::Shade) {
+                darken_rect(&mut c, w - 20, 3, 9, 9, 0.55);
+            }
 
             // Depress the held bottom-bar menu button. pledit has no pressed
             // sprite for these, so darken the button region to show the press.
