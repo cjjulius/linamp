@@ -308,6 +308,15 @@ mod tests {
     }
 
     #[test]
+    fn pl_region_at_hits_the_collapse_button_left_of_close() {
+        // Title-bar top-right: close box, then the collapse (windowshade) button to its left.
+        assert_eq!(pl_region_at(275.0 - 6.0, 6.0, 275.0, 180.0), Some(PlRegion::Close));
+        assert_eq!(pl_region_at(275.0 - 15.0, 6.0, 275.0, 180.0), Some(PlRegion::Shade));
+        // Further left along the bar is a normal title-bar drag.
+        assert_eq!(pl_region_at(100.0, 6.0, 275.0, 180.0), Some(PlRegion::TitleBar));
+    }
+
+    #[test]
     fn eq_sprite_index_maps_and_snaps() {
         let full: Vec<i32> = (0..28).collect();
         assert_eq!(eq_sprite_index(1.0, &full), Some(0)); // boost to top

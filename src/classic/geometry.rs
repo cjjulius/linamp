@@ -451,6 +451,8 @@ pub fn eq_value_at_y(y: f32) -> f32 {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PlRegion {
     Close,
+    /// The windowshade (collapse) button in the title bar, just left of Close.
+    Shade,
     TitleBar,
     List,
     AddMenu,
@@ -499,6 +501,10 @@ pub(crate) const PL_LIST_Y: i32 = 21;
 pub fn pl_region_at(x: f32, y: f32, width: f32, height: f32) -> Option<PlRegion> {
     if x >= width - 11.0 && x < width - 2.0 && y >= 3.0 && y < 12.0 {
         return Some(PlRegion::Close);
+    }
+    // Windowshade (collapse) button, just left of Close in the title bar.
+    if x >= width - 20.0 && x < width - 11.0 && y >= 3.0 && y < 12.0 {
+        return Some(PlRegion::Shade);
     }
     if y < 20.0 {
         return Some(PlRegion::TitleBar);
