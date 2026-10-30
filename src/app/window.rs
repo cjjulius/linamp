@@ -248,8 +248,13 @@ impl super::LinAmpApp {
                                 }
                                 Some(P::Scroll) => {
                                     // Grab the scrollbar where it is (no jump) and track the
-                                    // cursor relatively while the button is held.
-                                    self.pl_scroll_grab(ny);
+                                    // cursor relatively while the button is held. Grab from
+                                    // the global cursor so it matches the global-cursor drag
+                                    // below (which keeps tracking off-window).
+                                    let gy = global_cursor_points(ctx)
+                                        .map(|g| (g.y - self.geom.win_pos[win_idx(ClWin::Pl)].y) / self.scale)
+                                        .unwrap_or(ny);
+                                    self.pl_scroll_grab(gy);
                                 }
                                 Some(P::List) => {
                                     let row = classic::pl_row_at(ny, self.plview.first);
@@ -301,6 +306,18 @@ impl super::LinAmpApp {
 
         if down {
             let idx = win_idx(win);
+            // Drive the scrollbar drag from the global cursor, not the viewport-local
+            // pointer: the local pointer goes None once the cursor leaves the window, which
+            // froze the drag and, on re-entry near the top, snapped the thumb to the top.
+            // The global cursor keeps increasing as you pull down past the window, so the
+            // offset holds at the bottom (pl_scroll_first_at clamps it there).
+            if win == ClWin::Pl && self.plview.scroll_drag {
+                if let Some(g) = global_cursor_points(ctx) {
+                    let ny = (g.y - self.geom.win_pos[win_idx(ClWin::Pl)].y) / self.scale;
+                    self.pl_scroll_drag(ny);
+                }
+                ctx.request_repaint();
+            }
             let is_my_drag = self.geom.drag.as_ref().map(|d| d.win == win).unwrap_or(false);
             if is_my_drag {
                 let manual = self.geom.drag.as_ref().unwrap().manual;
@@ -380,9 +397,6 @@ impl super::LinAmpApp {
                         _ => self.apply_eq_slider(er, ny),
                     }
                 }
-                if self.plview.scroll_drag {
-                    self.pl_scroll_drag(ny);
-                }
                 if let Some(grab) = self.geom.resize_pl {
                     // Resize smoothly during the drag; the 25/29px grid is applied
                     // only on release (#61), so the rows don't re-flow and jiggle
@@ -414,6 +428,11 @@ impl super::LinAmpApp {
                 } else {
                     self.geom.drag = Some(d);
                 }
+            }
+            // End a scrollbar drag on release even when the cursor is off-window, where the
+            // `released` edge below may not reach this viewport.
+            if win == ClWin::Pl {
+                self.plview.scroll_drag = false;
             }
         }
 
