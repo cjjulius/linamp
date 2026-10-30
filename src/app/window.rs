@@ -241,6 +241,9 @@ impl super::LinAmpApp {
                             use classic::PlRegion as P;
                             match classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h) {
                                 Some(P::Close) => self.close_window(ctx, ClWin::Pl),
+                                // The title-bar collapse button windowshades the playlist,
+                                // the same as double-clicking the title bar.
+                                Some(P::Shade) => self.toggle_shade(ClWin::Pl),
                                 Some(P::TitleBar) => self.start_drag(ctx, win, screen_cursor),
                                 Some(P::Resize) => {
                                     self.geom.resize_pl =
@@ -249,27 +252,27 @@ impl super::LinAmpApp {
                                 Some(P::Scroll) => {
                                     // On the thumb: grab it (no jump) and track the cursor
                                     // relatively, from the global cursor so the drag keeps
-                                    // tracking off-window. Above/below the thumb: page the
-                                    // list up/down, like a classic scrollbar track click.
+                                    // tracking off-window. On the track above/below the thumb:
+                                    // jump to that position in the list as if normally loaded
+                                    // (clamped so the end rests at the bottom, no blank rows),
+                                    // which feels natural since the user picked the spot.
                                     let len = self.playlist.len();
                                     let visible = classic::pl_visible_rows(self.plview.px_h as u32);
                                     let max = classic::max_pl_first(len, visible);
                                     let thumb_top =
                                         classic::pl_scroll_thumb_y(self.plview.first, max, self.plview.px_h);
                                     let thumb_bot = thumb_top + classic::PL_SCROLL_THUMB_H as f32;
-                                    let page = visible.max(1);
-                                    if ny < thumb_top {
-                                        self.plview.first = self.plview.first.saturating_sub(page);
-                                    } else if ny >= thumb_bot {
-                                        // Page down only while the end isn't already visible.
-                                        if self.plview.first < max {
-                                            self.plview.first = (self.plview.first + page).min(max);
-                                        }
-                                    } else {
+                                    if ny >= thumb_top && ny < thumb_bot {
                                         let gy = global_cursor_points(ctx)
                                             .map(|g| (g.y - self.geom.win_pos[win_idx(ClWin::Pl)].y) / self.scale)
                                             .unwrap_or(ny);
                                         self.pl_scroll_grab(gy);
+                                    } else {
+                                        // Centre the thumb on the click; max-range clamp means
+                                        // no blank rows past the end.
+                                        let centred = ny - classic::PL_SCROLL_THUMB_H as f32 / 2.0;
+                                        self.plview.first =
+                                            classic::pl_scroll_first_at(centred, max, self.plview.px_h);
                                     }
                                 }
                                 Some(P::List) => {

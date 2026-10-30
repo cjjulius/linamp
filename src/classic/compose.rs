@@ -733,14 +733,17 @@ impl ClassicSkin {
         let pledit = self.bmp("pledit.bmp");
         if let Some(p) = pledit {
             let sy = if st.focused { 0 } else { 21 };
-            blit(&mut c, p, 0, 0, 0, sy, 25, 20); // top-left corner
-            blit(&mut c, p, w - 25, 0, 153, sy, 25, 20); // top-right corner
+            // Tiled middle and centre first, then the corners on top: the corners carry the
+            // collapse/close buttons, so drawing them last keeps the buttons from being
+            // painted over (and jittering) as the tiling reflows during a horizontal resize.
             let mut x = 25;
             while x < w - 25 {
                 blit(&mut c, p, x, 0, 127, sy, 25, 20);
                 x += 25;
             }
             blit(&mut c, p, (w - 100) / 2, 0, 26, sy, 100, 20); // title bar center
+            blit(&mut c, p, 0, 0, 0, sy, 25, 20); // top-left corner
+            blit(&mut c, p, w - 25, 0, 153, sy, 25, 20); // top-right corner (collapse/close)
 
             // Left/right window edges, tiled vertically.
             let mut y = 20;
