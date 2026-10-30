@@ -24,6 +24,9 @@ pub enum LibView {
     /// The user's bookmarks. Served from the bookmark store (bookmarks.json),
     /// not the library DB, so it works even for files that were never scanned.
     Bookmarks,
+    /// The conversion queue (not backed by the DB): shows active and finished file
+    /// conversions. Only appears in the nav while the queue is non-empty.
+    Converting,
 }
 
 /// Progress messages from a background scan.
@@ -233,8 +236,9 @@ impl Library {
             }
             LibView::NeverPlayed => ("WHERE play_count = 0", "artist, album, title"),
             LibView::TopRated => ("WHERE rating > 0", "rating DESC, artist, album, title"),
-            // Bookmarks aren't a DB query; the UI builds this view from the store.
-            LibView::Bookmarks => return Vec::new(),
+            // Bookmarks and the conversion queue aren't DB queries; the UI builds
+            // those views from the bookmark store / the live queue.
+            LibView::Bookmarks | LibView::Converting => return Vec::new(),
         };
         self.query(
             &format!("SELECT {COLS} FROM tracks {filter} ORDER BY {order} LIMIT ?1"),

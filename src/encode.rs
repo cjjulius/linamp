@@ -21,7 +21,7 @@ use rodio::Source;
 
 /// An output format the converter can write. `ALL` is the registry the UI lists and
 /// the dispatch matches, so adding a format is one variant plus its arm here.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum OutputFormat {
     /// MP3 via libmp3lame (lossy, widely compatible).
     Mp3,
@@ -56,36 +56,222 @@ impl OutputFormat {
             OutputFormat::Aiff => "aiff",
         }
     }
+
+    /// A human label for the format picker in Preferences.
+    pub fn display(self) -> &'static str {
+        match self {
+            OutputFormat::Mp3 => "MP3",
+            OutputFormat::Vorbis => "Ogg Vorbis",
+            OutputFormat::Opus => "Opus",
+            OutputFormat::Wav => "WAV",
+            OutputFormat::Aiff => "AIFF",
+        }
+    }
+
+    /// True for the lossy formats, where a bitrate setting applies. WAV and AIFF are
+    /// uncompressed 16-bit PCM, so bitrate does not apply to them.
+    pub fn is_lossy(self) -> bool {
+        matches!(self, OutputFormat::Mp3 | OutputFormat::Vorbis | OutputFormat::Opus)
+    }
+
+    /// Bitrate presets (kbps) the Bitrate dropdown offers for this format, most
+    /// common first in ascending order. Empty for the lossless formats (WAV/AIFF),
+    /// where the dropdown is disabled. These are curated common values, not every
+    /// value the codec accepts; more can be added later.
+    pub fn bitrate_presets(self) -> &'static [u32] {
+        match self {
+            OutputFormat::Mp3 => &[64, 96, 128, 160, 192, 256, 320],
+            OutputFormat::Vorbis => &[64, 96, 128, 160, 192, 256, 320],
+            // Opus is efficient at low bitrates and tops out well below MP3's 320.
+            OutputFormat::Opus => &[48, 64, 96, 128, 160, 192, 256],
+            OutputFormat::Wav | OutputFormat::Aiff => &[],
+        }
+    }
+
+    /// Sample-rate presets the Sample dropdown offers for this format, in addition to
+    /// the "same as source" choice the caller prepends. Opus encodes only at 48 kHz,
+    /// so it offers that one rate; the others offer the common PCM rates.
+    pub fn sample_rate_presets(self) -> &'static [u32] {
+        match self {
+            OutputFormat::Opus => &[48_000],
+            _ => &[22_050, 32_000, 44_100, 48_000],
+        }
+    }
+
+    /// Clamp a bitrate to one this format offers (the nearest preset), so a value
+    /// carried over from another format stays valid. Lossless formats return 0.
+    pub fn clamp_bitrate(self, kbps: u32) -> u32 {
+        let presets = self.bitrate_presets();
+        presets
+            .iter()
+            .copied()
+            .min_by_key(|&p| p.abs_diff(kbps))
+            .unwrap_or(0)
+    }
 }
 
-/// Convert one file: decode `src`, encode it to `dst` in `format`, then copy the
-/// source tags over (best-effort). `dst`'s parent directory must already exist.
+/// Default bitrate (kbps) for a new install.
+pub const DEFAULT_BITRATE_KBPS: u32 = 192;
+
+/// The global conversion settings, chosen once in Preferences and applied to every
+/// queued conversion. Per-track overrides may come later; for now this one setting
+/// governs all conversions.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ConvertSettings {
+    /// Output format.
+    pub format: OutputFormat,
+    /// Target bitrate in kbps, used only for the lossy formats.
+    pub bitrate_kbps: u32,
+    /// Target sample rate, or `None` to keep the source rate. Ignored for Opus.
+    pub sample_rate: Option<u32>,
+}
+
+impl Default for ConvertSettings {
+    fn default() -> Self {
+        Self {
+            format: OutputFormat::Mp3,
+            bitrate_kbps: DEFAULT_BITRATE_KBPS,
+            sample_rate: None,
+        }
+    }
+}
+
+/// How a conversion ended: it ran to completion, or it was cancelled partway (the
+/// caller removes the partial output).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConvertOutcome {
+    Completed,
+    Cancelled,
+}
+
+/// Convert one file with the default settings (source rate, 192 kbps), no progress
+/// reporting and no cancellation. The simple entry point the round-trip tests use;
+/// the queue uses [`convert_file_cb`]. Kept as the minimal public API even though the
+/// app now goes through the queue.
+#[allow(dead_code)]
 pub fn convert_file(src: &Path, dst: &Path, format: OutputFormat) -> Result<()> {
-    let (samples, rate, channels) = decode_pcm(src)?;
-    match format {
-        OutputFormat::Mp3 => encode_mp3(dst, &samples, rate, channels)?,
-        OutputFormat::Vorbis => encode_vorbis(dst, &samples, rate, channels)?,
-        OutputFormat::Opus => encode_opus(dst, &samples, rate, channels)?,
-        OutputFormat::Wav => encode_wav(dst, &samples, rate, channels)?,
-        OutputFormat::Aiff => encode_aiff(dst, &samples, rate, channels)?,
+    let settings = ConvertSettings { format, ..Default::default() };
+    convert_file_cb(src, dst, settings, &mut |_| {}, &|| false).map(|_| ())
+}
+
+/// Fraction of a conversion's progress attributed to the decode phase; the rest to
+/// encoding. Decode is a single pass up front, so the bar crawls through this band
+/// then fills the remainder while encoding.
+const DECODE_WEIGHT: f32 = 0.3;
+
+/// Convert one file: decode `src`, (optionally) resample, encode it to `dst` per
+/// `settings`, then copy the source tags over (best-effort). `progress` is called
+/// with a fraction in 0.0..=1.0 as the work advances, and `cancel` is polled
+/// periodically; when it returns true the conversion stops and the partial output is
+/// removed, returning [`ConvertOutcome::Cancelled`]. `dst`'s parent directory must
+/// already exist.
+pub fn convert_file_cb(
+    src: &Path,
+    dst: &Path,
+    settings: ConvertSettings,
+    progress: &mut dyn FnMut(f32),
+    cancel: &dyn Fn() -> bool,
+) -> Result<ConvertOutcome> {
+    let Some((mut samples, mut rate, channels)) =
+        decode_pcm(src, &mut |f| progress(f * DECODE_WEIGHT), cancel)?
+    else {
+        return Ok(ConvertOutcome::Cancelled);
+    };
+    // Resample to the requested rate (Opus resamples to 48 kHz itself, so skip it
+    // there and let encode_opus handle the rate).
+    if settings.format != OutputFormat::Opus {
+        if let Some(target) = settings.sample_rate {
+            if target != rate && channels > 0 {
+                samples = resample_interleaved(&samples, channels, rate, target)?;
+                rate = target;
+            }
+        }
+    }
+    let br = settings.bitrate_kbps;
+    let enc = &mut |f: f32| progress(DECODE_WEIGHT + f * (1.0 - DECODE_WEIGHT));
+    let completed = match settings.format {
+        OutputFormat::Mp3 => encode_mp3(dst, &samples, rate, channels, br, enc, cancel)?,
+        OutputFormat::Vorbis => encode_vorbis(dst, &samples, rate, channels, br, enc, cancel)?,
+        OutputFormat::Opus => encode_opus(dst, &samples, rate, channels, br, enc, cancel)?,
+        OutputFormat::Wav => encode_wav(dst, &samples, rate, channels, enc, cancel)?,
+        OutputFormat::Aiff => encode_aiff(dst, &samples, rate, channels, enc, cancel)?,
+    };
+    if !completed {
+        let _ = std::fs::remove_file(dst);
+        return Ok(ConvertOutcome::Cancelled);
     }
     // Carry the metadata across; a tag failure shouldn't fail the whole convert.
     if let Err(e) = copy_tags(src, dst) {
         eprintln!("convert: tags not copied to {}: {e}", dst.display());
     }
-    Ok(())
+    progress(1.0);
+    Ok(ConvertOutcome::Completed)
 }
 
-/// Decode `src` fully to interleaved f32 PCM, returning `(samples, rate, channels)`.
-fn decode_pcm(src: &Path) -> Result<(Vec<f32>, u32, u16)> {
-    let source = crate::decode::open_file(src)?;
+/// Decode `src` fully to interleaved f32 PCM, returning `(samples, rate, channels)`,
+/// or `None` if `cancel` fired during the decode. `progress` reports a fraction in
+/// 0.0..=1.0 of the decode when the source's duration is known.
+fn decode_pcm(
+    src: &Path,
+    progress: &mut dyn FnMut(f32),
+    cancel: &dyn Fn() -> bool,
+) -> Result<Option<(Vec<f32>, u32, u16)>> {
+    let mut source = crate::decode::open_file(src)?;
     let rate = source.sample_rate();
     let channels = source.channels();
-    let samples: Vec<f32> = source.collect();
+    // Estimate the total sample count from the reported duration, so decode progress
+    // can advance; many streams report no duration, in which case progress stays at 0
+    // through the decode and the bar simply starts moving when encoding begins.
+    let total = source
+        .total_duration()
+        .map(|d| (d.as_secs_f64() * rate as f64 * channels.max(1) as f64) as usize)
+        .filter(|&t| t > 0);
+    let mut samples: Vec<f32> = Vec::new();
+    // Pull in chunks so cancellation and progress are responsive without the overhead
+    // of a per-sample check.
+    const STEP: usize = 1 << 16;
+    loop {
+        let before = samples.len();
+        samples.extend((&mut source).take(STEP));
+        if samples.len() == before {
+            break; // source exhausted
+        }
+        if cancel() {
+            return Ok(None);
+        }
+        if let Some(total) = total {
+            progress((samples.len() as f32 / total as f32).min(1.0));
+        }
+    }
     if samples.is_empty() {
         bail!("no audio decoded from {}", src.display());
     }
-    Ok((samples, rate, channels))
+    Ok(Some((samples, rate, channels)))
+}
+
+/// Resample interleaved f32 PCM from `from` to `to` Hz, preserving channel count.
+/// De-interleaves, resamples each channel with the shared sinc resampler, then
+/// re-interleaves.
+fn resample_interleaved(samples: &[f32], channels: u16, from: u32, to: u32) -> Result<Vec<f32>> {
+    let n = channels as usize;
+    if n == 0 {
+        return Ok(samples.to_vec());
+    }
+    let mut planar: Vec<Vec<f32>> = vec![Vec::with_capacity(samples.len() / n); n];
+    for frame in samples.chunks_exact(n) {
+        for (c, &s) in frame.iter().enumerate() {
+            planar[c].push(s);
+        }
+    }
+    let planar = resample_planar(&planar, from, to)?;
+    let frames = planar.first().map(|c| c.len()).unwrap_or(0);
+    let mut out = Vec::with_capacity(frames * n);
+    for i in 0..frames {
+        for ch in &planar {
+            out.push(ch.get(i).copied().unwrap_or(0.0));
+        }
+    }
+    Ok(out)
 }
 
 /// Interleaved f32 (-1.0..=1.0) to 16-bit PCM, clamped.
@@ -93,7 +279,19 @@ fn f32_to_i16(s: f32) -> i16 {
     (s.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
 }
 
-fn encode_wav(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<()> {
+/// How often (in samples) the encode arms poll `cancel` and report `progress`. Large
+/// enough that the per-sample hot loop stays cheap, small enough that a cancel takes
+/// effect promptly.
+const ENCODE_POLL: usize = 1 << 13;
+
+fn encode_wav(
+    dst: &Path,
+    samples: &[f32],
+    rate: u32,
+    channels: u16,
+    progress: &mut dyn FnMut(f32),
+    cancel: &dyn Fn() -> bool,
+) -> Result<bool> {
     let spec = hound::WavSpec {
         channels,
         sample_rate: rate,
@@ -102,11 +300,19 @@ fn encode_wav(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<(
     };
     let mut w = hound::WavWriter::create(dst, spec)
         .with_context(|| format!("create {}", dst.display()))?;
-    for &s in samples {
+    let total = samples.len().max(1);
+    for (i, &s) in samples.iter().enumerate() {
+        if i % ENCODE_POLL == 0 {
+            if cancel() {
+                drop(w); // leave the partial file for the caller to remove
+                return Ok(false);
+            }
+            progress(i as f32 / total as f32);
+        }
         w.write_sample(f32_to_i16(s))?;
     }
     w.finalize()?;
-    Ok(())
+    Ok(true)
 }
 
 /// Encode an 80-bit IEEE 754 extended-precision float (big-endian), the odd type
@@ -168,7 +374,14 @@ fn sample_rate_to_extended(rate: f64) -> [u8; 10] {
 /// 16-bit big-endian PCM AIFF. Hand-written (AIFF is a simple IFF container, like
 /// WAV with big-endian samples and an 80-bit float sample rate); symphonia's `aiff`
 /// reader decodes the result, which the round-trip test checks.
-fn encode_aiff(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<()> {
+fn encode_aiff(
+    dst: &Path,
+    samples: &[f32],
+    rate: u32,
+    channels: u16,
+    progress: &mut dyn FnMut(f32),
+    cancel: &dyn Fn() -> bool,
+) -> Result<bool> {
     if channels == 0 {
         bail!("AIFF export needs at least one channel");
     }
@@ -200,19 +413,34 @@ fn encode_aiff(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<
     buf.extend_from_slice(&(ssnd_len as u32).to_be_bytes());
     buf.extend_from_slice(&0u32.to_be_bytes()); // offset
     buf.extend_from_slice(&0u32.to_be_bytes()); // block size
-    for &s in samples {
+    let total = samples.len().max(1);
+    for (i, &s) in samples.iter().enumerate() {
+        if i % ENCODE_POLL == 0 {
+            if cancel() {
+                return Ok(false); // nothing written to disk yet
+            }
+            progress(i as f32 / total as f32);
+        }
         buf.extend_from_slice(&f32_to_i16(s).to_be_bytes());
     }
     std::fs::write(dst, &buf).with_context(|| format!("write {}", dst.display()))?;
-    Ok(())
+    Ok(true)
 }
 
 /// Ogg Vorbis via libvorbis (`vorbis_rs`). The crate muxes the Ogg container itself;
 /// it takes planar (per-channel) f32 blocks, so de-interleave first. symphonia's
 /// `ogg`+`vorbis` readers decode the result (checked by the round-trip test).
-fn encode_vorbis(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<()> {
+fn encode_vorbis(
+    dst: &Path,
+    samples: &[f32],
+    rate: u32,
+    channels: u16,
+    bitrate_kbps: u32,
+    progress: &mut dyn FnMut(f32),
+    cancel: &dyn Fn() -> bool,
+) -> Result<bool> {
     use std::num::{NonZeroU32, NonZeroU8};
-    use vorbis_rs::VorbisEncoderBuilder;
+    use vorbis_rs::{VorbisBitrateManagementStrategy, VorbisEncoderBuilder};
     if channels == 0 {
         bail!("Vorbis export needs at least one channel");
     }
@@ -220,6 +448,12 @@ fn encode_vorbis(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Resul
     let ch = NonZeroU8::new(channels as u8).ok_or_else(|| anyhow::anyhow!("too many channels"))?;
     let file = std::fs::File::create(dst).with_context(|| format!("create {}", dst.display()))?;
     let mut builder = VorbisEncoderBuilder::new(rate, ch, file)?;
+    // Pure VBR selected by a target bitrate (libvorbis takes bit/s).
+    if let Some(target) = NonZeroU32::new(bitrate_kbps.saturating_mul(1000)) {
+        builder.bitrate_management_strategy(VorbisBitrateManagementStrategy::Vbr {
+            target_bitrate: target,
+        });
+    }
     let mut encoder = builder.build()?;
 
     // Feed libvorbis in modest per-channel blocks (it is built to be driven
@@ -228,8 +462,14 @@ fn encode_vorbis(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Resul
     // buffer per channel, reusing the buffers across blocks to bound memory.
     const BLOCK_FRAMES: usize = 4096;
     let n = channels as usize;
+    let total_frames = (samples.len() / n).max(1);
+    let mut done_frames = 0usize;
     let mut planar: Vec<Vec<f32>> = vec![Vec::with_capacity(BLOCK_FRAMES); n];
     for block in samples.chunks(BLOCK_FRAMES * n) {
+        if cancel() {
+            drop(encoder); // leave the partial file for the caller to remove
+            return Ok(false);
+        }
         for p in planar.iter_mut() {
             p.clear();
         }
@@ -239,19 +479,25 @@ fn encode_vorbis(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Resul
             }
         }
         encoder.encode_audio_block(&planar)?;
+        done_frames += block.len() / n;
+        progress(done_frames as f32 / total_frames as f32);
     }
     encoder.finish()?;
-    Ok(())
+    Ok(true)
 }
 
-/// Resample planar f32 (one buffer per channel) from `from_rate` to 48 kHz with a sinc
-/// resampler, returning planar 48 kHz. Opus only accepts 8/12/16/24/48 kHz, so other
-/// rates are brought to 48 kHz first. The resampler's leading delay is dropped and the
-/// result trimmed to the ideal output length so it stays aligned and correctly sized.
-fn resample_to_48k(planar: &[Vec<f32>], from_rate: u32) -> Result<Vec<Vec<f32>>> {
+/// Resample planar f32 (one buffer per channel) from `from_rate` to `to_rate` with a
+/// sinc resampler, returning the planar result. Used both to bring a track to Opus's
+/// 48 kHz and to honour the Preferences sample-rate setting for the other formats. The
+/// resampler's leading delay is dropped and the result trimmed to the ideal output
+/// length so it stays aligned and correctly sized. A no-op when the rates match.
+fn resample_planar(planar: &[Vec<f32>], from_rate: u32, to_rate: u32) -> Result<Vec<Vec<f32>>> {
     use rubato::{
         Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
     };
+    if from_rate == to_rate || from_rate == 0 {
+        return Ok(planar.to_vec());
+    }
     let channels = planar.len();
     let params = SincInterpolationParameters {
         sinc_len: 256,
@@ -261,7 +507,7 @@ fn resample_to_48k(planar: &[Vec<f32>], from_rate: u32) -> Result<Vec<Vec<f32>>>
         window: WindowFunction::BlackmanHarris2,
     };
     const CHUNK: usize = 4096;
-    let ratio = 48_000.0 / from_rate as f64;
+    let ratio = to_rate as f64 / from_rate as f64;
     let mut rs = SincFixedIn::<f32>::new(ratio, 2.0, params, CHUNK, channels)
         .map_err(|e| anyhow::anyhow!("resampler init: {e}"))?;
     let delay = rs.output_delay();
@@ -307,9 +553,17 @@ fn resample_to_48k(planar: &[Vec<f32>], from_rate: u32) -> Result<Vec<Vec<f32>>>
 /// encode 20 ms frames and mux them into an Ogg stream with the required OpusHead (its
 /// pre-skip is the encoder lookahead our decoder drops) and OpusTags pages. symphonia's
 /// ogg reader plus our libopus decode path read the result (checked by the round-trip test).
-fn encode_opus(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<()> {
+fn encode_opus(
+    dst: &Path,
+    samples: &[f32],
+    rate: u32,
+    channels: u16,
+    bitrate_kbps: u32,
+    progress: &mut dyn FnMut(f32),
+    cancel: &dyn Fn() -> bool,
+) -> Result<bool> {
     use ogg::{PacketWriteEndInfo, PacketWriter};
-    use opus::{Application, Channels, Encoder};
+    use opus::{Application, Bitrate, Channels, Encoder};
     if channels == 0 || channels > 2 {
         bail!("Opus export supports mono or stereo, not {channels} channels");
     }
@@ -322,11 +576,7 @@ fn encode_opus(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<
             planar[c].push(s);
         }
     }
-    let planar = if rate == 48_000 {
-        planar
-    } else {
-        resample_to_48k(&planar, rate)?
-    };
+    let planar = resample_planar(&planar, rate, 48_000)?;
 
     // Re-interleave at 48 kHz for the encoder (encode_float takes interleaved input).
     let frames = planar.first().map(|c| c.len()).unwrap_or(0);
@@ -340,6 +590,11 @@ fn encode_opus(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<
     let ch_enum = if n == 1 { Channels::Mono } else { Channels::Stereo };
     let mut enc = Encoder::new(48_000, ch_enum, Application::Audio)
         .map_err(|e| anyhow::anyhow!("opus init: {e}"))?;
+    // Target bitrate (libopus takes bit/s); left at the encoder default if zero.
+    if bitrate_kbps > 0 {
+        enc.set_bitrate(Bitrate::Bits(bitrate_kbps.saturating_mul(1000) as i32))
+            .map_err(|e| anyhow::anyhow!("opus bitrate: {e}"))?;
+    }
     // Pre-skip = the encoder's lookahead (at 48 kHz); the decoder drops this many leading
     // samples. ~312 is the usual value if the query ever fails.
     let pre_skip = enc.get_lookahead().unwrap_or(312).max(0) as u64;
@@ -380,6 +635,13 @@ fn encode_opus(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<
     let mut granule: u64 = 0;
     let frame_count = inter.len().div_ceil(per_frame).max(1);
     for fi in 0..frame_count {
+        if fi % 64 == 0 {
+            if cancel() {
+                drop(pw); // leave the partial file for the caller to remove
+                return Ok(false);
+            }
+            progress(fi as f32 / frame_count as f32);
+        }
         let start = fi * per_frame;
         let mut pcm = vec![0.0f32; per_frame];
         if start < inter.len() {
@@ -398,11 +660,49 @@ fn encode_opus(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<
         pw.write_packet(packet[..len].to_vec(), serial, info, granule)
             .context("write opus packet")?;
     }
-    Ok(())
+    Ok(true)
 }
 
-fn encode_mp3(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<()> {
-    use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushNoGap, MonoPcm, Quality};
+/// Map a kbps value to the nearest LAME CBR preset. The Preferences dropdown already
+/// restricts to this format's presets, but snap anyway so a stray value stays valid.
+fn mp3_bitrate(kbps: u32) -> mp3lame_encoder::Bitrate {
+    use mp3lame_encoder::Bitrate::*;
+    let supported = [8u32, 16, 24, 32, 40, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+    let nearest = supported
+        .iter()
+        .copied()
+        .min_by_key(|&b| b.abs_diff(kbps))
+        .unwrap_or(192);
+    match nearest {
+        8 => Kbps8,
+        16 => Kbps16,
+        24 => Kbps24,
+        32 => Kbps32,
+        40 => Kbps40,
+        48 => Kbps48,
+        64 => Kbps64,
+        80 => Kbps80,
+        96 => Kbps96,
+        112 => Kbps112,
+        128 => Kbps128,
+        160 => Kbps160,
+        192 => Kbps192,
+        224 => Kbps224,
+        256 => Kbps256,
+        _ => Kbps320,
+    }
+}
+
+fn encode_mp3(
+    dst: &Path,
+    samples: &[f32],
+    rate: u32,
+    channels: u16,
+    bitrate_kbps: u32,
+    progress: &mut dyn FnMut(f32),
+    cancel: &dyn Fn() -> bool,
+) -> Result<bool> {
+    use mp3lame_encoder::{Builder, DualPcm, FlushNoGap, MonoPcm, Quality};
     if channels == 0 || channels > 2 {
         bail!("MP3 export supports mono or stereo, not {channels} channels");
     }
@@ -412,34 +712,58 @@ fn encode_mp3(dst: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<(
     };
     m(builder.set_num_channels(channels as u8), "channels")?;
     m(builder.set_sample_rate(rate), "sample rate")?;
-    m(builder.set_brate(Bitrate::Kbps192), "bitrate")?;
+    m(builder.set_brate(mp3_bitrate(bitrate_kbps)), "bitrate")?;
     m(builder.set_quality(Quality::Good), "quality")?;
     let mut enc = builder
         .build()
         .map_err(|e| anyhow::anyhow!("LAME build: {e:?}"))?;
 
     let pcm: Vec<i16> = samples.iter().map(|&s| f32_to_i16(s)).collect();
-    let per_channel = if channels == 1 { pcm.len() } else { pcm.len() / 2 };
-    // encode_to_vec / flush_to_vec write into the Vec's spare capacity without
-    // reserving it themselves, so reserve the LAME-recommended worst case first,
-    // or libmp3lame writes out of bounds.
-    let mut out: Vec<u8> = Vec::with_capacity(mp3lame_encoder::max_required_buffer_size(per_channel));
+    let mut out: Vec<u8> = Vec::new();
+    // Feed LAME in blocks (per-channel frames) so the convert reports progress and can
+    // be cancelled; encode_to_vec / flush_to_vec write into the Vec's spare capacity
+    // without reserving it, so reserve the LAME-recommended worst case before each call
+    // or libmp3lame writes out of bounds. On cancel nothing has been written to disk
+    // yet (the file is created only by the final write), so just return.
+    const BLK: usize = 1 << 16; // per-channel frames per block
     if channels == 1 {
-        enc.encode_to_vec(MonoPcm(&pcm), &mut out)
-            .map_err(|e| anyhow::anyhow!("LAME encode: {e:?}"))?;
+        let total = pcm.len().max(1);
+        let mut i = 0;
+        while i < pcm.len() {
+            if cancel() {
+                return Ok(false);
+            }
+            let end = (i + BLK).min(pcm.len());
+            out.reserve(mp3lame_encoder::max_required_buffer_size(end - i));
+            enc.encode_to_vec(MonoPcm(&pcm[i..end]), &mut out)
+                .map_err(|e| anyhow::anyhow!("LAME encode: {e:?}"))?;
+            i = end;
+            progress(i as f32 / total as f32);
+        }
     } else {
         // libmp3lame takes planar channels; de-interleave stereo.
         let left: Vec<i16> = pcm.iter().step_by(2).copied().collect();
         let right: Vec<i16> = pcm.iter().skip(1).step_by(2).copied().collect();
-        enc.encode_to_vec(DualPcm { left: &left, right: &right }, &mut out)
-            .map_err(|e| anyhow::anyhow!("LAME encode: {e:?}"))?;
+        let total = left.len().max(1);
+        let mut i = 0;
+        while i < left.len() {
+            if cancel() {
+                return Ok(false);
+            }
+            let end = (i + BLK).min(left.len());
+            out.reserve(mp3lame_encoder::max_required_buffer_size(end - i));
+            enc.encode_to_vec(DualPcm { left: &left[i..end], right: &right[i..end] }, &mut out)
+                .map_err(|e| anyhow::anyhow!("LAME encode: {e:?}"))?;
+            i = end;
+            progress(i as f32 / total as f32);
+        }
     }
     // Flush needs its own headroom (LAME emits up to a few KiB at the end).
     out.reserve(mp3lame_encoder::max_required_buffer_size(0));
     enc.flush_to_vec::<FlushNoGap>(&mut out)
         .map_err(|e| anyhow::anyhow!("LAME flush: {e:?}"))?;
     std::fs::write(dst, &out).with_context(|| format!("write {}", dst.display()))?;
-    Ok(())
+    Ok(true)
 }
 
 /// Copy the source file's primary tag onto the destination, re-mapped to the tag
@@ -564,5 +888,124 @@ mod tests {
             let _ = std::fs::remove_file(&out);
         }
         let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn convert_cb_reports_monotonic_progress_to_one() {
+        // The queue relies on convert_file_cb reporting progress that never goes
+        // backwards and reaches 1.0 on success.
+        let dir = std::env::temp_dir();
+        let src = dir.join("linamp_cb_src.wav");
+        write_source_wav(&src);
+        let out = dir.join("linamp_cb_out.wav");
+        let (mut last, mut monotonic, mut max) = (-1.0f32, true, 0.0f32);
+        let settings = ConvertSettings { format: OutputFormat::Wav, ..Default::default() };
+        let outcome = convert_file_cb(
+            &src,
+            &out,
+            settings,
+            &mut |f| {
+                if f + 1e-6 < last {
+                    monotonic = false;
+                }
+                last = f;
+                max = max.max(f);
+            },
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(outcome, ConvertOutcome::Completed);
+        assert!(monotonic, "progress went backwards");
+        assert!((max - 1.0).abs() < 1e-6, "progress reached {max}, expected 1.0");
+        assert!(out.exists());
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn convert_cb_cancel_leaves_no_output() {
+        // Cancelling aborts the convert and removes any partial output (the queue's
+        // right-click cancel cleans up leftover files).
+        let dir = std::env::temp_dir();
+        let src = dir.join("linamp_cancel_src.wav");
+        write_source_wav(&src);
+        let out = dir.join("linamp_cancel_out.wav");
+        let _ = std::fs::remove_file(&out);
+        let settings = ConvertSettings { format: OutputFormat::Wav, ..Default::default() };
+        let outcome =
+            convert_file_cb(&src, &out, settings, &mut |_| {}, &|| true).unwrap();
+        assert_eq!(outcome, ConvertOutcome::Cancelled);
+        assert!(!out.exists(), "cancel left a partial file behind");
+        let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn convert_honours_target_sample_rate() {
+        // A non-Opus convert with a target sample rate resamples to it; the output
+        // decodes back at that rate.
+        let dir = std::env::temp_dir();
+        let src = dir.join("linamp_rate_src.wav"); // written at 44_100
+        write_source_wav(&src);
+        let out = dir.join("linamp_rate_out.wav");
+        let settings = ConvertSettings {
+            format: OutputFormat::Wav,
+            bitrate_kbps: 192,
+            sample_rate: Some(22_050),
+        };
+        convert_file_cb(&src, &out, settings, &mut |_| {}, &|| false).unwrap();
+        let back = crate::decode::open_file(&out).unwrap();
+        assert_eq!(back.sample_rate(), 22_050, "target sample rate not applied");
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn convert_at_a_chosen_bitrate_still_decodes() {
+        // A lossy convert at a non-default bitrate produces a valid file. Guards the
+        // bitrate plumbing for each lossy format.
+        let dir = std::env::temp_dir();
+        let src = dir.join("linamp_br_src.wav");
+        write_source_wav(&src);
+        for (format, kbps, ext) in [
+            (OutputFormat::Mp3, 128, "mp3"),
+            (OutputFormat::Vorbis, 96, "ogg"),
+            (OutputFormat::Opus, 64, "opus"),
+        ] {
+            let out = dir.join(format!("linamp_br_out.{ext}"));
+            let settings = ConvertSettings { format, bitrate_kbps: kbps, sample_rate: None };
+            convert_file_cb(&src, &out, settings, &mut |_| {}, &|| false)
+                .unwrap_or_else(|e| panic!("{format:?}@{kbps}: {e}"));
+            let mut back = crate::decode::open_file(&out)
+                .unwrap_or_else(|e| panic!("{format:?}@{kbps} did not decode: {e}"));
+            assert!((&mut back).take(2048).count() > 0, "{format:?}@{kbps} yields audio");
+            let _ = std::fs::remove_file(&out);
+        }
+        let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn bitrate_presets_and_clamp_are_consistent() {
+        // Lossy formats offer presets; lossless offer none. clamp snaps to the nearest
+        // preset so a value carried over from another format stays valid.
+        assert!(OutputFormat::Wav.bitrate_presets().is_empty());
+        assert!(OutputFormat::Aiff.bitrate_presets().is_empty());
+        for f in [OutputFormat::Mp3, OutputFormat::Vorbis, OutputFormat::Opus] {
+            assert!(!f.bitrate_presets().is_empty(), "{f:?} has presets");
+            // Clamp returns a value that is actually offered.
+            let c = f.clamp_bitrate(1_000_000);
+            assert!(f.bitrate_presets().contains(&c), "{f:?} clamp off-list");
+            assert_eq!(c, *f.bitrate_presets().last().unwrap(), "clamp high -> max");
+            assert_eq!(f.clamp_bitrate(0), f.bitrate_presets()[0], "clamp low -> min");
+        }
+    }
+
+    #[test]
+    fn output_format_serde_roundtrips() {
+        // Prefs persist OutputFormat; it must survive a JSON round-trip.
+        for &f in OutputFormat::ALL {
+            let s = serde_json::to_string(&f).unwrap();
+            let back: OutputFormat = serde_json::from_str(&s).unwrap();
+            assert_eq!(back, f);
+        }
     }
 }
