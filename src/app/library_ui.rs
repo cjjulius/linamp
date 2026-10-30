@@ -1031,17 +1031,20 @@ impl super::LinAmpApp {
         ui.add_space(2.0 * s);
 
         // Column layout: Progress is a fixed column on the right; Artist/Title/Location
-        // split the remaining body. Reserve the scrollbar gutter so header and rows
-        // share one layout.
+        // split the remaining body by the user-resizable fractions. Reserve the
+        // scrollbar gutter so header and rows share one layout.
         let w = ui.available_width();
         let sb = ui.spacing().scroll.bar_width + 2.0 * s;
         let prog_w = 130.0 * s;
         let body = (w - prog_w - 12.0 * s - sb).max(150.0 * s);
-        let (aw, tw, lw) = (body * 0.30, body * 0.30, body * 0.40);
+        let fa = self.lib.convert_col_fr[0];
+        let ft = self.lib.convert_col_fr[1];
+        let fl = (1.0 - fa - ft).max(0.1);
+        let (aw, tw, lw) = (body * fa, body * ft, body * fl);
         let prog_off = 2.0 * s + body + 6.0 * s;
 
         // Header.
-        paint_track_row(ui, 15.0 * s, true, header_bg, s, |rect, paint| {
+        let hdr = paint_track_row(ui, 15.0 * s, true, header_bg, s, |rect, paint| {
             let mut x = rect.left() + 2.0 * s;
             for (label, cw) in [("Artist", aw), ("Title", tw), ("Location", lw)] {
                 paint(x, cw, label, header_fg, false);
@@ -1049,6 +1052,43 @@ impl super::LinAmpApp {
             }
             paint(rect.left() + prog_off, prog_w, "Progress", header_fg, false);
         });
+
+        // Draggable dividers between the flexible columns, matching the track table:
+        // a subtle themed bar that brightens on hover, applied immediately (takes
+        // effect next frame). Keep each column at least 12% wide.
+        let base = hdr.rect.left() + 2.0;
+        let mut col_dx = [0.0f32; 2];
+        for (k, bx) in [(0usize, base + aw), (1usize, base + aw + tw)] {
+            let hit = egui::Rect::from_min_max(
+                egui::pos2(bx - 3.0 * s, hdr.rect.top()),
+                egui::pos2(bx + 3.0 * s, hdr.rect.bottom()),
+            );
+            let dr = ui.interact(hit, ui.id().with(("cvt_col_div", k)), egui::Sense::drag());
+            let hot = dr.hovered() || dr.dragged();
+            if hot {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            let stroke = egui::Stroke::new(1.0_f32, if hot { row_col } else { dim });
+            ui.painter().vline(bx, hdr.rect.y_range(), stroke);
+            if dr.dragged() && body > 1.0 {
+                col_dx[k] += dr.drag_delta().x / body;
+            }
+        }
+        // Divider 0 trades Artist|Title; divider 1 trades Title|Location (Location is
+        // the remainder, so growing Title shrinks it).
+        if col_dx[0] != 0.0 {
+            let a = (self.lib.convert_col_fr[0] + col_dx[0]).clamp(0.12, 0.70);
+            let t = (self.lib.convert_col_fr[1] - col_dx[0]).clamp(0.12, 0.70);
+            if a + t <= 0.88 {
+                self.lib.convert_col_fr = [a, t];
+            }
+        }
+        if col_dx[1] != 0.0 {
+            let t = (self.lib.convert_col_fr[1] + col_dx[1]).clamp(0.12, 0.70);
+            if self.lib.convert_col_fr[0] + t <= 0.88 {
+                self.lib.convert_col_fr[1] = t;
+            }
+        }
 
         let mut cancel_id: Option<u64> = None;
         egui::ScrollArea::vertical()
@@ -1068,6 +1108,10 @@ impl super::LinAmpApp {
                         JobState::Done => ("Done".to_string(), 1.0, accent, row_col),
                         JobState::Failed(_) => ("Failed".to_string(), 0.0, fail_col, fail_col),
                     };
+                    let fail_reason = match &job.state {
+                        JobState::Failed(msg) => Some(msg.as_str()),
+                        _ => None,
+                    };
                     let resp = paint_track_row(ui, 16.0 * s, false, sel_bg, s, |rect, paint| {
                         let mut x = rect.left() + 2.0 * s;
                         paint(x, aw, &job.artist, row_col, false);
@@ -1077,8 +1121,28 @@ impl super::LinAmpApp {
                         paint(x, lw, &loc, row_col, false);
                     });
 
-                    // Progress bar in the Progress column.
+                    // Full-text tooltip per cell, since the columns truncate long
+                    // names. A hover-only sense sits over each cell, so right-click
+                    // still reaches the row's context menu beneath.
                     let row = resp.rect;
+                    let mut cell_x = row.left() + 2.0 * s;
+                    for (ci, text, cw) in [
+                        (0usize, job.artist.as_str(), aw),
+                        (1, job.title.as_str(), tw),
+                        (2, loc.as_str(), lw),
+                    ] {
+                        if !text.is_empty() {
+                            let cell = egui::Rect::from_min_size(
+                                egui::pos2(cell_x, row.top()),
+                                egui::vec2(cw, row.height()),
+                            );
+                            ui.interact(cell, ui.id().with(("cvt_cell", job.id, ci)), egui::Sense::hover())
+                                .on_hover_text(text);
+                        }
+                        cell_x += cw;
+                    }
+
+                    // Progress bar in the Progress column.
                     let pad = 2.0 * s;
                     let bar = egui::Rect::from_min_size(
                         egui::pos2(row.left() + prog_off, row.top() + pad),
@@ -1101,6 +1165,12 @@ impl super::LinAmpApp {
                         egui::FontId::proportional(10.0 * s),
                         text_col,
                     );
+
+                    // Hovering a failed job's badge shows the short reason.
+                    if let Some(reason) = fail_reason {
+                        ui.interact(bar, ui.id().with(("cvt_fail", job.id)), egui::Sense::hover())
+                            .on_hover_text(reason);
+                    }
 
                     let finished = job.state.is_finished();
                     let id = job.id;

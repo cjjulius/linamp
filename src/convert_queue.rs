@@ -42,6 +42,68 @@ impl JobState {
     }
 }
 
+/// Condense a raw converter error into a few user-facing words for the Failed
+/// row's hover tooltip ("File doesn't exist", "Cannot write file", ...). The raw
+/// anyhow messages are developer-facing (file paths, codec names), so this maps the
+/// common cases and falls back to a trimmed first line. Kept pure for unit testing.
+pub fn short_fail_reason(raw: &str) -> String {
+    let low = raw.to_ascii_lowercase();
+    let not_found = low.contains("os error 2")
+        || low.contains("cannot find the file")
+        || low.contains("cannot find the path")
+        || low.contains("no such file");
+    let denied = low.contains("os error 5")
+        || low.contains("os error 13")
+        || low.contains("access is denied")
+        || low.contains("permission denied");
+    // The encode arms tag a destination failure with a "create "/"write " context,
+    // so a leading one of those means the write side, not the source read.
+    let writing = low.starts_with("create ") || low.starts_with("write ");
+
+    if writing {
+        return if not_found {
+            "Output folder doesn't exist".into()
+        } else {
+            "Cannot write file".into()
+        };
+    }
+    if not_found {
+        return "File doesn't exist".into();
+    }
+    if denied {
+        return "Cannot read file".into();
+    }
+    if low.starts_with("no audio decoded") {
+        return "No audio in file".into();
+    }
+    if low.contains("unsupported")
+        || low.contains("decode")
+        || low.contains("format")
+        || low.contains("malformed")
+    {
+        return "Cannot read file".into();
+    }
+    if low.contains("lame")
+        || low.contains("opus")
+        || low.contains("vorbis")
+        || low.contains("resample")
+    {
+        return "Conversion failed".into();
+    }
+    // Last resort: the first line of the raw message, trimmed to a few words.
+    let first = raw.lines().next().unwrap_or(raw).trim();
+    if first.is_empty() {
+        return "Conversion failed".into();
+    }
+    const MAX: usize = 48;
+    if first.chars().count() > MAX {
+        let s: String = first.chars().take(MAX).collect();
+        format!("{s}\u{2026}")
+    } else {
+        first.to_string()
+    }
+}
+
 /// What the UI hands the worker to convert.
 pub struct JobSpec {
     pub id: u64,
@@ -172,7 +234,7 @@ fn worker_loop(
                 let _ = msg_tx.send(ConvertMsg::Cancelled(id));
             }
             Err(e) => {
-                let _ = msg_tx.send(ConvertMsg::Failed(id, e.to_string()));
+                let _ = msg_tx.send(ConvertMsg::Failed(id, short_fail_reason(&e.to_string())));
             }
         }
     }
@@ -196,5 +258,51 @@ mod tests {
         assert!(!JobState::Converting.is_finished());
         assert!(JobState::Done.is_finished());
         assert!(JobState::Failed("x".into()).is_finished());
+    }
+
+    #[test]
+    fn short_fail_reason_maps_common_cases() {
+        // Missing source (Windows and Unix phrasings of os error 2).
+        assert_eq!(
+            short_fail_reason("The system cannot find the file specified. (os error 2)"),
+            "File doesn't exist"
+        );
+        assert_eq!(
+            short_fail_reason("No such file or directory (os error 2)"),
+            "File doesn't exist"
+        );
+        // Permission reading the source.
+        assert_eq!(
+            short_fail_reason("Permission denied (os error 13)"),
+            "Cannot read file"
+        );
+        // Destination write failures carry a "create "/"write " context.
+        assert_eq!(
+            short_fail_reason("create C:\\out\\x.mp3: Access is denied. (os error 5)"),
+            "Cannot write file"
+        );
+        assert_eq!(
+            short_fail_reason("create C:\\missing\\x.mp3: The system cannot find the path specified. (os error 3)"),
+            "Output folder doesn't exist"
+        );
+        assert_eq!(
+            short_fail_reason("write C:\\out\\x.aiff: disk full"),
+            "Cannot write file"
+        );
+        // Decode / unsupported source.
+        assert_eq!(short_fail_reason("no audio decoded from a.bin"), "No audio in file");
+        assert_eq!(short_fail_reason("unsupported codec"), "Cannot read file");
+        // Encoder/resampler internals collapse to a generic reason.
+        assert_eq!(short_fail_reason("LAME encode: BadValue"), "Conversion failed");
+        assert_eq!(short_fail_reason("opus init: bad argument"), "Conversion failed");
+    }
+
+    #[test]
+    fn short_fail_reason_falls_back_to_trimmed_first_line() {
+        assert_eq!(short_fail_reason("something odd went wrong"), "something odd went wrong");
+        let long = "x".repeat(80);
+        let out = short_fail_reason(&long);
+        assert!(out.ends_with('\u{2026}'));
+        assert!(out.chars().count() <= 49);
     }
 }
