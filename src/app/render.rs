@@ -133,7 +133,18 @@ impl super::LinAmpApp {
         // whole list renders blank even while a track plays. Clamp it here so the
         // list is always visible.
         if win == ClWin::Pl {
-            self.plview.first = classic::clamp_pl_first(self.plview.first, self.playlist.len());
+            let len = self.playlist.len();
+            // When the whole list fits the window there is nothing to scroll, so snap to
+            // the top: a stale non-zero offset (e.g. left after the window grew) would
+            // otherwise leave the list scrolled down with blank rows and the thumb pinned
+            // to the top. Otherwise keep the loose clamp so a delete-at-bottom blank can
+            // persist until the next scroll.
+            let visible = classic::pl_visible_rows(self.plview.px_h as u32);
+            self.plview.first = if classic::max_pl_first(len, visible) == 0 {
+                0
+            } else {
+                classic::clamp_pl_first(self.plview.first, len)
+            };
         }
 
         // Lazily read tags for the playlist rows about to be shown (on-view mode).
