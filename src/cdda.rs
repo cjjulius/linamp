@@ -592,6 +592,31 @@ pub fn mounted_cd_track(path: &Path) -> Option<(String, CdTrack)> {
     }
 }
 
+/// Optical drives currently attached, as device ids (drive letters like `D:` on
+/// Windows, `/dev/srN` on Linux). The library polls this to show each drive under
+/// Devices, so one appears as soon as it is plugged in. Empty on other platforms.
+pub fn list_drives() -> Vec<String> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::list_drives()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::list_drives()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        Vec::new()
+    }
+}
+
+/// A short label for a drive device id for the Devices list, e.g. `CD (D:)` or
+/// `CD (sr0)`.
+pub fn drive_label(device: &str) -> String {
+    let short = device.trim_start_matches("/dev/");
+    format!("CD ({short})")
+}
+
 /// The platform's default optical device, used when the UI opens a CD.
 pub fn default_cd_device() -> String {
     #[cfg(target_os = "linux")]
@@ -772,6 +797,25 @@ mod linux {
         }
         "/dev/cdrom".to_string()
     }
+
+    /// Every attached optical drive, as `/dev/srN` paths (the raw CDDA devices). The
+    /// `/dev/cdrom` symlink is skipped so a single drive isn't listed twice.
+    pub fn list_drives() -> Vec<String> {
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir("/dev") {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                let n = name.to_string_lossy();
+                if let Some(num) = n.strip_prefix("sr") {
+                    if !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()) {
+                        out.push(format!("/dev/{n}"));
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
+    }
 }
 
 /// Windows CD-ROM device layer via `DeviceIoControl`: `IOCTL_CDROM_READ_TOC` for
@@ -830,6 +874,30 @@ mod windows {
             overlapped: *mut c_void,
         ) -> i32;
         fn CloseHandle(h: Handle) -> i32;
+        fn GetLogicalDrives() -> u32;
+        fn GetDriveTypeW(root: *const u16) -> u32;
+    }
+
+    /// GetDriveType's optical-drive type.
+    const DRIVE_CDROM: u32 = 5;
+
+    /// Every attached optical drive, as `X:` drive-letter ids. Uses the drive TYPE, so
+    /// a CD/DVD drive is listed even with no disc in it.
+    pub fn list_drives() -> Vec<String> {
+        let mask = unsafe { GetLogicalDrives() };
+        let mut out = Vec::new();
+        for i in 0..26u32 {
+            if mask & (1 << i) == 0 {
+                continue;
+            }
+            let letter = (b'A' + i as u8) as char;
+            let root = format!("{letter}:\\");
+            let wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
+            if unsafe { GetDriveTypeW(wide.as_ptr()) } == DRIVE_CDROM {
+                out.push(format!("{letter}:"));
+            }
+        }
+        out
     }
 
     // Mirror ntddcdrm.h. The Control:4 / Adr:4 C bitfield packs into one byte with
@@ -1101,6 +1169,13 @@ mod tests {
             assert!(is_cdda_path(&p));
             assert_eq!(parse_track_path(&p), Some((dev.to_string(), n)));
         }
+    }
+
+    #[test]
+    fn drive_label_shortens_device_ids() {
+        assert_eq!(drive_label("D:"), "CD (D:)");
+        assert_eq!(drive_label("/dev/sr0"), "CD (sr0)");
+        assert_eq!(drive_label("/dev/cdrom"), "CD (cdrom)");
     }
 
     #[test]

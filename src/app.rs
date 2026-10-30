@@ -334,6 +334,7 @@ fn file_name_key(p: &std::path::Path) -> String {
 enum PrefTab {
     Display,
     Playback,
+    Conversion,
     Playlist,
     Tags,
     OptionalFeatures,
@@ -341,9 +342,10 @@ enum PrefTab {
 }
 
 impl PrefTab {
-    const ALL: [PrefTab; 6] = [
+    const ALL: [PrefTab; 7] = [
         PrefTab::Display,
         PrefTab::Playback,
+        PrefTab::Conversion,
         PrefTab::Playlist,
         PrefTab::Tags,
         PrefTab::OptionalFeatures,
@@ -353,6 +355,7 @@ impl PrefTab {
         match self {
             PrefTab::Display => "Display",
             PrefTab::Playback => "Playback",
+            PrefTab::Conversion => "Conversion",
             PrefTab::Playlist => "Playlist",
             PrefTab::Tags => "Tags",
             PrefTab::OptionalFeatures => "Optional Features",
@@ -461,9 +464,33 @@ struct LibraryViewState {
     sel_artists: Vec<String>,
     sel_albums: Vec<String>,
     sel_tracks: std::collections::BTreeSet<usize>,
+    /// Fixed end of a Shift-range in the track list (the row a plain or Ctrl click
+    /// last landed on), so Shift-click selects the contiguous span to it, matching
+    /// the playlist window. None until the first click; cleared when the result set
+    /// changes.
+    sel_anchor: Option<usize>,
     /// Active background scan receiver + its latest progress text.
     scan: Option<std::sync::mpsc::Receiver<crate::library::ScanMsg>>,
     scan_text: String,
+    /// The conversion queue shown in the "Converting" node: active and finished jobs,
+    /// in enqueue order. The node appears in the nav only while this is non-empty.
+    convert_queue: Vec<crate::convert_queue::ConvertJob>,
+    /// Monotonic id for the next queued conversion, matching jobs to worker messages.
+    convert_next_id: u64,
+    /// User-resizable Converting-pane column fractions [artist, title]; Location takes
+    /// the remainder. Separate from `col_fr` because the panes have different columns.
+    /// In-memory, so it resets on restart.
+    convert_col_fr: [f32; 2],
+    /// User-resizable Progress-column width, in unscaled logical points (multiplied by
+    /// the pane scale at use). Clamped so it can't shrink below the "Progress" header
+    /// label. In-memory, resets on restart.
+    convert_prog_w: f32,
+    /// Optical drives attached, as device ids (drive letters on Windows, /dev/srN on
+    /// Linux), shown under Devices. Polled while the library is open so a drive appears
+    /// when it is plugged in.
+    devices: Vec<String>,
+    /// When the device list was last polled, to throttle the scan to a couple of seconds.
+    devices_poll: Option<std::time::Instant>,
 }
 
 /// Window geometry and focus (C1): the classic windows' positions, the library
@@ -634,9 +661,9 @@ pub struct LinAmpApp {
     /// window-level command when it changes).
     on_top_last: Option<bool>,
     prefs: Prefs,
-    /// Status messages from a background rip/convert job (#183), polled each frame;
-    /// present while a conversion runs, cleared when the worker thread finishes.
-    convert_rx: Option<std::sync::mpsc::Receiver<String>>,
+    /// The background conversion worker (the rip/convert queue). Created lazily on the
+    /// first conversion; its progress drains into `lib.convert_queue` each frame.
+    convert_worker: Option<crate::convert_queue::ConvertWorker>,
     /// Whether this process is the primary instance (holds the instance lock). Only
     /// the primary drains the open-request queue, so files handed over by other
     /// launches always land in one deterministic instance (#193).
@@ -826,8 +853,15 @@ impl LinAmpApp {
                 sel_artists: Vec::new(),
                 sel_albums: Vec::new(),
                 sel_tracks: std::collections::BTreeSet::new(),
+                sel_anchor: None,
                 scan: None,
                 scan_text: String::new(),
+                convert_queue: Vec::new(),
+                convert_next_id: 0,
+                convert_col_fr: [0.30, 0.30],
+                convert_prog_w: 130.0,
+                devices: Vec::new(),
+                devices_poll: None,
             },
             geom: WindowGeom {
                 win_pos: [egui::pos2(100.0, 100.0); 3],
@@ -916,7 +950,7 @@ impl LinAmpApp {
             quit_countdown: None,
             on_top_last: None,
             prefs,
-            convert_rx: None,
+            convert_worker: None,
             is_primary,
             instance_lock: None,
             lock_path: crate::instance_lock_path(),
@@ -2671,6 +2705,7 @@ impl LinAmpApp {
                     .show(ui, |ui| match self.prefs_tab {
                         PrefTab::Display => self.prefs_page_display(ctx, ui),
                         PrefTab::Playback => self.prefs_page_playback(ui),
+                        PrefTab::Conversion => self.prefs_page_conversion(ui),
                         PrefTab::Playlist => self.prefs_page_playlist(ui),
                         PrefTab::Tags => self.prefs_page_tags(ui),
                         PrefTab::OptionalFeatures => self.prefs_page_optional_features(ui),
@@ -2839,6 +2874,105 @@ impl LinAmpApp {
                 self.prefs.save();
                 self.apply_crossfade_pref();
             }
+        });
+    }
+
+    /// The rip / convert settings page. Format first, then Bitrate and Sample rate as
+    /// dropdowns whose options depend on the chosen format (bitrate only for the lossy
+    /// formats; Opus is fixed at 48 kHz), then the output folder. These are global and
+    /// applied to every conversion for now.
+    fn prefs_page_conversion(&mut self, ui: &mut egui::Ui) {
+        use crate::encode::OutputFormat;
+        ui.add_space(2.0);
+        ui.weak("Applied to every file conversion. Per-track settings may come later.");
+        ui.add_space(10.0);
+
+        Self::pref_section(ui, "Format", |ui| {
+            let mut fmt = self.prefs.convert_format;
+            egui::ComboBox::from_id_salt("convert_format")
+                .selected_text(fmt.display())
+                .show_ui(ui, |ui| {
+                    for &f in OutputFormat::ALL {
+                        ui.selectable_value(&mut fmt, f, f.display());
+                    }
+                });
+            if fmt != self.prefs.convert_format {
+                self.prefs.convert_format = fmt;
+                // Keep the bitrate valid for the newly chosen format.
+                if fmt.is_lossy() {
+                    self.prefs.convert_bitrate_kbps =
+                        fmt.clamp_bitrate(self.prefs.convert_bitrate_kbps);
+                }
+                self.prefs.save();
+            }
+        });
+
+        let fmt = self.prefs.convert_format;
+
+        Self::pref_section(ui, "Bitrate", |ui| {
+            if fmt.is_lossy() {
+                let mut br = fmt.clamp_bitrate(self.prefs.convert_bitrate_kbps);
+                egui::ComboBox::from_id_salt("convert_bitrate")
+                    .selected_text(format!("{br} kbps"))
+                    .show_ui(ui, |ui| {
+                        for &p in fmt.bitrate_presets() {
+                            ui.selectable_value(&mut br, p, format!("{p} kbps"));
+                        }
+                    });
+                if br != self.prefs.convert_bitrate_kbps {
+                    self.prefs.convert_bitrate_kbps = br;
+                    self.prefs.save();
+                }
+            } else {
+                ui.weak(format!("{} is lossless; bitrate does not apply.", fmt.display()));
+            }
+        });
+
+        Self::pref_section(ui, "Sample rate", |ui| {
+            if fmt == OutputFormat::Opus {
+                ui.weak("Opus always encodes at 48000 Hz.");
+            } else {
+                let mut rate = self.prefs.convert_sample_rate;
+                let label = match rate {
+                    Some(r) => format!("{r} Hz"),
+                    None => "Same as source".to_string(),
+                };
+                egui::ComboBox::from_id_salt("convert_rate")
+                    .selected_text(label)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut rate, None, "Same as source");
+                        for &r in fmt.sample_rate_presets() {
+                            ui.selectable_value(&mut rate, Some(r), format!("{r} Hz"));
+                        }
+                    });
+                if rate != self.prefs.convert_sample_rate {
+                    self.prefs.convert_sample_rate = rate;
+                    self.prefs.save();
+                }
+            }
+        });
+
+        Self::pref_section(ui, "Output folder", |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Browse...").clicked() {
+                    if let Some(dir) = self.pick_dialog(|| rfd::FileDialog::new().pick_folder()) {
+                        self.prefs.convert_dir = Some(dir);
+                        self.prefs.save();
+                    }
+                }
+                if self.prefs.convert_dir.is_some() && ui.button("Clear").clicked() {
+                    self.prefs.convert_dir = None;
+                    self.prefs.save();
+                }
+            });
+            ui.add_space(2.0);
+            let cur = self
+                .prefs
+                .convert_dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "Not set; you will be asked when you convert.".to_string());
+            ui.weak(cur);
         });
     }
 
@@ -3977,28 +4111,8 @@ impl eframe::App for LinAmpApp {
             self.handle_tray_action(ctx, action);
         }
 
-        // Rip/convert progress (#183): a background job sends status lines; show the
-        // latest in the status area and drop the channel once the worker finishes.
-        if let Some(rx) = self.convert_rx.take() {
-            let mut done = false;
-            loop {
-                match rx.try_recv() {
-                    Ok(msg) => self.status = msg,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        done = true;
-                        break;
-                    }
-                }
-            }
-            if !done {
-                self.convert_rx = Some(rx);
-            } else {
-                // The worker indexed each converted file into the library as it went;
-                // re-query so they appear in the open library view (#185 QA).
-                self.refresh_library();
-            }
-        }
+        // Rip/convert progress: drain the queue worker's messages into the job list.
+        self.poll_convert();
 
         // Primary handover (#193): a secondary polls the instance lock, and when the
         // primary exits and frees it, takes over as the new primary so the open-request
