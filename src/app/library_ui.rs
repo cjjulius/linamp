@@ -799,52 +799,90 @@ impl super::LinAmpApp {
                 let header = |ui: &mut egui::Ui, label: &str| {
                     ui.label(RichText::new(label).color(row_col).font(font.clone()));
                 };
-                // A selectable node at `depth` (0 = top level). Children carry a gray
-                // vertical dash guide: a "|" per level that stacks down the rows into a
-                // dashed line, with a short tick into the label. Clicking selects it.
-                let mut node = |ui: &mut egui::Ui, label: &str, depth: usize, v: LibView| {
+
+                // Local Media, then its smart views with a painted dashed tree guide.
+                header(ui, "Local Media");
+                let views = [
+                    ("Audio", LibView::Audio),
+                    ("Most Played", LibView::MostPlayed),
+                    ("Recently Added", LibView::RecentlyAdded),
+                    ("Recently Played", LibView::RecentlyPlayed),
+                    ("Never Played", LibView::NeverPlayed),
+                    ("Top Rated", LibView::TopRated),
+                ];
+                let mut kid_rects: Vec<egui::Rect> = Vec::with_capacity(views.len());
+                for (label, v) in views {
                     let selected = self.lib.nav == v;
                     let txt = if selected { sel_col } else { row_col };
                     let mut job = egui::text::LayoutJob::default();
-                    if depth > 0 {
-                        let guide = format!(" {}|- ", "|   ".repeat(depth - 1));
-                        job.append(
-                            &guide,
-                            0.0,
-                            egui::text::TextFormat { font_id: font.clone(), color: dash_col, ..Default::default() },
-                        );
-                    }
+                    // Leading space leaves the gutter clear for the painted tree.
                     job.append(
                         label,
-                        0.0,
+                        16.0 * s,
                         egui::text::TextFormat { font_id: font.clone(), color: txt, ..Default::default() },
                     );
-                    if ui.selectable_label(selected, job).clicked() {
+                    let resp = ui.selectable_label(selected, job);
+                    if resp.clicked() {
                         act.nav_click = Some(v);
                     }
-                };
-
-                // Local Media and its smart views.
-                header(ui, "Local Media");
-                node(ui, "Audio", 1, LibView::Audio);
-                node(ui, "Most Played", 1, LibView::MostPlayed);
-                node(ui, "Recently Added", 1, LibView::RecentlyAdded);
-                node(ui, "Recently Played", 1, LibView::RecentlyPlayed);
-                node(ui, "Never Played", 1, LibView::NeverPlayed);
-                node(ui, "Top Rated", 1, LibView::TopRated);
+                    kid_rects.push(resp.rect);
+                }
+                // Paint the gray tree over the gutter: a continuous dashed vertical trunk
+                // down the group, with a short dashed horizontal tick into each child,
+                // matching the classic Media Library.
+                if let (Some(first), Some(last)) = (kid_rects.first(), kid_rects.last()) {
+                    let painter = ui.painter();
+                    let stroke = egui::Stroke::new(1.0 * s, dash_col);
+                    let gx = first.left() + 6.0 * s;
+                    let dashed_v = |y0: f32, y1: f32| {
+                        let (dash, gap) = (2.0 * s, 2.0 * s);
+                        let mut y = y0;
+                        while y < y1 {
+                            let y2 = (y + dash).min(y1);
+                            painter.line_segment([egui::pos2(gx, y), egui::pos2(gx, y2)], stroke);
+                            y += dash + gap;
+                        }
+                    };
+                    let dashed_h = |cy: f32| {
+                        let (dash, gap) = (2.0 * s, 1.5 * s);
+                        let xend = gx + 8.0 * s;
+                        let mut x = gx;
+                        while x < xend {
+                            let x2 = (x + dash).min(xend);
+                            painter.line_segment([egui::pos2(x, cy), egui::pos2(x2, cy)], stroke);
+                            x += dash + gap;
+                        }
+                    };
+                    dashed_v(first.top() + 2.0 * s, last.center().y);
+                    for r in &kid_rects {
+                        dashed_h(r.center().y);
+                    }
+                }
 
                 // Top-level siblings of Local Media. Playlists has no view yet, and an
                 // Audio CD mounts under Devices in Part 2; both are headings for now.
                 header(ui, "Playlists");
                 header(ui, "Devices");
 
-                node(ui, "Bookmarks", 0, LibView::Bookmarks);
+                // A top-level selectable view (no tree guide).
+                let mut leaf = |ui: &mut egui::Ui, label: &str, v: LibView| {
+                    let selected = self.lib.nav == v;
+                    let txt = if selected { sel_col } else { row_col };
+                    let job = egui::text::LayoutJob::single_section(
+                        label.to_owned(),
+                        egui::text::TextFormat { font_id: font.clone(), color: txt, ..Default::default() },
+                    );
+                    if ui.selectable_label(selected, job).clicked() {
+                        act.nav_click = Some(v);
+                    }
+                };
+                leaf(ui, "Bookmarks", LibView::Bookmarks);
 
                 // The conversion queue appears only while it has rows (active or
                 // finished), kept visible so a finished run can still be seen.
                 if !self.lib.convert_queue.is_empty() {
                     let n = self.lib.convert_queue.len();
-                    node(ui, &format!("Converting ({n})"), 0, LibView::Converting);
+                    leaf(ui, &format!("Converting ({n})"), LibView::Converting);
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| match &self.library {
                     Some(lib) => {
