@@ -1193,11 +1193,39 @@ impl super::LinAmpApp {
                         painter.rect_filled(fill, 2.0 * s, bar_col);
                     }
                     painter.rect_stroke(bar, 2.0 * s, egui::Stroke::new(1.0 * s, dim));
+                    // Draw the status with a contrasting halo so the "NN%" stays
+                    // legible where the fill passes under it: the fill and the row
+                    // text can be the same skin colour, which would otherwise erase
+                    // the number as the bar reaches the centre.
+                    let font = egui::FontId::proportional(10.0 * s);
+                    let lum = 0.299 * text_col.r() as f32
+                        + 0.587 * text_col.g() as f32
+                        + 0.114 * text_col.b() as f32;
+                    let halo = if lum > 140.0 {
+                        Color32::from_rgba_unmultiplied(0, 0, 0, 180)
+                    } else {
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 180)
+                    };
+                    let o = 1.0 * s;
+                    for off in [
+                        egui::vec2(-o, 0.0),
+                        egui::vec2(o, 0.0),
+                        egui::vec2(0.0, -o),
+                        egui::vec2(0.0, o),
+                    ] {
+                        painter.text(
+                            bar.center() + off,
+                            egui::Align2::CENTER_CENTER,
+                            &status,
+                            font.clone(),
+                            halo,
+                        );
+                    }
                     painter.text(
                         bar.center(),
                         egui::Align2::CENTER_CENTER,
                         &status,
-                        egui::FontId::proportional(10.0 * s),
+                        font,
                         text_col,
                     );
 
