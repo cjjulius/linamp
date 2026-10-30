@@ -120,11 +120,11 @@ pub struct PlState<'a> {
     pub colors: PlColors,
     pub rows: &'a [PlRow],
     pub first: usize,
-    /// The real scroll offset (index of the first visible row) and the total row count,
-    /// used to place the always-visible scrollbar thumb. `rows` is pre-sliced to the
+    /// The scroll offset (index of the first visible row) and the scroll range the thumb
+    /// spans, used to place the always-visible scrollbar thumb. `rows` is pre-sliced to the
     /// visible window with `first` 0, so these carry the full picture the thumb needs.
     pub scroll_first: usize,
-    pub total_rows: usize,
+    pub scroll_range: usize,
     /// Bottom-bar menu button currently held / with its menu open (or the scrollbar while
     /// it is being dragged, for the pressed thumb sprite).
     pub pressed: Option<PlRegion>,
@@ -259,53 +259,26 @@ mod tests {
     }
 
     #[test]
-    fn pl_scrollbar_thumb_reaches_bottom_at_full_scroll() {
+    fn pl_scrollbar_thumb_spans_the_scroll_range() {
         let height = 200.0;
-        let len = 100;
-        let visible = pl_visible_rows(height as u32);
-        let max = max_pl_first(len, visible);
-        assert!(max > 0 && max < len - 1, "the list overflows but the last row isn't the top");
-        // first=0 pins the thumb to the top; the max scroll offset (last row at the bottom)
-        // sends it to the very bottom of the track, even though the topmost row isn't the
-        // last row.
-        let top_y = pl_scroll_thumb_y(0, len, visible, height);
-        let bot_y = pl_scroll_thumb_y(max, len, visible, height);
-        assert!(bot_y > top_y);
-        assert_eq!(pl_scroll_first_at(top_y, len, visible, height), 0);
-        assert_eq!(pl_scroll_first_at(bot_y, len, visible, height), max);
-        // Grabbing below the bottom still clamps to the max scroll, not past it.
-        assert_eq!(pl_scroll_first_at(bot_y + 100.0, len, visible, height), max);
-        // An offset past the max (blank space from a resize/delete) pins the thumb to the
-        // bottom rather than overflowing the track.
-        assert_eq!(
-            pl_scroll_thumb_y(max + 20, len, visible, height),
-            pl_scroll_thumb_y(max, len, visible, height)
-        );
-        // A list that fits never scrolls; the thumb stays at the top.
-        assert_eq!(pl_scroll_first_at(9999.0, visible, visible, height), 0);
-    }
-
-    #[test]
-    fn pl_scrollbar_thumb_sits_at_bottom_when_the_end_is_visible() {
-        let height = 200.0;
-        let len = 100;
-        let visible = pl_visible_rows(height as u32);
-        let max = max_pl_first(len, visible);
-        let top_y = pl_scroll_thumb_y(0, len, visible, height);
-        let bot_y = pl_scroll_thumb_y(max, len, visible, height);
-
-        // Growing the window with a non-zero offset walks the thumb down and lands it at
-        // the bottom once the end is visible (first >= max), then holds it there past the
-        // end (blank rows), even as the whole list fits.
-        let mid = pl_scroll_thumb_y(max / 2, len, visible, height);
+        let range = 80usize; // at rest this is max_pl_first for an overflowing list
+        let top_y = pl_scroll_thumb_y(0, range, height);
+        let mid = pl_scroll_thumb_y(range / 2, range, height);
+        let bot_y = pl_scroll_thumb_y(range, range, height);
+        // Top at offset 0, proportional through the range, bottom at the range end.
         assert!(top_y < mid && mid < bot_y);
-        assert_eq!(pl_scroll_thumb_y(max, len, visible, height), bot_y);
-        assert_eq!(pl_scroll_thumb_y(max + 30, len, visible, height), bot_y);
-        // The whole list fits (visible >= len): first 0 stays at the top (nothing above),
-        // but any non-zero offset (blank rows below) puts the thumb at the bottom.
-        let fits = len + 5;
-        assert_eq!(pl_scroll_thumb_y(0, len, fits, height), top_y);
-        assert_eq!(pl_scroll_thumb_y(3, len, fits, height), bot_y);
+        // An offset past the range (blank rows below the end) pins the thumb to the bottom
+        // rather than overflowing the track.
+        assert_eq!(pl_scroll_thumb_y(range + 20, range, height), bot_y);
+        // Round-trips with the inverse, clamped to 0..=range.
+        assert_eq!(pl_scroll_first_at(top_y, range, height), 0);
+        assert_eq!(pl_scroll_first_at(bot_y, range, height), range);
+        assert_eq!(pl_scroll_first_at(bot_y + 100.0, range, height), range);
+        // A zero range (whole list fits): offset 0 stays at the top (nothing scrolled off),
+        // any non-zero offset (blank rows) sits at the bottom, and nothing scrolls.
+        assert_eq!(pl_scroll_thumb_y(0, 0, height), top_y);
+        assert_eq!(pl_scroll_thumb_y(3, 0, height), bot_y);
+        assert_eq!(pl_scroll_first_at(9999.0, 0, height), 0);
     }
 
     #[test]
@@ -615,7 +588,7 @@ mod tests {
             rows: &rows,
             first: 0,
             scroll_first: 0,
-            total_rows: rows.len(),
+            scroll_range: 0,
             pressed: None,
             elapsed_secs: 0.0,
             cur_duration: 0.0,
