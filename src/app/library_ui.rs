@@ -653,9 +653,13 @@ impl super::LinAmpApp {
             classic,
         };
         let mut act = LibActs::default();
-        self.ui_lib_top(ui, &cx, &mut act);
+        // Panel order matters: the bottom bar spans the full width, then the nav claims
+        // the full height on the left (up to the top), and only then does the search bar
+        // go in above the track table, so it sits to the right of the nav, like the
+        // classic Media Library, rather than a full-width strip pushing the nav down.
         self.ui_lib_bottom(ui, &cx, &mut act);
         self.ui_lib_nav(ui, &cx, &mut act);
+        self.ui_lib_top(ui, &cx, &mut act);
         self.ui_lib_center(ui, &cx, &mut act);
         self.apply_lib_actions(ui, &cx, act);
     }
@@ -2021,9 +2025,9 @@ fn paint_nav_tree(painter: &egui::Painter, rows: &[egui::Rect], col: Color32, s:
     };
     let stroke = egui::Stroke::new(1.0 * s, col);
     let gx = (first.left() + 6.0 * s).round() + 0.5; // crisp 1px trunk
-    let tick_end = first.left() + 13.0 * s; // reaches just left of the label
-    // Dashed vertical trunk from the first child down to the last child's centre.
+    let tick_end = first.left() + 13.0 * s; // short connector, hugging the trunk
     let (dash, gap) = (2.0 * s, 2.0 * s);
+    // Dashed vertical trunk from the first child down to the last child's centre.
     let bottom = last.center().y;
     let mut y = first.top() + 1.0 * s;
     while y < bottom {
@@ -2031,9 +2035,15 @@ fn paint_nav_tree(painter: &egui::Painter, rows: &[egui::Rect], col: Color32, s:
         painter.line_segment([egui::pos2(gx, y), egui::pos2(gx, y2)], stroke);
         y += dash + gap;
     }
-    // Solid short tick connecting the trunk to each child label.
+    // Dashed horizontal tick into each child at its centre, starting at the trunk so the
+    // corner stays joined.
     for r in rows {
         let cy = r.center().y.round() + 0.5;
-        painter.line_segment([egui::pos2(gx, cy), egui::pos2(tick_end, cy)], stroke);
+        let mut x = gx;
+        while x < tick_end {
+            let x2 = (x + dash).min(tick_end);
+            painter.line_segment([egui::pos2(x, cy), egui::pos2(x2, cy)], stroke);
+            x += dash + gap;
+        }
     }
 }
