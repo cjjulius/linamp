@@ -245,13 +245,7 @@ impl super::LinAmpApp {
                                     // Grab the scrollbar: jump to the clicked position and
                                     // then track the cursor while the button is held.
                                     self.plview.scroll_drag = true;
-                                    let visible = classic::pl_visible_rows(self.plview.px_h as u32);
-                                    self.plview.first = classic::pl_scroll_first_at(
-                                        ny,
-                                        self.playlist.len(),
-                                        visible,
-                                        self.plview.px_h,
-                                    );
+                                    self.pl_scroll_to_cursor(ny);
                                 }
                                 Some(P::List) => {
                                     let row = classic::pl_row_at(ny, self.plview.first);
@@ -383,13 +377,7 @@ impl super::LinAmpApp {
                     }
                 }
                 if self.plview.scroll_drag {
-                    let visible = classic::pl_visible_rows(self.plview.px_h as u32);
-                    self.plview.first = classic::pl_scroll_first_at(
-                        ny,
-                        self.playlist.len(),
-                        visible,
-                        self.plview.px_h,
-                    );
+                    self.pl_scroll_to_cursor(ny);
                 }
                 if let Some(grab) = self.geom.resize_pl {
                     // Resize smoothly during the drag; the 25/29px grid is applied

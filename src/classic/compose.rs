@@ -730,7 +730,8 @@ impl ClassicSkin {
         // Inner background fill.
         fill_rect(&mut c, 12, 20, w - 12 - 20, height as i32 - 20 - 38, st.colors.bg);
 
-        if let Some(p) = self.bmp("pledit.bmp") {
+        let pledit = self.bmp("pledit.bmp");
+        if let Some(p) = pledit {
             let sy = if st.focused { 0 } else { 21 };
             blit(&mut c, p, 0, 0, 0, sy, 25, 20); // top-left corner
             blit(&mut c, p, w - 25, 0, 153, sy, 25, 20); // top-right corner
@@ -839,7 +840,7 @@ impl ClassicSkin {
 
         // Skins without PLEDIT art get a synthesized always-visible scrollbar thumb from
         // the skin colours, so the scrollbar is present in every skin.
-        if self.bmp("pledit.bmp").is_none() {
+        if pledit.is_none() {
             let ty = pl_scroll_thumb_y(st.scroll_first, st.total_rows, visible, height as f32).round() as i32;
             fill_rect(&mut c, w - 13, ty, 7, PL_SCROLL_THUMB_H, st.colors.normal);
         }
