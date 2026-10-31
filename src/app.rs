@@ -435,6 +435,21 @@ struct PlaylistViewState {
     px_h: f32,
     /// Bottom-bar menu button currently held / with its menu open.
     menu_press: Option<classic::PlRegion>,
+    /// Title-bar button being held (Close or Shade): the action fires on release only if
+    /// the cursor is still over it, so it shows the pressed sprite and can be cancelled by
+    /// moving off before releasing.
+    title_press: Option<classic::PlRegion>,
+    /// True while the right-edge scrollbar thumb is being dragged, so the cursor drives
+    /// the scroll offset each frame and the thumb shows its pressed sprite.
+    scroll_drag: bool,
+    /// Cursor-to-thumb-top offset captured when the scrollbar is grabbed, so the drag is
+    /// relative (the thumb follows the cursor from where it was grabbed) instead of
+    /// jumping the thumb to the cursor on the first click.
+    scroll_grab_dy: f32,
+    /// The scroll range captured when the thumb is grabbed: `max(max_pl_first, first)`, so a
+    /// grab in the blank-row region (offset past the end) drags smoothly from where it is
+    /// rather than snapping the list to the bottom.
+    scroll_drag_max: usize,
 }
 
 /// Media Library 3-pane browser, search, sort, selection and background-scan
@@ -694,6 +709,16 @@ pub struct LinAmpApp {
     /// Visibility of the (eq, playlist, library) windows before hiding to the
     /// tray, so restoring brings back exactly the windows that were open.
     tray_prev_vis: (bool, bool, bool),
+    /// Taskbar (non-tray) minimize: on X11 the EQ/PL/library windows are their
+    /// own child viewports (top-levels with `with_taskbar(false)`) and do not
+    /// iconify with the root, so minimize would leave them on screen. We hide
+    /// them like the tray path and restore them when the root un-minimizes.
+    /// `min_prev_vis` stashes what was open; `min_confirmed` marks that the WM
+    /// has actually reported the root minimized, so the first un-minimize after
+    /// that (and not the race on the frame we send the command) restores them.
+    minimized_to_taskbar: bool,
+    min_prev_vis: (bool, bool, bool),
+    min_confirmed: bool,
     /// Whether this session runs in System tray mode: the pref, gated on the tray
     /// actually running. Drives whether minimize and the close (X) button hide to
     /// the tray instead of their usual behaviour. Set at launch and updated live
@@ -798,6 +823,22 @@ fn crossfade_due(
     match duration {
         Some(d) if d > secs => position >= d - secs,
         _ => false,
+    }
+}
+
+/// Taskbar-restore edge (#209): given the root viewport's current minimized flag
+/// (`min`) and whether we've already seen it confirmed minimized (`confirmed`),
+/// return the updated `confirmed` flag and whether the children should now be
+/// restored. Restoring waits for a confirmed true->false edge, so the frame that
+/// sends Minimized(true) (before the WM applies it, `min` still false) cannot be
+/// misread as an immediate restore.
+fn taskbar_restore_step(min: bool, confirmed: bool) -> (bool, bool) {
+    if min {
+        (true, false)
+    } else if confirmed {
+        (false, true)
+    } else {
+        (false, false)
     }
 }
 
@@ -928,6 +969,10 @@ impl LinAmpApp {
                 px_w: classic::MAIN_W as f32,
                 px_h: classic::PL_H as f32,
                 menu_press: None,
+                title_press: None,
+                scroll_drag: false,
+                scroll_grab_dy: 0.0,
+                scroll_drag_max: 0,
             },
             popups: PopupState {
                 cur: None,
@@ -962,6 +1007,9 @@ impl LinAmpApp {
             hidden_to_tray: false,
             last_tray_toggle: None,
             tray_prev_vis: (false, false, false),
+            minimized_to_taskbar: false,
+            min_prev_vis: (false, false, false),
+            min_confirmed: false,
             tray_mode,
             // Re-apply the taskbar-skip hint for a few seconds after launch (Linux),
             // until the window is in the WM's client list. Only when starting hidden
@@ -1384,6 +1432,54 @@ impl LinAmpApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         ctx.request_repaint();
+    }
+
+    /// Taskbar-mode minimize (#209). The EQ/PL/library child viewports are their
+    /// own X11 top-levels and X11 won't iconify them with the root, so minimizing
+    /// the root alone leaves them on screen and the app looks like it never
+    /// minimized. Hide them like the tray path and stash what was open, then
+    /// minimize the root; `restore_from_taskbar` brings the children back when the
+    /// root is restored. Harmless on Windows, where the children follow the root.
+    fn minimize_to_taskbar(&mut self, ctx: &egui::Context) {
+        if !self.minimized_to_taskbar {
+            self.min_prev_vis = (self.eq_visible, self.pl_visible, self.lib_visible);
+            self.eq_visible = false;
+            self.pl_visible = false;
+            self.lib_visible = false;
+            self.minimized_to_taskbar = true;
+            self.min_confirmed = false;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+    }
+
+    /// Reopen the child windows that `minimize_to_taskbar` hid, once the root has
+    /// been restored from the taskbar. The WM restores the root itself.
+    fn restore_from_taskbar(&mut self) {
+        if self.minimized_to_taskbar {
+            let (eq, pl, lib) = self.min_prev_vis;
+            self.eq_visible = eq;
+            self.pl_visible = pl;
+            self.lib_visible = lib;
+            self.minimized_to_taskbar = false;
+            self.min_confirmed = false;
+        }
+    }
+
+    /// Watch the root viewport's minimized flag so a taskbar restore (true->false)
+    /// reopens the children hidden by `minimize_to_taskbar`. Gated on `min_confirmed`
+    /// so the frame that sends Minimized(true), before the WM applies it, cannot be
+    /// read as an immediate restore.
+    fn poll_taskbar_restore(&mut self, ctx: &egui::Context) {
+        if !self.minimized_to_taskbar {
+            return;
+        }
+        let min = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
+        let (confirmed, restore) = taskbar_restore_step(min, self.min_confirmed);
+        self.min_confirmed = confirmed;
+        if restore {
+            self.restore_from_taskbar();
+            ctx.request_repaint();
+        }
     }
 
     /// Push the crossfade length (or 0 = off) from Preferences to the player.
@@ -1998,7 +2094,9 @@ impl LinAmpApp {
     /// Stop playback, fading out first when the "fade out when stopping" pref is
     /// on (otherwise an immediate cut). Shift+V always forces a fade regardless.
     fn stop_playback(&mut self) {
-        if self.prefs.fade_on_stop && self.player.state() != PlayState::Stopped {
+        // Fade only when actually playing: a Stop while paused is already silent, so it
+        // should stop at once instead of running the fade against silence (#208).
+        if self.prefs.fade_on_stop && self.player.state() == PlayState::Playing {
             self.fade = Some((self.prefs.fade_on_stop_secs, FadeEnd::Stop));
             self.status = "Fading out…".into();
         } else {
@@ -2151,6 +2249,11 @@ impl LinAmpApp {
         if self.hidden_to_tray {
             return;
         }
+        // Same while minimized to the taskbar (#209): the child windows are hidden
+        // for the minimize, not closed, so don't persist the layout as "closed".
+        if self.minimized_to_taskbar {
+            return;
+        }
         // Don't churn the file every 300ms during a drag; the final resting
         // position is saved on the next cycle after the button is released.
         if self.geom.drag.is_some() || self.geom.lib_drag.is_some() {
@@ -2205,11 +2308,12 @@ impl LinAmpApp {
                 }
             }
             Btn::Minimize => {
-                // Tray mode: minimize hides to the tray; otherwise iconify normally.
+                // Tray mode: minimize hides to the tray; otherwise iconify the root
+                // and take the child windows down with it (#209).
                 if self.tray_mode {
                     self.hide_to_tray(ctx);
                 } else {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    self.minimize_to_taskbar(ctx);
                 }
             }
             Btn::Time => self.time_remaining = !self.time_remaining,
@@ -2226,8 +2330,9 @@ impl LinAmpApp {
                 self.set_double_size(ctx, dbl);
             }
             Btn::ClutterV => self.viz_mode = self.viz_mode.next(),
+            // Shade is handled on release in window.rs (toggle_shade); nothing here.
             Btn::Seek | Btn::Volume | Btn::Balance | Btn::TitleBar | Btn::Options
-            | Btn::ClutterO => {}
+            | Btn::ClutterO | Btn::Shade => {}
         }
     }
 
@@ -2318,6 +2423,27 @@ impl LinAmpApp {
         self.pl_select_with(target, ctrl, shift, crate::selection::CtrlMode::Add);
     }
 
+    /// Grab the scrollbar thumb at cursor y (unscaled px) without moving it: capture the
+    /// scroll range (including any blank-row overshoot) and where on the thumb it was
+    /// grabbed, so the drag is smooth and a grab never snaps the view.
+    fn pl_scroll_grab(&mut self, ny: f32) {
+        let len = self.playlist.len();
+        let visible = classic::pl_visible_rows(self.plview.px_h as u32);
+        let range = classic::max_pl_first(len, visible).max(self.plview.first);
+        self.plview.scroll_drag_max = range;
+        let thumb_y = classic::pl_scroll_thumb_y(self.plview.first, range, self.plview.px_h);
+        self.plview.scroll_grab_dy = ny - thumb_y;
+        self.plview.scroll_drag = true;
+    }
+
+    /// Move the scroll offset while the scrollbar is dragged: keep the grab point under the
+    /// cursor (relative drag) over the captured range.
+    fn pl_scroll_drag(&mut self, ny: f32) {
+        let thumb_y = ny - self.plview.scroll_grab_dy;
+        self.plview.first =
+            classic::pl_scroll_first_at(thumb_y, self.plview.scroll_drag_max, self.plview.px_h);
+    }
+
     /// Adjust the playlist scroll offset so row `idx` is visible.
     fn pl_scroll_to(&mut self, idx: usize) {
         let visible = classic::pl_visible_rows(self.plview.px_h as u32).max(1);
@@ -2404,8 +2530,10 @@ impl LinAmpApp {
             R::Close => {
                 self.eq_visible = false;
             }
-            // Applied on press/drag, nothing to do on release.
+            // Applied on press/drag or handled on release in window.rs (Shade ->
+            // toggle_shade); nothing to do here.
             R::Presets
+            | R::Shade
             | R::TitleBar
             | R::Preamp
             | R::Band(_)
@@ -3875,6 +4003,12 @@ impl LinAmpApp {
     /// down, or the one whose fly-out menu is currently open.
     fn pl_pressed_button(&self) -> Option<classic::PlRegion> {
         use classic::PlRegion as P;
+        if self.plview.scroll_drag {
+            return Some(P::Scroll);
+        }
+        if let Some(r) = self.plview.title_press {
+            return Some(r);
+        }
         if let Some(r) = self.plview.menu_press {
             return Some(r);
         }
@@ -4113,6 +4247,10 @@ impl eframe::App for LinAmpApp {
 
         // Rip/convert progress: drain the queue worker's messages into the job list.
         self.poll_convert();
+
+        // Taskbar minimize (#209): bring the child windows back when the root is
+        // restored from the taskbar.
+        self.poll_taskbar_restore(ctx);
 
         // Primary handover (#193): a secondary polls the instance lock, and when the
         // primary exits and frees it, takes over as the new primary so the open-request
@@ -4393,7 +4531,23 @@ fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{crossfade_due, file_name_key, parse_time, reorder_play_next};
+    use super::{
+        crossfade_due, file_name_key, parse_time, reorder_play_next, taskbar_restore_step,
+    };
+
+    #[test]
+    fn taskbar_restore_waits_for_a_confirmed_minimize_edge() {
+        // #209: the frame that sends Minimized(true) still reads min == false, and
+        // must not be mistaken for a restore before the WM has minimized the root.
+        let (confirmed, restore) = taskbar_restore_step(false, false);
+        assert!(!confirmed && !restore, "unconfirmed + not minimized: hold, no restore");
+        // WM reports the root minimized: confirm it, still no restore.
+        let (confirmed, restore) = taskbar_restore_step(true, confirmed);
+        assert!(confirmed && !restore, "minimized: confirm, no restore yet");
+        // Root un-minimized after a confirmed minimize: restore the children once.
+        let (confirmed, restore) = taskbar_restore_step(false, confirmed);
+        assert!(!confirmed && restore, "confirmed true->false edge restores");
+    }
 
     #[test]
     fn crossfade_due_fires_in_the_end_window() {

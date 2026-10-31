@@ -133,6 +133,10 @@ impl super::LinAmpApp {
         // whole list renders blank even while a track plays. Clamp it here so the
         // list is always visible.
         if win == ClWin::Pl {
+            // Keep the offset in range but do NOT snap it when the list fits: growing the
+            // window must leave the list where it is (showing more rows below, then blanks)
+            // rather than popping it to the top. The thumb reflects the end being visible
+            // by sitting at the bottom (see pl_scroll_thumb_y).
             self.plview.first = classic::clamp_pl_first(self.plview.first, self.playlist.len());
         }
 
@@ -286,6 +290,12 @@ impl super::LinAmpApp {
                         colors,
                         rows: &rows,
                         first: 0,
+                        scroll_first: self.plview.first,
+                        scroll_range: if self.plview.scroll_drag {
+                            self.plview.scroll_drag_max
+                        } else {
+                            classic::max_pl_first(self.playlist.len(), vis)
+                        },
                         pressed: self.pl_pressed_button(),
                         elapsed_secs,
                         cur_duration,

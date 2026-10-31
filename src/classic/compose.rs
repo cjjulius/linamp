@@ -115,9 +115,15 @@ impl ClassicSkin {
         if let Some(tb) = self.bmp("titlebar.bmp") {
             let sy = if st.focused { 0 } else { 15 };
             blit(&mut c, tb, 0, 0, 27, sy, 275, 14);
-            blit_btn(&mut c, tb, Btn::Minimize, 9, 0); // minimize
-            blit(&mut c, tb, 254, 3, 0, 18, 9, 9); // shade (not a hit-tested Btn)
-            blit_btn(&mut c, tb, Btn::Close, 18, 0); // close
+            // Minimize: pressed sprite (one row down) while the button is held.
+            let min_sy = if st.pressed == Some(Btn::Minimize) { 9 } else { 0 };
+            blit_btn(&mut c, tb, Btn::Minimize, 9, min_sy); // minimize
+            // Windowshade (collapse): normal sprite at (0,18), pressed at (9,18) while held.
+            let shade_sx = if st.pressed == Some(Btn::Shade) { 9 } else { 0 };
+            blit(&mut c, tb, 254, 3, shade_sx, 18, 9, 9); // collapse
+            // Close: pressed sprite (one row down) while the button is held.
+            let close_sy = if st.pressed == Some(Btn::Close) { 9 } else { 0 };
+            blit_btn(&mut c, tb, Btn::Close, 18, close_sy); // close
 
             // Clutterbar (O/A/I/D/V) column: the normal strip, then "lit" overlays
             // for the active toggles and whichever button is being pressed.
@@ -626,6 +632,17 @@ impl ClassicSkin {
             let ty = if st.focused { 134 } else { 149 };
             blit(&mut c, e, 0, 0, 0, ty, 275, 14); // title bar
             blit(&mut c, e, 264, 3, 0, 116, 9, 9); // close
+            // EQMAIN ships no pressed-close sprite, so darken the box while it is held.
+            if st.pressed == Some(EqRegion::Close) {
+                darken_rect(&mut c, 264, 3, 9, 9, 0.55);
+            }
+            // Windowshade (collapse) button, just left of Close. Its normal glyph is
+            // baked into the EQMAIN title-bar strip (0,134 focused / 0,149 unfocused)
+            // at local (254,3), so the title-bar blit above already draws it. EQMAIN
+            // ships no pressed sprite for it, so darken the box while it is held.
+            if st.pressed == Some(EqRegion::Shade) {
+                darken_rect(&mut c, 254, 3, 9, 9, 0.55);
+            }
 
             // On button.
             let (ox, oy) = match (st.on, st.pressed == Some(EqRegion::On)) {
@@ -730,16 +747,20 @@ impl ClassicSkin {
         // Inner background fill.
         fill_rect(&mut c, 12, 20, w - 12 - 20, height as i32 - 20 - 38, st.colors.bg);
 
-        if let Some(p) = self.bmp("pledit.bmp") {
+        let pledit = self.bmp("pledit.bmp");
+        if let Some(p) = pledit {
             let sy = if st.focused { 0 } else { 21 };
-            blit(&mut c, p, 0, 0, 0, sy, 25, 20); // top-left corner
-            blit(&mut c, p, w - 25, 0, 153, sy, 25, 20); // top-right corner
+            // Tiled middle and centre first, then the corners on top: the corners carry the
+            // collapse/close buttons, so drawing them last keeps the buttons from being
+            // painted over (and jittering) as the tiling reflows during a horizontal resize.
             let mut x = 25;
             while x < w - 25 {
                 blit(&mut c, p, x, 0, 127, sy, 25, 20);
                 x += 25;
             }
             blit(&mut c, p, (w - 100) / 2, 0, 26, sy, 100, 20); // title bar center
+            blit(&mut c, p, 0, 0, 0, sy, 25, 20); // top-left corner
+            blit(&mut c, p, w - 25, 0, 153, sy, 25, 20); // top-right corner (collapse/close)
 
             // Left/right window edges, tiled vertically.
             let mut y = 20;
@@ -749,6 +770,12 @@ impl ClassicSkin {
                 blit(&mut c, p, w - 20, y, 31, 42, 20, 29);
                 y += 29;
             }
+
+            // Always-visible scrollbar thumb in the right frame. Fixed-size handle sprite
+            // (PLEDIT 52,53 8x18; pressed 61,53); its position reflects the scroll offset.
+            let tsx = if st.pressed == Some(PlRegion::Scroll) { 61 } else { 52 };
+            let ty = pl_scroll_thumb_y(st.scroll_first, st.scroll_range, height as f32).round() as i32;
+            blit(&mut c, p, w - 15, ty, tsx, 53, 8, 18);
 
             // Bottom bar: left corner (Add/Rem/Sel/Misc), the tiled stretch, then
             // the right corner (mini-player / List / time). Stretch tiles the 4px
@@ -762,7 +789,15 @@ impl ClassicSkin {
             }
             blit(&mut c, p, 0, by, 0, 72, 125, 38); // bottom-left
             blit(&mut c, p, w - 150, by, 126, 72, 150, 38); // bottom-right
-            blit(&mut c, p, w - 11, 3, 52, 42, 9, 9); // close
+            // The normal close X and collapse button are baked into the top-right corner
+            // sprite; only overlay the pressed close sprite (52,42) while Close is held, and
+            // darken the collapse box while Shade is held, so they press in like the others.
+            if st.pressed == Some(PlRegion::Close) {
+                blit(&mut c, p, w - 11, 3, 52, 42, 9, 9); // close (pressed)
+            }
+            if st.pressed == Some(PlRegion::Shade) {
+                darken_rect(&mut c, w - 20, 3, 9, 9, 0.55);
+            }
 
             // Depress the held bottom-bar menu button. pledit has no pressed
             // sprite for these, so darken the button region to show the press.
@@ -828,6 +863,13 @@ impl ClassicSkin {
                 title_w = tx - PL_LIST_X - 6; // leave a gap before the time
             }
             self.draw_text_tinted(&mut c, text, PL_LIST_X, ry, title_w.max(0), col);
+        }
+
+        // Skins without PLEDIT art get a synthesized always-visible scrollbar thumb from
+        // the skin colours, so the scrollbar is present in every skin.
+        if pledit.is_none() {
+            let ty = pl_scroll_thumb_y(st.scroll_first, st.scroll_range, height as f32).round() as i32;
+            fill_rect(&mut c, w - 13, ty, 7, PL_SCROLL_THUMB_H, st.colors.normal);
         }
         c
     }
@@ -931,8 +973,13 @@ impl ClassicSkin {
                 x += 25;
             }
             let ry = if focused { 42 } else { 57 };
-            blit(&mut c, p, 225, 0, 99, ry, 50, 14); // right end (with buttons)
-            blit(&mut c, p, 264, 3, 52, 42, 9, 9); // close
+            // The right-end sprite bakes in the normal close glyph at dest (264,3),
+            // the same way the expanded window's top-right corner does. The separate
+            // PLEDIT sprite at (52,42) is the *pressed* close; drawing it here
+            // unconditionally made the collapsed close always look pressed/boxed, so
+            // it is left to the baked glyph (the shade bar closes on click anyway, so
+            // there is no held frame to show a pressed state).
+            blit(&mut c, p, 225, 0, 99, ry, 50, 14); // right end (with buttons, incl. close)
 
             // Shade-bar track + time: title at `PL_LIST_X` (aligned with the
             // expanded rows), time right-aligned before the button cluster, title
@@ -1303,6 +1350,8 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
             },
             rows: &rows,
             first: 0,
+            scroll_first: 0,
+            scroll_range: 0,
             pressed: None,
             elapsed_secs: 73.0, // 1:13, matching the main display
             cur_duration: 325.0,
