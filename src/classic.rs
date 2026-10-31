@@ -120,7 +120,13 @@ pub struct PlState<'a> {
     pub colors: PlColors,
     pub rows: &'a [PlRow],
     pub first: usize,
-    /// Bottom-bar menu button currently held / with its menu open.
+    /// The scroll offset (index of the first visible row) and the scroll range the thumb
+    /// spans, used to place the always-visible scrollbar thumb. `rows` is pre-sliced to the
+    /// visible window with `first` 0, so these carry the full picture the thumb needs.
+    pub scroll_first: usize,
+    pub scroll_range: usize,
+    /// Bottom-bar menu button currently held / with its menu open (or the scrollbar while
+    /// it is being dragged, for the pressed thumb sprite).
     pub pressed: Option<PlRegion>,
     /// Elapsed time of the current track, in seconds (0 when stopped).
     pub elapsed_secs: f32,
@@ -239,6 +245,75 @@ mod tests {
         assert_eq!(clamp_pl_first(50, 3), 2);
         // An empty playlist clamps to 0.
         assert_eq!(clamp_pl_first(7, 0), 0);
+    }
+
+    #[test]
+    fn max_pl_first_stops_last_row_at_the_bottom() {
+        // 10 rows, 4 visible: the furthest scroll shows rows 6..10, so first maxes at 6
+        // (no blank rows past the last song).
+        assert_eq!(max_pl_first(10, 4), 6);
+        // A list that fits the window cannot scroll.
+        assert_eq!(max_pl_first(4, 4), 0);
+        assert_eq!(max_pl_first(3, 4), 0);
+        assert_eq!(max_pl_first(0, 4), 0);
+    }
+
+    #[test]
+    fn pl_scrollbar_thumb_spans_the_scroll_range() {
+        let height = 200.0;
+        let range = 80usize; // at rest this is max_pl_first for an overflowing list
+        let top_y = pl_scroll_thumb_y(0, range, height);
+        let mid = pl_scroll_thumb_y(range / 2, range, height);
+        let bot_y = pl_scroll_thumb_y(range, range, height);
+        // Top at offset 0, proportional through the range, bottom at the range end.
+        assert!(top_y < mid && mid < bot_y);
+        // An offset past the range (blank rows below the end) pins the thumb to the bottom
+        // rather than overflowing the track.
+        assert_eq!(pl_scroll_thumb_y(range + 20, range, height), bot_y);
+        // Round-trips with the inverse, clamped to 0..=range.
+        assert_eq!(pl_scroll_first_at(top_y, range, height), 0);
+        assert_eq!(pl_scroll_first_at(bot_y, range, height), range);
+        assert_eq!(pl_scroll_first_at(bot_y + 100.0, range, height), range);
+        // A zero range (whole list fits): offset 0 stays at the top (nothing scrolled off),
+        // any non-zero offset (blank rows) sits at the bottom, and nothing scrolls.
+        assert_eq!(pl_scroll_thumb_y(0, 0, height), top_y);
+        assert_eq!(pl_scroll_thumb_y(3, 0, height), bot_y);
+        assert_eq!(pl_scroll_first_at(9999.0, 0, height), 0);
+    }
+
+    #[test]
+    fn delete_at_bottom_blank_persists_until_scroll() {
+        // Scrolled to the bottom of a 10-row list with 4 visible: first = 6.
+        let visible = 4;
+        let first = max_pl_first(10, visible);
+        assert_eq!(first, 6);
+        // Delete the last two rows (len 8). The loose clamp used on render/after a delete
+        // keeps `first` where it is, so the blank space at the bottom remains.
+        assert_eq!(clamp_pl_first(first, 8), 6);
+        // A scroll gesture applies the tighter clamp, which pulls `first` back so the last
+        // row rests at the bottom (snapping the blank space away).
+        assert_eq!(max_pl_first(8, visible), 4);
+        assert!(max_pl_first(8, visible) < clamp_pl_first(first, 8));
+    }
+
+    #[test]
+    fn pl_region_at_hits_the_scrollbar_on_the_right_edge() {
+        // The right-edge channel in the list area is the scrollbar, not a list row.
+        assert_eq!(
+            pl_region_at(275.0 - 8.0, 100.0, 275.0, 180.0),
+            Some(PlRegion::Scroll)
+        );
+        // Just left of the channel is still the list.
+        assert_eq!(pl_region_at(100.0, 100.0, 275.0, 180.0), Some(PlRegion::List));
+    }
+
+    #[test]
+    fn pl_region_at_hits_the_collapse_button_left_of_close() {
+        // Title-bar top-right: close box, then the collapse (windowshade) button to its left.
+        assert_eq!(pl_region_at(275.0 - 6.0, 6.0, 275.0, 180.0), Some(PlRegion::Close));
+        assert_eq!(pl_region_at(275.0 - 15.0, 6.0, 275.0, 180.0), Some(PlRegion::Shade));
+        // Further left along the bar is a normal title-bar drag.
+        assert_eq!(pl_region_at(100.0, 6.0, 275.0, 180.0), Some(PlRegion::TitleBar));
     }
 
     #[test]
@@ -501,6 +576,27 @@ mod tests {
     }
 
     #[test]
+    fn pl_max_width_caps_at_desktop_right() {
+        // Desktop 2000px wide, window left at 400, scale 1: room is 1600px.
+        assert_eq!(pl_max_width(2000.0, 400.0, 1.0), Some(1600.0));
+        // Double-size: the same 1600pt of room is 800 skin px.
+        assert_eq!(pl_max_width(2000.0, 400.0, 2.0), Some(800.0));
+        // No room for even the minimum width, so None (leave the size alone).
+        assert_eq!(pl_max_width(2000.0, 1900.0, 1.0), None);
+        // Exactly the minimum width (MAIN_W) is allowed.
+        assert_eq!(pl_max_width(400.0 + MAIN_W as f32, 400.0, 1.0), Some(MAIN_W as f32));
+    }
+
+    #[test]
+    fn title_bar_collapse_button_regions() {
+        // Collapse (windowshade) button sits at x 254..263, just left of Close (264..273).
+        assert_eq!(region_at(258.0, 6.0), Some(Btn::Shade));
+        assert_eq!(region_at(268.0, 6.0), Some(Btn::Close));
+        assert_eq!(eq_region_at(258.0, 6.0), Some(EqRegion::Shade));
+        assert_eq!(eq_region_at(268.0, 6.0), Some(EqRegion::Close));
+    }
+
+    #[test]
     fn playlist_row_draws_track_time() {
         // #73: a row with a known length renders the time right-aligned; a row
         // with no length renders none. Checks for normal-coloured text pixels in
@@ -521,6 +617,8 @@ mod tests {
             colors,
             rows: &rows,
             first: 0,
+            scroll_first: 0,
+            scroll_range: 0,
             pressed: None,
             elapsed_secs: 0.0,
             cur_duration: 0.0,
@@ -557,6 +655,7 @@ mod tests {
         assert_eq!(main_shade_region_at(180.0, 6.0), Some(ShadeHit::Play));
         assert_eq!(main_shade_region_at(200.0, 6.0), Some(ShadeHit::Stop));
         assert_eq!(main_shade_region_at(219.0, 6.0), Some(ShadeHit::Eject));
+        assert_eq!(main_shade_region_at(248.0, 6.0), Some(ShadeHit::Minimize));
         assert_eq!(main_shade_region_at(258.0, 6.0), Some(ShadeHit::Restore));
         assert_eq!(main_shade_region_at(268.0, 6.0), Some(ShadeHit::Close));
         assert_eq!(main_shade_region_at(100.0, 6.0), Some(ShadeHit::TitleBar));
@@ -581,6 +680,8 @@ mod tests {
     #[test]
     fn shade_regions() {
         assert_eq!(shade_region_at(265.0, 5.0), Some(ShadeHit::Close));
+        // Restore (expand) button just left of Close on the EQ/playlist shade bars.
+        assert_eq!(shade_region_at(258.0, 5.0), Some(ShadeHit::Restore));
         assert_eq!(shade_region_at(50.0, 5.0), Some(ShadeHit::TitleBar));
         assert_eq!(shade_region_at(50.0, 20.0), None);
     }

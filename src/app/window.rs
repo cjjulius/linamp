@@ -100,9 +100,18 @@ impl super::LinAmpApp {
         }
 
         if win == ClWin::Pl && !shaded && scroll != 0.0 {
-            let max = self.playlist.len().saturating_sub(1) as i32;
-            let step = if scroll > 0.0 { -3 } else { 3 };
-            self.plview.first = (self.plview.first as i32 + step).clamp(0, max.max(0)) as usize;
+            // Scrolling up is always free down to the top. Scrolling down stops with the
+            // last song at the bottom (max_pl_first), but if the offset already sits past
+            // that (blank space left by a resize or a delete), down holds it there rather
+            // than snapping up; a few wheel-ups then ease it back into range.
+            let visible = classic::pl_visible_rows(self.plview.px_h as u32);
+            let max = classic::max_pl_first(self.playlist.len(), visible);
+            let first = self.plview.first;
+            self.plview.first = if scroll > 0.0 {
+                first.saturating_sub(3)
+            } else {
+                (first + 3).min(max.max(first))
+            };
         }
 
         // Mouse wheel over the main window adjusts volume, like the classic player
@@ -174,6 +183,10 @@ impl super::LinAmpApp {
                         match hit {
                             Some(H::Close) => self.close_window(ctx, win),
                             Some(H::Restore) => self.toggle_shade(win),
+                            // Minimize from the collapsed bar behaves exactly like the
+                            // expanded button: tray-hide or taskbar-minimize (with the
+                            // child windows), leaving the main window shaded.
+                            Some(H::Minimize) => self.trigger_classic(ctx, Btn::Minimize),
                             Some(H::TitleBar) => self.start_drag(ctx, win, screen_cursor),
                             Some(H::Options) => self.open_popup_in(Popup::Options, win, l),
                             Some(H::Prev) => self.trigger_classic(ctx, Btn::Prev),
@@ -231,11 +244,40 @@ impl super::LinAmpApp {
                         ClWin::Pl => {
                             use classic::PlRegion as P;
                             match classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h) {
-                                Some(P::Close) => self.close_window(ctx, ClWin::Pl),
+                                // Close and the collapse (windowshade) button press in while
+                                // held and only act on release if the cursor is still over
+                                // them (so you can press, slide off, and release to cancel).
+                                Some(r @ (P::Close | P::Shade)) => {
+                                    self.plview.title_press = Some(r);
+                                }
                                 Some(P::TitleBar) => self.start_drag(ctx, win, screen_cursor),
                                 Some(P::Resize) => {
                                     self.geom.resize_pl =
                                         Some(egui::vec2(self.plview.px_w - nx, self.plview.px_h - ny))
+                                }
+                                Some(P::Scroll) => {
+                                    // A press on the track (not the thumb) first jumps so the
+                                    // thumb centres on the click, as if normally loaded (clamped
+                                    // so the end rests at the bottom, no blank rows). Then, in
+                                    // every case, grab the thumb so holding and moving keeps
+                                    // dragging from there (via the global cursor, which tracks
+                                    // off-window too). Only the thumb moves, never the list on
+                                    // its own.
+                                    let len = self.playlist.len();
+                                    let visible = classic::pl_visible_rows(self.plview.px_h as u32);
+                                    let max = classic::max_pl_first(len, visible);
+                                    let thumb_top =
+                                        classic::pl_scroll_thumb_y(self.plview.first, max, self.plview.px_h);
+                                    let thumb_bot = thumb_top + classic::PL_SCROLL_THUMB_H as f32;
+                                    let gy = global_cursor_points(ctx)
+                                        .map(|g| (g.y - self.geom.win_pos[win_idx(ClWin::Pl)].y) / self.scale)
+                                        .unwrap_or(ny);
+                                    if !(ny >= thumb_top && ny < thumb_bot) {
+                                        let centred = gy - classic::PL_SCROLL_THUMB_H as f32 / 2.0;
+                                        self.plview.first =
+                                            classic::pl_scroll_first_at(centred, max, self.plview.px_h);
+                                    }
+                                    self.pl_scroll_grab(gy);
                                 }
                                 Some(P::List) => {
                                     let row = classic::pl_row_at(ny, self.plview.first);
@@ -287,6 +329,18 @@ impl super::LinAmpApp {
 
         if down {
             let idx = win_idx(win);
+            // Drive the scrollbar drag from the global cursor, not the viewport-local
+            // pointer: the local pointer goes None once the cursor leaves the window, which
+            // froze the drag and, on re-entry near the top, snapped the thumb to the top.
+            // The global cursor keeps increasing as you pull down past the window, so the
+            // offset holds at the bottom (pl_scroll_first_at clamps it there).
+            if win == ClWin::Pl && self.plview.scroll_drag {
+                if let Some(g) = global_cursor_points(ctx) {
+                    let ny = (g.y - self.geom.win_pos[win_idx(ClWin::Pl)].y) / self.scale;
+                    self.pl_scroll_drag(ny);
+                }
+                ctx.request_repaint();
+            }
             let is_my_drag = self.geom.drag.as_ref().map(|d| d.win == win).unwrap_or(false);
             if is_my_drag {
                 let manual = self.geom.drag.as_ref().unwrap().manual;
@@ -383,6 +437,13 @@ impl super::LinAmpApp {
                         if let Some(max_h) = classic::pl_max_height(vr.max.y, top_y, self.scale) {
                             self.plview.px_h = self.plview.px_h.min(max_h);
                         }
+                        // Same cap on width: at the right screen edge the WM pins the right
+                        // side and shifts the window left, so without this the width runs
+                        // away (#156 was only fixed for height).
+                        let left_x = self.geom.win_pos[win_idx(ClWin::Pl)].x;
+                        if let Some(max_w) = classic::pl_max_width(vr.max.x, left_x, self.scale) {
+                            self.plview.px_w = self.plview.px_w.min(max_w);
+                        }
                     }
                 }
             }
@@ -398,6 +459,11 @@ impl super::LinAmpApp {
                     self.geom.drag = Some(d);
                 }
             }
+            // End a scrollbar drag on release even when the cursor is off-window, where the
+            // `released` edge below may not reach this viewport.
+            if win == ClWin::Pl {
+                self.plview.scroll_drag = false;
+            }
         }
 
         if released {
@@ -412,6 +478,7 @@ impl super::LinAmpApp {
                     (((self.plview.px_w - min_w) / wstep).round() * wstep + min_w).max(min_w);
             }
             self.geom.resize_pl = None;
+            self.plview.scroll_drag = false;
             if let Some(l) = local {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;
@@ -420,6 +487,9 @@ impl super::LinAmpApp {
                         if classic::region_at(nx, ny) == Some(r) {
                             if r == Btn::Options || r == Btn::ClutterO {
                                 self.open_popup_in(Popup::Options, win, l);
+                            } else if r == Btn::Shade {
+                                // The title-bar collapse button windowshades the window.
+                                self.toggle_shade(ClWin::Main);
                             } else {
                                 // Btn::Time toggles elapsed/remaining on a single
                                 // click via trigger_classic, matching classic
@@ -439,6 +509,8 @@ impl super::LinAmpApp {
                         if self.eq_region(nx, ny) == Some(er) {
                             if er == classic::EqRegion::Presets {
                                 self.open_popup_in(Popup::EqPresets, ClWin::Eq, l);
+                            } else if er == classic::EqRegion::Shade {
+                                self.toggle_shade(ClWin::Eq);
                             } else {
                                 self.trigger_eq(ctx, er);
                             }
@@ -446,9 +518,10 @@ impl super::LinAmpApp {
                     }
                 }
                 if win == ClWin::Pl {
+                    use classic::PlRegion as P;
+                    let at = classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h);
                     if let Some(r) = self.plview.menu_press.take() {
-                        if classic::pl_region_at(nx, ny, self.plview.px_w, self.plview.px_h) == Some(r) {
-                            use classic::PlRegion as P;
+                        if at == Some(r) {
                             let kind = match r {
                                 P::AddMenu => Popup::PlAdd,
                                 P::RemMenu => Popup::PlRem,
@@ -459,18 +532,30 @@ impl super::LinAmpApp {
                             self.open_popup_in(kind, ClWin::Pl, l);
                         }
                     }
+                    // Fire a held title-bar button only if released over it.
+                    if let Some(r) = self.plview.title_press.take() {
+                        if at == Some(r) {
+                            match r {
+                                P::Close => self.close_window(ctx, ClWin::Pl),
+                                P::Shade => self.toggle_shade(ClWin::Pl),
+                                _ => {}
+                            }
+                        }
+                    }
                 }
             }
             self.render.active_region = None;
             self.eq.active = None;
             self.plview.menu_press = None;
+            self.plview.title_press = None;
         }
 
         if win == ClWin::Main {
             self.render.pressed_btn = if down {
                 match self.render.active_region {
                     Some(b @ (Btn::Prev | Btn::Play | Btn::Pause | Btn::Stop | Btn::Next | Btn::Eject
-                    | Btn::Shuffle | Btn::Repeat | Btn::Seek | Btn::Volume | Btn::Balance)) => Some(b),
+                    | Btn::Shuffle | Btn::Repeat | Btn::Seek | Btn::Volume | Btn::Balance
+                    | Btn::Close | Btn::Shade | Btn::Minimize)) => Some(b),
                     _ => None,
                 }
             } else {

@@ -41,6 +41,8 @@ pub enum Btn {
     Balance,
     Close,
     Minimize,
+    /// Windowshade (collapse) button in the title bar, just left of Close.
+    Shade,
     Options,
     TitleBar,
     Time,
@@ -67,6 +69,7 @@ pub const REGIONS: &[(Btn, i32, i32, i32, i32)] = &[
     (Btn::ClutterD, 10, 48, 8, 8),
     (Btn::ClutterV, 10, 56, 8, 8),
     (Btn::Close, 264, 3, 9, 9),
+    (Btn::Shade, 254, 3, 9, 9),
     (Btn::Minimize, 244, 3, 9, 9),
     (Btn::Prev, 16, 88, 23, 18),
     (Btn::Play, 39, 88, 23, 18),
@@ -211,6 +214,8 @@ pub enum ShadeHit {
     TitleBar,
     // Main window-shade extras (the EQ/playlist shades only use Close/TitleBar).
     Restore,
+    /// Minimize button on the collapsed main bar (same slot as the expanded window).
+    Minimize,
     Options,
     Prev,
     Play,
@@ -246,8 +251,13 @@ pub fn shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
     if y >= 14.0 {
         return None;
     }
-    if x >= 264.0 && x < 273.0 && y >= 3.0 && y < 12.0 {
+    let btn = |bx: f32| x >= bx && x < bx + 9.0 && (3.0..12.0).contains(&y);
+    if btn(264.0) {
         Some(ShadeHit::Close)
+    } else if btn(254.0) {
+        // Restore (expand) button, just left of Close; the EQ and playlist shade bars
+        // are MAIN_W wide, so this matches their windowshade/restore glyph position.
+        Some(ShadeHit::Restore)
     } else {
         Some(ShadeHit::TitleBar)
     }
@@ -260,11 +270,16 @@ pub fn main_shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
     if y >= 14.0 {
         return None;
     }
-    if x >= 264.0 && x < 273.0 && y >= 3.0 && y < 12.0 {
+    let btn = |bx: f32| x >= bx && x < bx + 9.0 && (3.0..12.0).contains(&y);
+    if btn(264.0) {
         return Some(ShadeHit::Close);
     }
-    if x >= 254.0 && x < 263.0 && y >= 3.0 && y < 12.0 {
+    if btn(254.0) {
         return Some(ShadeHit::Restore);
+    }
+    // Minimize button, just left of Restore, in the same slot as the expanded window.
+    if btn(244.0) {
+        return Some(ShadeHit::Minimize);
     }
     // Wave/clutter button at the far left opens the Options menu.
     if x >= 1.0 && x < 18.0 {
@@ -372,6 +387,8 @@ pub enum EqRegion {
     Auto,
     Presets,
     Close,
+    /// Windowshade (collapse) button in the title bar, just left of Close.
+    Shade,
     TitleBar,
     Preamp,
     Band(usize),
@@ -417,6 +434,9 @@ pub fn eq_region_at(x: f32, y: f32) -> Option<EqRegion> {
     if hit(264.0, 3.0, 9.0, 9.0) {
         return Some(EqRegion::Close);
     }
+    if hit(254.0, 3.0, 9.0, 9.0) {
+        return Some(EqRegion::Shade);
+    }
     if hit(14.0, 18.0, 26.0, 12.0) {
         return Some(EqRegion::On);
     }
@@ -451,6 +471,8 @@ pub fn eq_value_at_y(y: f32) -> f32 {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PlRegion {
     Close,
+    /// The windowshade (collapse) button in the title bar, just left of Close.
+    Shade,
     TitleBar,
     List,
     AddMenu,
@@ -459,6 +481,8 @@ pub enum PlRegion {
     MiscMenu,
     ListMenu,
     Resize,
+    /// The right-edge scrollbar channel, where the thumb travels.
+    Scroll,
     // Mini-player transport buttons in the bottom-right sprite.
     MiniPrev,
     MiniPlay,
@@ -498,12 +522,21 @@ pub fn pl_region_at(x: f32, y: f32, width: f32, height: f32) -> Option<PlRegion>
     if x >= width - 11.0 && x < width - 2.0 && y >= 3.0 && y < 12.0 {
         return Some(PlRegion::Close);
     }
+    // Windowshade (collapse) button, just left of Close in the title bar.
+    if x >= width - 20.0 && x < width - 11.0 && y >= 3.0 && y < 12.0 {
+        return Some(PlRegion::Shade);
+    }
     if y < 20.0 {
         return Some(PlRegion::TitleBar);
     }
     // Resize grip (bottom-right corner).
     if x >= width - 20.0 && y >= height - 20.0 {
         return Some(PlRegion::Resize);
+    }
+    // Right-edge scrollbar channel (the thumb lives in the right frame), checked before
+    // the list so a click on the far right scrolls rather than selecting a row.
+    if x >= width - 16.0 && y >= 20.0 && y < height - 38.0 {
+        return Some(PlRegion::Scroll);
     }
     if y < height - 38.0 {
         return Some(PlRegion::List);
@@ -546,9 +579,63 @@ pub fn pl_visible_rows(height: u32) -> usize {
 /// Clamp a playlist scroll offset so it never points past the last row. An offset
 /// at or beyond the length makes the visible range (`first..end`) empty, which would
 /// render the whole list blank, so callers that change the playlist length must
-/// re-clamp. Returns 0 for an empty list.
+/// re-clamp. Returns 0 for an empty list. This is the loose clamp used on render and
+/// after a delete, so the "blank space at the bottom after deleting" case is allowed to
+/// persist; a scroll gesture re-applies the tighter [`max_pl_first`] clamp.
 pub fn clamp_pl_first(first: usize, len: usize) -> usize {
     first.min(len.saturating_sub(1))
+}
+
+/// Fixed height (native px) of the scrollbar thumb sprite (PLEDIT.BMP 52,53 8x18).
+pub(crate) const PL_SCROLL_THUMB_H: i32 = 18;
+
+/// The furthest a scroll offset may advance from a scroll gesture: the last row rests at
+/// the bottom with no blank rows past it (retro Winamp behaviour). 0 when the list fits
+/// the window.
+pub fn max_pl_first(len: usize, visible: usize) -> usize {
+    len.saturating_sub(visible)
+}
+
+/// (top, travel) of the scrollbar thumb's vertical range for a PL window `height` px: the
+/// thumb top moves from just under the title bar to `thumb_h` above the bottom bar.
+fn pl_scroll_track(height: f32) -> (f32, f32) {
+    let top = PL_LIST_Y as f32;
+    let bottom = height - 38.0;
+    let travel = (bottom - top - PL_SCROLL_THUMB_H as f32).max(0.0);
+    (top, travel)
+}
+
+/// Top y (native px) of the fixed-size scrollbar thumb for scroll offset `first` over a
+/// scroll `range` (the number of offsets 0..=range the thumb spans). The thumb is at the
+/// top for `first == 0`, proportional through the range, and at the bottom for
+/// `first >= range`. The caller picks the range: at rest it is `max_pl_first` (so the
+/// thumb sits at the bottom whenever the end of the list is visible, `first >= max_pl_first`,
+/// including the blank-row case where `first > max_pl_first` clamps to the bottom); during a
+/// drag it is the offset grabbed, so the thumb tracks the cursor smoothly through the blank
+/// rows instead of snapping. A zero range (whole list fits) is top at 0, bottom otherwise.
+pub fn pl_scroll_thumb_y(first: usize, range: usize, height: f32) -> f32 {
+    let (top, travel) = pl_scroll_track(height);
+    let frac = if range == 0 {
+        if first == 0 {
+            0.0
+        } else {
+            1.0
+        }
+    } else {
+        (first as f32 / range as f32).min(1.0)
+    };
+    top + frac * travel
+}
+
+/// The scroll offset a thumb whose top sits at window-y `thumb_y` represents over `range`,
+/// the inverse of [`pl_scroll_thumb_y`], clamped to `0..=range`. 0 when the range is zero.
+pub fn pl_scroll_first_at(thumb_y: f32, range: usize, height: f32) -> usize {
+    let (top, travel) = pl_scroll_track(height);
+    if range == 0 || travel <= 0.0 {
+        return 0;
+    }
+    let frac = ((thumb_y - top) / travel).clamp(0.0, 1.0);
+    (frac * range as f32).round() as usize
 }
 
 /// Smallest playlist height, in unscaled skin pixels (two title rows + a usable
@@ -565,6 +652,17 @@ pub const PL_MIN_H: f32 = 87.0;
 pub fn pl_max_height(desktop_bottom: f32, top_y: f32, scale: f32) -> Option<f32> {
     let max_h = (desktop_bottom - top_y) / scale.max(0.01);
     (max_h >= PL_MIN_H).then_some(max_h)
+}
+
+/// The widest the playlist may grow (unscaled skin pixels) before its right edge would
+/// pass `desktop_right`, given the window left edge `left_x` and the UI `scale`. The
+/// width-axis twin of [`pl_max_height`]: at the right screen edge the WM pins the right
+/// side and shifts the window left, so without this cap the width runs away (#156 was only
+/// fixed for height). `desktop_right` is the whole virtual desktop's right edge, so a
+/// resize still extends onto other monitors and only stops at the far-right virtual edge.
+pub fn pl_max_width(desktop_right: f32, left_x: f32, scale: f32) -> Option<f32> {
+    let max_w = (desktop_right - left_x) / scale.max(0.01);
+    (max_w >= MAIN_W as f32).then_some(max_w)
 }
 
 /// Format a playlist time like the classic player's bottom bar: `M:SS`, or `H:MM:SS` once it
