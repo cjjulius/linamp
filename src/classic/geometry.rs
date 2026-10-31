@@ -214,6 +214,8 @@ pub enum ShadeHit {
     TitleBar,
     // Main window-shade extras (the EQ/playlist shades only use Close/TitleBar).
     Restore,
+    /// Minimize button on the collapsed main bar (same slot as the expanded window).
+    Minimize,
     Options,
     Prev,
     Play,
@@ -268,11 +270,16 @@ pub fn main_shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
     if y >= 14.0 {
         return None;
     }
-    if x >= 264.0 && x < 273.0 && y >= 3.0 && y < 12.0 {
+    let btn = |bx: f32| x >= bx && x < bx + 9.0 && (3.0..12.0).contains(&y);
+    if btn(264.0) {
         return Some(ShadeHit::Close);
     }
-    if x >= 254.0 && x < 263.0 && y >= 3.0 && y < 12.0 {
+    if btn(254.0) {
         return Some(ShadeHit::Restore);
+    }
+    // Minimize button, just left of Restore, in the same slot as the expanded window.
+    if btn(244.0) {
+        return Some(ShadeHit::Minimize);
     }
     // Wave/clutter button at the far left opens the Options menu.
     if x >= 1.0 && x < 18.0 {
