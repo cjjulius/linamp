@@ -2017,7 +2017,9 @@ impl LinAmpApp {
     /// Stop playback, fading out first when the "fade out when stopping" pref is
     /// on (otherwise an immediate cut). Shift+V always forces a fade regardless.
     fn stop_playback(&mut self) {
-        if self.prefs.fade_on_stop && self.player.state() != PlayState::Stopped {
+        // Fade only when actually playing: a Stop while paused is already silent, so it
+        // should stop at once instead of running the fade against silence (#208).
+        if self.prefs.fade_on_stop && self.player.state() == PlayState::Playing {
             self.fade = Some((self.prefs.fade_on_stop_secs, FadeEnd::Stop));
             self.status = "Fading out…".into();
         } else {
@@ -2245,8 +2247,9 @@ impl LinAmpApp {
                 self.set_double_size(ctx, dbl);
             }
             Btn::ClutterV => self.viz_mode = self.viz_mode.next(),
+            // Shade is handled on release in window.rs (toggle_shade); nothing here.
             Btn::Seek | Btn::Volume | Btn::Balance | Btn::TitleBar | Btn::Options
-            | Btn::ClutterO => {}
+            | Btn::ClutterO | Btn::Shade => {}
         }
     }
 
@@ -2444,8 +2447,10 @@ impl LinAmpApp {
             R::Close => {
                 self.eq_visible = false;
             }
-            // Applied on press/drag, nothing to do on release.
+            // Applied on press/drag or handled on release in window.rs (Shade ->
+            // toggle_shade); nothing to do here.
             R::Presets
+            | R::Shade
             | R::TitleBar
             | R::Preamp
             | R::Band(_)

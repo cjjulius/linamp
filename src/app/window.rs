@@ -433,6 +433,13 @@ impl super::LinAmpApp {
                         if let Some(max_h) = classic::pl_max_height(vr.max.y, top_y, self.scale) {
                             self.plview.px_h = self.plview.px_h.min(max_h);
                         }
+                        // Same cap on width: at the right screen edge the WM pins the right
+                        // side and shifts the window left, so without this the width runs
+                        // away (#156 was only fixed for height).
+                        let left_x = self.geom.win_pos[win_idx(ClWin::Pl)].x;
+                        if let Some(max_w) = classic::pl_max_width(vr.max.x, left_x, self.scale) {
+                            self.plview.px_w = self.plview.px_w.min(max_w);
+                        }
                     }
                 }
             }
@@ -476,6 +483,9 @@ impl super::LinAmpApp {
                         if classic::region_at(nx, ny) == Some(r) {
                             if r == Btn::Options || r == Btn::ClutterO {
                                 self.open_popup_in(Popup::Options, win, l);
+                            } else if r == Btn::Shade {
+                                // The title-bar collapse button windowshades the window.
+                                self.toggle_shade(ClWin::Main);
                             } else {
                                 // Btn::Time toggles elapsed/remaining on a single
                                 // click via trigger_classic, matching classic
@@ -495,6 +505,8 @@ impl super::LinAmpApp {
                         if self.eq_region(nx, ny) == Some(er) {
                             if er == classic::EqRegion::Presets {
                                 self.open_popup_in(Popup::EqPresets, ClWin::Eq, l);
+                            } else if er == classic::EqRegion::Shade {
+                                self.toggle_shade(ClWin::Eq);
                             } else {
                                 self.trigger_eq(ctx, er);
                             }
@@ -538,7 +550,8 @@ impl super::LinAmpApp {
             self.render.pressed_btn = if down {
                 match self.render.active_region {
                     Some(b @ (Btn::Prev | Btn::Play | Btn::Pause | Btn::Stop | Btn::Next | Btn::Eject
-                    | Btn::Shuffle | Btn::Repeat | Btn::Seek | Btn::Volume | Btn::Balance | Btn::Close)) => Some(b),
+                    | Btn::Shuffle | Btn::Repeat | Btn::Seek | Btn::Volume | Btn::Balance
+                    | Btn::Close | Btn::Shade)) => Some(b),
                     _ => None,
                 }
             } else {
