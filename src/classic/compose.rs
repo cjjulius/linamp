@@ -116,7 +116,9 @@ impl ClassicSkin {
             let sy = if st.focused { 0 } else { 15 };
             blit(&mut c, tb, 0, 0, 27, sy, 275, 14);
             blit_btn(&mut c, tb, Btn::Minimize, 9, 0); // minimize
-            blit(&mut c, tb, 254, 3, 0, 18, 9, 9); // shade (not a hit-tested Btn)
+            // Windowshade (collapse): normal sprite at (0,18), pressed at (9,18) while held.
+            let shade_sx = if st.pressed == Some(Btn::Shade) { 9 } else { 0 };
+            blit(&mut c, tb, 254, 3, shade_sx, 18, 9, 9); // collapse
             // Close: pressed sprite (one row down) while the button is held.
             let close_sy = if st.pressed == Some(Btn::Close) { 9 } else { 0 };
             blit_btn(&mut c, tb, Btn::Close, 18, close_sy); // close
@@ -631,6 +633,13 @@ impl ClassicSkin {
             // EQMAIN ships no pressed-close sprite, so darken the box while it is held.
             if st.pressed == Some(EqRegion::Close) {
                 darken_rect(&mut c, 264, 3, 9, 9, 0.55);
+            }
+            // Windowshade (collapse) button, just left of Close. The hit region is wired
+            // (EqRegion::Shade -> toggle_shade), but the normal glyph sprite in EQMAIN is
+            // not yet identified, so for now show it only as a darkened box while pressed.
+            // TODO: blit the EQMAIN windowshade glyph here once its sprite is confirmed.
+            if st.pressed == Some(EqRegion::Shade) {
+                darken_rect(&mut c, 254, 3, 9, 9, 0.55);
             }
 
             // On button.

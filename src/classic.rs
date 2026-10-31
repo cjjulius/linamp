@@ -576,6 +576,27 @@ mod tests {
     }
 
     #[test]
+    fn pl_max_width_caps_at_desktop_right() {
+        // Desktop 2000px wide, window left at 400, scale 1: room is 1600px.
+        assert_eq!(pl_max_width(2000.0, 400.0, 1.0), Some(1600.0));
+        // Double-size: the same 1600pt of room is 800 skin px.
+        assert_eq!(pl_max_width(2000.0, 400.0, 2.0), Some(800.0));
+        // No room for even the minimum width, so None (leave the size alone).
+        assert_eq!(pl_max_width(2000.0, 1900.0, 1.0), None);
+        // Exactly the minimum width (MAIN_W) is allowed.
+        assert_eq!(pl_max_width(400.0 + MAIN_W as f32, 400.0, 1.0), Some(MAIN_W as f32));
+    }
+
+    #[test]
+    fn title_bar_collapse_button_regions() {
+        // Collapse (windowshade) button sits at x 254..263, just left of Close (264..273).
+        assert_eq!(region_at(258.0, 6.0), Some(Btn::Shade));
+        assert_eq!(region_at(268.0, 6.0), Some(Btn::Close));
+        assert_eq!(eq_region_at(258.0, 6.0), Some(EqRegion::Shade));
+        assert_eq!(eq_region_at(268.0, 6.0), Some(EqRegion::Close));
+    }
+
+    #[test]
     fn playlist_row_draws_track_time() {
         // #73: a row with a known length renders the time right-aligned; a row
         // with no length renders none. Checks for normal-coloured text pixels in
@@ -658,6 +679,8 @@ mod tests {
     #[test]
     fn shade_regions() {
         assert_eq!(shade_region_at(265.0, 5.0), Some(ShadeHit::Close));
+        // Restore (expand) button just left of Close on the EQ/playlist shade bars.
+        assert_eq!(shade_region_at(258.0, 5.0), Some(ShadeHit::Restore));
         assert_eq!(shade_region_at(50.0, 5.0), Some(ShadeHit::TitleBar));
         assert_eq!(shade_region_at(50.0, 20.0), None);
     }

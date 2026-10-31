@@ -41,6 +41,8 @@ pub enum Btn {
     Balance,
     Close,
     Minimize,
+    /// Windowshade (collapse) button in the title bar, just left of Close.
+    Shade,
     Options,
     TitleBar,
     Time,
@@ -67,6 +69,7 @@ pub const REGIONS: &[(Btn, i32, i32, i32, i32)] = &[
     (Btn::ClutterD, 10, 48, 8, 8),
     (Btn::ClutterV, 10, 56, 8, 8),
     (Btn::Close, 264, 3, 9, 9),
+    (Btn::Shade, 254, 3, 9, 9),
     (Btn::Minimize, 244, 3, 9, 9),
     (Btn::Prev, 16, 88, 23, 18),
     (Btn::Play, 39, 88, 23, 18),
@@ -246,8 +249,13 @@ pub fn shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
     if y >= 14.0 {
         return None;
     }
-    if x >= 264.0 && x < 273.0 && y >= 3.0 && y < 12.0 {
+    let btn = |bx: f32| x >= bx && x < bx + 9.0 && (3.0..12.0).contains(&y);
+    if btn(264.0) {
         Some(ShadeHit::Close)
+    } else if btn(254.0) {
+        // Restore (expand) button, just left of Close; the EQ and playlist shade bars
+        // are MAIN_W wide, so this matches their windowshade/restore glyph position.
+        Some(ShadeHit::Restore)
     } else {
         Some(ShadeHit::TitleBar)
     }
@@ -372,6 +380,8 @@ pub enum EqRegion {
     Auto,
     Presets,
     Close,
+    /// Windowshade (collapse) button in the title bar, just left of Close.
+    Shade,
     TitleBar,
     Preamp,
     Band(usize),
@@ -416,6 +426,9 @@ pub fn eq_region_at(x: f32, y: f32) -> Option<EqRegion> {
     let hit = |rx: f32, ry: f32, rw: f32, rh: f32| x >= rx && x < rx + rw && y >= ry && y < ry + rh;
     if hit(264.0, 3.0, 9.0, 9.0) {
         return Some(EqRegion::Close);
+    }
+    if hit(254.0, 3.0, 9.0, 9.0) {
+        return Some(EqRegion::Shade);
     }
     if hit(14.0, 18.0, 26.0, 12.0) {
         return Some(EqRegion::On);
@@ -632,6 +645,17 @@ pub const PL_MIN_H: f32 = 87.0;
 pub fn pl_max_height(desktop_bottom: f32, top_y: f32, scale: f32) -> Option<f32> {
     let max_h = (desktop_bottom - top_y) / scale.max(0.01);
     (max_h >= PL_MIN_H).then_some(max_h)
+}
+
+/// The widest the playlist may grow (unscaled skin pixels) before its right edge would
+/// pass `desktop_right`, given the window left edge `left_x` and the UI `scale`. The
+/// width-axis twin of [`pl_max_height`]: at the right screen edge the WM pins the right
+/// side and shifts the window left, so without this cap the width runs away (#156 was only
+/// fixed for height). `desktop_right` is the whole virtual desktop's right edge, so a
+/// resize still extends onto other monitors and only stops at the far-right virtual edge.
+pub fn pl_max_width(desktop_right: f32, left_x: f32, scale: f32) -> Option<f32> {
+    let max_w = (desktop_right - left_x) / scale.max(0.01);
+    (max_w >= MAIN_W as f32).then_some(max_w)
 }
 
 /// Format a playlist time like the classic player's bottom bar: `M:SS`, or `H:MM:SS` once it
