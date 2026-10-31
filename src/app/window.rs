@@ -551,7 +551,7 @@ impl super::LinAmpApp {
                 match self.render.active_region {
                     Some(b @ (Btn::Prev | Btn::Play | Btn::Pause | Btn::Stop | Btn::Next | Btn::Eject
                     | Btn::Shuffle | Btn::Repeat | Btn::Seek | Btn::Volume | Btn::Balance
-                    | Btn::Close | Btn::Shade)) => Some(b),
+                    | Btn::Close | Btn::Shade | Btn::Minimize)) => Some(b),
                     _ => None,
                 }
             } else {

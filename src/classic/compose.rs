@@ -115,7 +115,9 @@ impl ClassicSkin {
         if let Some(tb) = self.bmp("titlebar.bmp") {
             let sy = if st.focused { 0 } else { 15 };
             blit(&mut c, tb, 0, 0, 27, sy, 275, 14);
-            blit_btn(&mut c, tb, Btn::Minimize, 9, 0); // minimize
+            // Minimize: pressed sprite (one row down) while the button is held.
+            let min_sy = if st.pressed == Some(Btn::Minimize) { 9 } else { 0 };
+            blit_btn(&mut c, tb, Btn::Minimize, 9, min_sy); // minimize
             // Windowshade (collapse): normal sprite at (0,18), pressed at (9,18) while held.
             let shade_sx = if st.pressed == Some(Btn::Shade) { 9 } else { 0 };
             blit(&mut c, tb, 254, 3, shade_sx, 18, 9, 9); // collapse
@@ -634,10 +636,10 @@ impl ClassicSkin {
             if st.pressed == Some(EqRegion::Close) {
                 darken_rect(&mut c, 264, 3, 9, 9, 0.55);
             }
-            // Windowshade (collapse) button, just left of Close. The hit region is wired
-            // (EqRegion::Shade -> toggle_shade), but the normal glyph sprite in EQMAIN is
-            // not yet identified, so for now show it only as a darkened box while pressed.
-            // TODO: blit the EQMAIN windowshade glyph here once its sprite is confirmed.
+            // Windowshade (collapse) button, just left of Close. Its normal glyph is
+            // baked into the EQMAIN title-bar strip (0,134 focused / 0,149 unfocused)
+            // at local (254,3), so the title-bar blit above already draws it. EQMAIN
+            // ships no pressed sprite for it, so darken the box while it is held.
             if st.pressed == Some(EqRegion::Shade) {
                 darken_rect(&mut c, 254, 3, 9, 9, 0.55);
             }
