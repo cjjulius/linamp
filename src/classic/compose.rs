@@ -973,8 +973,13 @@ impl ClassicSkin {
                 x += 25;
             }
             let ry = if focused { 42 } else { 57 };
-            blit(&mut c, p, 225, 0, 99, ry, 50, 14); // right end (with buttons)
-            blit(&mut c, p, 264, 3, 52, 42, 9, 9); // close
+            // The right-end sprite bakes in the normal close glyph at dest (264,3),
+            // the same way the expanded window's top-right corner does. The separate
+            // PLEDIT sprite at (52,42) is the *pressed* close; drawing it here
+            // unconditionally made the collapsed close always look pressed/boxed, so
+            // it is left to the baked glyph (the shade bar closes on click anyway, so
+            // there is no held frame to show a pressed state).
+            blit(&mut c, p, 225, 0, 99, ry, 50, 14); // right end (with buttons, incl. close)
 
             // Shade-bar track + time: title at `PL_LIST_X` (aligned with the
             // expanded rows), time right-aligned before the button cluster, title
