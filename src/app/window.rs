@@ -252,30 +252,28 @@ impl super::LinAmpApp {
                                         Some(egui::vec2(self.plview.px_w - nx, self.plview.px_h - ny))
                                 }
                                 Some(P::Scroll) => {
-                                    // On the thumb: grab it (no jump) and track the cursor
-                                    // relatively, from the global cursor so the drag keeps
-                                    // tracking off-window. On the track above/below the thumb:
-                                    // jump to that position in the list as if normally loaded
-                                    // (clamped so the end rests at the bottom, no blank rows),
-                                    // which feels natural since the user picked the spot.
+                                    // A press on the track (not the thumb) first jumps so the
+                                    // thumb centres on the click, as if normally loaded (clamped
+                                    // so the end rests at the bottom, no blank rows). Then, in
+                                    // every case, grab the thumb so holding and moving keeps
+                                    // dragging from there (via the global cursor, which tracks
+                                    // off-window too). Only the thumb moves, never the list on
+                                    // its own.
                                     let len = self.playlist.len();
                                     let visible = classic::pl_visible_rows(self.plview.px_h as u32);
                                     let max = classic::max_pl_first(len, visible);
                                     let thumb_top =
                                         classic::pl_scroll_thumb_y(self.plview.first, max, self.plview.px_h);
                                     let thumb_bot = thumb_top + classic::PL_SCROLL_THUMB_H as f32;
-                                    if ny >= thumb_top && ny < thumb_bot {
-                                        let gy = global_cursor_points(ctx)
-                                            .map(|g| (g.y - self.geom.win_pos[win_idx(ClWin::Pl)].y) / self.scale)
-                                            .unwrap_or(ny);
-                                        self.pl_scroll_grab(gy);
-                                    } else {
-                                        // Centre the thumb on the click; max-range clamp means
-                                        // no blank rows past the end.
-                                        let centred = ny - classic::PL_SCROLL_THUMB_H as f32 / 2.0;
+                                    let gy = global_cursor_points(ctx)
+                                        .map(|g| (g.y - self.geom.win_pos[win_idx(ClWin::Pl)].y) / self.scale)
+                                        .unwrap_or(ny);
+                                    if !(ny >= thumb_top && ny < thumb_bot) {
+                                        let centred = gy - classic::PL_SCROLL_THUMB_H as f32 / 2.0;
                                         self.plview.first =
                                             classic::pl_scroll_first_at(centred, max, self.plview.px_h);
                                     }
+                                    self.pl_scroll_grab(gy);
                                 }
                                 Some(P::List) => {
                                     let row = classic::pl_row_at(ny, self.plview.first);
