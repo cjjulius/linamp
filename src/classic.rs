@@ -655,6 +655,7 @@ mod tests {
         assert_eq!(main_shade_region_at(180.0, 6.0), Some(ShadeHit::Play));
         assert_eq!(main_shade_region_at(200.0, 6.0), Some(ShadeHit::Stop));
         assert_eq!(main_shade_region_at(219.0, 6.0), Some(ShadeHit::Eject));
+        assert_eq!(main_shade_region_at(248.0, 6.0), Some(ShadeHit::Minimize));
         assert_eq!(main_shade_region_at(258.0, 6.0), Some(ShadeHit::Restore));
         assert_eq!(main_shade_region_at(268.0, 6.0), Some(ShadeHit::Close));
         assert_eq!(main_shade_region_at(100.0, 6.0), Some(ShadeHit::TitleBar));

@@ -183,6 +183,10 @@ impl super::LinAmpApp {
                         match hit {
                             Some(H::Close) => self.close_window(ctx, win),
                             Some(H::Restore) => self.toggle_shade(win),
+                            // Minimize from the collapsed bar behaves exactly like the
+                            // expanded button: tray-hide or taskbar-minimize (with the
+                            // child windows), leaving the main window shaded.
+                            Some(H::Minimize) => self.trigger_classic(ctx, Btn::Minimize),
                             Some(H::TitleBar) => self.start_drag(ctx, win, screen_cursor),
                             Some(H::Options) => self.open_popup_in(Popup::Options, win, l),
                             Some(H::Prev) => self.trigger_classic(ctx, Btn::Prev),
