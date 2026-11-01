@@ -1628,11 +1628,19 @@ impl LinAmpApp {
     fn open_audio_cd(&mut self) {
         hide_popup_window();
         let device = crate::cdda::default_cd_device();
-        match crate::cdda::read_cd_toc(&device) {
+        self.play_audio_cd_device(&device);
+    }
+
+    /// Enqueue every track of the audio CD in `device` onto the playlist and start
+    /// playing at the first of them (#191). Shared by the Options "Open Audio CD" menu
+    /// and the library's right-click "Play" on an audio CD.
+    pub(crate) fn play_audio_cd_device(&mut self, device: &str) {
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        match crate::cdda::read_cd_toc(device) {
             Ok(toc) if !toc.is_empty() => {
                 let start = self.playlist.len();
                 for t in &toc {
-                    self.playlist.tracks.push(crate::playlist::Track::cd_track(&device, t));
+                    self.playlist.tracks.push(crate::playlist::Track::cd_track(device, t));
                 }
                 self.status = format!("Audio CD: {} track(s) added.", toc.len());
                 self.play_index(start);
@@ -1640,6 +1648,23 @@ impl LinAmpApp {
             Ok(_) => self.status = "Audio CD: no audio tracks on the disc.".to_string(),
             Err(e) => self.status = format!("Audio CD: {e}"),
         }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            let _ = device;
+        }
+    }
+
+    /// Eject the disc in `device` (the library's right-click Eject on an audio CD).
+    /// The Devices poll then drops the entry and, if that CD was being viewed, moves
+    /// the view elsewhere; a track playing off the drive ends on its next failed read
+    /// and the playlist advances (#191).
+    pub(crate) fn eject_cd(&mut self, device: &str) {
+        match crate::cdda::eject(device) {
+            Ok(()) => self.status = format!("Ejected {}.", crate::cdda::drive_label(device)),
+            Err(e) => self.status = format!("Eject failed: {e}"),
+        }
+        // Re-poll Devices on the next frame so the ejected disc disappears promptly.
+        self.lib.devices_poll = None;
     }
 
     fn maybe_scan_tags(&mut self) {
