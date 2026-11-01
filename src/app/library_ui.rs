@@ -96,6 +96,28 @@ struct LibActs {
     header_click: Option<u8>,
 }
 
+/// Decide how the library view reacts when the set of inserted audio CDs changes
+/// (#191). If the CD the user is viewing is no longer present, switch to another
+/// inserted CD, or to Local Media when none remain. Returns None to leave the view
+/// as-is: the viewed CD is still present, a different drive was the one ejected, or
+/// the user is not on a CD view at all.
+fn cd_eject_view(
+    present: &[String],
+    nav: crate::library::LibView,
+    viewed: Option<&str>,
+) -> Option<(crate::library::LibView, Option<String>)> {
+    use crate::library::LibView;
+    let viewed_ejected =
+        nav == LibView::AudioCd && viewed.is_some_and(|d| !present.iter().any(|p| p == d));
+    if !viewed_ejected {
+        return None;
+    }
+    Some(match present.first() {
+        Some(next) => (LibView::AudioCd, Some(next.clone())),
+        None => (LibView::Audio, None),
+    })
+}
+
 
 impl super::LinAmpApp {
     /// Snap the library window to the player windows / screen edges on drag end.
@@ -796,22 +818,45 @@ impl super::LinAmpApp {
             });
     }
 
-    fn ui_lib_nav(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
-        use crate::library::LibView;
-        let s = cx.s;
-        let dim = cx.dim;
-        // Poll attached optical drives (throttled) so one shows under Devices as soon as
-        // it is plugged in. Keep the library repainting while open so the poll ticks even
-        // when the user is idle.
+    /// Poll the attached optical drives for an inserted audio CD (throttled to a couple
+    /// of seconds) and update the Devices list. When a disc that was present is ejected,
+    /// its entry disappears; if the user was viewing that CD, move them to another
+    /// inserted disc, or to Local Media when none remain (#191). A playing CD track
+    /// whose disc is ejected ends on its own (the drive read fails), so the playlist
+    /// advances through the normal end-of-track path, like any track that finishes.
+    fn poll_cd_devices(&mut self) {
         let now = std::time::Instant::now();
         let due = self
             .lib
             .devices_poll
             .is_none_or(|t| now.duration_since(t).as_secs_f32() >= 2.0);
-        if due {
-            self.lib.devices = crate::cdda::list_drives();
-            self.lib.devices_poll = Some(now);
+        if !due {
+            return;
         }
+        self.lib.devices_poll = Some(now);
+        let present: Vec<String> = crate::cdda::list_drives()
+            .into_iter()
+            .filter(|d| crate::cdda::audio_cd_present(d))
+            .collect();
+        if present == self.lib.devices {
+            return; // nothing inserted or ejected since the last poll
+        }
+        let switch = cd_eject_view(&present, self.lib.nav, self.lib.cd_device.as_deref());
+        self.lib.devices = present;
+        if let Some((nav, dev)) = switch {
+            self.lib.nav = nav;
+            self.lib.cd_device = dev;
+            self.refresh_library();
+        }
+    }
+
+    fn ui_lib_nav(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
+        use crate::library::LibView;
+        let s = cx.s;
+        let dim = cx.dim;
+        // Poll for an inserted/ejected audio CD (throttled) so Devices updates while the
+        // library is open. Keep repainting so the poll ticks even when the user is idle.
+        self.poll_cd_devices();
         ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
         // The library uses one black list background across the nav and the track
         // pane, so give the nav panel the list fill, not the lighter window panel fill.
@@ -883,23 +928,26 @@ impl super::LinAmpApp {
                 // Playlists has no view yet; a heading for now.
                 header(ui, "Playlists");
 
-                // Devices: each attached optical drive (polled above), so one shows as
-                // soon as it is plugged in. Clicking it reads the inserted audio CD's
-                // tracks into the track list (#191); double-clicking a track plays it.
-                header(ui, "Devices");
-                let mut dev_rects: Vec<egui::Rect> = Vec::with_capacity(self.lib.devices.len());
-                for dev in &self.lib.devices {
-                    let label = crate::cdda::drive_label(dev);
-                    let selected = self.lib.nav == LibView::AudioCd
-                        && self.lib.cd_device.as_deref() == Some(dev.as_str());
-                    let txt = if selected { sel_col } else { row_col };
-                    let resp = ui.selectable_label(selected, child_job(&label, txt));
-                    if resp.clicked() {
-                        act.device_click = Some(dev.clone());
+                // Devices: one entry per optical drive that holds an audio CD (polled
+                // above), so an entry appears when a disc is inserted and the whole
+                // section collapses when the last disc is ejected (#191). Clicking an
+                // entry lists the disc's tracks; double-clicking a track plays it.
+                if !self.lib.devices.is_empty() {
+                    header(ui, "Devices");
+                    let mut dev_rects: Vec<egui::Rect> = Vec::with_capacity(self.lib.devices.len());
+                    for dev in &self.lib.devices {
+                        let label = crate::cdda::audio_cd_label(dev);
+                        let selected = self.lib.nav == LibView::AudioCd
+                            && self.lib.cd_device.as_deref() == Some(dev.as_str());
+                        let txt = if selected { sel_col } else { row_col };
+                        let resp = ui.selectable_label(selected, child_job(&label, txt));
+                        if resp.clicked() {
+                            act.device_click = Some(dev.clone());
+                        }
+                        dev_rects.push(resp.rect);
                     }
-                    dev_rects.push(resp.rect);
+                    paint_nav_tree(ui.painter(), &dev_rects, dash_col, s);
                 }
-                paint_nav_tree(ui.painter(), &dev_rects, dash_col, s);
 
                 // A top-level selectable view (no tree guide).
                 let mut leaf = |ui: &mut egui::Ui, label: &str, v: LibView| {
@@ -2102,5 +2150,41 @@ fn paint_nav_tree(painter: &egui::Painter, rows: &[egui::Rect], col: Color32, s:
             painter.line_segment([egui::pos2(x, cy), egui::pos2(x2, cy)], stroke);
             x += dash + gap;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cd_eject_view;
+    use crate::library::LibView;
+
+    fn s(v: &str) -> String {
+        v.to_string()
+    }
+
+    #[test]
+    fn eject_switches_to_another_cd_or_local_media() {
+        // Viewing sr0; it is ejected but sr1 still holds a disc -> switch to sr1 (#191).
+        assert_eq!(
+            cd_eject_view(&[s("/dev/sr1")], LibView::AudioCd, Some("/dev/sr0")),
+            Some((LibView::AudioCd, Some(s("/dev/sr1"))))
+        );
+        // Viewing sr0; it is ejected and no disc remains -> back to Local Media.
+        assert_eq!(
+            cd_eject_view(&[], LibView::AudioCd, Some("/dev/sr0")),
+            Some((LibView::Audio, None))
+        );
+    }
+
+    #[test]
+    fn eject_leaves_the_view_alone_when_the_viewed_cd_is_still_in() {
+        // The viewed disc is still present (a different drive was ejected) -> no change.
+        assert_eq!(
+            cd_eject_view(&[s("/dev/sr0")], LibView::AudioCd, Some("/dev/sr0")),
+            None
+        );
+        // Not on a CD view -> never switches, even if a disc was ejected.
+        assert_eq!(cd_eject_view(&[], LibView::Audio, Some("/dev/sr0")), None);
+        assert_eq!(cd_eject_view(&[], LibView::AudioCd, None), None);
     }
 }

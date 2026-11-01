@@ -617,6 +617,33 @@ pub fn drive_label(device: &str) -> String {
     format!("CD ({short})")
 }
 
+/// The label for a drive that currently holds an audio CD, e.g. `Audio CD (D:)`.
+pub fn audio_cd_label(device: &str) -> String {
+    let short = device.trim_start_matches("/dev/");
+    format!("Audio CD ({short})")
+}
+
+/// Whether `device` currently holds an audio CD. Cheap on Linux (a drive-status and
+/// disc-type ioctl, no media read, so it does not spin the disc up). On Windows it
+/// falls back to reading the TOC, which does spin the drive. The library polls this
+/// while open to show and hide the Devices entry as discs are inserted and ejected
+/// (#191), so an eject makes the entry disappear.
+pub fn audio_cd_present(device: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        linux::audio_cd_present(device)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        read_cd_toc(device).is_ok()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = device;
+        false
+    }
+}
+
 /// The platform's default optical device, used when the UI opens a CD.
 pub fn default_cd_device() -> String {
     #[cfg(target_os = "linux")]
@@ -646,6 +673,12 @@ mod linux {
     const CDROMREADTOCHDR: libc::c_ulong = 0x5305;
     const CDROMREADTOCENTRY: libc::c_ulong = 0x5306;
     const CDROMREADAUDIO: libc::c_ulong = 0x530e;
+    const CDROM_DRIVE_STATUS: libc::c_ulong = 0x5326; // is a disc loaded?
+    const CDROM_DISC_STATUS: libc::c_ulong = 0x5327; // what kind of disc?
+    const CDSL_CURRENT: libc::c_int = 0x7fff_ffff; // the current slot (INT_MAX)
+    const CDS_DISC_OK: libc::c_int = 4; // drive status: a disc is present and readable
+    const CDS_AUDIO: libc::c_int = 100; // disc status: audio CD
+    const CDS_MIXED: libc::c_int = 105; // disc status: mixed-mode (has an audio session)
     const CDROM_LBA: u8 = 0x01; // address format: logical block address
     const CDROM_LEADOUT: u8 = 0xAA; // pseudo-track: the disc lead-out (end)
     const CDROM_DATA_TRACK: u8 = 0x04; // ctrl bit set on data (non-audio) tracks
@@ -762,6 +795,25 @@ mod linux {
             }
             Ok(buf)
         }
+    }
+
+    /// Whether an audio CD is loaded in `device`, via the status ioctls only (no
+    /// media read, so the disc is not spun up). CDROM_DRIVE_STATUS reports whether a
+    /// disc is present; CDROM_DISC_STATUS reports its type, and we accept audio and
+    /// mixed-mode discs (ignoring data/DVD/blank). Used to poll for insert/eject.
+    pub fn audio_cd_present(device: &str) -> bool {
+        let Ok(drive) = LinuxCdDrive::open(device) else {
+            return false;
+        };
+        // Is a disc actually loaded? (ioctl's return value is the status, not 0/-1.)
+        let status = unsafe { libc::ioctl(drive.fd(), CDROM_DRIVE_STATUS as _, CDSL_CURRENT) };
+        if status != CDS_DISC_OK {
+            return false;
+        }
+        // Only report audio and mixed-mode discs as an "audio CD". The arg is ignored
+        // by this ioctl; pass 0 to match the 3-arg form used elsewhere.
+        let disc = unsafe { libc::ioctl(drive.fd(), CDROM_DISC_STATUS as _, 0 as libc::c_int) };
+        disc == CDS_AUDIO || disc == CDS_MIXED
     }
 
     /// The disc TOC, cached briefly per device so adding a whole folder of GVfs CD
