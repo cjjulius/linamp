@@ -642,24 +642,88 @@ pub fn audio_cd_label(device: &str) -> String {
     format!("Audio CD ({short})")
 }
 
-/// Whether `device` currently holds an audio CD. Cheap on Linux (a drive-status and
-/// disc-type ioctl, no media read, so it does not spin the disc up). On Windows it
-/// falls back to reading the TOC, which does spin the drive. The library polls this
-/// while open to show and hide the Devices entry as discs are inserted and ejected
-/// (#191), so an eject makes the entry disappear.
-pub fn audio_cd_present(device: &str) -> bool {
+/// Whether `device` currently has a disc loaded and ready, via a cheap status check
+/// only (no media read, so the disc is not spun up for this). The background watcher
+/// calls this every cycle to notice inserts and ejects, and reads the TOC just once
+/// when a disc first appears, so the UI never blocks on disc I/O (#191). It does not
+/// distinguish an audio disc from a data disc; the TOC read does that.
+pub fn media_present(device: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
-        linux::audio_cd_present(device)
+        linux::media_present(device)
     }
     #[cfg(target_os = "windows")]
     {
-        read_cd_toc(device).is_ok()
+        windows::media_present(device)
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = device;
         false
+    }
+}
+
+/// A snapshot of the audio CDs currently present: each drive that holds an audio disc
+/// paired with that disc's tracks.
+pub type CdSnapshot = Vec<(String, Vec<CdTrack>)>;
+
+/// Watches the optical drives for inserted and ejected audio CDs on a background
+/// thread, so the UI never blocks on disc I/O (#191). Each cycle it checks drive
+/// presence cheaply ([`media_present`]) and reads a disc's TOC only once, when it
+/// first appears; it sends a fresh [`CdSnapshot`] whenever the set of present audio
+/// CDs changes. Dropping the watcher ends the thread (its send fails).
+pub struct CdWatcher {
+    rx: std::sync::mpsc::Receiver<CdSnapshot>,
+}
+
+impl CdWatcher {
+    pub fn start() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = std::thread::Builder::new()
+            .name("cd-watch".into())
+            .spawn(move || cd_watch_loop(tx));
+        CdWatcher { rx }
+    }
+
+    /// The most recent snapshot since the last call, or `None` if nothing changed.
+    /// Non-blocking; drains any queued snapshots and keeps the newest.
+    pub fn latest(&self) -> Option<CdSnapshot> {
+        self.rx.try_iter().last()
+    }
+}
+
+fn cd_watch_loop(tx: std::sync::mpsc::Sender<CdSnapshot>) {
+    use std::collections::BTreeMap;
+    // device -> Some(toc) for an audio disc, None for a disc that is present but has
+    // no audio tracks (data/blank). A key means "already determined", so the TOC is
+    // read only once per inserted disc.
+    let mut cache: BTreeMap<String, Option<Vec<CdTrack>>> = BTreeMap::new();
+    let mut last_sent: Option<CdSnapshot> = None;
+    loop {
+        let drives = list_drives();
+        cache.retain(|d, _| drives.iter().any(|x| x == d));
+        for d in &drives {
+            if media_present(d) {
+                // New disc: read its TOC once. An empty/data disc caches as None so it
+                // is not re-read while it sits in the drive.
+                cache
+                    .entry(d.clone())
+                    .or_insert_with(|| read_cd_toc(d).ok().filter(|t| !t.is_empty()));
+            } else {
+                cache.remove(d); // empty tray / ejected
+            }
+        }
+        let snap: CdSnapshot = cache
+            .iter()
+            .filter_map(|(d, t)| t.as_ref().map(|t| (d.clone(), t.clone())))
+            .collect();
+        if last_sent.as_ref() != Some(&snap) {
+            if tx.send(snap.clone()).is_err() {
+                return; // the app (and its Receiver) is gone
+            }
+            last_sent = Some(snap);
+        }
+        std::thread::sleep(Duration::from_secs(2));
     }
 }
 
@@ -693,12 +757,9 @@ mod linux {
     const CDROMREADTOCENTRY: libc::c_ulong = 0x5306;
     const CDROMREADAUDIO: libc::c_ulong = 0x530e;
     const CDROM_DRIVE_STATUS: libc::c_ulong = 0x5326; // is a disc loaded?
-    const CDROM_DISC_STATUS: libc::c_ulong = 0x5327; // what kind of disc?
     const CDROMEJECT: libc::c_ulong = 0x5309; // open the tray / eject the disc
     const CDSL_CURRENT: libc::c_int = 0x7fff_ffff; // the current slot (INT_MAX)
     const CDS_DISC_OK: libc::c_int = 4; // drive status: a disc is present and readable
-    const CDS_AUDIO: libc::c_int = 100; // disc status: audio CD
-    const CDS_MIXED: libc::c_int = 105; // disc status: mixed-mode (has an audio session)
     const CDROM_LBA: u8 = 0x01; // address format: logical block address
     const CDROM_LEADOUT: u8 = 0xAA; // pseudo-track: the disc lead-out (end)
     const CDROM_DATA_TRACK: u8 = 0x04; // ctrl bit set on data (non-audio) tracks
@@ -817,23 +878,18 @@ mod linux {
         }
     }
 
-    /// Whether an audio CD is loaded in `device`, via the status ioctls only (no
-    /// media read, so the disc is not spun up). CDROM_DRIVE_STATUS reports whether a
-    /// disc is present; CDROM_DISC_STATUS reports its type, and we accept audio and
-    /// mixed-mode discs (ignoring data/DVD/blank). Used to poll for insert/eject.
-    pub fn audio_cd_present(device: &str) -> bool {
+    /// Whether a disc is loaded and ready in `device`, via the CDROM_DRIVE_STATUS
+    /// ioctl only (no media read, so the disc is not spun up for this check). Returns
+    /// false while the drive is still spinning up (CDS_DRIVE_NOT_READY) so the TOC is
+    /// read only once the disc is actually ready. The disc type (audio vs data) is
+    /// decided by the subsequent TOC read, not here.
+    pub fn media_present(device: &str) -> bool {
         let Ok(drive) = LinuxCdDrive::open(device) else {
             return false;
         };
-        // Is a disc actually loaded? (ioctl's return value is the status, not 0/-1.)
+        // The ioctl's return value is the status itself, not 0/-1.
         let status = unsafe { libc::ioctl(drive.fd(), CDROM_DRIVE_STATUS as _, CDSL_CURRENT) };
-        if status != CDS_DISC_OK {
-            return false;
-        }
-        // Only report audio and mixed-mode discs as an "audio CD". The arg is ignored
-        // by this ioctl; pass 0 to match the 3-arg form used elsewhere.
-        let disc = unsafe { libc::ioctl(drive.fd(), CDROM_DISC_STATUS as _, 0 as libc::c_int) };
-        disc == CDS_AUDIO || disc == CDS_MIXED
+        status == CDS_DISC_OK
     }
 
     /// Eject the disc in `device` via the CDROMEJECT ioctl. Opening read-only is
@@ -926,6 +982,7 @@ mod windows {
     const IOCTL_CDROM_READ_TOC: u32 = 0x0002_4000;
     const IOCTL_CDROM_RAW_READ: u32 = 0x0002_403E;
     const IOCTL_STORAGE_EJECT_MEDIA: u32 = 0x0002_D4808;
+    const IOCTL_STORAGE_CHECK_VERIFY: u32 = 0x0002_D4800;
     const TRACK_MODE_CDDA: u32 = 2;
     const MAX_TRACKS: usize = 100;
     const CONTROL_DATA_TRACK: u8 = 0x04;
@@ -1054,6 +1111,29 @@ mod windows {
                 CloseHandle(self.handle);
             }
         }
+    }
+
+    /// Whether a disc is present and readable in `device`, via IOCTL_STORAGE_CHECK_VERIFY
+    /// (a cheap media-present check that does not read the TOC). UNTESTED on hardware,
+    /// like the rest of the Windows CD path.
+    pub fn media_present(device: &str) -> bool {
+        let Ok(drive) = WindowsCdDrive::open(device) else {
+            return false;
+        };
+        let mut returned = 0u32;
+        let ok = unsafe {
+            DeviceIoControl(
+                drive.handle,
+                IOCTL_STORAGE_CHECK_VERIFY,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                &mut returned,
+                std::ptr::null_mut(),
+            )
+        };
+        ok != 0
     }
 
     /// Eject the disc in `device` via IOCTL_STORAGE_EJECT_MEDIA. UNTESTED on hardware,

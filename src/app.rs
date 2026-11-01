@@ -505,10 +505,12 @@ struct LibraryViewState {
     /// open so an entry appears when a disc is inserted and disappears when it is
     /// ejected (#191).
     devices: Vec<String>,
-    /// When the device list was last polled, to throttle the scan to a couple of seconds.
-    devices_poll: Option<std::time::Instant>,
+    /// TOCs of the currently-present audio CDs, keyed by device id, as last reported by
+    /// the background CD watcher (#191). The AudioCd view and the right-click Play build
+    /// their track lists from this cache, so the UI never blocks on a disc read.
+    cd_tocs: std::collections::HashMap<String, Vec<crate::cdda::CdTrack>>,
     /// The optical drive whose audio CD is being shown (#191). Set when a Devices
-    /// entry is clicked; the AudioCd view reads this drive's TOC into the track list.
+    /// entry is clicked; the AudioCd view fills the track list from `cd_tocs`.
     cd_device: Option<String>,
 }
 
@@ -705,6 +707,10 @@ pub struct LinAmpApp {
     /// through the same `handle_tray_action` as the tray's transport buttons.
     _media_keys: crate::mediakeys::MediaKeys,
     media_keys_rx: std::sync::mpsc::Receiver<crate::tray::TrayAction>,
+    /// Background watcher for inserted/ejected audio CDs. It does the disc I/O off the
+    /// UI thread and reports snapshots the library drains each frame, so reading a
+    /// freshly inserted disc never freezes the app (#191).
+    cd_watcher: crate::cdda::CdWatcher,
     hidden_to_tray: bool,
     /// Time of the last tray-icon toggle, to debounce a double-click. A desktop that
     /// reports Activate for both clicks would otherwise toggle twice (hide then show,
@@ -906,7 +912,7 @@ impl LinAmpApp {
                 convert_col_fr: [0.30, 0.30],
                 convert_prog_w: 130.0,
                 devices: Vec::new(),
-                devices_poll: None,
+                cd_tocs: std::collections::HashMap::new(),
                 cd_device: None,
             },
             geom: WindowGeom {
@@ -1009,6 +1015,7 @@ impl LinAmpApp {
             tray_rx,
             _media_keys: media_keys,
             media_keys_rx,
+            cd_watcher: crate::cdda::CdWatcher::start(),
             hidden_to_tray: false,
             last_tray_toggle: None,
             tray_prev_vis: (false, false, false),
@@ -1636,17 +1643,26 @@ impl LinAmpApp {
     /// and the library's right-click "Play" on an audio CD.
     pub(crate) fn play_audio_cd_device(&mut self, device: &str) {
         #[cfg(any(target_os = "linux", target_os = "windows"))]
-        match crate::cdda::read_cd_toc(device) {
-            Ok(toc) if !toc.is_empty() => {
-                let start = self.playlist.len();
-                for t in &toc {
-                    self.playlist.tracks.push(crate::playlist::Track::cd_track(device, t));
+        {
+            // Prefer the TOC the background watcher already read, so a library Play
+            // never blocks the UI. The Options "Open Audio CD" path may have no cached
+            // TOC (the watcher may not have scanned that drive yet), so read it then.
+            let toc = match self.lib.cd_tocs.get(device) {
+                Some(t) => Ok(t.clone()),
+                None => crate::cdda::read_cd_toc(device),
+            };
+            match toc {
+                Ok(toc) if !toc.is_empty() => {
+                    let start = self.playlist.len();
+                    for t in &toc {
+                        self.playlist.tracks.push(crate::playlist::Track::cd_track(device, t));
+                    }
+                    self.status = format!("Audio CD: {} track(s) added.", toc.len());
+                    self.play_index(start);
                 }
-                self.status = format!("Audio CD: {} track(s) added.", toc.len());
-                self.play_index(start);
+                Ok(_) => self.status = "Audio CD: no audio tracks on the disc.".to_string(),
+                Err(e) => self.status = format!("Audio CD: {e}"),
             }
-            Ok(_) => self.status = "Audio CD: no audio tracks on the disc.".to_string(),
-            Err(e) => self.status = format!("Audio CD: {e}"),
         }
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
@@ -1663,8 +1679,8 @@ impl LinAmpApp {
             Ok(()) => self.status = format!("Ejected {}.", crate::cdda::drive_label(device)),
             Err(e) => self.status = format!("Eject failed: {e}"),
         }
-        // Re-poll Devices on the next frame so the ejected disc disappears promptly.
-        self.lib.devices_poll = None;
+        // The background watcher notices the empty tray within a cycle and drops the
+        // Devices entry (and moves the view if it was showing this disc).
     }
 
     fn maybe_scan_tags(&mut self) {
