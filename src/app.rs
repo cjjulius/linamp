@@ -506,6 +506,9 @@ struct LibraryViewState {
     devices: Vec<String>,
     /// When the device list was last polled, to throttle the scan to a couple of seconds.
     devices_poll: Option<std::time::Instant>,
+    /// The optical drive whose audio CD is being shown (#191). Set when a Devices
+    /// entry is clicked; the AudioCd view reads this drive's TOC into the track list.
+    cd_device: Option<String>,
 }
 
 /// Window geometry and focus (C1): the classic windows' positions, the library
@@ -903,6 +906,7 @@ impl LinAmpApp {
                 convert_prog_w: 130.0,
                 devices: Vec::new(),
                 devices_poll: None,
+                cd_device: None,
             },
             geom: WindowGeom {
                 win_pos: [egui::pos2(100.0, 100.0); 3],
