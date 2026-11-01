@@ -88,6 +88,9 @@ impl Track {
             return;
         }
         self.loaded = true;
+        // Whether lofty supplied a real title (not the filename fallback), so the
+        // symphonia tag probe below doesn't overwrite it.
+        let mut tag_title = false;
         if let Ok(tagged) = lofty::read_from_path(&self.path) {
             use lofty::file::{AudioFile, TaggedFileExt};
             use lofty::tag::Accessor;
@@ -103,6 +106,7 @@ impl Track {
                     let t = repair_mojibake(&t);
                     if !t.trim().is_empty() {
                         self.title = t;
+                        tag_title = true;
                     }
                 }
                 if let Some(a) = tag.artist() {
@@ -110,6 +114,31 @@ impl Track {
                 }
                 if let Some(al) = tag.album() {
                     self.album = repair_mojibake(&al);
+                }
+            }
+        }
+        // Matroska/WebM (and any container lofty won't tag-read) carry their
+        // ARTIST/ALBUM/TITLE in the container, which symphonia reads. Only probe
+        // when lofty left the artist empty, so tagged files pay nothing (#202).
+        if self.artist.trim().is_empty() {
+            if let Some(tags) = crate::decode::probe_tags(&self.path) {
+                if let Some(a) = tags.artist {
+                    self.artist = repair_mojibake(&a);
+                }
+                if self.album.trim().is_empty() {
+                    if let Some(al) = tags.album {
+                        self.album = repair_mojibake(&al);
+                    }
+                }
+                // Keep a real lofty title over the symphonia one, but take the
+                // container title over the filename fallback.
+                if !tag_title {
+                    if let Some(t) = tags.title {
+                        let t = repair_mojibake(&t);
+                        if !t.trim().is_empty() {
+                            self.title = t;
+                        }
+                    }
                 }
             }
         }
@@ -735,6 +764,26 @@ mod tests {
         assert!(!t.loaded);
         assert_eq!(t.title, "Song");
         assert_eq!(t.display_name(), "Song");
+    }
+
+    #[test]
+    fn matroska_webm_read_the_artist_tag() {
+        // #202: lofty reads no tags from Matroska/WebM, so the symphonia tag probe
+        // must fill the artist the container carries. qa-music is gitignored, so
+        // this skips on CI and runs locally where the samples exist.
+        for ext in ["mkv", "webm"] {
+            let p = PathBuf::from(format!("qa-music/format-samples/hypno-this.{ext}"));
+            if !p.exists() {
+                continue;
+            }
+            let t = Track::from_path(p);
+            assert_eq!(t.artist, "Kevin MacLeod", "{ext}: artist should be read");
+            assert!(
+                t.display_name().starts_with("Kevin MacLeod - "),
+                "{ext}: display should be 'Artist - Title', got {:?}",
+                t.display_name()
+            );
+        }
     }
 
     fn pl_of(paths: &[&str], current: Option<usize>) -> Playlist {
