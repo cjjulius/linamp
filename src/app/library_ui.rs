@@ -158,11 +158,10 @@ impl super::LinAmpApp {
             self.lib.albums.clear();
             return;
         }
-        // An inserted audio CD (#191): read the disc's TOC into the track list, so the
-        // normal table renders its tracks and double-click plays them off the drive.
-        // Not a DB query, so it works with no library. read_cd_toc distinguishes an
-        // audio disc from an empty/data disc (Err), leaving the list empty with a
-        // helpful message.
+        // An inserted audio CD (#191): fill the track list from the TOC the background
+        // watcher already read, so the normal table renders its tracks and double-click
+        // plays them off the drive. Not a DB query, so it works with no library, and it
+        // reads from the cache, so it never blocks the UI on disc I/O.
         if self.lib.nav == crate::library::LibView::AudioCd {
             self.lib.results.clear();
             self.lib.sel_tracks.clear();
@@ -172,15 +171,10 @@ impl super::LinAmpApp {
             self.lib.ratings.clear();
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             if let Some(dev) = self.lib.cd_device.clone() {
-                match crate::cdda::read_cd_toc(&dev) {
-                    Ok(toc) => {
-                        self.lib.results =
-                            toc.iter().map(|t| crate::playlist::Track::cd_track(&dev, t)).collect();
-                        self.status = format!("Audio CD: {} track(s).", self.lib.results.len());
-                    }
-                    Err(e) => {
-                        self.status = format!("No audio CD in {}: {e}", crate::cdda::drive_label(&dev));
-                    }
+                if let Some(toc) = self.lib.cd_tocs.get(&dev) {
+                    self.lib.results =
+                        toc.iter().map(|t| crate::playlist::Track::cd_track(&dev, t)).collect();
+                    self.status = format!("Audio CD: {} track(s).", self.lib.results.len());
                 }
             }
             self.apply_lib_sort();
@@ -822,28 +816,21 @@ impl super::LinAmpApp {
             });
     }
 
-    /// Poll the attached optical drives for an inserted audio CD (throttled to a couple
-    /// of seconds) and update the Devices list. When a disc that was present is ejected,
-    /// its entry disappears; if the user was viewing that CD, move them to another
-    /// inserted disc, or to Local Media when none remain (#191). A playing CD track
-    /// whose disc is ejected ends on its own (the drive read fails), so the playlist
-    /// advances through the normal end-of-track path, like any track that finishes.
+    /// Drain the background CD watcher's latest snapshot and update the Devices list and
+    /// the cached TOCs (#191). All disc I/O happens on the watcher thread, so this never
+    /// blocks the UI even while a freshly inserted disc is being read. When a disc that
+    /// was present is ejected its entry disappears; if the user was viewing that CD, move
+    /// them to another inserted disc, or to Local Media when none remain. A playing CD
+    /// track whose disc is ejected ends on its own (the drive read fails), so the
+    /// playlist advances through the normal end-of-track path, like any finished track.
     fn poll_cd_devices(&mut self) {
-        let now = std::time::Instant::now();
-        let due = self
-            .lib
-            .devices_poll
-            .is_none_or(|t| now.duration_since(t).as_secs_f32() >= 2.0);
-        if !due {
-            return;
-        }
-        self.lib.devices_poll = Some(now);
-        let present: Vec<String> = crate::cdda::list_drives()
-            .into_iter()
-            .filter(|d| crate::cdda::audio_cd_present(d))
-            .collect();
+        let Some(snapshot) = self.cd_watcher.latest() else {
+            return; // nothing inserted or ejected since the last snapshot
+        };
+        let present: Vec<String> = snapshot.iter().map(|(d, _)| d.clone()).collect();
+        self.lib.cd_tocs = snapshot.into_iter().collect();
         if present == self.lib.devices {
-            return; // nothing inserted or ejected since the last poll
+            return;
         }
         let switch = cd_eject_view(&present, self.lib.nav, self.lib.cd_device.as_deref());
         self.lib.devices = present;
