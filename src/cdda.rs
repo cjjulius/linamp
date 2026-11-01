@@ -505,6 +505,25 @@ pub fn open_cd_source(device: &str, track: u8) -> Result<BufferedCdSource> {
     }
 }
 
+/// Eject the disc in `device`. Linux and Windows only; other platforms return a
+/// clean error. Best-effort: if a track is playing off the drive the tray still
+/// opens, and the playing source then ends on its next failed read (#191).
+pub fn eject(device: &str) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::eject(device)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::eject(device)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = device;
+        Err(anyhow!("eject isn't available on this platform in this build"))
+    }
+}
+
 // --- GVfs audio-CD redirect -----------------------------------------------
 //
 // When the desktop mounts an audio CD, it exposes the tracks as slow FUSE WAV
@@ -675,6 +694,7 @@ mod linux {
     const CDROMREADAUDIO: libc::c_ulong = 0x530e;
     const CDROM_DRIVE_STATUS: libc::c_ulong = 0x5326; // is a disc loaded?
     const CDROM_DISC_STATUS: libc::c_ulong = 0x5327; // what kind of disc?
+    const CDROMEJECT: libc::c_ulong = 0x5309; // open the tray / eject the disc
     const CDSL_CURRENT: libc::c_int = 0x7fff_ffff; // the current slot (INT_MAX)
     const CDS_DISC_OK: libc::c_int = 4; // drive status: a disc is present and readable
     const CDS_AUDIO: libc::c_int = 100; // disc status: audio CD
@@ -816,6 +836,18 @@ mod linux {
         disc == CDS_AUDIO || disc == CDS_MIXED
     }
 
+    /// Eject the disc in `device` via the CDROMEJECT ioctl. Opening read-only is
+    /// enough to eject on Linux; a playing track's own fd keeps reading until the
+    /// tray opens and the read fails.
+    pub fn eject(device: &str) -> Result<()> {
+        let drive = LinuxCdDrive::open(device)?;
+        let r = unsafe { libc::ioctl(drive.fd(), CDROMEJECT as _, 0 as libc::c_int) };
+        if r != 0 {
+            return Err(anyhow!("eject {device}: {}", std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+
     /// The disc TOC, cached briefly per device so adding a whole folder of GVfs CD
     /// tracks reads the disc once instead of once per file.
     pub fn cached_toc(device: &str) -> Option<Vec<CdTrack>> {
@@ -893,6 +925,7 @@ mod windows {
     const OPEN_EXISTING: u32 = 3;
     const IOCTL_CDROM_READ_TOC: u32 = 0x0002_4000;
     const IOCTL_CDROM_RAW_READ: u32 = 0x0002_403E;
+    const IOCTL_STORAGE_EJECT_MEDIA: u32 = 0x0002_D4808;
     const TRACK_MODE_CDDA: u32 = 2;
     const MAX_TRACKS: usize = 100;
     const CONTROL_DATA_TRACK: u8 = 0x04;
@@ -1021,6 +1054,29 @@ mod windows {
                 CloseHandle(self.handle);
             }
         }
+    }
+
+    /// Eject the disc in `device` via IOCTL_STORAGE_EJECT_MEDIA. UNTESTED on hardware,
+    /// like the rest of the Windows CD path.
+    pub fn eject(device: &str) -> Result<()> {
+        let drive = WindowsCdDrive::open(device)?;
+        let mut returned = 0u32;
+        let ok = unsafe {
+            DeviceIoControl(
+                drive.handle,
+                IOCTL_STORAGE_EJECT_MEDIA,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                &mut returned,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(anyhow!("eject {device}: {}", std::io::Error::last_os_error()));
+        }
+        Ok(())
     }
 
     impl CdDrive for WindowsCdDrive {

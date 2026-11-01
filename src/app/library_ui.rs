@@ -25,6 +25,10 @@ pub(super) enum LibAction {
     SelectAll,
     /// Enqueue the given rows for conversion, using the global Preferences settings.
     Convert(Vec<usize>),
+    /// Enqueue the whole audio CD in this drive and start at track 1 (#191).
+    PlayCd(String),
+    /// Eject the disc in this drive (#191).
+    EjectCd(String),
 }
 
 /// One row of a dynamic popup menu (the Media Library context menus). Built per
@@ -854,6 +858,7 @@ impl super::LinAmpApp {
         use crate::library::LibView;
         let s = cx.s;
         let dim = cx.dim;
+        let classic = cx.classic;
         // Poll for an inserted/ejected audio CD (throttled) so Devices updates while the
         // library is open. Keep repainting so the poll ticks even when the user is idle.
         self.poll_cd_devices();
@@ -943,6 +948,37 @@ impl super::LinAmpApp {
                         let resp = ui.selectable_label(selected, child_job(&label, txt));
                         if resp.clicked() {
                             act.device_click = Some(dev.clone());
+                        }
+                        // Right-click: play the whole CD (enqueue + start at track 1) or
+                        // eject it (#191).
+                        if classic {
+                            if resp.secondary_clicked() {
+                                let anchor = self.geom.lib_pos
+                                    + ui.ctx().pointer_latest_pos().unwrap_or_default().to_vec2();
+                                let menu = vec![
+                                    DynRow::Item {
+                                        label: "Play".into(),
+                                        act: LibAction::PlayCd(dev.clone()),
+                                    },
+                                    DynRow::Item {
+                                        label: "Eject".into(),
+                                        act: LibAction::EjectCd(dev.clone()),
+                                    },
+                                ];
+                                act.open_menu = Some((anchor, menu, Vec::new()));
+                            }
+                        } else {
+                            resp.context_menu(|ui| {
+                                ui.set_min_width(140.0);
+                                if ui.button("Play").clicked() {
+                                    act.lib_action = Some(LibAction::PlayCd(dev.clone()));
+                                    ui.close_menu();
+                                }
+                                if ui.button("Eject").clicked() {
+                                    act.lib_action = Some(LibAction::EjectCd(dev.clone()));
+                                    ui.close_menu();
+                                }
+                            });
                         }
                         dev_rects.push(resp.rect);
                     }
@@ -2004,6 +2040,12 @@ impl super::LinAmpApp {
             }
             LibAction::Convert(rows) => {
                 self.convert_tracks(&rows);
+            }
+            LibAction::PlayCd(device) => {
+                self.play_audio_cd_device(&device);
+            }
+            LibAction::EjectCd(device) => {
+                self.eject_cd(&device);
             }
         }
     }
