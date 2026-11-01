@@ -73,6 +73,8 @@ struct LibCx {
 #[derive(Default)]
 struct LibActs {
     nav_click: Option<crate::library::LibView>,
+    /// A Devices entry (optical drive) was clicked: show that drive's audio CD (#191).
+    device_click: Option<String>,
     artist_click: Option<(Option<String>, bool)>,
     album_click: Option<(Option<String>, bool)>,
     /// (row, ctrl, shift) for a track-list click; Shift extends a range from the
@@ -128,6 +130,34 @@ impl super::LinAmpApp {
             self.lib.sel_anchor = None;
             self.lib.artists.clear();
             self.lib.albums.clear();
+            return;
+        }
+        // An inserted audio CD (#191): read the disc's TOC into the track list, so the
+        // normal table renders its tracks and double-click plays them off the drive.
+        // Not a DB query, so it works with no library. read_cd_toc distinguishes an
+        // audio disc from an empty/data disc (Err), leaving the list empty with a
+        // helpful message.
+        if self.lib.nav == crate::library::LibView::AudioCd {
+            self.lib.results.clear();
+            self.lib.sel_tracks.clear();
+            self.lib.sel_anchor = None;
+            self.lib.artists.clear();
+            self.lib.albums.clear();
+            self.lib.ratings.clear();
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            if let Some(dev) = self.lib.cd_device.clone() {
+                match crate::cdda::read_cd_toc(&dev) {
+                    Ok(toc) => {
+                        self.lib.results =
+                            toc.iter().map(|t| crate::playlist::Track::cd_track(&dev, t)).collect();
+                        self.status = format!("Audio CD: {} track(s).", self.lib.results.len());
+                    }
+                    Err(e) => {
+                        self.status = format!("No audio CD in {}: {e}", crate::cdda::drive_label(&dev));
+                    }
+                }
+            }
+            self.apply_lib_sort();
             return;
         }
         if self.library.is_none() {
@@ -854,13 +884,20 @@ impl super::LinAmpApp {
                 header(ui, "Playlists");
 
                 // Devices: each attached optical drive (polled above), so one shows as
-                // soon as it is plugged in. Clicking opens its rip screen in Part 2; for
-                // now the entries are informational.
+                // soon as it is plugged in. Clicking it reads the inserted audio CD's
+                // tracks into the track list (#191); double-clicking a track plays it.
                 header(ui, "Devices");
                 let mut dev_rects: Vec<egui::Rect> = Vec::with_capacity(self.lib.devices.len());
                 for dev in &self.lib.devices {
                     let label = crate::cdda::drive_label(dev);
-                    dev_rects.push(ui.label(child_job(&label, row_col)).rect);
+                    let selected = self.lib.nav == LibView::AudioCd
+                        && self.lib.cd_device.as_deref() == Some(dev.as_str());
+                    let txt = if selected { sel_col } else { row_col };
+                    let resp = ui.selectable_label(selected, child_job(&label, txt));
+                    if resp.clicked() {
+                        act.device_click = Some(dev.clone());
+                    }
+                    dev_rects.push(resp.rect);
                 }
                 paint_nav_tree(ui.painter(), &dev_rects, dash_col, s);
 
@@ -1451,6 +1488,10 @@ impl super::LinAmpApp {
                                         } else {
                                             "No bookmarks match your search."
                                         }
+                                    } else if self.lib.nav == LibView::AudioCd {
+                                        // The CD view is independent of the DB; an empty
+                                        // list means no audio disc in the drive.
+                                        "No audio CD in the drive. Insert one and click the drive again."
                                     } else if lib_empty {
                                         "No tracks. Use \u{201c}Scan folder\u{2026}\u{201d} to index your music."
                                     } else if !self.lib.query.trim().is_empty() {
@@ -1468,6 +1509,9 @@ impl super::LinAmpApp {
                                             // the queue has rows, so this arm is unused
                                             // in practice; the queue has its own pane.
                                             LibView::Converting => "No conversions.",
+                                            // Handled by the AudioCd check above; this
+                                            // arm just keeps the match exhaustive.
+                                            LibView::AudioCd => "No audio CD in the drive.",
                                         }
                                     };
                                     ui.label(RichText::new(msg).color(dim).italics());
@@ -1649,6 +1693,7 @@ impl super::LinAmpApp {
         use crate::library::LibView;
         let LibActs {
             nav_click,
+            device_click,
             artist_click,
             album_click,
             track_click,
@@ -1710,6 +1755,18 @@ impl super::LinAmpApp {
             self.lib.query.clear();
             self.lib.search_at = None; // nav refreshes now; drop any pending search
             self.lib.sort = None; // each view starts in its natural order
+            self.refresh_library();
+        }
+        if let Some(dev) = device_click {
+            // Show the audio CD in this drive (#191). Clicking the drive again re-reads
+            // the TOC, so inserting a disc then clicking refreshes the track list.
+            self.lib.nav = LibView::AudioCd;
+            self.lib.cd_device = Some(dev);
+            self.lib.sel_artists.clear();
+            self.lib.sel_albums.clear();
+            self.lib.query.clear();
+            self.lib.search_at = None;
+            self.lib.sort = None;
             self.refresh_library();
         }
         if let Some((name, ctrl)) = artist_click {
