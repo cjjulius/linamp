@@ -500,9 +500,10 @@ struct LibraryViewState {
     /// the pane scale at use). Clamped so it can't shrink below the "Progress" header
     /// label. In-memory, resets on restart.
     convert_prog_w: f32,
-    /// Optical drives attached, as device ids (drive letters on Windows, /dev/srN on
-    /// Linux), shown under Devices. Polled while the library is open so a drive appears
-    /// when it is plugged in.
+    /// Optical drives that currently hold an audio CD, as device ids (drive letters on
+    /// Windows, /dev/srN on Linux), shown under Devices. Polled while the library is
+    /// open so an entry appears when a disc is inserted and disappears when it is
+    /// ejected (#191).
     devices: Vec<String>,
     /// When the device list was last polled, to throttle the scan to a couple of seconds.
     devices_poll: Option<std::time::Instant>,
