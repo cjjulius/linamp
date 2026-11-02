@@ -121,9 +121,15 @@ impl ClassicSkin {
             // Windowshade (collapse): normal sprite at (0,18), pressed at (9,18) while held.
             let shade_sx = if st.pressed == Some(Btn::Shade) { 9 } else { 0 };
             blit(&mut c, tb, 254, 3, shade_sx, 18, 9, 9); // collapse
-            // Close: pressed sprite (one row down) while the button is held.
-            let close_sy = if st.pressed == Some(Btn::Close) { 9 } else { 0 };
-            blit_btn(&mut c, tb, Btn::Close, 18, close_sy); // close
+            // Close: the active glyph is drawn on top of the strip, and the pressed
+            // sprite (one row down) replaces it while held. When the window is inactive
+            // the dim close baked into the unfocused title-bar strip shows through, so it
+            // is not overdrawn, matching the playlist's focus-aware close.
+            if st.pressed == Some(Btn::Close) {
+                blit_btn(&mut c, tb, Btn::Close, 18, 9); // close (pressed)
+            } else if st.focused {
+                blit_btn(&mut c, tb, Btn::Close, 18, 0); // close (active)
+            }
 
             // Clutterbar (O/A/I/D/V) column: the normal strip, then "lit" overlays
             // for the active toggles and whichever button is being pressed.
@@ -542,7 +548,14 @@ impl ClassicSkin {
     /// the interior with the window background colour. `title_w` reserves a centred
     /// span of the title bar for the caption (drawn by the caller). Returns `None`
     /// when the skin has no gen art.
-    pub fn compose_gen_window(&self, w: u32, h: u32, active: bool, title: &str) -> Option<RgbaImage> {
+    pub fn compose_gen_window(
+        &self,
+        w: u32,
+        h: u32,
+        active: bool,
+        close_pressed: bool,
+        title: &str,
+    ) -> Option<RgbaImage> {
         let g = self.bmp("gen.bmp")?;
         let cols = self.gen_colors()?;
         let w = w.max(2 * GEN_CORNER_W + 10);
@@ -584,6 +597,13 @@ impl ClassicSkin {
         blit(&mut img, g, 0, by, 0, 42, GEN_BOTTOM_SIDE_W, GEN_BORDER_B); // BOTTOM_LEFT
         blit(&mut img, g, (w - GEN_BOTTOM_SIDE_W) as i32, by, 0, 57, GEN_BOTTOM_SIDE_W, GEN_BORDER_B); // BOTTOM_RIGHT
         tile_h(&mut img, g, GEN_BOTTOM_SIDE_W, w - GEN_BOTTOM_SIDE_W, by, 127, 72, GEN_CORNER_W, GEN_BORDER_B);
+
+        // Close button press-in: the active/inactive close is baked into the TOP_RIGHT
+        // corner by its focus variant; overlay GEN's pressed close sprite (148,42) while
+        // the button is held, matching the other windows.
+        if close_pressed {
+            blit(&mut img, g, (w - 11) as i32, 3, 148, 42, 9, 9);
+        }
 
         Some(img)
     }
@@ -635,10 +655,14 @@ impl ClassicSkin {
             blit(&mut c, e, 0, 0, 0, 0, 275, 116); // background
             let ty = if st.focused { 134 } else { 149 };
             blit(&mut c, e, 0, 0, 0, ty, 275, 14); // title bar
-            blit(&mut c, e, 264, 3, 0, 116, 9, 9); // close
-            // EQMAIN ships no pressed-close sprite, so darken the box while it is held.
+            // Close: the active glyph is drawn on top; EQMAIN's pressed sprite (0,125)
+            // replaces it while held. When inactive, the dim close baked into the
+            // unfocused title-bar strip shows through, so it is not overdrawn, matching
+            // the playlist's focus-aware close.
             if st.pressed == Some(EqRegion::Close) {
-                darken_rect(&mut c, 264, 3, 9, 9, 0.55);
+                blit(&mut c, e, 264, 3, 0, 125, 9, 9); // close (pressed)
+            } else if st.focused {
+                blit(&mut c, e, 264, 3, 0, 116, 9, 9); // close (active)
             }
             // Windowshade (collapse) button, just left of Close. Its normal glyph is
             // baked into the EQMAIN title-bar strip (0,134 focused / 0,149 unfocused)
@@ -1407,7 +1431,7 @@ pub fn render_gen_png(skin_path: &Path, out: &Path) -> Result<()> {
         anyhow::bail!("skin has no GEN.BMP/GENEX.BMP");
     }
     let frame = skin
-        .compose_gen_window(550, 300, true, "LinAmp Library")
+        .compose_gen_window(550, 300, true, false, "LinAmp Library")
         .ok_or_else(|| anyhow::anyhow!("failed to compose gen window"))?;
     frame.save(out)?;
     Ok(())
