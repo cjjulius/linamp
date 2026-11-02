@@ -243,6 +243,8 @@ impl Playlist {
     pub fn add_file(&mut self, path: PathBuf) {
         #[cfg(target_os = "linux")]
         if let Some((dev, t)) = crate::cdda::mounted_cd_track(&path) {
+            // No disc metadata lookup on this GVfs path; the cdda:// entry gets titles
+            // from the watcher once it's in the library view.
             self.tracks.push(Track::cd_track(&dev, &t, None));
             return;
         }
