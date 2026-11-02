@@ -169,6 +169,13 @@ impl super::LinAmpApp {
             return;
         };
         let path = track.path.clone();
+        // An audio-CD track (cdda://) has no file to edit, so show the same read-only CD
+        // tag view the library's right-click uses, keeping "Edit File Tags…" consistent
+        // across the playlist and the library (#191).
+        if crate::cdda::is_cdda_path(&path.to_string_lossy()) {
+            self.cd_tag_view = Some(track.clone());
+            return;
+        }
         let (v1, v2, v1_on, v2_on, single) = read_editor_tags(&path);
         let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
