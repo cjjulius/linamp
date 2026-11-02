@@ -25,6 +25,10 @@ pub(super) enum LibAction {
     SelectAll,
     /// Enqueue the given rows for conversion, using the global Preferences settings.
     Convert(Vec<usize>),
+    /// Enqueue the whole audio CD in this drive and start at track 1 (#191).
+    PlayCd(String),
+    /// Eject the disc in this drive (#191).
+    EjectCd(String),
 }
 
 /// One row of a dynamic popup menu (the Media Library context menus). Built per
@@ -73,6 +77,8 @@ struct LibCx {
 #[derive(Default)]
 struct LibActs {
     nav_click: Option<crate::library::LibView>,
+    /// A Devices entry (optical drive) was clicked: show that drive's audio CD (#191).
+    device_click: Option<String>,
     artist_click: Option<(Option<String>, bool)>,
     album_click: Option<(Option<String>, bool)>,
     /// (row, ctrl, shift) for a track-list click; Shift extends a range from the
@@ -92,6 +98,28 @@ struct LibActs {
     open_menu: Option<(egui::Pos2, Vec<DynRow>, Vec<usize>)>,
     col_dx: [f32; 2],
     header_click: Option<u8>,
+}
+
+/// Decide how the library view reacts when the set of inserted audio CDs changes
+/// (#191). If the CD the user is viewing is no longer present, switch to another
+/// inserted CD, or to Local Media when none remain. Returns None to leave the view
+/// as-is: the viewed CD is still present, a different drive was the one ejected, or
+/// the user is not on a CD view at all.
+fn cd_eject_view(
+    present: &[String],
+    nav: crate::library::LibView,
+    viewed: Option<&str>,
+) -> Option<(crate::library::LibView, Option<String>)> {
+    use crate::library::LibView;
+    let viewed_ejected =
+        nav == LibView::AudioCd && viewed.is_some_and(|d| !present.iter().any(|p| p == d));
+    if !viewed_ejected {
+        return None;
+    }
+    Some(match present.first() {
+        Some(next) => (LibView::AudioCd, Some(next.clone())),
+        None => (LibView::Audio, None),
+    })
 }
 
 
@@ -128,6 +156,32 @@ impl super::LinAmpApp {
             self.lib.sel_anchor = None;
             self.lib.artists.clear();
             self.lib.albums.clear();
+            return;
+        }
+        // An inserted audio CD (#191): fill the track list from the TOC the background
+        // watcher already read, so the normal table renders its tracks and double-click
+        // plays them off the drive. Not a DB query, so it works with no library, and it
+        // reads from the cache, so it never blocks the UI on disc I/O.
+        if self.lib.nav == crate::library::LibView::AudioCd {
+            self.lib.results.clear();
+            self.lib.sel_tracks.clear();
+            self.lib.sel_anchor = None;
+            self.lib.artists.clear();
+            self.lib.albums.clear();
+            self.lib.ratings.clear();
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            if let Some(dev) = self.lib.cd_device.clone() {
+                // Clone out of the cache first so the borrow ends before assigning results.
+                let disc = self.lib.cd_discs.get(&dev).map(|cd| (cd.tracks.clone(), cd.meta.clone()));
+                if let Some((tracks, meta)) = disc {
+                    self.lib.results = tracks
+                        .iter()
+                        .map(|t| crate::playlist::Track::cd_track(&dev, t, meta.as_ref()))
+                        .collect();
+                    self.status = format!("Audio CD: {} track(s).", self.lib.results.len());
+                }
+            }
+            self.apply_lib_sort();
             return;
         }
         if self.library.is_none() {
@@ -766,22 +820,40 @@ impl super::LinAmpApp {
             });
     }
 
+    /// Drain the background CD watcher's latest snapshot and update the Devices list and
+    /// the cached TOCs (#191). All disc I/O happens on the watcher thread, so this never
+    /// blocks the UI even while a freshly inserted disc is being read. When a disc that
+    /// was present is ejected its entry disappears; if the user was viewing that CD, move
+    /// them to another inserted disc, or to Local Media when none remain. A playing CD
+    /// track whose disc is ejected ends on its own (the drive read fails), so the
+    /// playlist advances through the normal end-of-track path, like any finished track.
+    pub(super) fn poll_cd_devices(&mut self) {
+        let Some(snapshot) = self.cd_watcher.latest() else {
+            return; // nothing inserted or ejected since the last snapshot
+        };
+        let present: Vec<String> = snapshot.iter().map(|cd| cd.device.clone()).collect();
+        self.lib.cd_discs = snapshot.into_iter().map(|cd| (cd.device.clone(), cd)).collect();
+        let switch = cd_eject_view(&present, self.lib.nav, self.lib.cd_device.as_deref());
+        self.lib.devices = present;
+        if let Some((nav, dev)) = switch {
+            self.lib.nav = nav;
+            self.lib.cd_device = dev;
+            self.refresh_library();
+        } else if self.lib.nav == crate::library::LibView::AudioCd {
+            // The looked-up titles for the CD being viewed may have just arrived; rebuild
+            // the track list from the refreshed cache.
+            self.refresh_library();
+        }
+    }
+
     fn ui_lib_nav(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
         use crate::library::LibView;
         let s = cx.s;
         let dim = cx.dim;
-        // Poll attached optical drives (throttled) so one shows under Devices as soon as
-        // it is plugged in. Keep the library repainting while open so the poll ticks even
-        // when the user is idle.
-        let now = std::time::Instant::now();
-        let due = self
-            .lib
-            .devices_poll
-            .is_none_or(|t| now.duration_since(t).as_secs_f32() >= 2.0);
-        if due {
-            self.lib.devices = crate::cdda::list_drives();
-            self.lib.devices_poll = Some(now);
-        }
+        let classic = cx.classic;
+        // The CD watcher is drained in the main update loop; keep repainting while the
+        // library is open so that poll keeps ticking (and the Devices list stays live)
+        // even when the user is idle.
         ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
         // The library uses one black list background across the nav and the track
         // pane, so give the nav panel the list fill, not the lighter window panel fill.
@@ -853,16 +925,57 @@ impl super::LinAmpApp {
                 // Playlists has no view yet; a heading for now.
                 header(ui, "Playlists");
 
-                // Devices: each attached optical drive (polled above), so one shows as
-                // soon as it is plugged in. Clicking opens its rip screen in Part 2; for
-                // now the entries are informational.
-                header(ui, "Devices");
-                let mut dev_rects: Vec<egui::Rect> = Vec::with_capacity(self.lib.devices.len());
-                for dev in &self.lib.devices {
-                    let label = crate::cdda::drive_label(dev);
-                    dev_rects.push(ui.label(child_job(&label, row_col)).rect);
+                // Devices: one entry per optical drive that holds an audio CD (polled
+                // above), so an entry appears when a disc is inserted and the whole
+                // section collapses when the last disc is ejected (#191). Clicking an
+                // entry lists the disc's tracks; double-clicking a track plays it.
+                if !self.lib.devices.is_empty() {
+                    header(ui, "Devices");
+                    let mut dev_rects: Vec<egui::Rect> = Vec::with_capacity(self.lib.devices.len());
+                    for dev in &self.lib.devices {
+                        let label = crate::cdda::audio_cd_label(dev);
+                        let selected = self.lib.nav == LibView::AudioCd
+                            && self.lib.cd_device.as_deref() == Some(dev.as_str());
+                        let txt = if selected { sel_col } else { row_col };
+                        let resp = ui.selectable_label(selected, child_job(&label, txt));
+                        if resp.clicked() {
+                            act.device_click = Some(dev.clone());
+                        }
+                        // Right-click: play the whole CD (enqueue + start at track 1) or
+                        // eject it (#191).
+                        if classic {
+                            if resp.secondary_clicked() {
+                                let anchor = self.geom.lib_pos
+                                    + ui.ctx().pointer_latest_pos().unwrap_or_default().to_vec2();
+                                let menu = vec![
+                                    DynRow::Item {
+                                        label: "Play".into(),
+                                        act: LibAction::PlayCd(dev.clone()),
+                                    },
+                                    DynRow::Item {
+                                        label: "Eject".into(),
+                                        act: LibAction::EjectCd(dev.clone()),
+                                    },
+                                ];
+                                act.open_menu = Some((anchor, menu, Vec::new()));
+                            }
+                        } else {
+                            resp.context_menu(|ui| {
+                                ui.set_min_width(140.0);
+                                if ui.button("Play").clicked() {
+                                    act.lib_action = Some(LibAction::PlayCd(dev.clone()));
+                                    ui.close_menu();
+                                }
+                                if ui.button("Eject").clicked() {
+                                    act.lib_action = Some(LibAction::EjectCd(dev.clone()));
+                                    ui.close_menu();
+                                }
+                            });
+                        }
+                        dev_rects.push(resp.rect);
+                    }
+                    paint_nav_tree(ui.painter(), &dev_rects, dash_col, s);
                 }
-                paint_nav_tree(ui.painter(), &dev_rects, dash_col, s);
 
                 // A top-level selectable view (no tree guide).
                 let mut leaf = |ui: &mut egui::Ui, label: &str, v: LibView| {
@@ -1451,6 +1564,10 @@ impl super::LinAmpApp {
                                         } else {
                                             "No bookmarks match your search."
                                         }
+                                    } else if self.lib.nav == LibView::AudioCd {
+                                        // The CD view is independent of the DB; an empty
+                                        // list means no audio disc in the drive.
+                                        "No audio CD in the drive. Insert one and click the drive again."
                                     } else if lib_empty {
                                         "No tracks. Use \u{201c}Scan folder\u{2026}\u{201d} to index your music."
                                     } else if !self.lib.query.trim().is_empty() {
@@ -1468,6 +1585,9 @@ impl super::LinAmpApp {
                                             // the queue has rows, so this arm is unused
                                             // in practice; the queue has its own pane.
                                             LibView::Converting => "No conversions.",
+                                            // Handled by the AudioCd check above; this
+                                            // arm just keeps the match exhaustive.
+                                            LibView::AudioCd => "No audio CD in the drive.",
                                         }
                                     };
                                     ui.label(RichText::new(msg).color(dim).italics());
@@ -1649,6 +1769,7 @@ impl super::LinAmpApp {
         use crate::library::LibView;
         let LibActs {
             nav_click,
+            device_click,
             artist_click,
             album_click,
             track_click,
@@ -1710,6 +1831,18 @@ impl super::LinAmpApp {
             self.lib.query.clear();
             self.lib.search_at = None; // nav refreshes now; drop any pending search
             self.lib.sort = None; // each view starts in its natural order
+            self.refresh_library();
+        }
+        if let Some(dev) = device_click {
+            // Show the audio CD in this drive (#191). Clicking the drive again re-reads
+            // the TOC, so inserting a disc then clicking refreshes the track list.
+            self.lib.nav = LibView::AudioCd;
+            self.lib.cd_device = Some(dev);
+            self.lib.sel_artists.clear();
+            self.lib.sel_albums.clear();
+            self.lib.query.clear();
+            self.lib.search_at = None;
+            self.lib.sort = None;
             self.refresh_library();
         }
         if let Some((name, ctrl)) = artist_click {
@@ -1900,6 +2033,12 @@ impl super::LinAmpApp {
             LibAction::Convert(rows) => {
                 self.convert_tracks(&rows);
             }
+            LibAction::PlayCd(device) => {
+                self.play_audio_cd_device(&device);
+            }
+            LibAction::EjectCd(device) => {
+                self.eject_cd(&device);
+            }
         }
     }
 
@@ -2045,5 +2184,41 @@ fn paint_nav_tree(painter: &egui::Painter, rows: &[egui::Rect], col: Color32, s:
             painter.line_segment([egui::pos2(x, cy), egui::pos2(x2, cy)], stroke);
             x += dash + gap;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cd_eject_view;
+    use crate::library::LibView;
+
+    fn s(v: &str) -> String {
+        v.to_string()
+    }
+
+    #[test]
+    fn eject_switches_to_another_cd_or_local_media() {
+        // Viewing sr0; it is ejected but sr1 still holds a disc -> switch to sr1 (#191).
+        assert_eq!(
+            cd_eject_view(&[s("/dev/sr1")], LibView::AudioCd, Some("/dev/sr0")),
+            Some((LibView::AudioCd, Some(s("/dev/sr1"))))
+        );
+        // Viewing sr0; it is ejected and no disc remains -> back to Local Media.
+        assert_eq!(
+            cd_eject_view(&[], LibView::AudioCd, Some("/dev/sr0")),
+            Some((LibView::Audio, None))
+        );
+    }
+
+    #[test]
+    fn eject_leaves_the_view_alone_when_the_viewed_cd_is_still_in() {
+        // The viewed disc is still present (a different drive was ejected) -> no change.
+        assert_eq!(
+            cd_eject_view(&[s("/dev/sr0")], LibView::AudioCd, Some("/dev/sr0")),
+            None
+        );
+        // Not on a CD view -> never switches, even if a disc was ejected.
+        assert_eq!(cd_eject_view(&[], LibView::Audio, Some("/dev/sr0")), None);
+        assert_eq!(cd_eject_view(&[], LibView::AudioCd, None), None);
     }
 }

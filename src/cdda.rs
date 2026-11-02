@@ -505,6 +505,25 @@ pub fn open_cd_source(device: &str, track: u8) -> Result<BufferedCdSource> {
     }
 }
 
+/// Eject the disc in `device`. Linux and Windows only; other platforms return a
+/// clean error. Best-effort: if a track is playing off the drive the tray still
+/// opens, and the playing source then ends on its next failed read (#191).
+pub fn eject(device: &str) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::eject(device)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::eject(device)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = device;
+        Err(anyhow!("eject isn't available on this platform in this build"))
+    }
+}
+
 // --- GVfs audio-CD redirect -----------------------------------------------
 //
 // When the desktop mounts an audio CD, it exposes the tracks as slow FUSE WAV
@@ -617,6 +636,437 @@ pub fn drive_label(device: &str) -> String {
     format!("CD ({short})")
 }
 
+/// The label for a drive that currently holds an audio CD, e.g. `Audio CD (D:)`.
+pub fn audio_cd_label(device: &str) -> String {
+    let short = device.trim_start_matches("/dev/");
+    format!("Audio CD ({short})")
+}
+
+/// Whether `device` currently has a disc loaded and ready, via a cheap status check
+/// only (no media read, so the disc is not spun up for this). The background watcher
+/// calls this every cycle to notice inserts and ejects, and reads the TOC just once
+/// when a disc first appears, so the UI never blocks on disc I/O (#191). It does not
+/// distinguish an audio disc from a data disc; the TOC read does that.
+pub fn media_present(device: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        linux::media_present(device)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::media_present(device)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = device;
+        false
+    }
+}
+
+/// Titles/artist/album for an audio CD, looked up online from its disc ID (#191).
+/// `tracks` maps a 1-based track number to its (title, artist).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DiscMeta {
+    pub album: String,
+    pub album_artist: String,
+    pub tracks: std::collections::HashMap<u8, (String, String)>,
+}
+
+/// One present audio CD: its drive, its tracks (from the TOC), and the looked-up
+/// metadata once it is available (`None` until the online lookup returns, or when it
+/// fails / there is no network).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CdInfo {
+    pub device: String,
+    pub tracks: Vec<CdTrack>,
+    pub meta: Option<DiscMeta>,
+}
+
+/// A snapshot of the audio CDs currently present.
+pub type CdSnapshot = Vec<CdInfo>;
+
+/// Watches the optical drives for inserted and ejected audio CDs on a background
+/// thread, so the UI never blocks on disc I/O (#191). Each cycle it checks drive
+/// presence cheaply ([`media_present`]), reads a disc's TOC only once when it first
+/// appears, then looks the disc up online (MusicBrainz) once to fill in titles. It
+/// sends a fresh [`CdSnapshot`] whenever the present set, a TOC, or metadata changes,
+/// so the disc shows immediately with "Track N" and the titles fill in a moment
+/// later. Dropping the watcher ends the thread (its send fails).
+pub struct CdWatcher {
+    rx: std::sync::mpsc::Receiver<CdSnapshot>,
+}
+
+impl CdWatcher {
+    pub fn start() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = std::thread::Builder::new()
+            .name("cd-watch".into())
+            .spawn(move || cd_watch_loop(tx));
+        CdWatcher { rx }
+    }
+
+    /// The most recent snapshot since the last call, or `None` if nothing changed.
+    /// Non-blocking; drains any queued snapshots and keeps the newest.
+    pub fn latest(&self) -> Option<CdSnapshot> {
+        self.rx.try_iter().last()
+    }
+}
+
+/// A cached disc on the watcher thread: `None` once determined not to be an audio CD
+/// (data/blank), else the TOC plus its metadata lookup state.
+enum CachedDisc {
+    NotAudio,
+    Audio {
+        tracks: Vec<CdTrack>,
+        meta: Option<DiscMeta>,
+        looked_up: bool,
+    },
+}
+
+fn cd_watch_loop(tx: std::sync::mpsc::Sender<CdSnapshot>) {
+    use std::collections::BTreeMap;
+    let mut cache: BTreeMap<String, CachedDisc> = BTreeMap::new();
+    let mut last_sent: Option<CdSnapshot> = None;
+    // Build the snapshot from the cache and send it if it changed; return false if the
+    // receiver is gone so the loop can exit.
+    let send = |cache: &BTreeMap<String, CachedDisc>,
+                last: &mut Option<CdSnapshot>,
+                tx: &std::sync::mpsc::Sender<CdSnapshot>|
+     -> bool {
+        let snap: CdSnapshot = cache
+            .iter()
+            .filter_map(|(d, c)| match c {
+                CachedDisc::Audio { tracks, meta, .. } => Some(CdInfo {
+                    device: d.clone(),
+                    tracks: tracks.clone(),
+                    meta: meta.clone(),
+                }),
+                CachedDisc::NotAudio => None,
+            })
+            .collect();
+        if last.as_ref() != Some(&snap) {
+            if tx.send(snap.clone()).is_err() {
+                return false;
+            }
+            *last = Some(snap);
+        }
+        true
+    };
+    loop {
+        let drives = list_drives();
+        cache.retain(|d, _| drives.iter().any(|x| x == d));
+        for d in &drives {
+            if media_present(d) {
+                // New disc: read its TOC once. A data/blank disc caches as NotAudio so
+                // it is not re-read while it sits in the drive.
+                cache.entry(d.clone()).or_insert_with(|| {
+                    match read_cd_toc(d).ok().filter(|t| !t.is_empty()) {
+                        Some(tracks) => CachedDisc::Audio { tracks, meta: None, looked_up: false },
+                        None => CachedDisc::NotAudio,
+                    }
+                });
+            } else {
+                cache.remove(d); // empty tray / ejected
+            }
+        }
+        // Surface new discs immediately (titles still pending).
+        if !send(&cache, &mut last_sent, &tx) {
+            return;
+        }
+        // Look up one not-yet-looked-up disc per cycle. The 2s cycle spaces these out,
+        // staying well under MusicBrainz's 1 request/second limit.
+        let pending = cache.iter().find_map(|(d, c)| match c {
+            CachedDisc::Audio { tracks, looked_up: false, .. } => Some((d.clone(), tracks.clone())),
+            _ => None,
+        });
+        if let Some((device, tracks)) = pending {
+            let meta = lookup_disc(&tracks);
+            if let Some(CachedDisc::Audio { meta: slot, looked_up, .. }) = cache.get_mut(&device) {
+                *slot = meta;
+                *looked_up = true; // one attempt per insert; re-insert the disc to retry
+            }
+            if !send(&cache, &mut last_sent, &tx) {
+                return;
+            }
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+/// The MusicBrainz Disc ID for a disc's audio tracks, computed from the TOC (no
+/// network). SHA-1 over the first/last track numbers and the 100 offset slots
+/// (lead-out first, then each track's start offset = LBA + 150), in a modified
+/// Base64. Matches <https://musicbrainz.org/doc/Disc_ID_Calculation>. Correct for a
+/// pure audio CD; a mixed-mode / CD-Extra disc (data track present) may not match
+/// since we only see the audio tracks. `None` for an empty TOC.
+pub fn disc_id(tracks: &[CdTrack]) -> Option<String> {
+    use sha1::{Digest, Sha1};
+    let first = tracks.first()?.number;
+    let last = tracks.last()?.number;
+    let leadout = tracks.last()?;
+    let mut offsets = [0u32; 100];
+    // offset[0] is the lead-out: the disc's total sector count (the lead-out's LBA),
+    // which is where the last track ends. Track offsets are the absolute address
+    // (LBA + 150), but the lead-out offset is the sector count itself (no +150).
+    offsets[0] = leadout.start_lba + leadout.sectors;
+    for t in tracks {
+        let n = t.number as usize;
+        if (1..=99).contains(&n) {
+            offsets[n] = t.start_lba + 150;
+        }
+    }
+    let mut s = format!("{first:02X}{last:02X}");
+    for off in offsets {
+        s.push_str(&format!("{off:08X}"));
+    }
+    let digest = Sha1::digest(s.as_bytes());
+    Some(mb_base64(&digest))
+}
+
+/// RFC-4648 Base64 with MusicBrainz's substitutions (`+`->`.`, `/`->`_`, `=`->`-`).
+fn mb_base64(data: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(A[((n >> 18) & 63) as usize] as char);
+        out.push(A[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { A[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { A[(n & 63) as usize] as char } else { '=' });
+    }
+    out.replace('+', ".").replace('/', "_").replace('=', "-")
+}
+
+/// Look up a disc's titles/artist/album on MusicBrainz by its disc ID. Free, no API
+/// key; sets a descriptive User-Agent and relies on the watcher's 2s cycle to honour
+/// the 1 request/second limit. Returns `None` on any failure (offline, throttled,
+/// unknown disc), so the caller falls back to "Track N". `track_count` picks the
+/// right medium on multi-disc releases.
+fn lookup_musicbrainz(disc_id: &str, track_count: usize) -> Option<DiscMeta> {
+    let url = format!(
+        "https://musicbrainz.org/ws/2/discid/{disc_id}?inc=recordings+artists&fmt=json"
+    );
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(8))
+        .timeout(Duration::from_secs(15))
+        .build();
+    let body = agent
+        .get(&url)
+        .set(
+            "User-Agent",
+            concat!(
+                "LinAmp/",
+                env!("CARGO_PKG_VERSION"),
+                " ( https://github.com/cjjulius/linamp )"
+            ),
+        )
+        .call()
+        .ok()?
+        .into_string()
+        .ok()?;
+    let json: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let releases = json.get("releases")?.as_array()?;
+    // The first release is MusicBrainz's best match for the disc ID.
+    let release = releases.first()?;
+    let album = release.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let album_artist = artist_credit(release.get("artist-credit"));
+    // Prefer the medium whose track count matches this disc; else the first.
+    let media = release.get("media").and_then(|v| v.as_array())?;
+    let medium = media
+        .iter()
+        .find(|m| m.get("track-count").and_then(|v| v.as_u64()) == Some(track_count as u64))
+        .or_else(|| media.first())?;
+    let mut tracks = std::collections::HashMap::new();
+    if let Some(ts) = medium.get("tracks").and_then(|v| v.as_array()) {
+        for t in ts {
+            let Some(pos) = t.get("position").and_then(|v| v.as_u64()) else {
+                continue;
+            };
+            if !(1..=99).contains(&pos) {
+                continue;
+            }
+            let title = t.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let artist = artist_credit(t.get("artist-credit"));
+            let artist = if artist.is_empty() { album_artist.clone() } else { artist };
+            tracks.insert(pos as u8, (title, artist));
+        }
+    }
+    Some(DiscMeta { album, album_artist, tracks })
+}
+
+/// Join a MusicBrainz `artist-credit` array into a display string, honouring each
+/// entry's join phrase (so "A feat. B" collaborations read correctly).
+fn artist_credit(v: Option<&serde_json::Value>) -> String {
+    let Some(arr) = v.and_then(|v| v.as_array()) else {
+        return String::new();
+    };
+    let mut s = String::new();
+    for c in arr {
+        if let Some(name) = c.get("name").and_then(|n| n.as_str()) {
+            s.push_str(name);
+        }
+        if let Some(join) = c.get("joinphrase").and_then(|j| j.as_str()) {
+            s.push_str(join);
+        }
+    }
+    s.trim().to_string()
+}
+
+/// Look up a disc's metadata: MusicBrainz first (richest, CC0), then the freedb
+/// database (gnudb-compatible) for discs MusicBrainz lacks (#191). `None` if neither
+/// knows the disc or there is no network.
+fn lookup_disc(tracks: &[CdTrack]) -> Option<DiscMeta> {
+    if let Some(id) = disc_id(tracks) {
+        if let Some(m) = lookup_musicbrainz(&id, tracks.len()) {
+            return Some(m);
+        }
+    }
+    lookup_freedb(tracks)
+}
+
+/// The sum of a number's decimal digits (the freedb/CDDB checksum step).
+fn cddb_digit_sum(mut n: u32) -> u32 {
+    let mut s = 0;
+    while n > 0 {
+        s += n % 10;
+        n /= 10;
+    }
+    s
+}
+
+/// The freedb/CDDB disc ID (8 lowercase hex digits) for a disc's tracks. This is a
+/// different, older scheme than the MusicBrainz Disc ID: a checksum over each track's
+/// start time in seconds, the disc length, and the track count. Computed from the TOC
+/// (no network). `None` for an empty TOC.
+pub fn freedb_disc_id(tracks: &[CdTrack]) -> Option<String> {
+    let first = tracks.first()?;
+    let last = tracks.last()?;
+    // Track offsets and the lead-out are absolute frame addresses (LBA + 150).
+    let checksum: u32 = tracks.iter().map(|t| cddb_digit_sum((t.start_lba + 150) / 75)).sum();
+    let leadout_secs = (last.start_lba + last.sectors + 150) / 75;
+    let total_secs = leadout_secs - (first.start_lba + 150) / 75;
+    let id = ((checksum % 255) << 24) | (total_secs << 8) | (tracks.len() as u32);
+    Some(format!("{id:08x}"))
+}
+
+/// An open freedb-protocol server. gnudb.org (the usual successor) blocks unregistered
+/// clients, so use this open mirror, which answers the same CDDB CGI protocol.
+const FREEDB_CGI: &str = "http://freedbtest.dyndns.org/~cddb/cddb.cgi";
+/// The CDDB `hello` identifies the client as user+host+app+version (user@host is the
+/// client email). A generic, non-personal LinAmp identity, not a registered account.
+const FREEDB_HELLO: &str =
+    concat!("linamp+users.noreply.github.com+linamp+", env!("CARGO_PKG_VERSION"));
+
+/// Look up a disc on the freedb database by its TOC. Runs the CDDB `query` (to find
+/// the disc's category) then `read` (to fetch the titles), parsing the classic xmcd
+/// text format. `None` on any failure. Used as a fallback when MusicBrainz has no
+/// match (#191).
+fn lookup_freedb(tracks: &[CdTrack]) -> Option<DiscMeta> {
+    let id = freedb_disc_id(tracks)?;
+    let last = tracks.last()?;
+    let leadout_secs = (last.start_lba + last.sectors + 150) / 75;
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(8))
+        .timeout(Duration::from_secs(15))
+        .build();
+    // cddb query <id> <ntracks> <offset1> .. <offsetN> <leadout_secs>
+    let mut query = format!("cddb+query+{id}+{}", tracks.len());
+    for t in tracks {
+        query.push('+');
+        query.push_str(&(t.start_lba + 150).to_string());
+    }
+    query.push('+');
+    query.push_str(&leadout_secs.to_string());
+    let q_url = format!("{FREEDB_CGI}?cmd={query}&hello={FREEDB_HELLO}&proto=6");
+    let resp = decode_cddb(agent.get(&q_url).call().ok()?)?;
+    let (category, read_id) = parse_cddb_query(&resp)?;
+    // cddb read <category> <discid>
+    let r_url = format!("{FREEDB_CGI}?cmd=cddb+read+{category}+{read_id}&hello={FREEDB_HELLO}&proto=6");
+    let body = decode_cddb(agent.get(&r_url).call().ok()?)?;
+    parse_cddb_read(&body)
+}
+
+/// Read a CDDB response body as text. Classic freedb records are frequently
+/// ISO-8859-1 and some servers omit the charset header, so decode as UTF-8 when valid
+/// and otherwise fall back to Latin-1 (each byte maps to the same code point) rather
+/// than mangling accented titles.
+fn decode_cddb(resp: ureq::Response) -> Option<String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    resp.into_reader().take(2_000_000).read_to_end(&mut buf).ok()?;
+    Some(match String::from_utf8(buf) {
+        Ok(s) => s,
+        Err(e) => e.into_bytes().iter().map(|&b| b as char).collect(),
+    })
+}
+
+/// Parse a CDDB `query` response for the (category, discid) of the best match. Handles
+/// an exact single match (200), a list of exact or inexact matches (210 / 211 followed
+/// by `category discid title` lines), and no-match / error codes.
+fn parse_cddb_query(resp: &str) -> Option<(String, String)> {
+    let mut lines = resp.lines();
+    let head = lines.next()?;
+    let code = head.split_whitespace().next()?;
+    match code {
+        // Single exact match: "200 <category> <discid> <title>"
+        "200" => {
+            let mut it = head.split_whitespace();
+            let _ = it.next();
+            let category = it.next()?.to_string();
+            let discid = it.next()?.to_string();
+            Some((category, discid))
+        }
+        // A list of matches follows (exact 210, inexact 211); take the first entry.
+        "210" | "211" => {
+            let entry = lines.next()?;
+            let mut it = entry.split_whitespace();
+            let category = it.next()?.to_string();
+            let discid = it.next()?.to_string();
+            Some((category, discid))
+        }
+        _ => None, // 202 no match, 403 corrupt, 409 no handshake, etc.
+    }
+}
+
+/// Parse a CDDB `read` (xmcd) record into a [`DiscMeta`]. `DTITLE` is "Artist / Album"
+/// and `TTITLEn` are the 0-based track titles; long values continue across repeated
+/// keys. The track artist falls back to the disc artist.
+fn parse_cddb_read(body: &str) -> Option<DiscMeta> {
+    use std::collections::HashMap;
+    let mut dtitle = String::new();
+    let mut titles: HashMap<usize, String> = HashMap::new();
+    for line in body.lines() {
+        if let Some(v) = line.strip_prefix("DTITLE=") {
+            dtitle.push_str(v);
+        } else if let Some(rest) = line.strip_prefix("TTITLE") {
+            if let Some((idx, val)) = rest.split_once('=') {
+                if let Ok(i) = idx.parse::<usize>() {
+                    titles.entry(i).or_default().push_str(val);
+                }
+            }
+        }
+    }
+    if dtitle.is_empty() && titles.is_empty() {
+        return None;
+    }
+    // DTITLE is "Artist / Album"; split on the first " / ".
+    let (album_artist, album) = match dtitle.split_once(" / ") {
+        Some((a, b)) => (a.trim().to_string(), b.trim().to_string()),
+        None => (String::new(), dtitle.trim().to_string()),
+    };
+    let mut tracks = HashMap::new();
+    for (i, title) in titles {
+        let n = i + 1; // CDDB TTITLE is 0-based; our track numbers are 1-based
+        if (1..=99).contains(&n) {
+            tracks.insert(n as u8, (title.trim().to_string(), album_artist.clone()));
+        }
+    }
+    Some(DiscMeta { album, album_artist, tracks })
+}
+
 /// The platform's default optical device, used when the UI opens a CD.
 pub fn default_cd_device() -> String {
     #[cfg(target_os = "linux")]
@@ -646,6 +1096,11 @@ mod linux {
     const CDROMREADTOCHDR: libc::c_ulong = 0x5305;
     const CDROMREADTOCENTRY: libc::c_ulong = 0x5306;
     const CDROMREADAUDIO: libc::c_ulong = 0x530e;
+    const CDROM_DRIVE_STATUS: libc::c_ulong = 0x5326; // is a disc loaded?
+    const CDROMEJECT: libc::c_ulong = 0x5309; // open the tray / eject the disc
+    const CDSL_CURRENT: libc::c_int = 0x7fff_ffff; // the current slot (INT_MAX)
+    const SG_IO: libc::c_ulong = 0x2285; // send a raw SCSI command (sg_io_hdr)
+    const CDS_DISC_OK: libc::c_int = 4; // drive status: a disc is present and readable
     const CDROM_LBA: u8 = 0x01; // address format: logical block address
     const CDROM_LEADOUT: u8 = 0xAA; // pseudo-track: the disc lead-out (end)
     const CDROM_DATA_TRACK: u8 = 0x04; // ctrl bit set on data (non-audio) tracks
@@ -764,6 +1219,131 @@ mod linux {
         }
     }
 
+    /// Whether a disc is loaded and ready in `device`, via the CDROM_DRIVE_STATUS
+    /// ioctl only (no media read, so the disc is not spun up for this check). Returns
+    /// false while the drive is still spinning up (CDS_DRIVE_NOT_READY) so the TOC is
+    /// read only once the disc is actually ready. The disc type (audio vs data) is
+    /// decided by the subsequent TOC read, not here.
+    pub fn media_present(device: &str) -> bool {
+        let Ok(drive) = LinuxCdDrive::open(device) else {
+            return false;
+        };
+        // The ioctl's return value is the status itself, not 0/-1.
+        let status = unsafe { libc::ioctl(drive.fd(), CDROM_DRIVE_STATUS as _, CDSL_CURRENT) };
+        status == CDS_DISC_OK
+    }
+
+    /// The SCSI generic request header (`sg_io_hdr_t` from <scsi/sg.h>), used to send a
+    /// raw SCSI command through the `SG_IO` ioctl. `#[repr(C)]` so the layout matches the
+    /// kernel's; only the fields we set matter, the rest are zeroed.
+    #[repr(C)]
+    struct SgIoHdr {
+        interface_id: libc::c_int,
+        dxfer_direction: libc::c_int,
+        cmd_len: libc::c_uchar,
+        mx_sb_len: libc::c_uchar,
+        iovec_count: libc::c_ushort,
+        dxfer_len: libc::c_uint,
+        dxferp: *mut libc::c_void,
+        cmdp: *mut libc::c_uchar,
+        sbp: *mut libc::c_uchar,
+        timeout: libc::c_uint,
+        flags: libc::c_uint,
+        pack_id: libc::c_int,
+        usr_ptr: *mut libc::c_void,
+        status: libc::c_uchar,
+        masked_status: libc::c_uchar,
+        msg_status: libc::c_uchar,
+        sb_len_wr: libc::c_uchar,
+        host_status: libc::c_ushort,
+        driver_status: libc::c_ushort,
+        resid: libc::c_int,
+        duration: libc::c_uint,
+        info: libc::c_uint,
+    }
+
+    /// Eject via a direct SCSI START STOP UNIT (opcode 0x1B, LOEJ set + START clear)
+    /// through SG_IO. Unlike CDROMEJECT this is not gated on the cdrom driver's open
+    /// count, so it still works when the desktop's gvfsd-cdda (or anything else) also
+    /// holds the disc open. Needs a writable fd (SG_IO START STOP UNIT is a write
+    /// command for the block command filter).
+    /// Send a 6-byte SCSI CDB with no data transfer via SG_IO. Ok on GOOD status.
+    /// Retries on a UNIT ATTENTION (sense key 0x06): the first command after a media
+    /// change or fresh open reports it, and it is cleared by being reported.
+    fn sg_cmd6(fd: libc::c_int, cdb6: [u8; 6]) -> Result<()> {
+        for _ in 0..3 {
+            let mut cdb = cdb6;
+            let mut sense = [0u8; 32];
+            let mut hdr: SgIoHdr = unsafe { std::mem::zeroed() };
+            hdr.interface_id = b'S' as libc::c_int;
+            hdr.dxfer_direction = -1; // SG_DXFER_NONE
+            hdr.cmd_len = cdb.len() as libc::c_uchar;
+            hdr.mx_sb_len = sense.len() as libc::c_uchar;
+            hdr.cmdp = cdb.as_mut_ptr();
+            hdr.sbp = sense.as_mut_ptr();
+            hdr.timeout = 15_000; // ms
+            let r = unsafe { libc::ioctl(fd, SG_IO as _, &mut hdr as *mut SgIoHdr) };
+            if r != 0 {
+                return Err(anyhow!("sg_io: {}", std::io::Error::last_os_error()));
+            }
+            if hdr.status == 0 && hdr.host_status == 0 {
+                return Ok(());
+            }
+            let key = sense[2] & 0x0f;
+            if hdr.status == 0x02 && key == 0x06 {
+                continue; // UNIT ATTENTION cleared by this report; retry
+            }
+            return Err(anyhow!(
+                "cdb {:#04x} refused (status {:#x} key {:#x} asc {:#04x}/{:#04x})",
+                cdb6[0],
+                hdr.status,
+                key,
+                sense[12],
+                sense[13]
+            ));
+        }
+        Err(anyhow!("cdb {:#04x}: repeated unit attention", cdb6[0]))
+    }
+
+    /// Eject via SCSI, unlocking the door first. The desktop/kernel sends PREVENT ALLOW
+    /// MEDIUM REMOVAL to lock an in-use disc, so START STOP UNIT alone is refused with
+    /// MEDIUM REMOVAL PREVENTED; ALLOW (prevent=0) clears that, then LOEJ opens the tray.
+    /// Mirrors what `eject -s` does, and ignores the open count, so it works while
+    /// gvfsd-cdda holds the disc.
+    fn scsi_eject(fd: libc::c_int) -> Result<()> {
+        let _ = sg_cmd6(fd, [0x1e, 0, 0, 0, 0x00, 0]); // ALLOW MEDIUM REMOVAL (best effort)
+        sg_cmd6(fd, [0x1b, 0, 0, 0, 0x02, 0]) // START STOP UNIT, LOEJ=1 START=0 (eject)
+    }
+
+    /// Eject the disc in `device`. Tries CDROMEJECT first (works when nothing else holds
+    /// the drive), then falls back to a direct SCSI eject: on a desktop the GNOME CDDA
+    /// backend (gvfsd-cdda) keeps an inserted audio CD open the whole time, so CDROMEJECT
+    /// returns EBUSY (use_count != 1) and only the SCSI path, which ignores the open
+    /// count, actually opens the tray (#191).
+    pub fn eject(device: &str) -> Result<()> {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Write access is needed for the SCSI eject; non-blocking avoids a stall when the
+        // tray is already open. Fall back to read-only if write is denied (CDROMEJECT
+        // still works read-only; the SCSI path would then need privileges).
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(device)
+            .or_else(|_| {
+                File::options()
+                    .read(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(device)
+            })
+            .map_err(|e| anyhow!("open {device}: {e}"))?;
+        let fd = file.as_raw_fd();
+        if unsafe { libc::ioctl(fd, CDROMEJECT as _, 0 as libc::c_int) } == 0 {
+            return Ok(());
+        }
+        scsi_eject(fd)
+    }
+
     /// The disc TOC, cached briefly per device so adding a whole folder of GVfs CD
     /// tracks reads the disc once instead of once per file.
     pub fn cached_toc(device: &str) -> Option<Vec<CdTrack>> {
@@ -841,6 +1421,8 @@ mod windows {
     const OPEN_EXISTING: u32 = 3;
     const IOCTL_CDROM_READ_TOC: u32 = 0x0002_4000;
     const IOCTL_CDROM_RAW_READ: u32 = 0x0002_403E;
+    const IOCTL_STORAGE_EJECT_MEDIA: u32 = 0x0002_D4808;
+    const IOCTL_STORAGE_CHECK_VERIFY: u32 = 0x0002_D4800;
     const TRACK_MODE_CDDA: u32 = 2;
     const MAX_TRACKS: usize = 100;
     const CONTROL_DATA_TRACK: u8 = 0x04;
@@ -969,6 +1551,52 @@ mod windows {
                 CloseHandle(self.handle);
             }
         }
+    }
+
+    /// Whether a disc is present and readable in `device`, via IOCTL_STORAGE_CHECK_VERIFY
+    /// (a cheap media-present check that does not read the TOC). UNTESTED on hardware,
+    /// like the rest of the Windows CD path.
+    pub fn media_present(device: &str) -> bool {
+        let Ok(drive) = WindowsCdDrive::open(device) else {
+            return false;
+        };
+        let mut returned = 0u32;
+        let ok = unsafe {
+            DeviceIoControl(
+                drive.handle,
+                IOCTL_STORAGE_CHECK_VERIFY,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                &mut returned,
+                std::ptr::null_mut(),
+            )
+        };
+        ok != 0
+    }
+
+    /// Eject the disc in `device` via IOCTL_STORAGE_EJECT_MEDIA. UNTESTED on hardware,
+    /// like the rest of the Windows CD path.
+    pub fn eject(device: &str) -> Result<()> {
+        let drive = WindowsCdDrive::open(device)?;
+        let mut returned = 0u32;
+        let ok = unsafe {
+            DeviceIoControl(
+                drive.handle,
+                IOCTL_STORAGE_EJECT_MEDIA,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                &mut returned,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(anyhow!("eject {device}: {}", std::io::Error::last_os_error()));
+        }
+        Ok(())
     }
 
     impl CdDrive for WindowsCdDrive {
@@ -1102,12 +1730,109 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(target_os = "linux")]
+    fn hw_eject_when_requested() {
+        // Opt-in hardware check: actually ejects /dev/sr0 through the real eject path
+        // (CDROMEJECT then the SCSI fallback). Run with a disc in and the app closed:
+        // LINAMP_EJECT_TEST=1 cargo test --release hw_eject_when_requested -- --nocapture
+        if std::env::var_os("LINAMP_EJECT_TEST").is_none() {
+            return;
+        }
+        let dev = default_cd_device();
+        eprintln!("ejecting {dev} ...");
+        eject(&dev).expect("eject should open the tray");
+        eprintln!("eject returned Ok");
+    }
+
+    #[test]
     fn track_duration_is_sectors_over_75() {
         // 75 sectors = 1 second; a 3-minute track is 3*60*75 sectors.
         assert_eq!(CdTrack { number: 1, start_lba: 0, sectors: 75 }.duration(),
                    Duration::from_secs(1));
         let three_min = CdTrack { number: 2, start_lba: 0, sectors: 3 * 60 * 75 };
         assert_eq!(three_min.duration(), Duration::from_secs(180));
+    }
+
+    #[test]
+    fn disc_id_matches_musicbrainz_for_a_real_disc() {
+        // "American Jet Set" (MusicBrainz release 8aca2911-9b49-4653-b108-068c29f2b5c8).
+        // The TOC was read from the physical disc; these track offsets (LBA + 150) and
+        // lead-out (the total sector count) produce the disc's canonical MusicBrainz
+        // Disc ID, confirmed by a live /ws/2/discid lookup. This pins the whole
+        // computation (SHA-1 input layout, lead-out handling, modified Base64) against a
+        // real, server-verified disc.
+        let offsets = [
+            150u32, 16467, 36215, 52995, 69427, 86862, 108230, 132405, 154510, 168400,
+        ];
+        let leadout_lba = 197730u32; // MusicBrainz offset[0]: total sectors on the disc
+        let tracks: Vec<CdTrack> = offsets
+            .iter()
+            .enumerate()
+            .map(|(i, &off)| {
+                let start_lba = off - 150;
+                let next_lba = offsets.get(i + 1).map(|&o| o - 150).unwrap_or(leadout_lba);
+                CdTrack { number: (i + 1) as u8, start_lba, sectors: next_lba - start_lba }
+            })
+            .collect();
+        assert_eq!(disc_id(&tracks).as_deref(), Some("mxeV67091WHJmMYeQG4OMwMspvc-"));
+    }
+
+    #[test]
+    fn disc_id_is_none_for_an_empty_toc() {
+        assert_eq!(disc_id(&[]), None);
+    }
+
+    // Build a TOC from MusicBrainz-style offsets (LBA + 150) and a lead-out LBA.
+    fn toc_from_offsets(offsets: &[u32], leadout_lba: u32) -> Vec<CdTrack> {
+        offsets
+            .iter()
+            .enumerate()
+            .map(|(i, &off)| {
+                let start_lba = off - 150;
+                let next_lba = offsets.get(i + 1).map(|&o| o - 150).unwrap_or(leadout_lba);
+                CdTrack { number: (i + 1) as u8, start_lba, sectors: next_lba - start_lba }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn freedb_disc_id_matches_a_real_disc() {
+        // Green Day, "Saviors (édition de luxe)", read from the disc and confirmed
+        // against the freedb server (disc id 290fb416).
+        let offsets = [
+            150u32, 14118, 23382, 40204, 53170, 68043, 77768, 91039, 106657, 120318, 135076,
+            148992, 158451, 176032, 189210, 207348, 219988, 238751, 248009, 260456, 274075, 291585,
+        ];
+        let tracks = toc_from_offsets(&offsets, 301543);
+        assert_eq!(freedb_disc_id(&tracks).as_deref(), Some("290fb416"));
+    }
+
+    #[test]
+    fn parse_cddb_query_takes_the_first_match() {
+        // Inexact-match list (211) as the server returns it.
+        let resp = "211 Found inexact matches, list follows (until terminating `.')\n\
+                    data 290fb416 Green Day / Saviors (\u{e9}dition de luxe)\n.\n";
+        assert_eq!(parse_cddb_query(resp), Some(("data".into(), "290fb416".into())));
+        // Single exact match (200).
+        let resp = "200 rock abcd1234 Some Artist / Some Album";
+        assert_eq!(parse_cddb_query(resp), Some(("rock".into(), "abcd1234".into())));
+        // No match (202).
+        assert_eq!(parse_cddb_query("202 No match found"), None);
+    }
+
+    #[test]
+    fn parse_cddb_read_splits_artist_and_titles() {
+        let body = "# xmcd\nDISCID=290fb416\n\
+                    DTITLE=Green Day / Saviors (\u{e9}dition de luxe)\n\
+                    DYEAR=2024\n\
+                    TTITLE0=The American Dream Is Killing Me\n\
+                    TTITLE1=Look Ma\n\
+                    TTITLE2=Bobby Sox\n.\n";
+        let meta = parse_cddb_read(body).expect("should parse");
+        assert_eq!(meta.album_artist, "Green Day");
+        assert_eq!(meta.album, "Saviors (\u{e9}dition de luxe)");
+        assert_eq!(meta.tracks.get(&1).map(|t| t.0.as_str()), Some("The American Dream Is Killing Me"));
+        assert_eq!(meta.tracks.get(&3), Some(&("Bobby Sox".to_string(), "Green Day".to_string())));
     }
 
     // Shorthand for a TOC entry in the toc_from_entries tests.
@@ -1346,10 +2071,15 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn reads_real_disc_sectors_when_present() {
-        // Hardware check (Windows): only runs when an optical drive holds an audio
-        // CD. Exercises the Windows device path end to end, open, TOC, and raw CDDA
-        // sector reads, against a real disc. Skips on no drive, no disc, or a
-        // data-only disc (the TOC read returns Err or no audio tracks).
+        // Hardware check (Windows): exercises the device path end to end, open, TOC, and
+        // raw CDDA sector reads, against a real disc. Opt-in via LINAMP_CD_HW_TEST=1,
+        // because it needs EXCLUSIVE access to the drive: a raw read racing another
+        // handle (e.g. a running LinAmp whose watcher polls the drive) can return
+        // repeated/garbage sectors, so running it during a normal `cargo test` while the
+        // app is open fails spuriously. Run it deliberately with the app closed.
+        if std::env::var_os("LINAMP_CD_HW_TEST").is_none() {
+            return;
+        }
         let dev = default_cd_device();
         let Ok(toc) = read_cd_toc(&dev) else {
             return;

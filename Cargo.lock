@@ -2195,7 +2195,7 @@ dependencies = [
 
 [[package]]
 name = "linamp"
-version = "0.5.36"
+version = "0.5.37"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2220,6 +2220,7 @@ dependencies = [
  "self_cell",
  "serde",
  "serde_json",
+ "sha1",
  "symphonia",
  "tokio",
  "ureq",

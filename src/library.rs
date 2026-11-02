@@ -27,6 +27,10 @@ pub enum LibView {
     /// The conversion queue (not backed by the DB): shows active and finished file
     /// conversions. Only appears in the nav while the queue is non-empty.
     Converting,
+    /// An inserted audio CD, selected from the Devices section (#191). Not backed by
+    /// the DB; the UI reads the disc's TOC into the track list and the selected drive
+    /// is held in `LibraryViewState::cd_device`.
+    AudioCd,
 }
 
 /// Progress messages from a background scan.
@@ -236,9 +240,9 @@ impl Library {
             }
             LibView::NeverPlayed => ("WHERE play_count = 0", "artist, album, title"),
             LibView::TopRated => ("WHERE rating > 0", "rating DESC, artist, album, title"),
-            // Bookmarks and the conversion queue aren't DB queries; the UI builds
-            // those views from the bookmark store / the live queue.
-            LibView::Bookmarks | LibView::Converting => return Vec::new(),
+            // Bookmarks, the conversion queue and an audio CD aren't DB queries; the
+            // UI builds those from the bookmark store / the live queue / the disc TOC.
+            LibView::Bookmarks | LibView::Converting | LibView::AudioCd => return Vec::new(),
         };
         self.query(
             &format!("SELECT {COLS} FROM tracks {filter} ORDER BY {order} LIMIT ?1"),

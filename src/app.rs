@@ -500,12 +500,19 @@ struct LibraryViewState {
     /// the pane scale at use). Clamped so it can't shrink below the "Progress" header
     /// label. In-memory, resets on restart.
     convert_prog_w: f32,
-    /// Optical drives attached, as device ids (drive letters on Windows, /dev/srN on
-    /// Linux), shown under Devices. Polled while the library is open so a drive appears
-    /// when it is plugged in.
+    /// Optical drives that currently hold an audio CD, as device ids (drive letters on
+    /// Windows, /dev/srN on Linux), shown under Devices. Polled while the library is
+    /// open so an entry appears when a disc is inserted and disappears when it is
+    /// ejected (#191).
     devices: Vec<String>,
-    /// When the device list was last polled, to throttle the scan to a couple of seconds.
-    devices_poll: Option<std::time::Instant>,
+    /// The currently-present audio CDs (TOC + looked-up metadata), keyed by device id,
+    /// as last reported by the background CD watcher (#191). The AudioCd view and the
+    /// right-click Play build their track lists from this cache, so the UI never blocks
+    /// on a disc read or an online lookup.
+    cd_discs: std::collections::HashMap<String, crate::cdda::CdInfo>,
+    /// The optical drive whose audio CD is being shown (#191). Set when a Devices
+    /// entry is clicked; the AudioCd view fills the track list from `cd_tocs`.
+    cd_device: Option<String>,
 }
 
 /// Window geometry and focus (C1): the classic windows' positions, the library
@@ -656,6 +663,12 @@ pub struct LinAmpApp {
     /// pause) while fading out (Shift+V, or the "fade out when stopping or
     /// pausing" preference).
     fade: Option<(f32, FadeEnd)>,
+    /// A drive to eject once playback has stopped, with the retries left. Set when Eject
+    /// is used on the CD that is playing: the disc must stay in while a fade-out runs,
+    /// and the Linux `sr` driver refuses CDROMEJECT (EBUSY) until the reader thread has
+    /// released its handle, so the eject waits for the fade to finish and then retries
+    /// across frames until the drive is free (#191).
+    pending_eject: Option<(String, u32)>,
     mode_init: bool,
     eq_visible: bool,
     pl_visible: bool,
@@ -701,6 +714,10 @@ pub struct LinAmpApp {
     /// through the same `handle_tray_action` as the tray's transport buttons.
     _media_keys: crate::mediakeys::MediaKeys,
     media_keys_rx: std::sync::mpsc::Receiver<crate::tray::TrayAction>,
+    /// Background watcher for inserted/ejected audio CDs. It does the disc I/O off the
+    /// UI thread and reports snapshots the library drains each frame, so reading a
+    /// freshly inserted disc never freezes the app (#191).
+    cd_watcher: crate::cdda::CdWatcher,
     hidden_to_tray: bool,
     /// Time of the last tray-icon toggle, to debounce a double-click. A desktop that
     /// reports Activate for both clicks would otherwise toggle twice (hide then show,
@@ -826,6 +843,42 @@ fn crossfade_due(
     }
 }
 
+/// Whether a queued CD track (number `num`) still matches the disc currently in its
+/// drive, `cd` (as the watcher last reported it), so it may play (#191). Prefers the
+/// looked-up title + artist; falls back to the track length from the TOC when titles
+/// aren't comparable (not looked up yet, or the entry predates the lookup); plays
+/// best-effort when there is nothing to compare (no recognised disc, or no details
+/// loaded). This is what stops a swapped disc from playing the wrong audio under the
+/// queued track's title/artist.
+fn cd_entry_matches_disc(
+    track: &crate::playlist::Track,
+    num: u8,
+    cd: Option<&crate::cdda::CdInfo>,
+) -> bool {
+    let Some(cd) = cd else {
+        return true; // no recognised audio disc in the drive: best-effort
+    };
+    // Prefer the looked-up title + artist, when both the entry and the disc have real
+    // titles for this track.
+    if let Some(meta) = &cd.meta {
+        if let Some((title, artist)) = meta.tracks.get(&num) {
+            let placeholder = track.title.trim() == format!("Track {num}");
+            if !placeholder && !track.title.trim().is_empty() {
+                return track.title.trim() == title.trim()
+                    && track.artist.trim() == artist.trim();
+            }
+        }
+    }
+    // Titles not comparable: fall back to the track length from the TOC. A different
+    // disc's track almost always runs a different time, so this still catches a swap.
+    if let (Some(queued), Some(cur)) =
+        (track.duration, cd.tracks.iter().find(|t| t.number == num))
+    {
+        return (queued.as_secs_f32() - cur.duration().as_secs_f32()).abs() <= 2.0;
+    }
+    true // nothing to compare against: best-effort
+}
+
 /// Taskbar-restore edge (#209): given the root viewport's current minimized flag
 /// (`min`) and whether we've already seen it confirmed minimized (`confirmed`),
 /// return the updated `confirmed` flag and whether the children should now be
@@ -840,6 +893,23 @@ fn taskbar_restore_step(min: bool, confirmed: bool) -> (bool, bool) {
     } else {
         (false, false)
     }
+}
+
+/// How many frames the deferred eject retries while the CD reader thread releases the
+/// drive (it exits a moment after playback stops). Ample: the handle frees within a
+/// frame or two, and the poller re-requests a repaint so these tick promptly.
+const EJECT_RETRIES: u32 = 90;
+
+/// Whether ejecting `device` should stop playback first: true when something is
+/// playing and the current track is a CD track on that same drive. Pure, so the
+/// decision is unit-tested. Ejecting an idle drive, or a drive other than the one
+/// playing, does not disturb playback.
+fn eject_should_stop(playing: bool, current_path: Option<&str>, device: &str) -> bool {
+    playing
+        && current_path
+            .and_then(crate::cdda::parse_track_path)
+            .map(|(d, _)| d == device)
+            .unwrap_or(false)
 }
 
 impl LinAmpApp {
@@ -902,7 +972,8 @@ impl LinAmpApp {
                 convert_col_fr: [0.30, 0.30],
                 convert_prog_w: 130.0,
                 devices: Vec::new(),
-                devices_poll: None,
+                cd_discs: std::collections::HashMap::new(),
+                cd_device: None,
             },
             geom: WindowGeom {
                 win_pos: [egui::pos2(100.0, 100.0); 3],
@@ -956,6 +1027,7 @@ impl LinAmpApp {
             time_blink_hidden: false,
             stop_after_current: false,
             fade: None,
+            pending_eject: None,
             mode_init: true,
             eq_visible: false,
             pl_visible: false,
@@ -1004,6 +1076,7 @@ impl LinAmpApp {
             tray_rx,
             _media_keys: media_keys,
             media_keys_rx,
+            cd_watcher: crate::cdda::CdWatcher::start(),
             hidden_to_tray: false,
             last_tray_toggle: None,
             tray_prev_vis: (false, false, false),
@@ -1247,6 +1320,26 @@ impl LinAmpApp {
         self.status = format!("{} track(s) in playlist.", self.playlist.len());
     }
 
+    /// Whether a queued track may play. Always true for non-CD tracks. For a `cdda://`
+    /// track it guards against a swapped disc (#191): if the disc now in that drive is a
+    /// different one than the queued entry came from, return false so the entry is
+    /// skipped instead of playing the wrong disc's audio under the queued title/artist.
+    /// Best-effort (true) when the inserted disc's details aren't loaded yet, matching
+    /// the requested behaviour.
+    fn cd_track_matches_disc(&self, track: &crate::playlist::Track) -> bool {
+        let Some(path) = track.path.to_str() else {
+            return true;
+        };
+        if !crate::cdda::is_cdda_path(path) {
+            return true; // not a CD track
+        }
+        let Some((device, num)) = crate::cdda::parse_track_path(path) else {
+            return true;
+        };
+        // Compare against what the watcher last saw in that drive.
+        cd_entry_matches_disc(track, num, self.lib.cd_discs.get(&device))
+    }
+
     /// Play track `idx`, skipping forward over any that can't be opened/decoded
     /// (missing files, unsupported/corrupt audio) until one plays. Bounded to one
     /// pass over the playlist so an all-unplayable list can't loop forever.
@@ -1262,6 +1355,15 @@ impl LinAmpApp {
             let Some(track) = self.playlist.tracks.get(i).cloned() else {
                 break;
             };
+            // A queued CD track whose disc was swapped must not play the wrong disc's
+            // audio with the queued track's title/artist (#191). Skip it when it no
+            // longer matches the disc in the drive; best-effort when the disc's details
+            // aren't loaded yet.
+            if !self.cd_track_matches_disc(&track) {
+                skipped += 1;
+                i = (i + 1) % len;
+                continue;
+            }
             match self.player.play_file(&track.path) {
                 Ok(()) => {
                     self.playlist.current = Some(i);
@@ -1623,17 +1725,95 @@ impl LinAmpApp {
     fn open_audio_cd(&mut self) {
         hide_popup_window();
         let device = crate::cdda::default_cd_device();
-        match crate::cdda::read_cd_toc(&device) {
-            Ok(toc) if !toc.is_empty() => {
-                let start = self.playlist.len();
-                for t in &toc {
-                    self.playlist.tracks.push(crate::playlist::Track::cd_track(&device, t));
+        self.play_audio_cd_device(&device);
+    }
+
+    /// Enqueue every track of the audio CD in `device` onto the playlist and start
+    /// playing at the first of them (#191). Shared by the Options "Open Audio CD" menu
+    /// and the library's right-click "Play" on an audio CD.
+    pub(crate) fn play_audio_cd_device(&mut self, device: &str) {
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        {
+            // Prefer the disc the background watcher already read (TOC + looked-up
+            // titles), so a library Play never blocks the UI. The Options "Open Audio
+            // CD" path may have nothing cached (that drive not scanned yet), so read the
+            // TOC directly there, without metadata.
+            let (toc, meta) = match self.lib.cd_discs.get(device) {
+                Some(cd) => (Ok(cd.tracks.clone()), cd.meta.clone()),
+                None => (crate::cdda::read_cd_toc(device), None),
+            };
+            match toc {
+                Ok(toc) if !toc.is_empty() => {
+                    let start = self.playlist.len();
+                    for t in &toc {
+                        self.playlist.tracks.push(crate::playlist::Track::cd_track(
+                            device,
+                            t,
+                            meta.as_ref(),
+                        ));
+                    }
+                    self.status = format!("Audio CD: {} track(s) added.", toc.len());
+                    self.play_index(start);
                 }
-                self.status = format!("Audio CD: {} track(s) added.", toc.len());
-                self.play_index(start);
+                Ok(_) => self.status = "Audio CD: no audio tracks on the disc.".to_string(),
+                Err(e) => self.status = format!("Audio CD: {e}"),
             }
-            Ok(_) => self.status = "Audio CD: no audio tracks on the disc.".to_string(),
-            Err(e) => self.status = format!("Audio CD: {e}"),
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            let _ = device;
+        }
+    }
+
+    /// Eject the disc in `device` (the library's right-click Eject on an audio CD).
+    /// If the track playing now is on this drive, stop it first (respecting the
+    /// fade-on-stop pref) so playback ends cleanly instead of advancing to the next
+    /// track on the failed read. With a fade, the disc must stay in to play the fade,
+    /// so the physical eject is deferred until the fade reaches silence; otherwise it
+    /// ejects now. The Devices poll then drops the entry and moves the view if that CD
+    /// was being shown (#191).
+    pub(crate) fn eject_cd(&mut self, device: &str) {
+        let cur = self.playlist.current_track().map(|t| t.path.to_string_lossy().into_owned());
+        if eject_should_stop(self.player.state() != PlayState::Stopped, cur.as_deref(), device) {
+            // Stop first (fading when fade-on-stop is on, else an immediate stop), then
+            // let the deferred poller eject: it waits for any fade to finish and retries
+            // until the CD reader thread has released the drive (`poll_pending_eject`).
+            self.stop_playback();
+            self.pending_eject = Some((device.to_string(), EJECT_RETRIES));
+            return;
+        }
+        // An idle drive (nothing playing off it): eject straight away.
+        self.do_eject(device);
+    }
+
+    /// Eject the drive queued by [`eject_cd`] once playback has fully stopped. The Linux
+    /// `sr` driver returns EBUSY while the reader thread's handle is still open, so retry
+    /// across frames until the drive frees or the budget runs out. Waits out any running
+    /// fade-out first (the disc is needed to play it). Re-requests a repaint so the retry
+    /// keeps ticking even when the app would otherwise go idle.
+    fn poll_pending_eject(&mut self, ctx: &egui::Context) {
+        if self.fade.is_some() {
+            return; // a fade-out is still playing off the disc; wait for it
+        }
+        let Some((dev, tries)) = self.pending_eject.take() else {
+            return;
+        };
+        if crate::cdda::eject(&dev).is_ok() {
+            self.status = format!("Ejected {}.", crate::cdda::drive_label(&dev));
+        } else if tries > 0 {
+            self.pending_eject = Some((dev, tries - 1));
+            ctx.request_repaint();
+        } else {
+            self.status = "Eject failed: drive busy".into();
+        }
+    }
+
+    /// Send the physical eject to `device` and report it. The background watcher then
+    /// notices the empty tray within a cycle and drops the Devices entry.
+    fn do_eject(&mut self, device: &str) {
+        match crate::cdda::eject(device) {
+            Ok(()) => self.status = format!("Ejected {}.", crate::cdda::drive_label(device)),
+            Err(e) => self.status = format!("Eject failed: {e}"),
         }
     }
 
@@ -4248,6 +4428,11 @@ impl eframe::App for LinAmpApp {
         // Rip/convert progress: drain the queue worker's messages into the job list.
         self.poll_convert();
 
+        // Audio-CD watcher (#191): drain the latest snapshot every frame so the Devices
+        // list and the cached disc info stay current even while the library window is
+        // closed, which the play-time disc-match check relies on.
+        self.poll_cd_devices();
+
         // Taskbar minimize (#209): bring the child windows back when the root is
         // restored from the taskbar.
         self.poll_taskbar_restore(ctx);
@@ -4374,6 +4559,10 @@ impl eframe::App for LinAmpApp {
                 self.fade = Some((t, end));
             }
         }
+
+        // Eject the drive queued by eject_cd once the fade-out (if any) has finished and
+        // the CD reader thread has let go of the drive (#191).
+        self.poll_pending_eject(ctx);
 
         // Advance any in-progress crossfade, then start one when the current track
         // nears its end (begins the next track overlapping this one's tail).
@@ -4532,8 +4721,67 @@ fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        crossfade_due, file_name_key, parse_time, reorder_play_next, taskbar_restore_step,
+        cd_entry_matches_disc, crossfade_due, eject_should_stop, file_name_key, parse_time,
+        reorder_play_next, taskbar_restore_step,
     };
+
+    #[test]
+    fn eject_stops_only_the_playing_drive() {
+        // Playing a CD track on the drive being ejected: stop first (#191).
+        assert!(eject_should_stop(true, Some("cdda:///dev/sr0/3"), "/dev/sr0"));
+        // Nothing playing: eject without touching playback.
+        assert!(!eject_should_stop(false, Some("cdda:///dev/sr0/3"), "/dev/sr0"));
+        // Playing a different drive: leave it alone.
+        assert!(!eject_should_stop(true, Some("cdda:///dev/sr1/3"), "/dev/sr0"));
+        // Playing a regular file, not a CD: leave it alone.
+        assert!(!eject_should_stop(true, Some("/music/song.flac"), "/dev/sr0"));
+        assert!(!eject_should_stop(true, None, "/dev/sr0"));
+    }
+
+    #[test]
+    fn cd_entry_skips_a_swapped_disc() {
+        use crate::cdda::{CdInfo, CdTrack, DiscMeta};
+        use crate::playlist::Track;
+        use std::collections::HashMap;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        // A queued CD track with a given title/artist/length.
+        let entry = |title: &str, artist: &str, secs: u64| {
+            let mut t = Track::new(PathBuf::from("cdda://D:/1"));
+            t.title = title.into();
+            t.artist = artist.into();
+            t.duration = Some(Duration::from_secs(secs));
+            t
+        };
+        // The disc now in the drive: track 1 of `secs` length, optionally with titles.
+        let disc = |title: &str, artist: &str, secs: u32, titled: bool| {
+            let meta = titled.then(|| {
+                let mut tracks = HashMap::new();
+                tracks.insert(1u8, (title.to_string(), artist.to_string()));
+                DiscMeta { album: "Album".into(), album_artist: artist.into(), tracks }
+            });
+            CdInfo {
+                device: "D:".into(),
+                tracks: vec![CdTrack { number: 1, start_lba: 0, sectors: secs * 75 }],
+                meta,
+            }
+        };
+
+        // Same disc (title + artist match): play.
+        assert!(cd_entry_matches_disc(&entry("Song A", "Band A", 200), 1, Some(&disc("Song A", "Band A", 200, true))));
+        // Swapped disc, both titled, titles differ: skip (the bug we're preventing).
+        assert!(!cd_entry_matches_disc(&entry("Song A", "Band A", 200), 1, Some(&disc("Song B", "Band B", 180, true))));
+        // No recognised disc in the drive: best-effort (play).
+        assert!(cd_entry_matches_disc(&entry("Song A", "Band A", 200), 1, None));
+        // Titles not loaded yet but the length differs: skip (catches a swap pre-lookup).
+        assert!(!cd_entry_matches_disc(&entry("Song A", "Band A", 200), 1, Some(&disc("", "", 180, false))));
+        // Titles not loaded, same length: best-effort play (same disc).
+        assert!(cd_entry_matches_disc(&entry("Song A", "Band A", 200), 1, Some(&disc("", "", 200, false))));
+        // Placeholder entry ("Track 1") against a now-titled disc of the same length:
+        // don't falsely skip (it was queued before the titles loaded).
+        assert!(cd_entry_matches_disc(&entry("Track 1", "", 200), 1, Some(&disc("Real Title", "Band", 200, true))));
+    }
 
     #[test]
     fn taskbar_restore_waits_for_a_confirmed_minimize_edge() {

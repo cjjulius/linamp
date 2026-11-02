@@ -341,6 +341,79 @@ pub fn probe_duration(path: &Path) -> Option<Duration> {
         .or_else(|| media_duration(format.as_ref()))
 }
 
+/// Title / artist / album read from a file's container tags via symphonia, as a
+/// fallback for formats lofty does not tag-read. Matroska/WebM (`.mkv`/`.webm`)
+/// are the motivating case (#202): lofty returns no tags for them, but symphonia
+/// reads the container's ARTIST/ALBUM/TITLE. Each field is `None` when absent.
+#[derive(Default)]
+pub struct ProbedTags {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+}
+
+/// Read the container tags via symphonia. Used only when lofty left a field empty,
+/// so the common (lofty-tagged) path never pays for the extra probe. Returns `None`
+/// if the file can't be opened/probed.
+pub fn probe_tags(path: &Path) -> Option<ProbedTags> {
+    use symphonia::core::meta::{RawValue, StandardTag, Tag};
+    let file = File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let mut format = symphonia::default::get_probe()
+        .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
+        .ok()?;
+    let mut out = ProbedTags::default();
+    // Prefer symphonia's standard mapping; fall back to the raw key's name, since
+    // some containers (Matroska ALBUM) don't map every tag to a standard key.
+    let fill = |out: &mut ProbedTags, tags: &[Tag]| {
+        for tag in tags {
+            let (slot, val) = match &tag.std {
+                Some(StandardTag::Artist(v)) => ("ARTIST", v.to_string()),
+                Some(StandardTag::TrackTitle(v)) => ("TITLE", v.to_string()),
+                Some(StandardTag::Album(v)) => ("ALBUM", v.to_string()),
+                _ => {
+                    let name = tag
+                        .raw
+                        .key
+                        .rsplit(['@', ':', '/'])
+                        .next()
+                        .unwrap_or(&tag.raw.key)
+                        .to_ascii_uppercase();
+                    match (name.as_str(), &tag.raw.value) {
+                        ("ARTIST", RawValue::String(v)) => ("ARTIST", v.to_string()),
+                        ("TITLE", RawValue::String(v)) => ("TITLE", v.to_string()),
+                        ("ALBUM", RawValue::String(v)) => ("ALBUM", v.to_string()),
+                        _ => continue,
+                    }
+                }
+            };
+            let v = val.trim();
+            if v.is_empty() {
+                continue;
+            }
+            let slot = match slot {
+                "ARTIST" => &mut out.artist,
+                "TITLE" => &mut out.title,
+                _ => &mut out.album,
+            };
+            if slot.is_none() {
+                *slot = Some(v.to_string());
+            }
+        }
+    };
+    if let Some(rev) = format.metadata().current() {
+        fill(&mut out, &rev.media.tags);
+        for pt in &rev.per_track {
+            fill(&mut out, &pt.metadata.tags);
+        }
+    }
+    Some(out)
+}
+
 /// A track length from its container time-base and frame count, if both are known.
 /// symphonia 0.6's `calc_time` takes a `Timestamp` and returns an `Option<Time>`,
 /// which is (seconds, nanos); convert that to a `std::time::Duration`.
