@@ -208,7 +208,7 @@ pub enum VizFrame {
 }
 
 /// Hit target on a 14px window-shade bar.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum ShadeHit {
     Close,
     TitleBar,
