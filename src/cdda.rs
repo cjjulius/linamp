@@ -981,12 +981,26 @@ fn lookup_freedb(tracks: &[CdTrack]) -> Option<DiscMeta> {
     query.push('+');
     query.push_str(&leadout_secs.to_string());
     let q_url = format!("{FREEDB_CGI}?cmd={query}&hello={FREEDB_HELLO}&proto=6");
-    let resp = agent.get(&q_url).call().ok()?.into_string().ok()?;
+    let resp = decode_cddb(agent.get(&q_url).call().ok()?)?;
     let (category, read_id) = parse_cddb_query(&resp)?;
     // cddb read <category> <discid>
     let r_url = format!("{FREEDB_CGI}?cmd=cddb+read+{category}+{read_id}&hello={FREEDB_HELLO}&proto=6");
-    let body = agent.get(&r_url).call().ok()?.into_string().ok()?;
+    let body = decode_cddb(agent.get(&r_url).call().ok()?)?;
     parse_cddb_read(&body)
+}
+
+/// Read a CDDB response body as text. Classic freedb records are frequently
+/// ISO-8859-1 and some servers omit the charset header, so decode as UTF-8 when valid
+/// and otherwise fall back to Latin-1 (each byte maps to the same code point) rather
+/// than mangling accented titles.
+fn decode_cddb(resp: ureq::Response) -> Option<String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    resp.into_reader().take(2_000_000).read_to_end(&mut buf).ok()?;
+    Some(match String::from_utf8(buf) {
+        Ok(s) => s,
+        Err(e) => e.into_bytes().iter().map(|&b| b as char).collect(),
+    })
 }
 
 /// Parse a CDDB `query` response for the (category, discid) of the best match. Handles
@@ -1942,10 +1956,15 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn reads_real_disc_sectors_when_present() {
-        // Hardware check (Windows): only runs when an optical drive holds an audio
-        // CD. Exercises the Windows device path end to end, open, TOC, and raw CDDA
-        // sector reads, against a real disc. Skips on no drive, no disc, or a
-        // data-only disc (the TOC read returns Err or no audio tracks).
+        // Hardware check (Windows): exercises the device path end to end, open, TOC, and
+        // raw CDDA sector reads, against a real disc. Opt-in via LINAMP_CD_HW_TEST=1,
+        // because it needs EXCLUSIVE access to the drive: a raw read racing another
+        // handle (e.g. a running LinAmp whose watcher polls the drive) can return
+        // repeated/garbage sectors, so running it during a normal `cargo test` while the
+        // app is open fails spuriously. Run it deliberately with the app closed.
+        if std::env::var_os("LINAMP_CD_HW_TEST").is_none() {
+            return;
+        }
         let dev = default_cd_device();
         let Ok(toc) = read_cd_toc(&dev) else {
             return;
