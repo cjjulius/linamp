@@ -556,9 +556,9 @@ mod tests {
             }
             n
         };
-        let shown = skin.compose_pl_shade(true, "1. a song", "6:12", color);
+        let shown = skin.compose_pl_shade(true, "1. a song", "6:12", color, None);
         assert!(text_px(&shown) > 0, "shaded bar should draw the track and time");
-        let empty = skin.compose_pl_shade(true, "", "", color);
+        let empty = skin.compose_pl_shade(true, "", "", color, None);
         assert_eq!(text_px(&empty), 0, "no current track -> no text on the bar");
     }
 
@@ -839,7 +839,7 @@ mod tests {
             regions: crate::region::parse(""),
             cursors: HashMap::new(),
         };
-        let img = skin.compose_eq_shade(true, 0.5, 0.0);
+        let img = skin.compose_eq_shade(true, 0.5, 0.0, None);
         assert_eq!(img.dimensions(), (275, 14));
         // Fully opaque, no transparent void.
         assert!(img.pixels().all(|p| p[3] == 255), "shade bar must be opaque");
@@ -861,7 +861,7 @@ mod tests {
             regions: crate::region::parse(""),
             cursors: HashMap::new(),
         };
-        let img = skin.compose_eq_shade(false, 0.0, 0.0);
+        let img = skin.compose_eq_shade(false, 0.0, 0.0, None);
         assert!(img.pixels().all(|p| p[3] == 255), "shade bar must be opaque");
         // The close marker is light on the black bar.
         assert!(img.get_pixel(266, 5)[0] > 100, "controls must contrast black");
