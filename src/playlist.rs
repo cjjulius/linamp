@@ -243,7 +243,7 @@ impl Playlist {
     pub fn add_file(&mut self, path: PathBuf) {
         #[cfg(target_os = "linux")]
         if let Some((dev, t)) = crate::cdda::mounted_cd_track(&path) {
-            self.tracks.push(Track::cd_track(&dev, &t));
+            self.tracks.push(Track::cd_track(&dev, &t, None));
             return;
         }
         if is_supported(&path) {
@@ -279,7 +279,7 @@ impl Playlist {
             // A GVfs audio-CD mount's WAV tracks become native cdda:// entries.
             #[cfg(target_os = "linux")]
             if let Some((dev, t)) = crate::cdda::mounted_cd_track(&p) {
-                self.tracks.push(Track::cd_track(&dev, &t));
+                self.tracks.push(Track::cd_track(&dev, &t, None));
                 continue;
             }
             self.tracks.push(Track::new(p));
