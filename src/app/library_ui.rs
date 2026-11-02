@@ -2194,7 +2194,7 @@ impl super::LinAmpApp {
 /// the group, plus a short solid horizontal tick into each child at its centre. The solid
 /// tick keeps the corner joined to the trunk even where a trunk dash falls in a gap, so
 /// the trunk and label read as one connected branch (the classic Media Library look).
-fn paint_nav_tree(painter: &egui::Painter, rows: &[egui::Rect], col: Color32, s: f32) {
+pub(super) fn paint_nav_tree(painter: &egui::Painter, rows: &[egui::Rect], col: Color32, s: f32) {
     let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
         return;
     };

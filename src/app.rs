@@ -2885,6 +2885,32 @@ impl LinAmpApp {
             || (self.pl_visible && rects_docked(lib, self.win_rect_pts(2)))
     }
 
+    /// The Media Library nav palette for the current skin: (list fill, row text,
+    /// selection bg, selection text, tree-guide gray). The Preferences category tree
+    /// draws from these so it matches the library nav across skins, using the skin's
+    /// GEN.BMP colours when present and the sampled theme otherwise. Mirrors the
+    /// derivation in `library_ui::ui_library`.
+    fn skin_nav_colors(&self) -> (Color32, Color32, Color32, Color32, Color32) {
+        let rgb = |c: [u8; 3]| Color32::from_rgb(c[0], c[1], c[2]);
+        let gen = if self.ui_mode == UiMode::Classic {
+            self.classic.as_ref().and_then(|c| c.gen_colors())
+        } else {
+            None
+        };
+        let (list_fill, row_col, sel_bg) = if let Some(g) = gen {
+            (rgb(g.item_bg), rgb(g.item_fg), rgb(g.selection))
+        } else {
+            (self.theme.list_bg, self.theme.list_normal, self.theme.list_sel_bg)
+        };
+        let sel_col = skin::contrast_text(sel_bg);
+        let dim = skin::blend(row_col, list_fill, 0.45);
+        // A neutral gray for the tree guide: the skin's dim colour desaturated to its
+        // luminance so it reads gray, not tinted.
+        let gl = (0.299 * dim.r() as f32 + 0.587 * dim.g() as f32 + 0.114 * dim.b() as f32) as u8;
+        let dash_col = Color32::from_gray(gl.clamp(96, 180));
+        (list_fill, row_col, sel_bg, sel_col, dash_col)
+    }
+
     fn ui_prefs(&mut self, ctx: &egui::Context) {
         if !self.prefs_open {
             // Re-anchor to the main window the next time it opens.
@@ -2911,6 +2937,10 @@ impl LinAmpApp {
             .with_taskbar(false)
             .with_window_level(self.window_level());
         let id = egui::ViewportId::from_hash_of("linamp_prefs");
+        // Skin nav colours for the category tree, so it matches the Media Library nav
+        // whatever skin is applied.
+        let (nav_list_fill, nav_row_col, nav_sel_bg, nav_sel_col, nav_dash) =
+            self.skin_nav_colors();
         let mut close = false;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             // Top: skin-accented title bar (the window is borderless). Drag it to
@@ -2969,16 +2999,26 @@ impl LinAmpApp {
                         self.prefs_drag = None;
                     }
                 });
-            // Left: the category tree. Categories sit under bold group headings, indented
-            // beneath them, the way the classic player's Preferences tree (and the Media
-            // Library nav pane) are laid out. A None heading renders its categories at the
-            // top level with no indent.
+            // Left: the category tree, painted like the Media Library nav so it reads the
+            // same whatever skin is applied: a list-fill background, skin item text, the
+            // skin selection colours, and a dashed gray tree guide under each group. The
+            // categories sit under bold group headings, indented beneath them; a None
+            // heading renders its categories at the top level with no guide.
+            let nav_frame = egui::Frame::none()
+                .fill(nav_list_fill)
+                .inner_margin(egui::Margin::same(4.0));
             egui::SidePanel::left("prefs_cats")
                 .resizable(false)
                 .exact_width(160.0)
+                .frame(nav_frame)
                 .show(ctx, |ui| {
-                    ui.add_space(6.0);
+                    ui.add_space(2.0);
+                    ui.visuals_mut().selection.bg_fill = nav_sel_bg;
+                    ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
+                    // Flush the selectable rows to the left margin so top-level nodes line
+                    // up with the headings.
                     ui.spacing_mut().button_padding.x = 0.0;
+                    let font = egui::FontId::proportional(13.0);
                     let groups: &[(Option<&str>, &[PrefTab])] = &[
                         (
                             Some("General Preferences"),
@@ -2988,23 +3028,42 @@ impl LinAmpApp {
                         (None, &[PrefTab::OptionalFeatures, PrefTab::About]),
                     ];
                     for (heading, tabs) in groups {
+                        let indent = heading.is_some();
                         if let Some(h) = heading {
                             ui.add_space(2.0);
-                            ui.label(egui::RichText::new(*h).strong());
+                            ui.label(
+                                egui::RichText::new(*h)
+                                    .strong()
+                                    .color(nav_row_col)
+                                    .font(font.clone()),
+                            );
                         }
-                        let indent = heading.is_some();
+                        let mut rects: Vec<egui::Rect> = Vec::with_capacity(tabs.len());
                         for &tab in *tabs {
-                            ui.horizontal(|ui| {
-                                if indent {
-                                    ui.add_space(12.0);
-                                }
-                                if ui
-                                    .selectable_label(self.prefs_tab == tab, tab.label())
-                                    .clicked()
-                                {
-                                    self.prefs_tab = tab;
-                                }
-                            });
+                            let selected = self.prefs_tab == tab;
+                            let txt = if selected { nav_sel_col } else { nav_row_col };
+                            // Leading space clears the gutter for the painted guide on
+                            // indented children; top-level rows start flush.
+                            let mut job = egui::text::LayoutJob::default();
+                            job.append(
+                                tab.label(),
+                                if indent { 15.0 } else { 0.0 },
+                                egui::text::TextFormat {
+                                    font_id: font.clone(),
+                                    color: txt,
+                                    ..Default::default()
+                                },
+                            );
+                            let resp = ui.selectable_label(selected, job);
+                            if resp.clicked() {
+                                self.prefs_tab = tab;
+                            }
+                            if indent {
+                                rects.push(resp.rect);
+                            }
+                        }
+                        if indent && !rects.is_empty() {
+                            library_ui::paint_nav_tree(ui.painter(), &rects, nav_dash, 1.0);
                         }
                     }
                 });
