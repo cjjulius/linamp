@@ -1,14 +1,15 @@
 # Keyboard shortcuts
 
 LinAmp follows the classic Winamp 2.x shortcut set. Keys work whenever a LinAmp
-window has focus and no text field is active.
+window has focus and no text field is active, in both the classic skin and the
+modern view. The global media keys (below) work even when LinAmp is unfocused.
 
 ## Playback
 
 | Key | Action |
 | --- | --- |
 | X | Play |
-| C | Pause / unpause |
+| C | Pause (press Space or X to resume) |
 | V | Stop |
 | Shift+V | Stop with a fade-out |
 | Ctrl+V | Toggle "stop after current track" |
@@ -76,6 +77,32 @@ for the top number row).
 | Ctrl+A | Select all (toggles always on top from the other windows) |
 | Insert | Add file(s) |
 | Delete | Remove the selected tracks |
+
+## Global media keys
+
+The keyboard media / transport keys control LinAmp even when it is unfocused,
+minimized, or hidden to the system tray (Windows media hotkeys; MPRIS on Linux).
+
+| Key | Action |
+| --- | --- |
+| Media Play / Pause | Play / pause |
+| Media Stop | Stop |
+| Media Previous | Previous track |
+| Media Next | Next track |
+
+## Tag editor window
+
+Active while the tag editor ("File Info") window has focus.
+
+| Key | Action |
+| --- | --- |
+| Alt+B | Basic Info tab |
+| Alt+I | ID3 tab (MP3 / MP2 / MP1) |
+| Alt+A | Tags tab (FLAC / Ogg / M4A) |
+| Alt+1 / Alt+2 | Toggle the ID3v1 / ID3v2 tag (ID3 tab) |
+| Alt+U | Update (save tags) |
+| Alt+C / Escape | Cancel (close without saving) |
+| Alt+T / Alt+F | Copy to / from ID3v1 (MP3, ID3 tab) |
 
 ## Mouse
 

@@ -12,7 +12,19 @@ Core (`src/`):
   `--render-all`, file arguments) and app launch.
 - `player.rs`, audio engine: decode, play/pause/stop/seek, volume, device
   follow and the EQ/balance source chain.
-- `eq.rs`, 10-band + preamp biquad DSP and presets.
+- `decode.rs`, the single local decode path (symphonia with a format hint, plus a
+  bundled libopus for Opus); also feeds streaming.
+- `midi.rs`, MIDI synthesis (rustysynth + a bundled SoundFont); `tracker.rs`,
+  tracker-module rendering (xmrs/xmrsplayer). Both expose the same player source API.
+- `stream.rs`, HTTP(S)/ICY internet-radio streaming on a background thread.
+- `cdda.rs`, audio-CD support: the TOC, the `cdda://` model, per-OS raw sector reads
+  (the `CdDrive` trait), the background `CdWatcher`, online metadata
+  (MusicBrainz/freedb) and eject.
+- `encode.rs` + `convert_queue.rs`, audio conversion and CD ripping: the encoders
+  (MP3/Ogg/Opus/WAV/AIFF), the shared decode-to-PCM core, and the serial background
+  job queue that indexes finished files into the library.
+- `eq.rs`, 10-band + preamp biquad DSP and presets; `eqf.rs`, Winamp `.eqf` preset
+  import/export.
 - `balance.rs`, stereo pan with centre snap.
 - `viz.rs`, FFT spectrum / oscilloscope data.
 - `playlist.rs`, track list, M3U/M3U8/PLS load/save, ordering, next/prev,
@@ -21,7 +33,11 @@ Core (`src/`):
 - `tags.rs`, read/write tags: ID3 (MP3/MP2/MP1), Vorbis comments (FLAC/Ogg) and
   MP4 atoms (M4A); plus Basic Info (format, length, bitrate, …) for any format.
 - `library.rs`, SQLite media library (scan, search).
-- `config.rs`, on-disk preferences and session (skin, playlist, volume, …).
+- `config.rs`, on-disk preferences and session (skin, playlist, volume, …);
+  `openq.rs`, the cross-instance open queue behind single-instance forwarding.
+- `mediakeys.rs`, global media keys (Windows `RegisterHotKey`, Linux MPRIS);
+  `tray.rs`, the system-tray icon and menu; `fileassoc.rs`, per-user "Open with"
+  file associations (Windows registry, Linux `.desktop`).
 - `skin.rs`, derives the modern-view colour theme from a skin.
 - `classic.rs`, the classic skin renderer: decodes a `.wsz` and composites each
   window from its sprite sheets. The largest and most parity-critical module.
@@ -87,6 +103,30 @@ taken from the webamp project) into the 275-wide classic windows, including the
 bitmap-font LCD/marquee, custom cursors and `REGION.TXT` window-shape masks.
 Headless previews (`--render-skin` / `--render-all`) use the same compositing
 code, which makes skins straightforward to vet without launching the UI.
+
+## Audio pipeline, CD and conversion
+
+Playback routes a track by kind: MIDI through `midi.rs`, tracker modules through
+`tracker.rs`, and everything else through `decode.rs` (symphonia, plus libopus for
+Opus), with `stream.rs` for HTTP(S) sources. The decoded `rodio::Source` runs
+through the EQ and balance stages before the output device, with the analyzer
+tapping the same stream.
+
+An audio CD is handled entirely in `cdda.rs`: a background `CdWatcher` polls the
+drives, reads each disc's TOC once and looks its titles up online, while playback
+and ripping read raw CD sectors through the per-OS `CdDrive`. Conversion and
+ripping share one path, `encode.rs` decodes to PCM (a file via `decode.rs`, or a CD
+track via `cdda.rs`) and encodes to MP3/Ogg/Opus/WAV/AIFF, and `convert_queue.rs`
+runs the jobs one at a time off the UI thread and indexes each finished file into
+the library.
+
+## System integration
+
+`mediakeys.rs`, `tray.rs` and `fileassoc.rs` each isolate their OS specifics behind
+a small cross-platform surface: global media keys use `RegisterHotKey` on Windows
+and MPRIS over D-Bus on Linux; the tray uses the native shell tray on Windows and
+`ksni` on Linux; file associations are per-user only (the Windows registry under
+`HKCU`, a Linux `.desktop` plus `xdg-mime`), and never seize the default handler.
 
 ## Platform FFI boundary
 
