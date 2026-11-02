@@ -663,15 +663,35 @@ pub fn media_present(device: &str) -> bool {
     }
 }
 
-/// A snapshot of the audio CDs currently present: each drive that holds an audio disc
-/// paired with that disc's tracks.
-pub type CdSnapshot = Vec<(String, Vec<CdTrack>)>;
+/// Titles/artist/album for an audio CD, looked up online from its disc ID (#191).
+/// `tracks` maps a 1-based track number to its (title, artist).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DiscMeta {
+    pub album: String,
+    pub album_artist: String,
+    pub tracks: std::collections::HashMap<u8, (String, String)>,
+}
+
+/// One present audio CD: its drive, its tracks (from the TOC), and the looked-up
+/// metadata once it is available (`None` until the online lookup returns, or when it
+/// fails / there is no network).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CdInfo {
+    pub device: String,
+    pub tracks: Vec<CdTrack>,
+    pub meta: Option<DiscMeta>,
+}
+
+/// A snapshot of the audio CDs currently present.
+pub type CdSnapshot = Vec<CdInfo>;
 
 /// Watches the optical drives for inserted and ejected audio CDs on a background
 /// thread, so the UI never blocks on disc I/O (#191). Each cycle it checks drive
-/// presence cheaply ([`media_present`]) and reads a disc's TOC only once, when it
-/// first appears; it sends a fresh [`CdSnapshot`] whenever the set of present audio
-/// CDs changes. Dropping the watcher ends the thread (its send fails).
+/// presence cheaply ([`media_present`]), reads a disc's TOC only once when it first
+/// appears, then looks the disc up online (MusicBrainz) once to fill in titles. It
+/// sends a fresh [`CdSnapshot`] whenever the present set, a TOC, or metadata changes,
+/// so the disc shows immediately with "Track N" and the titles fill in a moment
+/// later. Dropping the watcher ends the thread (its send fails).
 pub struct CdWatcher {
     rx: std::sync::mpsc::Receiver<CdSnapshot>,
 }
@@ -692,39 +712,204 @@ impl CdWatcher {
     }
 }
 
+/// A cached disc on the watcher thread: `None` once determined not to be an audio CD
+/// (data/blank), else the TOC plus its metadata lookup state.
+enum CachedDisc {
+    NotAudio,
+    Audio {
+        tracks: Vec<CdTrack>,
+        meta: Option<DiscMeta>,
+        looked_up: bool,
+    },
+}
+
 fn cd_watch_loop(tx: std::sync::mpsc::Sender<CdSnapshot>) {
     use std::collections::BTreeMap;
-    // device -> Some(toc) for an audio disc, None for a disc that is present but has
-    // no audio tracks (data/blank). A key means "already determined", so the TOC is
-    // read only once per inserted disc.
-    let mut cache: BTreeMap<String, Option<Vec<CdTrack>>> = BTreeMap::new();
+    let mut cache: BTreeMap<String, CachedDisc> = BTreeMap::new();
     let mut last_sent: Option<CdSnapshot> = None;
+    // Build the snapshot from the cache and send it if it changed; return false if the
+    // receiver is gone so the loop can exit.
+    let send = |cache: &BTreeMap<String, CachedDisc>,
+                last: &mut Option<CdSnapshot>,
+                tx: &std::sync::mpsc::Sender<CdSnapshot>|
+     -> bool {
+        let snap: CdSnapshot = cache
+            .iter()
+            .filter_map(|(d, c)| match c {
+                CachedDisc::Audio { tracks, meta, .. } => Some(CdInfo {
+                    device: d.clone(),
+                    tracks: tracks.clone(),
+                    meta: meta.clone(),
+                }),
+                CachedDisc::NotAudio => None,
+            })
+            .collect();
+        if last.as_ref() != Some(&snap) {
+            if tx.send(snap.clone()).is_err() {
+                return false;
+            }
+            *last = Some(snap);
+        }
+        true
+    };
     loop {
         let drives = list_drives();
         cache.retain(|d, _| drives.iter().any(|x| x == d));
         for d in &drives {
             if media_present(d) {
-                // New disc: read its TOC once. An empty/data disc caches as None so it
-                // is not re-read while it sits in the drive.
-                cache
-                    .entry(d.clone())
-                    .or_insert_with(|| read_cd_toc(d).ok().filter(|t| !t.is_empty()));
+                // New disc: read its TOC once. A data/blank disc caches as NotAudio so
+                // it is not re-read while it sits in the drive.
+                cache.entry(d.clone()).or_insert_with(|| {
+                    match read_cd_toc(d).ok().filter(|t| !t.is_empty()) {
+                        Some(tracks) => CachedDisc::Audio { tracks, meta: None, looked_up: false },
+                        None => CachedDisc::NotAudio,
+                    }
+                });
             } else {
                 cache.remove(d); // empty tray / ejected
             }
         }
-        let snap: CdSnapshot = cache
-            .iter()
-            .filter_map(|(d, t)| t.as_ref().map(|t| (d.clone(), t.clone())))
-            .collect();
-        if last_sent.as_ref() != Some(&snap) {
-            if tx.send(snap.clone()).is_err() {
-                return; // the app (and its Receiver) is gone
+        // Surface new discs immediately (titles still pending).
+        if !send(&cache, &mut last_sent, &tx) {
+            return;
+        }
+        // Look up one not-yet-looked-up disc per cycle. The 2s cycle spaces these out,
+        // staying well under MusicBrainz's 1 request/second limit.
+        let pending = cache.iter().find_map(|(d, c)| match c {
+            CachedDisc::Audio { tracks, looked_up: false, .. } => Some((d.clone(), tracks.clone())),
+            _ => None,
+        });
+        if let Some((device, tracks)) = pending {
+            let meta = disc_id(&tracks).and_then(|id| lookup_musicbrainz(&id, tracks.len()));
+            if let Some(CachedDisc::Audio { meta: slot, looked_up, .. }) = cache.get_mut(&device) {
+                *slot = meta;
+                *looked_up = true; // one attempt per insert; re-insert the disc to retry
             }
-            last_sent = Some(snap);
+            if !send(&cache, &mut last_sent, &tx) {
+                return;
+            }
         }
         std::thread::sleep(Duration::from_secs(2));
     }
+}
+
+/// The MusicBrainz Disc ID for a disc's audio tracks, computed from the TOC (no
+/// network). SHA-1 over the first/last track numbers and the 100 offset slots
+/// (lead-out first, then each track's start offset = LBA + 150), in a modified
+/// Base64. Matches <https://musicbrainz.org/doc/Disc_ID_Calculation>. Correct for a
+/// pure audio CD; a mixed-mode / CD-Extra disc (data track present) may not match
+/// since we only see the audio tracks. `None` for an empty TOC.
+pub fn disc_id(tracks: &[CdTrack]) -> Option<String> {
+    use sha1::{Digest, Sha1};
+    let first = tracks.first()?.number;
+    let last = tracks.last()?.number;
+    let leadout = tracks.last()?;
+    let mut offsets = [0u32; 100];
+    offsets[0] = leadout.start_lba + leadout.sectors + 150;
+    for t in tracks {
+        let n = t.number as usize;
+        if (1..=99).contains(&n) {
+            offsets[n] = t.start_lba + 150;
+        }
+    }
+    let mut s = format!("{first:02X}{last:02X}");
+    for off in offsets {
+        s.push_str(&format!("{off:08X}"));
+    }
+    let digest = Sha1::digest(s.as_bytes());
+    Some(mb_base64(&digest))
+}
+
+/// RFC-4648 Base64 with MusicBrainz's substitutions (`+`->`.`, `/`->`_`, `=`->`-`).
+fn mb_base64(data: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(A[((n >> 18) & 63) as usize] as char);
+        out.push(A[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { A[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { A[(n & 63) as usize] as char } else { '=' });
+    }
+    out.replace('+', ".").replace('/', "_").replace('=', "-")
+}
+
+/// Look up a disc's titles/artist/album on MusicBrainz by its disc ID. Free, no API
+/// key; sets a descriptive User-Agent and relies on the watcher's 2s cycle to honour
+/// the 1 request/second limit. Returns `None` on any failure (offline, throttled,
+/// unknown disc), so the caller falls back to "Track N". `track_count` picks the
+/// right medium on multi-disc releases.
+fn lookup_musicbrainz(disc_id: &str, track_count: usize) -> Option<DiscMeta> {
+    let url = format!(
+        "https://musicbrainz.org/ws/2/discid/{disc_id}?inc=recordings+artists&fmt=json"
+    );
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(8))
+        .timeout(Duration::from_secs(15))
+        .build();
+    let body = agent
+        .get(&url)
+        .set(
+            "User-Agent",
+            concat!(
+                "LinAmp/",
+                env!("CARGO_PKG_VERSION"),
+                " ( https://github.com/cjjulius/linamp )"
+            ),
+        )
+        .call()
+        .ok()?
+        .into_string()
+        .ok()?;
+    let json: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let releases = json.get("releases")?.as_array()?;
+    // The first release is MusicBrainz's best match for the disc ID.
+    let release = releases.first()?;
+    let album = release.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let album_artist = artist_credit(release.get("artist-credit"));
+    // Prefer the medium whose track count matches this disc; else the first.
+    let media = release.get("media").and_then(|v| v.as_array())?;
+    let medium = media
+        .iter()
+        .find(|m| m.get("track-count").and_then(|v| v.as_u64()) == Some(track_count as u64))
+        .or_else(|| media.first())?;
+    let mut tracks = std::collections::HashMap::new();
+    if let Some(ts) = medium.get("tracks").and_then(|v| v.as_array()) {
+        for t in ts {
+            let Some(pos) = t.get("position").and_then(|v| v.as_u64()) else {
+                continue;
+            };
+            if !(1..=99).contains(&pos) {
+                continue;
+            }
+            let title = t.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let artist = artist_credit(t.get("artist-credit"));
+            let artist = if artist.is_empty() { album_artist.clone() } else { artist };
+            tracks.insert(pos as u8, (title, artist));
+        }
+    }
+    Some(DiscMeta { album, album_artist, tracks })
+}
+
+/// Join a MusicBrainz `artist-credit` array into a display string, honouring each
+/// entry's join phrase (so "A feat. B" collaborations read correctly).
+fn artist_credit(v: Option<&serde_json::Value>) -> String {
+    let Some(arr) = v.and_then(|v| v.as_array()) else {
+        return String::new();
+    };
+    let mut s = String::new();
+    for c in arr {
+        if let Some(name) = c.get("name").and_then(|n| n.as_str()) {
+            s.push_str(name);
+        }
+        if let Some(join) = c.get("joinphrase").and_then(|j| j.as_str()) {
+            s.push_str(join);
+        }
+    }
+    s.trim().to_string()
 }
 
 /// The platform's default optical device, used when the UI opens a CD.
@@ -1296,6 +1481,34 @@ mod tests {
                    Duration::from_secs(1));
         let three_min = CdTrack { number: 2, start_lba: 0, sectors: 3 * 60 * 75 };
         assert_eq!(three_min.duration(), Duration::from_secs(180));
+    }
+
+    #[test]
+    fn disc_id_matches_the_reference_algorithm() {
+        // A 15-track disc with these track-start offsets and lead-out. The expected disc
+        // ID was cross-checked against an independent implementation of the documented
+        // MusicBrainz algorithm (https://musicbrainz.org/doc/Disc_ID_Calculation): the
+        // uppercase-hex SHA-1 input layout plus the modified Base64. This pins the whole
+        // computation so a regression in either part is caught.
+        let offsets = [
+            150u32, 17510, 33570, 51150, 71130, 92670, 107955, 125680, 138705, 153265,
+            170245, 187410, 207610, 230005, 246890,
+        ];
+        let leadout = 258725u32;
+        let tracks: Vec<CdTrack> = offsets
+            .iter()
+            .enumerate()
+            .map(|(i, &off)| {
+                let next = offsets.get(i + 1).copied().unwrap_or(leadout);
+                CdTrack { number: (i + 1) as u8, start_lba: off - 150, sectors: next - off }
+            })
+            .collect();
+        assert_eq!(disc_id(&tracks).as_deref(), Some("3qMWZydysnOXikvpDtgoNvKBl1w-"));
+    }
+
+    #[test]
+    fn disc_id_is_none_for_an_empty_toc() {
+        assert_eq!(disc_id(&[]), None);
     }
 
     // Shorthand for a TOC entry in the toc_from_entries tests.

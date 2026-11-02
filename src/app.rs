@@ -505,10 +505,11 @@ struct LibraryViewState {
     /// open so an entry appears when a disc is inserted and disappears when it is
     /// ejected (#191).
     devices: Vec<String>,
-    /// TOCs of the currently-present audio CDs, keyed by device id, as last reported by
-    /// the background CD watcher (#191). The AudioCd view and the right-click Play build
-    /// their track lists from this cache, so the UI never blocks on a disc read.
-    cd_tocs: std::collections::HashMap<String, Vec<crate::cdda::CdTrack>>,
+    /// The currently-present audio CDs (TOC + looked-up metadata), keyed by device id,
+    /// as last reported by the background CD watcher (#191). The AudioCd view and the
+    /// right-click Play build their track lists from this cache, so the UI never blocks
+    /// on a disc read or an online lookup.
+    cd_discs: std::collections::HashMap<String, crate::cdda::CdInfo>,
     /// The optical drive whose audio CD is being shown (#191). Set when a Devices
     /// entry is clicked; the AudioCd view fills the track list from `cd_tocs`.
     cd_device: Option<String>,
@@ -912,7 +913,7 @@ impl LinAmpApp {
                 convert_col_fr: [0.30, 0.30],
                 convert_prog_w: 130.0,
                 devices: Vec::new(),
-                cd_tocs: std::collections::HashMap::new(),
+                cd_discs: std::collections::HashMap::new(),
                 cd_device: None,
             },
             geom: WindowGeom {
@@ -1644,18 +1645,23 @@ impl LinAmpApp {
     pub(crate) fn play_audio_cd_device(&mut self, device: &str) {
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         {
-            // Prefer the TOC the background watcher already read, so a library Play
-            // never blocks the UI. The Options "Open Audio CD" path may have no cached
-            // TOC (the watcher may not have scanned that drive yet), so read it then.
-            let toc = match self.lib.cd_tocs.get(device) {
-                Some(t) => Ok(t.clone()),
-                None => crate::cdda::read_cd_toc(device),
+            // Prefer the disc the background watcher already read (TOC + looked-up
+            // titles), so a library Play never blocks the UI. The Options "Open Audio
+            // CD" path may have nothing cached (that drive not scanned yet), so read the
+            // TOC directly there, without metadata.
+            let (toc, meta) = match self.lib.cd_discs.get(device) {
+                Some(cd) => (Ok(cd.tracks.clone()), cd.meta.clone()),
+                None => (crate::cdda::read_cd_toc(device), None),
             };
             match toc {
                 Ok(toc) if !toc.is_empty() => {
                     let start = self.playlist.len();
                     for t in &toc {
-                        self.playlist.tracks.push(crate::playlist::Track::cd_track(device, t));
+                        self.playlist.tracks.push(crate::playlist::Track::cd_track(
+                            device,
+                            t,
+                            meta.as_ref(),
+                        ));
                     }
                     self.status = format!("Audio CD: {} track(s) added.", toc.len());
                     self.play_index(start);

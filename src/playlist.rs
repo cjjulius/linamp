@@ -166,12 +166,26 @@ impl Track {
     /// pseudo-path the player recognises. Built on Linux and Windows (the only
     /// caller, the Open-Audio-CD action, runs on both).
     #[cfg(any(target_os = "linux", target_os = "windows"))]
-    pub fn cd_track(device: &str, t: &crate::cdda::CdTrack) -> Track {
+    pub fn cd_track(device: &str, t: &crate::cdda::CdTrack, meta: Option<&crate::cdda::DiscMeta>) -> Track {
+        // Use the looked-up titles when available, otherwise the classic "Track N" /
+        // "Audio CD" placeholders (#191).
+        let (title, artist, album) = match meta {
+            Some(m) => {
+                let (title, artist) = m
+                    .tracks
+                    .get(&t.number)
+                    .cloned()
+                    .unwrap_or_else(|| (format!("Track {}", t.number), m.album_artist.clone()));
+                let album = if m.album.is_empty() { "Audio CD".to_string() } else { m.album.clone() };
+                (title, artist, album)
+            }
+            None => (format!("Track {}", t.number), String::new(), "Audio CD".to_string()),
+        };
         Track {
             path: PathBuf::from(crate::cdda::track_path(device, t.number)),
-            title: format!("Track {}", t.number),
-            artist: String::new(),
-            album: "Audio CD".to_string(),
+            title,
+            artist,
+            album,
             duration: Some(t.duration()),
             sample_rate: Some(crate::cdda::CDDA_SAMPLE_RATE),
             // CDDA is a constant 1411 kbit/s (44100 × 16 × 2).
