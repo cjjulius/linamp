@@ -141,6 +141,47 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+/// Theme a Preferences panel (`ui`) with the Media Library nav colour scheme, so the
+/// content and footer sit on the same list-fill background with skin item text and
+/// selection colours as the category tree, whatever skin is applied. The panel's own
+/// Frame paints the fill; this styles the text and widgets drawn inside it. The colours
+/// come from [`LinAmpApp::skin_nav_colors`]: (list fill, item text, selection bg,
+/// selection text).
+fn style_prefs_panel(
+    ui: &mut egui::Ui,
+    list_fill: Color32,
+    row_col: Color32,
+    sel_bg: Color32,
+    sel_col: Color32,
+) {
+    // A touch lifted off the list fill so fields and widget bodies read as controls.
+    let field = skin::blend(list_fill, row_col, 0.14);
+    let v = ui.visuals_mut();
+    v.override_text_color = Some(row_col);
+    v.hyperlink_color = row_col;
+    v.panel_fill = list_fill;
+    v.window_fill = list_fill;
+    v.faint_bg_color = list_fill;
+    v.extreme_bg_color = field;
+    // Widget bodies: a subtle lift, brighter on hover, the selection colour when active.
+    v.widgets.inactive.bg_fill = field;
+    v.widgets.inactive.weak_bg_fill = field;
+    v.widgets.hovered.bg_fill = skin::blend(field, row_col, 0.2);
+    v.widgets.hovered.weak_bg_fill = skin::blend(field, row_col, 0.2);
+    v.widgets.active.bg_fill = sel_bg;
+    v.widgets.active.weak_bg_fill = sel_bg;
+    v.widgets.open.bg_fill = field;
+    // Widget text and marks (radio dot, checkmark, labels) in the item colour, flipping
+    // to the selection text colour on an active widget.
+    v.widgets.noninteractive.fg_stroke.color = row_col;
+    v.widgets.inactive.fg_stroke.color = row_col;
+    v.widgets.hovered.fg_stroke.color = row_col;
+    v.widgets.active.fg_stroke.color = sel_col;
+    v.widgets.open.fg_stroke.color = row_col;
+    v.selection.bg_fill = sel_bg;
+    v.selection.stroke = egui::Stroke::NONE;
+}
+
 /// Open the folder containing `path` in the system file manager.
 fn open_in_file_manager(path: &std::path::Path) {
     let dir = path.parent().unwrap_or(path);
@@ -3068,32 +3109,39 @@ impl LinAmpApp {
                     }
                 });
             // Bottom: Close on the left, a compact version on the right (always
-            // visible, whichever category is open).
-            egui::TopBottomPanel::bottom("prefs_footer").show(ctx, |ui| {
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Close").clicked() {
-                        close = true;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(format!("LinAmp {}", env!("CARGO_PKG_VERSION")))
-                                .small()
-                                .color(Color32::GRAY),
-                        );
+            // visible, whichever category is open). Painted on the nav's list fill so
+            // the footer matches the category tree.
+            egui::TopBottomPanel::bottom("prefs_footer")
+                .frame(egui::Frame::side_top_panel(&ctx.style()).fill(nav_list_fill))
+                .show(ctx, |ui| {
+                    style_prefs_panel(ui, nav_list_fill, nav_row_col, nav_sel_bg, nav_sel_col);
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Close").clicked() {
+                            close = true;
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("LinAmp {}", env!("CARGO_PKG_VERSION")))
+                                    .small()
+                                    .weak(),
+                            );
+                        });
                     });
+                    ui.add_space(4.0);
                 });
-                ui.add_space(4.0);
-            });
             // Right: the selected category's options.
             // Right: the selected category's page, in a scroll area so a category
             // can grow tall without the fixed window clipping it. Each arm just
             // dispatches to a `prefs_page_*` method, see `pref_section` for the
             // pattern that keeps every page consistent as options are added.
-            egui::CentralPanel::default().show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| match self.prefs_tab {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::central_panel(&ctx.style()).fill(nav_list_fill))
+                .show(ctx, |ui| {
+                    style_prefs_panel(ui, nav_list_fill, nav_row_col, nav_sel_bg, nav_sel_col);
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match self.prefs_tab {
                         PrefTab::Display => self.prefs_page_display(ctx, ui),
                         PrefTab::Playback => self.prefs_page_playback(ui),
                         PrefTab::Conversion => self.prefs_page_conversion(ui),
