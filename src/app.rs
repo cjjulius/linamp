@@ -342,15 +342,6 @@ enum PrefTab {
 }
 
 impl PrefTab {
-    const ALL: [PrefTab; 7] = [
-        PrefTab::Display,
-        PrefTab::Playback,
-        PrefTab::Conversion,
-        PrefTab::Playlist,
-        PrefTab::Tags,
-        PrefTab::OptionalFeatures,
-        PrefTab::About,
-    ];
     fn label(self) -> &'static str {
         match self {
             PrefTab::Display => "Display",
@@ -2909,7 +2900,12 @@ impl LinAmpApp {
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
             .with_position(pos)
-            .with_inner_size(egui::vec2(440.0, 300.0))
+            // A bit larger than before so the longest page (Conversion) fits without
+            // scrolling and the grouped category tree (whose "General Preferences"
+            // heading is wider than the old flat labels) has room. Kept well under the
+            // combined Main/EQ/PL/Library footprint at 1x (the rule of thumb is to stay
+            // under ~95% of the open dashboard, so it never dwarfs the player).
+            .with_inner_size(egui::vec2(520.0, 360.0))
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
@@ -2973,19 +2969,42 @@ impl LinAmpApp {
                         self.prefs_drag = None;
                     }
                 });
-            // Left: the category list (the classic player's Preferences tree, flattened
-            // to a list that the buildout can extend).
+            // Left: the category tree. Categories sit under bold group headings, indented
+            // beneath them, the way the classic player's Preferences tree (and the Media
+            // Library nav pane) are laid out. A None heading renders its categories at the
+            // top level with no indent.
             egui::SidePanel::left("prefs_cats")
                 .resizable(false)
-                .exact_width(104.0)
+                .exact_width(160.0)
                 .show(ctx, |ui| {
                     ui.add_space(6.0);
-                    for tab in PrefTab::ALL {
-                        if ui
-                            .selectable_label(self.prefs_tab == tab, tab.label())
-                            .clicked()
-                        {
-                            self.prefs_tab = tab;
+                    ui.spacing_mut().button_padding.x = 0.0;
+                    let groups: &[(Option<&str>, &[PrefTab])] = &[
+                        (
+                            Some("General Preferences"),
+                            &[PrefTab::Display, PrefTab::Playback, PrefTab::Playlist, PrefTab::Tags],
+                        ),
+                        (Some("Media Library"), &[PrefTab::Conversion]),
+                        (None, &[PrefTab::OptionalFeatures, PrefTab::About]),
+                    ];
+                    for (heading, tabs) in groups {
+                        if let Some(h) = heading {
+                            ui.add_space(2.0);
+                            ui.label(egui::RichText::new(*h).strong());
+                        }
+                        let indent = heading.is_some();
+                        for &tab in *tabs {
+                            ui.horizontal(|ui| {
+                                if indent {
+                                    ui.add_space(12.0);
+                                }
+                                if ui
+                                    .selectable_label(self.prefs_tab == tab, tab.label())
+                                    .clicked()
+                                {
+                                    self.prefs_tab = tab;
+                                }
+                            });
                         }
                     }
                 });
@@ -3084,17 +3103,16 @@ impl LinAmpApp {
         });
         Self::pref_section(ui, "System tray", |ui| {
             let mut tray = self.prefs.tray_enabled;
-            ui.radio_value(&mut tray, false, "Normal: taskbar button, no tray icon");
-            ui.radio_value(
-                &mut tray,
-                true,
-                "System tray: tray icon, no taskbar button, hide to tray on minimize and close",
-            );
+            ui.radio_value(&mut tray, false, "Normal: (Taskbar)");
+            ui.radio_value(&mut tray, true, "System Tray Icon");
             if tray != self.prefs.tray_enabled {
                 self.set_window_mode(ctx, tray);
             }
-            ui.add_space(4.0);
-            ui.weak("Minimize and the close button hide to the tray. Exit from the main menu always quits.");
+            // The tray behaviour note is only relevant when tray mode is selected.
+            if tray {
+                ui.add_space(4.0);
+                ui.weak("In system tray mode, close will minimize to the system tray. Exit from the tray icon or select exit from the main menu to close.");
+            }
         });
     }
 
@@ -3197,7 +3215,7 @@ impl LinAmpApp {
     fn prefs_page_conversion(&mut self, ui: &mut egui::Ui) {
         use crate::encode::OutputFormat;
         ui.add_space(2.0);
-        ui.weak("Applied to every file conversion. Per-track settings may come later.");
+        ui.weak("Default for Audio Encoding.");
         ui.add_space(10.0);
 
         Self::pref_section(ui, "Format", |ui| {
@@ -3302,7 +3320,7 @@ impl LinAmpApp {
                 }
             }
         });
-        Self::pref_section(ui, "Open with", |ui| {
+        Self::pref_section(ui, "Open with... (system menu)", |ui| {
             let mut mode = self.prefs.open_with;
             ui.radio_value(
                 &mut mode,
@@ -3318,13 +3336,11 @@ impl LinAmpApp {
                 self.prefs.open_with = mode;
                 self.prefs.save();
             }
-            ui.add_space(4.0);
-            ui.weak("Applies when you open audio files with LinAmp from your file manager.");
         });
     }
 
     fn prefs_page_tags(&mut self, ui: &mut egui::Ui) {
-        Self::pref_section(ui, "ID3v2 version", |ui| {
+        Self::pref_section(ui, "ID3v2 version on write", |ui| {
             let mut v23 = self.prefs.id3v23;
             ui.radio_value(&mut v23, true, "ID3v2.3 (most compatible)");
             ui.radio_value(&mut v23, false, "ID3v2.4 (newer standard)");
@@ -3333,7 +3349,7 @@ impl LinAmpApp {
                 self.prefs.save();
             }
             ui.add_space(4.0);
-            ui.weak("The version written when you save MP3 tags. Reading handles both regardless.");
+            ui.weak("Both handled on read");
         });
     }
 
