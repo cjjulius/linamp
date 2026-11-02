@@ -2961,6 +2961,19 @@ impl LinAmpApp {
         (list_fill, row_col, sel_bg, sel_col, dash_col)
     }
 
+    /// The skin's window-background colour: the GEN window background (the colour the
+    /// Media Library's own frame uses) when the skin ships GEN art, else the sampled
+    /// window tone. Drives the Preferences title bar and border, and the fallback
+    /// Library title bar, so those windows read as the skin's own.
+    fn skin_window_bg(&self) -> Color32 {
+        if self.ui_mode == UiMode::Classic {
+            if let Some(g) = self.classic.as_ref().and_then(|c| c.gen_colors()) {
+                return Color32::from_rgb(g.window_bg[0], g.window_bg[1], g.window_bg[2]);
+            }
+        }
+        self.theme.bg
+    }
+
     fn ui_prefs(&mut self, ctx: &egui::Context) {
         if !self.prefs_open {
             // Re-anchor to the main window the next time it opens, and re-apply the
@@ -3002,19 +3015,9 @@ impl LinAmpApp {
             self.skin_nav_colors();
         // Frame the window with the skin's window-background colour, on the title bar
         // and the 2px border, so Preferences reads like one of the player's own skin
-        // windows instead of a foreign dialog. Use the GEN window background the Library
-        // uses when the skin ships GEN art, else the sampled window tone. The slight
-        // rounding and the OS corner region (below) keep it legible where it overlaps
-        // another window.
-        let win_bg = if self.ui_mode == UiMode::Classic {
-            self.classic
-                .as_ref()
-                .and_then(|c| c.gen_colors())
-                .map(|g| Color32::from_rgb(g.window_bg[0], g.window_bg[1], g.window_bg[2]))
-        } else {
-            None
-        }
-        .unwrap_or(self.theme.bg);
+        // windows instead of a foreign dialog. The slight rounding and the OS corner
+        // region (below) keep it legible where it overlaps another window.
+        let win_bg = self.skin_window_bg();
         let border_col = win_bg;
         let corner = 6.0_f32;
         let mut close = false;
