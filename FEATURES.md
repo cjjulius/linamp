@@ -10,13 +10,14 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 > backlog of record. The Planned: items below are kept only as a quick overview.
 
 ## Core playback
-- Decode MP3, MPEG Layer I/II (`.mp1`/`.mp2`/`.mpa`), FLAC, OGG/Vorbis, WAV,
-  AAC/M4A (`.m4a`/`.mp4`/`.m4b`), AIFF, tracker modules
+- Decode MP3, MPEG Layer I/II (`.mp1`/`.mp2`/`.mpa`), FLAC, OGG/Vorbis, Opus, WAV,
+  AIFF, CAF, AAC/M4A (`.m4a`/`.mp4`/`.m4b`/`.aac`), the audio track of video
+  containers (`.mp4`/`.m4v`/`.3gp`/`.mov`/`.mkv`/`.webm`/`.ogv`), tracker modules
   (`.mod`/`.xm`/`.s3m`/`.it`) and MIDI (`.mid`/`.midi`, via a bundled SoundFont)
-- Planned: audio CD (#160). AC-3 (#161) and WMA (#162) are won't-fix,
-  restrictive / proprietary licensing (and AC-3 was never a native classic-Winamp
-  format). Opus and WavPack aren't decodable with the current engine (no symphonia
-  decoder), so they're intentionally not offered
+- Audio CD playback (#160), verified on Windows and Linux hardware
+- Won't-fix / not decodable: AC-3 (#161) and WMA (#162) are won't-fix (restrictive
+  / proprietary licensing; AC-3 was never a native classic-Winamp format); WavPack
+  and Monkey's Audio (#182) have no viable symphonia decoder, so they aren't offered
 - Play / Pause / Stop / Next / Previous
 - Seek bar (scrub) with position + total time
 - Time display toggles elapsed / remaining (−mm:ss), Ctrl+T or click the time
@@ -28,8 +29,20 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 - Open location / internet-radio streaming (Ctrl+L or the Options menu),
   HTTP/HTTPS with the live ICY song title
 - Skips tracks that can't be opened or decoded instead of stalling
-- Planned: Crossfade, gapless, ReplayGain
+- Crossfade between tracks (Preferences > Playback, on/off with a 1-12s length)
+- Planned: Gapless playback (#42), ReplayGain (#44)
 - Planned: Playback speed / pitch
+
+## Audio conversion and CD ripping
+- Convert any library or playlist track to MP3, Ogg Vorbis, Opus, WAV or AIFF
+- Rip audio CD tracks, the whole disc or a selection, into a folder named after the
+  album, named `[Artist] - [Track]` and tagged from the online lookup (ID3v1+ID3v2,
+  or Vorbis comments for Ogg/Opus)
+- A background queue runs jobs one at a time with per-file progress; add, remove or
+  cancel while it runs, shown in the Media Library's Converting pane; finished files
+  are added to the library automatically
+- Format, bitrate, sample rate and output folder set in Preferences > Conversion
+- Planned: FLAC output (#190)
 
 ## Playlist
 - Add files, add folder (recursive), remove, clear
@@ -102,7 +115,7 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   window stack resizes to fit. Close/minimize work on shade bars too.
 - Load real Winamp `.wsz` skins; also derives egui/modern-view colour theme
   from `PLEDIT.TXT` / `VISCOLOR.TXT` / `MAIN.BMP`
-- Skin picker (auto-discovers `./skins`), "Load .wsz…", reset to default
+- Skin picker listing the bundled `./skins`, "Load .wsz…", reset to default
 - Headless tools: `--check-skin` (colours) and `--render-skin in.wsz out.png`
   (classic-window PNG preview)
 - Test skins bundled in `skins/` incl. artwork skins (Akira, Battle Angel
@@ -139,8 +152,14 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 - Album art display from embedded tags (with placeholder)
 
 ## System integration
-- Open files/folders via CLI args ("Open with LinAmp")
-- Planned: Global media keys, system tray, taskbar controls, file associations
+- Open files/folders via CLI args and the OS "Open with" menu, backed by per-user
+  file associations (Windows registry under HKCU; Linux `.desktop` + xdg-mime),
+  never seizing the default handler; single-instance forwarding opens into the
+  running window
+- Global media keys (Play/Pause, Stop, Previous, Next) that work while LinAmp is
+  unfocused, minimized or trayed (Windows media hotkeys; MPRIS over D-Bus on Linux)
+- System-tray mode: close minimizes to a tray icon with a menu, toggled in
+  Preferences
 
 ## Audio / devices
 - Uses the system default output device; follows it live (example: headphones
@@ -169,9 +188,10 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 ## Planned / Backlog
 Big-ticket items; the full, current backlog is in
 [GitHub Issues](https://github.com/cjjulius/linamp/issues).
-- Planned: Crossfade, gapless, ReplayGain
-- Planned: True "modern" (Winamp 3/5 `.wal` freeform) skin engine
+- Planned: Gapless playback (#42), ReplayGain (#44)
+- Planned: True "modern" (Winamp 3/5 `.wal` freeform) skin engine (#20)
 
 ## Keyboard shortcuts
-See the [README](README.md#keyboard-shortcuts) for the full list. Remaining
-Winamp 2.x shortcuts to fill in are tracked in #144.
+The classic Winamp 2.x shortcut set is complete; see
+[docs/SHORTCUTS.md](docs/SHORTCUTS.md) for the full reference (the README has a
+quick summary).

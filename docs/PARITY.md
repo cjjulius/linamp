@@ -1,145 +1,65 @@
 # Winamp 2.666 parity
 
-LinAmp's classic-mode target is Winamp 2.666 specifically. This map tracks that
-version's feature set: what's done, what genuinely remains and what belongs to
-later Winamp lines (and so is out of scope until 2.666 is complete).
+LinAmp's classic-mode target is Winamp 2.666. As of the v1.0 line the 2.666
+functional feature set is complete: transport (play/pause/stop, stop-after-current,
+stop-with-fade, next/previous, seek), the playlist (add/remove/crop/remove-missing/
+reverse/sort, jump-to-file and jump-to-time, m3u/m3u8/pls), shuffle and repeat, the
+10-band equalizer with presets, Auto gain and `.EQF` import/export, classic `.wsz`
+skins including skinned cursors, the main / equalizer / playlist windows with
+window-shade, double-size and always-on-top (positions and state persisted), the
+visualizer (spectrum / oscilloscope / off), the clutterbar, volume and stereo
+balance, drag-and-drop, bookmarks, Open-location streaming with the live ICY title,
+tag reading and writing, the SQLite media library, audio CD playback and ripping,
+and system integration (global media keys, a system-tray mode, and "Open with"
+file associations). Audio CD is verified on Windows and Linux hardware.
 
-For how each change was verified, see [REVIEW-NOTES.md](REVIEW-NOTES.md); for the
-keyboard and mouse reference, see [SHORTCUTS.md](SHORTCUTS.md).
+Conversion and CD ripping (to MP3 / Ogg Vorbis / Opus / WAV / AIFF) go a little
+past stock 2.666; they are shipped and noted here for completeness.
 
-## Finish line
+For how each change was verified see [REVIEW-NOTES.md](REVIEW-NOTES.md); the
+keyboard and mouse reference is [SHORTCUTS.md](SHORTCUTS.md).
 
-As of feat/winamp-parity-3, LinAmp meets the Winamp 2.666 functional feature set.
-The only in-scope item not fully landed on every platform is the audio-CD device
-layer (#160): the Linux reads are implemented and verified on real hardware, and
-the Windows device layer is now written best-effort but still needs a real optical
-drive to verify. A few completed changes are also waiting on a quick visual or
-audio sign-off (see below), those are confirmations, not missing features.
+## Not yet matching 2.666
 
-Everything else still open in the tracker is either later-line work (Winamp 3/5+)
-or an internal refactor, listed under Deferred.
+These are the only in-scope gaps left:
 
-## Core features, present and verified
+- #146, the minibrowser's SHOUTcast **directory** pane. The minibrowser window and
+  "Open in browser" already work; the live directory listing is the remaining piece
+  (and SHOUTcast's directory is largely defunct, so this is cosmetic parity).
+- #209 / #210, window-shade close-button polish: a collapsed window should show the
+  pressed close-X and act on release, matching the full windows.
 
-These classic behaviours are implemented and were confirmed against the 2.666
-feature set:
+## Audio formats
 
-- Transport: play, pause, stop (plus stop-after-current and stop-with-fade),
-  next, previous, seeking.
-- Playlist: add files/folders, remove, crop, remove-missing, reverse, sort
-  (title / artist / album / duration / filename / path), per-track file info,
-  jump-to-file (J) and jump-to-time (Ctrl+J), the elapsed/total time readout and
-  m3u / m3u8 / pls load and save.
-- Shuffle (plays through the whole list before repeating) and repeat.
-- Equalizer: 10 bands plus preamp, on/off, Auto, built-in presets, a custom
-  named-preset library (save / load / delete) and Winamp .EQF import/export.
-- Classic `.wsz` skins, including skinned cursors.
-- Windows: main / equalizer / playlist, window-shade (collapsed) mode with a
-  mini transport and position slider, title-bar double-click to shade, double
-  size and always-on-top. Window positions, visibility and shade state persist
-  across runs.
-- Visualization: spectrum analyzer, oscilloscope and off, cycled by click.
-- Clutterbar (O / A / I / D / V) and the elapsed/remaining time toggle.
-- Volume and stereo balance.
-- Drag-and-drop of files, folders and playlists from the OS.
-- Bookmarks (Alt+I) with a recall list in the Options menu and a Media Library
-  Bookmarks view.
-- Open location (Ctrl+L) and an Options-menu entry: stream an HTTP(S) URL
-  (internet radio or a remote file), decoded on a background thread, with the live
-  ICY stream title shown in the scrolling display.
-- Tag reading for every format lofty supports, and writing broadened beyond MP3:
-  ID3v1/ID3v2 for MPEG audio (MP3/MP2/MP1), Vorbis comments for FLAC/Ogg, and MP4
-  atoms for M4A (#89). The ID3v2 set covers title, artist, album, year, track,
-  disc, genre, comment, composer, original artist, copyright, URL, encoded-by, BPM
-  and the compilation flag, with an ID3v2.3-vs-2.4 choice in Preferences. The Basic
-  Info tab reports format, length, bitrate, sample rate and channels per format
-  (MIDI shows its type, track count and length).
+Local playback flows through one symphonia path (`src/decode.rs`), with
+special-cased MIDI and tracker renderers:
 
-### Audio formats decoded
+- MPEG audio (`.mp3`, `.mp1` / `.mp2` / `.mpa`), FLAC, Ogg Vorbis, Opus, WAV, AIFF,
+  CAF and the AAC / ISO-MP4 family (`.m4a` / `.m4b` / `.mp4` / `.aac`).
+- The audio track of video containers: `.mp4` / `.m4v` / `.3gp` / `.mov`, `.mkv`,
+  `.webm`, `.ogv`.
+- MIDI (`.mid` / `.midi`) via a bundled SoundFont; tracker modules
+  (`.mod` / `.xm` / `.s3m` / `.it`).
 
-All local decoding now flows through one symphonia path with a format hint
-(`src/decode.rs`), which also powers streaming; there is no second decoder to
-disagree with it:
+Converts / rips to MP3, Ogg Vorbis, Opus, WAV and AIFF. Not offered, by design:
+AC-3 (#161) and WMA (#162) are won't-fix (proprietary / licensing); FLAC as a
+convert *output* is deferred (#190); WavPack and Monkey's Audio (#182) have no
+viable decoder in the current engine.
 
-- MPEG audio: Layer III (.mp3) and Layer I/II (.mp1/.mp2/.mpa) (#157).
-- The ISO-MP4 family: .m4a/.mp4/.m4b, including the former open-panic (#164).
-- FLAC, Ogg Vorbis, WAV and AIFF (#163).
-- MIDI (.mid/.midi), synthesized by rustysynth with a bundled GeneralUser GS
-  SoundFont (#159).
-- Tracker modules (.mod/.xm/.s3m/.it), rendered by the pure-Rust xmrs/xmrsplayer
-  (#158, no native C dependency, so the build stays portable).
+## Beyond 2.666 (tracked, out of scope)
 
-## Implemented, awaiting a visual sign-off
+Later-Winamp-line features and internal work, kept in the backlog until the above
+is signed off:
 
-Done in code and unit-tested where possible; each needs a quick in-app check to
-close, not further work:
+- Media Library buildout (#78) and its pieces: saved playlists (#150), genre / year
+  columns (#151), drag-to-editor (#152), album-art pane (#153), audio-CD cover art
+  (#212).
+- Tag-editor embedded album art (#174).
+- Classic EQ drag-to-draw the response curve (#139).
+- A true modern (Winamp 3/5 `.wal`) skin engine (#20).
+- Gapless playback (#42) and ReplayGain (#44).
+- Internal, no user-facing parity effect: collapse per-window state into arrays
+  (#111); a native-Wayland single composite window for docking (#69).
 
-- #154, classic menu sizing on repeat right-clicks: each popup now opens its own
-  fresh viewport so it always hugs its items. Confirm the Options, playlist and
-  EQ-presets menus stay tight on repeated opens (no empty band).
-- Cross-format playback feel: open an .mp2, an .m4a, a FLAC/OGG/WAV, a .mid and a
-  tracker module and confirm each plays with the EQ and analyzer responding. The
-  routing and decode are unit-tested (including render tests for MIDI and a
-  tracker), but audio quality is a human call.
-
-## Genuinely remaining 2.666 work
-
-- #160, Audio CD (CDDA). The device-independent half is complete and tested, the
-  CD model, timing, the `cdda://` pseudo-path, PCM conversion, the `CdAudioSource`
-  rodio source and the `CdDrive` contract (read_toc / read_sector). The Linux device
-  layer is now implemented and verified on real hardware: raw `CDROMREADTOCHDR` /
-  `CDROMREADTOCENTRY` / `CDROMREADAUDIO` ioctls on `/dev/sr0`, read on a background
-  thread into a deep prefetch buffer so the drive streams without the stutter-respin
-  (see REVIEW-NOTES). Opened from Options to Open Audio CD. The Windows device layer
-  (WindowsCdDrive, DeviceIoControl TOC and raw sector reads) is now written as a
-  best-effort: it compiles and the MSF-to-LBA conversion is unit-tested, but the raw
-  reads still need a real drive and disc to verify (see REVIEW-NOTES).
-
-## Resolved on feat/winamp-parity-3
-
-- #43, crossfade between tracks (maintainer reversed the earlier "out of scope"
-  call and asked for it as a feature). Off by default; Preferences to Playback to
-  Crossfade toggles it with a 1 to 12 second length. The outgoing track fades out
-  on its own sink while the next fades in, held back for streams, stop-after-current,
-  repeat-one and while a stop-fade is running, and the hard cut is unchanged when it
-  is off. Ramp and gate logic are unit-tested; the blend itself needs an audio check
-  (REVIEW-NOTES).
-- #149, EQ slider thumb sat a pixel off the groove on crisp skins (MacOSXAqua,
-  Osmosis): the 11px thumb was inset 2px into its 14px band cell; every skin draws
-  its groove centred at local x ~6, so the inset is now 1 (regression-tested).
-- #163, unified local decoding on direct symphonia with a hint; rodio's file
-  Decoder is gone, so the m4a/mp2 decoder-mismatch class of bugs is closed.
-- #157 (MPEG Layer I/II), #164 (ISO-MP4 open-panic), #159 (MIDI), #158 (trackers),
-  see "Audio formats decoded".
-- #77, shortcut-only stop actions: closed as-is, stop-after-current and
-  stop-with-fade live in the Stop button's right-click menu (#130); Preferences
-  stays limited to persistent settings (maintainer call, decision 4a).
-- #156 (resize clamp, user-verified on Linux), #97 (accented/Vietnamese text
-  ASCII-folds to readable base letters; full non-Latin scripts in the classic
-  bitmap path stay out of scope by design), #144 (Ctrl+A always-on-top completes
-  the shortcut set).
-- Shipped in 0.4.9: #15, #45, #17, #146. Also closed: #76 (vetted skins bundled)
-  and #49 (PipeWire verified on Pop!_OS, Mint assumed working).
-
-## Deferred, beyond the 2.666 functional-parity bar
-
-These are tracked but out of scope until 2.666 is signed off; several are later
-Winamp lines rather than 2.x behaviour at all.
-
-- Maintainer call, out of scope for this run: #40, system integration (global
-  media keys, tray icon, file associations).
-- Beyond 2.666 (post-2.x era), not stock 2.666 behaviour:
-  - #174, embedded album art in the tag editor (display/replace/remove). The rest
-    of the tag-editing broadening (#89, writing FLAC/OGG/M4A and MP2/MP1 tags, more
-    ID3v2 frames, the ID3v2.3-vs-2.4 choice and its Preferences) is done; album art
-    is the one piece held as 3.x-era work. A conscious maintainer call to go a
-    little past stock 2.666, which edited MP3 tags only.
-  - #108, drop shadows on the classic context menus (a post-2.x window-compositing
-    nicety).
-- 3.x: #20 modern `.wal` skin engine, #78 Media Library buildout, #139 EQ graph
-  drag-to-draw, #150/#151/#152 Media Library saved playlists / genre-year / drag to
-  editor.
-- 5.x: #42 gapless playback, #44 ReplayGain, #153 Media Library album-art pane.
-- Internal (no user-facing parity effect): #111 collapse per-window state into
-  arrays, #116 consolidate context menus onto one system, #69 native-Wayland single
-  composite window.
+The full backlog of record is
+[GitHub Issues](https://github.com/cjjulius/linamp/issues).

@@ -1,11 +1,12 @@
 # LinAmp on Linux, build & testing notes
 
-This document briefs a contributor (human or AI assistant) picking up Linux
-build and runtime testing for LinAmp. Development and testing have so far been
-done on Windows, which is the known-good platform. The code is written to be
-cross-platform and has no OS-specific branches yet, so most of the work here
-is making it build and run cleanly on Linux and fixing whatever platform gaps
-turn up, without regressing the working Windows build.
+This document is build and runtime notes for LinAmp on Linux. LinAmp is developed
+and tested on both Windows and Linux (the focus distros are Pop!_OS and Mint, with
+audio going to PipeWire via ALSA); the codebase is cross-platform, with the
+OS-specific pieces isolated behind small per-OS shims (see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). What follows covers the system
+libraries, audio setup and the Linux-specific details worth knowing when building,
+running or packaging.
 
 ## What LinAmp is
 
@@ -96,7 +97,8 @@ cargo run --release -- --render-all skins/linamp_base_skin.wsz /tmp/out.png
 
 ## What to watch for on Linux
 
-These are untested on Linux and the most likely sources of platform bugs:
+These are the most platform-sensitive areas; each is handled per-OS and verified on
+the Linux targets except where noted:
 
 - Borderless windows / docking, the three windows are undecorated and
   manually positioned/dragged, and snap/dock to each other (the main window
