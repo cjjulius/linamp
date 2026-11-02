@@ -32,6 +32,8 @@ pub(super) enum LibAction {
     PlayCd(String),
     /// Eject the disc in this drive (#191).
     EjectCd(String),
+    /// Rip every track of the audio CD in this drive (the nav device menu).
+    ConvertCd(String),
 }
 
 /// One row of a dynamic popup menu (the Media Library context menus). Built per
@@ -961,8 +963,10 @@ impl super::LinAmpApp {
                         if resp.clicked() {
                             act.device_click = Some(dev.clone());
                         }
-                        // Right-click: play the whole CD (enqueue + start at track 1) or
-                        // eject it (#191).
+                        // Right-click: play the whole CD (enqueue + start at track 1),
+                        // rip it (convert every track), or eject it (#191).
+                        let convert_label =
+                            format!("Convert to {}", self.prefs.convert_format.display());
                         if classic {
                             if resp.secondary_clicked() {
                                 let anchor = self.geom.lib_pos
@@ -971,6 +975,10 @@ impl super::LinAmpApp {
                                     DynRow::Item {
                                         label: "Play".into(),
                                         act: LibAction::PlayCd(dev.clone()),
+                                    },
+                                    DynRow::Item {
+                                        label: convert_label,
+                                        act: LibAction::ConvertCd(dev.clone()),
                                     },
                                     DynRow::Item {
                                         label: "Eject".into(),
@@ -984,6 +992,10 @@ impl super::LinAmpApp {
                                 ui.set_min_width(140.0);
                                 if ui.button("Play").clicked() {
                                     act.lib_action = Some(LibAction::PlayCd(dev.clone()));
+                                    ui.close_menu();
+                                }
+                                if ui.button(convert_label).clicked() {
+                                    act.lib_action = Some(LibAction::ConvertCd(dev.clone()));
                                     ui.close_menu();
                                 }
                                 if ui.button("Eject").clicked() {
@@ -1391,35 +1403,26 @@ impl super::LinAmpApp {
                         painter.rect_filled(fill, 2.0 * s, bar_col);
                     }
                     painter.rect_stroke(bar, 2.0 * s, egui::Stroke::new(1.0 * s, dim));
-                    // Draw the status with a contrasting halo so the "NN%" stays
-                    // legible where the fill passes under it: the fill and the row
-                    // text can be the same skin colour, which would otherwise erase
-                    // the number as the bar reaches the centre.
+                    // Two-tone status text so it stays legible as the fill passes under it:
+                    // the part over the unfilled track keeps the row colour, and the part
+                    // the fill has reached flips to a colour that contrasts with the fill.
+                    // Drawn twice, each clipped to its side of the fill edge, so a letter
+                    // changes colour exactly where the bar crosses it.
                     let font = egui::FontId::proportional(10.0 * s);
-                    let lum = 0.299 * text_col.r() as f32
-                        + 0.587 * text_col.g() as f32
-                        + 0.114 * text_col.b() as f32;
-                    let halo = if lum > 140.0 {
-                        Color32::from_rgba_unmultiplied(0, 0, 0, 180)
-                    } else {
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 180)
-                    };
-                    let o = 1.0 * s;
-                    for off in [
-                        egui::vec2(-o, 0.0),
-                        egui::vec2(o, 0.0),
-                        egui::vec2(0.0, -o),
-                        egui::vec2(0.0, o),
-                    ] {
-                        painter.text(
-                            bar.center() + off,
-                            egui::Align2::CENTER_CENTER,
-                            &status,
-                            font.clone(),
-                            halo,
-                        );
-                    }
-                    painter.text(
+                    let fill_edge = bar.left() + bar.width() * frac;
+                    let over_fill = skin::contrast_text(bar_col);
+                    let filled =
+                        egui::Rect::from_min_max(bar.min, egui::pos2(fill_edge, bar.bottom()));
+                    let unfilled =
+                        egui::Rect::from_min_max(egui::pos2(fill_edge, bar.top()), bar.max);
+                    painter.with_clip_rect(filled).text(
+                        bar.center(),
+                        egui::Align2::CENTER_CENTER,
+                        &status,
+                        font.clone(),
+                        over_fill,
+                    );
+                    painter.with_clip_rect(unfilled).text(
                         bar.center(),
                         egui::Align2::CENTER_CENTER,
                         &status,
@@ -1689,6 +1692,12 @@ impl super::LinAmpApp {
                                                     DynRow::Item { label: "Play".into(), act: LibAction::Play(rows.clone()) },
                                                     DynRow::Item { label: "Enqueue".into(), act: LibAction::Enqueue(rows.clone()) },
                                                     DynRow::Sep,
+                                                    // Rip the selected tracks (#191); same label as the rest of the library.
+                                                    DynRow::Item {
+                                                        label: format!("Convert to {}", self.prefs.convert_format.display()),
+                                                        act: LibAction::Convert(rows.clone()),
+                                                    },
+                                                    DynRow::Sep,
                                                     DynRow::Item { label: "View tags\u{2026}".into(), act: LibAction::ViewTags(i) },
                                                     DynRow::Item { label: "Select all".into(), act: LibAction::SelectAll },
                                                 ]
@@ -1745,6 +1754,10 @@ impl super::LinAmpApp {
                                         }
                                         ui.separator();
                                         if is_cd {
+                                            if ui.button(format!("Convert to {}", self.prefs.convert_format.display())).clicked() {
+                                                act.lib_action = Some(LibAction::Convert(rows.clone()));
+                                                ui.close_menu();
+                                            }
                                             if ui.button("View tags\u{2026}").clicked() {
                                                 act.lib_action = Some(LibAction::ViewTags(i));
                                                 ui.close_menu();
@@ -2092,6 +2105,16 @@ impl super::LinAmpApp {
             LibAction::EjectCd(device) => {
                 self.eject_cd(&device);
             }
+            LibAction::ConvertCd(device) => {
+                // Rip the whole disc: every track from the drive's cached TOC.
+                let tracks: Vec<u8> = self
+                    .lib
+                    .cd_discs
+                    .get(&device)
+                    .map(|info| info.tracks.iter().map(|t| t.number).collect())
+                    .unwrap_or_default();
+                self.rip_cd_tracks(&device, &tracks);
+            }
         }
     }
 
@@ -2102,6 +2125,22 @@ impl super::LinAmpApp {
     /// worker converts them one at a time off the UI thread; `poll_convert` feeds its
     /// progress back into the job list.
     fn convert_tracks(&mut self, rows: &[usize]) {
+        // CD rows carry a cdda:// path with no real file to decode, so they are ripped
+        // (read off the disc) rather than file-converted. A results list is all one kind,
+        // so detecting any CD row routes the whole batch to the rip path.
+        let cd: Vec<(String, u8)> = rows
+            .iter()
+            .filter_map(|&i| self.lib.results.get(i))
+            .filter_map(|t| crate::cdda::parse_track_path(&t.path.to_string_lossy()))
+            .collect();
+        if !cd.is_empty() {
+            let device = cd[0].0.clone();
+            let tracks: Vec<u8> =
+                cd.iter().filter(|(d, _)| *d == device).map(|(_, n)| *n).collect();
+            self.rip_cd_tracks(&device, &tracks);
+            return;
+        }
+
         // Gather (source, artist, title) for each selected row up front.
         let picked: Vec<(std::path::PathBuf, String, String)> = rows
             .iter()
@@ -2142,7 +2181,13 @@ impl super::LinAmpApp {
             let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("track").to_string();
             // The worker resolves the final path (dir + stem + format) just before it
             // writes, so same-named sources in one batch don't overwrite each other.
-            specs.push(crate::convert_queue::JobSpec { id, src: src.clone(), dir: dir.clone(), stem, settings });
+            specs.push(crate::convert_queue::JobSpec {
+                id,
+                source: crate::convert_queue::JobSource::File(src.clone()),
+                dir: dir.clone(),
+                stem,
+                settings,
+            });
             jobs.push(crate::convert_queue::ConvertJob {
                 id,
                 artist,
@@ -2167,6 +2212,142 @@ impl super::LinAmpApp {
         self.lib.nav = crate::library::LibView::Converting;
         self.lib.sel_tracks.clear();
         self.status = format!("Queued {n} file(s) for conversion to {}.", ext.to_uppercase());
+    }
+
+    /// Rip the given track numbers from the audio CD in `device` by enqueuing them on the
+    /// same background convert worker, reading each track off the disc instead of a file.
+    /// Tracks land in a folder named after the album (timestamped if the album is unknown
+    /// or the folder already exists), named `[Artist] - [Track]`, tagged from the disc
+    /// metadata, and indexed into the library on completion like any conversion.
+    fn rip_cd_tracks(&mut self, device: &str, tracks: &[u8]) {
+        if tracks.is_empty() {
+            return;
+        }
+        let Some(info) = self.lib.cd_discs.get(device).cloned() else {
+            self.status = "No audio CD is loaded in that drive.".into();
+            return;
+        };
+        let meta = info.meta.clone().unwrap_or_default();
+        let total_tracks = info.tracks.len() as u32;
+        let settings = self.prefs.convert_settings();
+        let ext = settings.format.ext();
+        let id3v23 = self.prefs.id3v23;
+
+        // Base output folder: the saved default, or prompt once and remember it.
+        let base_dir = match self.prefs.convert_dir.clone() {
+            Some(d) => d,
+            None => {
+                super::hide_popup_window();
+                self.popups.cur = None;
+                self.popups.sub = None;
+                let Some(d) = self.pick_dialog(|| rfd::FileDialog::new().pick_folder()) else {
+                    return;
+                };
+                self.prefs.convert_dir = Some(d.clone());
+                self.prefs.save();
+                d
+            }
+        };
+
+        // Album subfolder: named after the album; timestamped when the album is unknown
+        // or a folder of that name already exists, so a re-rip never overwrites the first.
+        let ts = crate::convert_queue::rip_timestamp();
+        let album = meta.album.trim();
+        let folder = if album.is_empty() {
+            base_dir.join(format!("Album_{ts}"))
+        } else {
+            let name = crate::convert_queue::sanitize_filename(album);
+            let candidate = base_dir.join(&name);
+            if candidate.exists() {
+                base_dir.join(crate::convert_queue::sanitize_filename(&format!("{album}_{ts}")))
+            } else {
+                candidate
+            }
+        };
+        if let Err(e) = std::fs::create_dir_all(&folder) {
+            self.status = format!("Couldn't create the rip folder: {e}");
+            return;
+        }
+
+        // Rip in disc order; one job per track.
+        let mut nums: Vec<u8> = tracks.to_vec();
+        nums.sort_unstable();
+        nums.dedup();
+        let mut specs = Vec::with_capacity(nums.len());
+        let mut jobs = Vec::with_capacity(nums.len());
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for n in nums {
+            let (mut title, mut artist) = meta.tracks.get(&n).cloned().unwrap_or_default();
+            let has_info = !title.trim().is_empty();
+            if !has_info {
+                title = format!("Track {n}");
+            }
+            if artist.trim().is_empty() {
+                artist = meta.album_artist.clone();
+            }
+            // "[Artist] - [Track]", or just the title when no artist is known.
+            let display = if artist.trim().is_empty() {
+                title.clone()
+            } else {
+                format!("{artist} - {title}")
+            };
+            let mut stem = crate::convert_queue::sanitize_filename(&display);
+            // Suffix a timestamp for a track with no metadata (so a later rip can't
+            // overwrite it) or when the name is already taken this batch or on disk.
+            let taken = used.contains(&stem.to_lowercase())
+                || folder.join(format!("{stem}.{ext}")).exists();
+            if !has_info || taken {
+                stem = crate::convert_queue::sanitize_filename(&format!("{display}_{ts}"));
+            }
+            used.insert(stem.to_lowercase());
+
+            let id = self.lib.convert_next_id;
+            self.lib.convert_next_id += 1;
+            let tags = crate::encode::RipTags {
+                title: title.clone(),
+                artist: artist.clone(),
+                album: meta.album.clone(),
+                album_artist: meta.album_artist.clone(),
+                track: u32::from(n),
+                total_tracks,
+                year: meta.year.clone(),
+                genre: meta.genre.clone(),
+                id3v23,
+            };
+            specs.push(crate::convert_queue::JobSpec {
+                id,
+                source: crate::convert_queue::JobSource::Cd {
+                    device: device.to_string(),
+                    track: n,
+                    tags,
+                },
+                dir: folder.clone(),
+                stem,
+                settings,
+            });
+            jobs.push(crate::convert_queue::ConvertJob {
+                id,
+                artist,
+                title,
+                location: std::path::PathBuf::from(crate::cdda::track_path(device, n)),
+                progress: 0.0,
+                state: crate::convert_queue::JobState::Queued,
+            });
+        }
+
+        if self.convert_worker.is_none() {
+            self.convert_worker = Some(crate::convert_queue::ConvertWorker::new());
+        }
+        if let Some(worker) = &self.convert_worker {
+            for s in specs {
+                worker.enqueue(s);
+            }
+        }
+        let n = jobs.len();
+        self.lib.convert_queue.extend(jobs);
+        self.lib.nav = crate::library::LibView::Converting;
+        self.lib.sel_tracks.clear();
+        self.status = format!("Ripping {n} track(s) to {}.", ext.to_uppercase());
     }
 
     /// Cancel a queued/running conversion by id (removes the row; the worker deletes

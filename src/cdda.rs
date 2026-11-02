@@ -505,6 +505,67 @@ pub fn open_cd_source(device: &str, track: u8) -> Result<BufferedCdSource> {
     }
 }
 
+/// Read a whole CD track's audio into interleaved f32 PCM (44.1 kHz stereo) for
+/// ripping. Reads the track's sectors sequentially in ~1-second batches through the
+/// per-OS drive, reporting progress (0.0..=1.0 of the track read) and checking
+/// `cancel` between batches. Returns `Ok(None)` if cancelled, the samples with the
+/// CDDA sample rate and channel count otherwise. Audio-CD access is Linux and Windows
+/// only; other platforms return a clean error.
+pub fn read_track_pcm(
+    device: &str,
+    track: u8,
+    progress: &mut dyn FnMut(f32),
+    cancel: &dyn Fn() -> bool,
+) -> Result<Option<(Vec<f32>, u32, u16)>> {
+    #[cfg(target_os = "linux")]
+    {
+        let drive = linux::LinuxCdDrive::open(device)?;
+        read_track_pcm_drive(drive, track, progress, cancel)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let drive = windows::WindowsCdDrive::open(device)?;
+        read_track_pcm_drive(drive, track, progress, cancel)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = (device, track, progress, cancel);
+        Err(anyhow!("audio CD support isn't available on this platform in this build"))
+    }
+}
+
+/// Shared whole-track read over any [`CdDrive`]; see [`read_track_pcm`].
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn read_track_pcm_drive<D: CdDrive>(
+    mut drive: D,
+    track: u8,
+    progress: &mut dyn FnMut(f32),
+    cancel: &dyn Fn() -> bool,
+) -> Result<Option<(Vec<f32>, u32, u16)>> {
+    let toc = drive.read_toc()?;
+    let t = toc
+        .iter()
+        .find(|t| t.number == track)
+        .ok_or_else(|| anyhow!("track {track} not found on the disc"))?;
+    let (start, total) = (t.start_lba, t.sectors);
+    if total == 0 {
+        return Ok(Some((Vec::new(), CDDA_SAMPLE_RATE, CDDA_CHANNELS)));
+    }
+    let mut pcm = Vec::with_capacity(total as usize * CDDA_SAMPLES_PER_SECTOR);
+    let mut done = 0u32;
+    while done < total {
+        if cancel() {
+            return Ok(None);
+        }
+        let count = (total - done).min(READAHEAD_SECTORS);
+        let bytes = drive.read_sectors(start + done, count)?;
+        pcm.extend(pcm_s16le_to_f32(&bytes));
+        done += count;
+        progress((done as f32 / total as f32).min(1.0));
+    }
+    Ok(Some((pcm, CDDA_SAMPLE_RATE, CDDA_CHANNELS)))
+}
+
 /// Eject the disc in `device`. Linux and Windows only; other platforms return a
 /// clean error. Best-effort: if a track is playing off the drive the tray still
 /// opens, and the playing source then ends on its next failed read (#191).
@@ -664,11 +725,15 @@ pub fn media_present(device: &str) -> bool {
 }
 
 /// Titles/artist/album for an audio CD, looked up online from its disc ID (#191).
-/// `tracks` maps a 1-based track number to its (title, artist).
+/// `tracks` maps a 1-based track number to its (title, artist). `year` and `genre`
+/// are cached when the source supplies them (for ID3 tagging on rip); either may be
+/// empty when unknown. Not surfaced in the UI yet.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DiscMeta {
     pub album: String,
     pub album_artist: String,
+    pub year: String,
+    pub genre: String,
     pub tracks: std::collections::HashMap<u8, (String, String)>,
 }
 
@@ -847,7 +912,7 @@ fn mb_base64(data: &[u8]) -> String {
 /// right medium on multi-disc releases.
 fn lookup_musicbrainz(disc_id: &str, track_count: usize) -> Option<DiscMeta> {
     let url = format!(
-        "https://musicbrainz.org/ws/2/discid/{disc_id}?inc=recordings+artists&fmt=json"
+        "https://musicbrainz.org/ws/2/discid/{disc_id}?inc=recordings+artists+genres&fmt=json"
     );
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(8))
@@ -873,6 +938,15 @@ fn lookup_musicbrainz(disc_id: &str, track_count: usize) -> Option<DiscMeta> {
     let release = releases.first()?;
     let album = release.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let album_artist = artist_credit(release.get("artist-credit"));
+    // Cache year and genre for ID3 tagging when present (not shown in the UI yet). The
+    // release "date" is "YYYY" or "YYYY-MM-DD"; keep the leading year.
+    let year = release
+        .get("date")
+        .and_then(|v| v.as_str())
+        .map(|d| d.chars().take(4).collect::<String>())
+        .filter(|y| y.len() == 4 && y.chars().all(|c| c.is_ascii_digit()))
+        .unwrap_or_default();
+    let genre = mb_top_genre(release.get("genres"));
     // Prefer the medium whose track count matches this disc; else the first.
     let media = release.get("media").and_then(|v| v.as_array())?;
     let medium = media
@@ -894,7 +968,23 @@ fn lookup_musicbrainz(disc_id: &str, track_count: usize) -> Option<DiscMeta> {
             tracks.insert(pos as u8, (title, artist));
         }
     }
-    Some(DiscMeta { album, album_artist, tracks })
+    Some(DiscMeta { album, album_artist, year, genre, tracks })
+}
+
+/// Pick the most-voted genre name from a MusicBrainz `genres` array, or "" if absent.
+fn mb_top_genre(v: Option<&serde_json::Value>) -> String {
+    let Some(arr) = v.and_then(|v| v.as_array()) else {
+        return String::new();
+    };
+    arr.iter()
+        .filter_map(|g| {
+            let name = g.get("name").and_then(|n| n.as_str())?;
+            let count = g.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
+            Some((count, name.to_string()))
+        })
+        .max_by_key(|(c, _)| *c)
+        .map(|(_, n)| n)
+        .unwrap_or_default()
 }
 
 /// Join a MusicBrainz `artist-credit` array into a display string, honouring each
@@ -1037,10 +1127,16 @@ fn parse_cddb_query(resp: &str) -> Option<(String, String)> {
 fn parse_cddb_read(body: &str) -> Option<DiscMeta> {
     use std::collections::HashMap;
     let mut dtitle = String::new();
+    let mut dyear = String::new();
+    let mut dgenre = String::new();
     let mut titles: HashMap<usize, String> = HashMap::new();
     for line in body.lines() {
         if let Some(v) = line.strip_prefix("DTITLE=") {
             dtitle.push_str(v);
+        } else if let Some(v) = line.strip_prefix("DYEAR=") {
+            dyear.push_str(v);
+        } else if let Some(v) = line.strip_prefix("DGENRE=") {
+            dgenre.push_str(v);
         } else if let Some(rest) = line.strip_prefix("TTITLE") {
             if let Some((idx, val)) = rest.split_once('=') {
                 if let Ok(i) = idx.parse::<usize>() {
@@ -1064,7 +1160,16 @@ fn parse_cddb_read(body: &str) -> Option<DiscMeta> {
             tracks.insert(n as u8, (title.trim().to_string(), album_artist.clone()));
         }
     }
-    Some(DiscMeta { album, album_artist, tracks })
+    // Cache year and genre for ID3 tagging (not shown in the UI yet). DYEAR is a plain
+    // year; keep it only when it reads as a 4-digit year.
+    let year = dyear.trim().to_string();
+    let year = if year.len() == 4 && year.chars().all(|c| c.is_ascii_digit()) {
+        year
+    } else {
+        String::new()
+    };
+    let genre = dgenre.trim().to_string();
+    Some(DiscMeta { album, album_artist, year, genre, tracks })
 }
 
 /// The platform's default optical device, used when the UI opens a CD.
@@ -1825,14 +1930,24 @@ mod tests {
         let body = "# xmcd\nDISCID=290fb416\n\
                     DTITLE=Green Day / Saviors (\u{e9}dition de luxe)\n\
                     DYEAR=2024\n\
+                    DGENRE=Punk\n\
                     TTITLE0=The American Dream Is Killing Me\n\
                     TTITLE1=Look Ma\n\
                     TTITLE2=Bobby Sox\n.\n";
         let meta = parse_cddb_read(body).expect("should parse");
         assert_eq!(meta.album_artist, "Green Day");
         assert_eq!(meta.album, "Saviors (\u{e9}dition de luxe)");
+        assert_eq!(meta.year, "2024");
+        assert_eq!(meta.genre, "Punk");
         assert_eq!(meta.tracks.get(&1).map(|t| t.0.as_str()), Some("The American Dream Is Killing Me"));
         assert_eq!(meta.tracks.get(&3), Some(&("Bobby Sox".to_string(), "Green Day".to_string())));
+    }
+
+    #[test]
+    fn parse_cddb_read_ignores_a_non_year_dyear() {
+        let body = "# xmcd\nDTITLE=A / B\nDYEAR=\nTTITLE0=One\n.\n";
+        let meta = parse_cddb_read(body).expect("should parse");
+        assert_eq!(meta.year, "");
     }
 
     // Shorthand for a TOC entry in the toc_from_entries tests.
