@@ -23,8 +23,12 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # HTTP(S) client for streaming "Open location" URLs (internet radio / remote
-# files). Blocking, pure-Rust TLS; used only on a background decode thread.
+# files) and the background MusicBrainz CD lookup. Blocking, pure-Rust TLS; used
+# only on background threads.
 ureq = "2"
+# SHA-1 for the MusicBrainz Disc ID, computed from the CD's TOC to look up the
+# disc's titles/artist/album (#191). RustCrypto, MIT/Apache-2.0.
+sha1 = "0.10"
 # The sole decode path: symphonia directly, for both local files (src/decode.rs)
 # and non-seekable network streams (src/stream.rs). rodio's own Decoder is unused,
 # so rodio pulls no symphonia of its own (no symphonia-* features above), keeping a

@@ -171,9 +171,13 @@ impl super::LinAmpApp {
             self.lib.ratings.clear();
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             if let Some(dev) = self.lib.cd_device.clone() {
-                if let Some(toc) = self.lib.cd_tocs.get(&dev) {
-                    self.lib.results =
-                        toc.iter().map(|t| crate::playlist::Track::cd_track(&dev, t)).collect();
+                // Clone out of the cache first so the borrow ends before assigning results.
+                let disc = self.lib.cd_discs.get(&dev).map(|cd| (cd.tracks.clone(), cd.meta.clone()));
+                if let Some((tracks, meta)) = disc {
+                    self.lib.results = tracks
+                        .iter()
+                        .map(|t| crate::playlist::Track::cd_track(&dev, t, meta.as_ref()))
+                        .collect();
                     self.status = format!("Audio CD: {} track(s).", self.lib.results.len());
                 }
             }
@@ -827,16 +831,17 @@ impl super::LinAmpApp {
         let Some(snapshot) = self.cd_watcher.latest() else {
             return; // nothing inserted or ejected since the last snapshot
         };
-        let present: Vec<String> = snapshot.iter().map(|(d, _)| d.clone()).collect();
-        self.lib.cd_tocs = snapshot.into_iter().collect();
-        if present == self.lib.devices {
-            return;
-        }
+        let present: Vec<String> = snapshot.iter().map(|cd| cd.device.clone()).collect();
+        self.lib.cd_discs = snapshot.into_iter().map(|cd| (cd.device.clone(), cd)).collect();
         let switch = cd_eject_view(&present, self.lib.nav, self.lib.cd_device.as_deref());
         self.lib.devices = present;
         if let Some((nav, dev)) = switch {
             self.lib.nav = nav;
             self.lib.cd_device = dev;
+            self.refresh_library();
+        } else if self.lib.nav == crate::library::LibView::AudioCd {
+            // The looked-up titles for the CD being viewed may have just arrived; rebuild
+            // the track list from the refreshed cache.
             self.refresh_library();
         }
     }
