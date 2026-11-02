@@ -510,8 +510,10 @@ impl super::LinAmpApp {
                 );
                 let close_resp =
                     ui.interact(close_rect, ui.id().with("lib_gen_close"), egui::Sense::click());
-                let close_pressed =
-                    close_resp.is_pointer_button_down_on() && close_resp.contains_pointer();
+                // Hold the pressed sprite for the whole press (until release), matching the
+                // other windows. is_pointer_button_down_on stays true while the button is
+                // held after pressing on the close; clicked() only fires on release over it.
+                let close_pressed = close_resp.is_pointer_button_down_on();
                 if close_resp.clicked() {
                     *close = true;
                 }
