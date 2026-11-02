@@ -449,6 +449,20 @@ impl super::LinAmpApp {
                         self.ui_library_titlebar(ctx, ui, &mut close);
                         self.ui_library(ui);
                     });
+                // A themed border (the skin window-background colour, matching the
+                // title bar) just inside the edge, so the fallback window reads as
+                // distinct where it overlaps another window. Square corners: the
+                // Library docks edge-to-edge, so it is not rounded like Preferences.
+                let vr = ctx.screen_rect().shrink(1.0);
+                ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::new("lib_border"),
+                ))
+                .rect_stroke(
+                    vr,
+                    egui::Rounding::ZERO,
+                    egui::Stroke::new(2.0_f32, self.skin_window_bg()),
+                );
             }
             self.apply_base_cursor(ctx, "LinAmp Library");
             if ctx.input(|i| i.viewport().close_requested()) {
