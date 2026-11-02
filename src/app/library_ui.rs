@@ -487,21 +487,6 @@ impl super::LinAmpApp {
         // scaled) window rect and upscaled like the classic windows.
         let base = self.lib_base_size();
         let (w, h) = (base.x as u32, base.y as u32);
-        let sig = (self.theme.name.clone(), active, w, h);
-        if self.lib_tex_sig.as_ref() != Some(&sig) {
-            if let Some(img) = self
-                .classic
-                .as_ref()
-                .and_then(|c| c.compose_gen_window(w, h, active, "LinAmp Library"))
-            {
-                let color = egui::ColorImage::from_rgba_unmultiplied(
-                    [w as usize, h as usize],
-                    img.as_raw(),
-                );
-                self.lib_tex = Some(ctx.load_texture("lib_gen", color, egui::TextureOptions::NEAREST));
-                self.lib_tex_sig = Some(sig);
-            }
-        }
         let s = self.scale;
         let (top, right, bottom, left) = classic::ClassicSkin::gen_insets();
         // Insets scale with the window (the 1x frame is upscaled into it).
@@ -515,21 +500,59 @@ impl super::LinAmpApp {
             .frame(egui::Frame::none())
             .show(ctx, |ui| {
                 let full = ui.max_rect();
-                if let Some(tex) = &self.lib_tex {
-                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-                    ui.painter().image(tex.id(), full, uv, Color32::WHITE);
-                }
-                // (The caption is drawn into the frame with GEN.BMP's own font.)
-                // Close button (top-right corner of the frame).
+                // Close button (top-right corner of the frame). Interact before
+                // composing so the pressed sprite can be baked into the frame texture.
+                // It presses in while held over it and only fires on release if the
+                // cursor is still over it, matching the other windows.
                 let close_rect = egui::Rect::from_min_max(
                     egui::pos2(full.right() - 20.0 * s, full.top() + 3.0 * s),
                     egui::pos2(full.right() - 6.0 * s, full.top() + 17.0 * s),
                 );
-                if ui
-                    .interact(close_rect, ui.id().with("lib_gen_close"), egui::Sense::click())
-                    .clicked()
-                {
-                    *close = true;
+                // Track the press explicitly (egui's click-sense drops the "down on"
+                // state once the pointer leaves the widget): arm on a press over the
+                // close, keep the pressed sprite for the whole press even if the cursor
+                // moves off, and fire on release only if the cursor is still over it,
+                // matching the classic windows.
+                let (p_pressed, p_released, p_down, p_pos) = ui.input(|i| {
+                    (
+                        i.pointer.primary_pressed(),
+                        i.pointer.primary_released(),
+                        i.pointer.primary_down(),
+                        i.pointer.latest_pos(),
+                    )
+                });
+                let over_close = p_pos.is_some_and(|p| close_rect.contains(p));
+                if p_pressed && over_close {
+                    self.lib_close_armed = true;
+                }
+                let close_pressed = self.lib_close_armed && p_down;
+                if p_released {
+                    if self.lib_close_armed && over_close {
+                        *close = true;
+                    }
+                    self.lib_close_armed = false;
+                }
+
+                // (Re)compose and cache the frame texture, now including the press state.
+                let sig = (self.theme.name.clone(), active, close_pressed, w, h);
+                if self.lib_tex_sig.as_ref() != Some(&sig) {
+                    if let Some(img) = self
+                        .classic
+                        .as_ref()
+                        .and_then(|c| c.compose_gen_window(w, h, active, close_pressed, "LinAmp Library"))
+                    {
+                        let color = egui::ColorImage::from_rgba_unmultiplied(
+                            [w as usize, h as usize],
+                            img.as_raw(),
+                        );
+                        self.lib_tex =
+                            Some(ctx.load_texture("lib_gen", color, egui::TextureOptions::NEAREST));
+                        self.lib_tex_sig = Some(sig);
+                    }
+                }
+                if let Some(tex) = &self.lib_tex {
+                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                    ui.painter().image(tex.id(), full, uv, Color32::WHITE);
                 }
                 // Drag the title bar (minus the close corner) to move / dock.
                 let drag_rect = egui::Rect::from_min_max(
