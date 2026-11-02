@@ -508,14 +508,29 @@ impl super::LinAmpApp {
                     egui::pos2(full.right() - 20.0 * s, full.top() + 3.0 * s),
                     egui::pos2(full.right() - 6.0 * s, full.top() + 17.0 * s),
                 );
-                let close_resp =
-                    ui.interact(close_rect, ui.id().with("lib_gen_close"), egui::Sense::click());
-                // Hold the pressed sprite for the whole press (until release), matching the
-                // other windows. is_pointer_button_down_on stays true while the button is
-                // held after pressing on the close; clicked() only fires on release over it.
-                let close_pressed = close_resp.is_pointer_button_down_on();
-                if close_resp.clicked() {
-                    *close = true;
+                // Track the press explicitly (egui's click-sense drops the "down on"
+                // state once the pointer leaves the widget): arm on a press over the
+                // close, keep the pressed sprite for the whole press even if the cursor
+                // moves off, and fire on release only if the cursor is still over it,
+                // matching the classic windows.
+                let (p_pressed, p_released, p_down, p_pos) = ui.input(|i| {
+                    (
+                        i.pointer.primary_pressed(),
+                        i.pointer.primary_released(),
+                        i.pointer.primary_down(),
+                        i.pointer.latest_pos(),
+                    )
+                });
+                let over_close = p_pos.is_some_and(|p| close_rect.contains(p));
+                if p_pressed && over_close {
+                    self.lib_close_armed = true;
+                }
+                let close_pressed = self.lib_close_armed && p_down;
+                if p_released {
+                    if self.lib_close_armed && over_close {
+                        *close = true;
+                    }
+                    self.lib_close_armed = false;
                 }
 
                 // (Re)compose and cache the frame texture, now including the press state.

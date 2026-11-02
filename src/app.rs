@@ -684,6 +684,10 @@ pub struct LinAmpApp {
     /// so it is only re-composited when something changes.
     lib_tex: Option<egui::TextureHandle>,
     lib_tex_sig: Option<(String, bool, bool, u32, u32)>,
+    /// The library close button is held: armed on a press over it, it keeps the
+    /// pressed sprite for the whole press (even if the cursor moves off) and fires
+    /// on release only if the cursor is still over it, like the classic windows.
+    lib_close_armed: bool,
     /// Whether any X11 shape was ever set, to reset windows to rectangular when
     /// switching to a skin without regions.
     shaped_any: bool,
@@ -1044,6 +1048,7 @@ impl LinAmpApp {
             },
             lib_tex: None,
             lib_tex_sig: None,
+            lib_close_armed: false,
             shaped_any: false,
             viz,
             viz_mode: VizMode::Spectrum,
