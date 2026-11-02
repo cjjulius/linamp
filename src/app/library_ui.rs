@@ -568,9 +568,12 @@ impl super::LinAmpApp {
         let full = ui.available_width();
         let (bar, bar_resp) =
             ui.allocate_exact_size(egui::vec2(full, 20.0), egui::Sense::click_and_drag());
-        let accent = self.theme.accent;
-        let txt = skin::contrast_text(accent);
-        ui.painter().rect_filled(bar, 0.0, accent);
+        // Skin window-background colour (there is no GEN art on this fallback path, so
+        // the sampled window tone), matching the Preferences title bar so the window
+        // reads as the skin's own rather than a bright foreign dialog.
+        let bar_col = self.skin_window_bg();
+        let txt = skin::contrast_text(bar_col);
+        ui.painter().rect_filled(bar, 0.0, bar_col);
         ui.painter().text(
             bar.left_center() + egui::vec2(6.0, 0.0),
             egui::Align2::LEFT_CENTER,
