@@ -797,6 +797,9 @@ pub struct LinAmpApp {
     /// last applied (None when closed or not yet applied, so it re-rounds on open and
     /// when the DPI changes). See `round_popup_window`.
     prefs_rounded: Option<f32>,
+    /// Set when Preferences is (re)selected from the menu, so the next frame raises and
+    /// focuses the window even if it was already open and had been covered.
+    prefs_raise: bool,
     lib_visible: bool,
     /// Whether the Minibrowser window (a themed nod to the classic player's SHOUTcast pane)
     /// is open. Transient, it opens from the Options menu each session.
@@ -1137,6 +1140,7 @@ impl LinAmpApp {
             prefs_pos: None,
             prefs_drag: None,
             prefs_rounded: None,
+            prefs_raise: false,
             lib_visible: false,
             mb_visible: false,
             tag_editor: None,
@@ -2963,6 +2967,7 @@ impl LinAmpApp {
             // rounded corner region then (the OS window is destroyed on close).
             self.prefs_pos = None;
             self.prefs_rounded = None;
+            self.prefs_raise = false;
             return;
         }
         // Render in its own real window so it is never clipped by the (small)
@@ -2983,7 +2988,13 @@ impl LinAmpApp {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
-            .with_window_level(self.window_level());
+            // Always on top while open, whatever the global always-on-top setting, so
+            // clicking another window never buries the open Preferences dialog. It is a
+            // standalone window (not one of main's owned children), so topmost keeps it
+            // above the player and Library windows. Selecting Preferences again also
+            // raises it (see `prefs_raise`), covering the rare case of two topmost
+            // windows where a sibling can still come forward.
+            .with_window_level(egui::WindowLevel::AlwaysOnTop);
         let id = egui::ViewportId::from_hash_of("linamp_prefs");
         // Skin nav colours for the category tree, so it matches the Media Library nav
         // whatever skin is applied.
@@ -2998,6 +3009,12 @@ impl LinAmpApp {
         let corner = 6.0_f32;
         let mut close = false;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            // Raise and focus the window when Preferences was just (re)selected, so it
+            // comes back to the front if it had slipped behind another window.
+            if self.prefs_raise {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                self.prefs_raise = false;
+            }
             // Top: skin-accented title bar (the window is borderless). Drag it to
             // move the window; the × closes it. Mirrors the Library's title bar.
             egui::TopBottomPanel::top("prefs_titlebar")
