@@ -827,7 +827,7 @@ impl super::LinAmpApp {
     /// them to another inserted disc, or to Local Media when none remain. A playing CD
     /// track whose disc is ejected ends on its own (the drive read fails), so the
     /// playlist advances through the normal end-of-track path, like any finished track.
-    fn poll_cd_devices(&mut self) {
+    pub(super) fn poll_cd_devices(&mut self) {
         let Some(snapshot) = self.cd_watcher.latest() else {
             return; // nothing inserted or ejected since the last snapshot
         };
@@ -851,9 +851,9 @@ impl super::LinAmpApp {
         let s = cx.s;
         let dim = cx.dim;
         let classic = cx.classic;
-        // Poll for an inserted/ejected audio CD (throttled) so Devices updates while the
-        // library is open. Keep repainting so the poll ticks even when the user is idle.
-        self.poll_cd_devices();
+        // The CD watcher is drained in the main update loop; keep repainting while the
+        // library is open so that poll keeps ticking (and the Devices list stays live)
+        // even when the user is idle.
         ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
         // The library uses one black list background across the nav and the track
         // pane, so give the nav panel the list fill, not the lighter window panel fill.

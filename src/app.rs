@@ -837,6 +837,42 @@ fn crossfade_due(
     }
 }
 
+/// Whether a queued CD track (number `num`) still matches the disc currently in its
+/// drive, `cd` (as the watcher last reported it), so it may play (#191). Prefers the
+/// looked-up title + artist; falls back to the track length from the TOC when titles
+/// aren't comparable (not looked up yet, or the entry predates the lookup); plays
+/// best-effort when there is nothing to compare (no recognised disc, or no details
+/// loaded). This is what stops a swapped disc from playing the wrong audio under the
+/// queued track's title/artist.
+fn cd_entry_matches_disc(
+    track: &crate::playlist::Track,
+    num: u8,
+    cd: Option<&crate::cdda::CdInfo>,
+) -> bool {
+    let Some(cd) = cd else {
+        return true; // no recognised audio disc in the drive: best-effort
+    };
+    // Prefer the looked-up title + artist, when both the entry and the disc have real
+    // titles for this track.
+    if let Some(meta) = &cd.meta {
+        if let Some((title, artist)) = meta.tracks.get(&num) {
+            let placeholder = track.title.trim() == format!("Track {num}");
+            if !placeholder && !track.title.trim().is_empty() {
+                return track.title.trim() == title.trim()
+                    && track.artist.trim() == artist.trim();
+            }
+        }
+    }
+    // Titles not comparable: fall back to the track length from the TOC. A different
+    // disc's track almost always runs a different time, so this still catches a swap.
+    if let (Some(queued), Some(cur)) =
+        (track.duration, cd.tracks.iter().find(|t| t.number == num))
+    {
+        return (queued.as_secs_f32() - cur.duration().as_secs_f32()).abs() <= 2.0;
+    }
+    true // nothing to compare against: best-effort
+}
+
 /// Taskbar-restore edge (#209): given the root viewport's current minimized flag
 /// (`min`) and whether we've already seen it confirmed minimized (`confirmed`),
 /// return the updated `confirmed` flag and whether the children should now be
@@ -1260,6 +1296,26 @@ impl LinAmpApp {
         self.status = format!("{} track(s) in playlist.", self.playlist.len());
     }
 
+    /// Whether a queued track may play. Always true for non-CD tracks. For a `cdda://`
+    /// track it guards against a swapped disc (#191): if the disc now in that drive is a
+    /// different one than the queued entry came from, return false so the entry is
+    /// skipped instead of playing the wrong disc's audio under the queued title/artist.
+    /// Best-effort (true) when the inserted disc's details aren't loaded yet, matching
+    /// the requested behaviour.
+    fn cd_track_matches_disc(&self, track: &crate::playlist::Track) -> bool {
+        let Some(path) = track.path.to_str() else {
+            return true;
+        };
+        if !crate::cdda::is_cdda_path(path) {
+            return true; // not a CD track
+        }
+        let Some((device, num)) = crate::cdda::parse_track_path(path) else {
+            return true;
+        };
+        // Compare against what the watcher last saw in that drive.
+        cd_entry_matches_disc(track, num, self.lib.cd_discs.get(&device))
+    }
+
     /// Play track `idx`, skipping forward over any that can't be opened/decoded
     /// (missing files, unsupported/corrupt audio) until one plays. Bounded to one
     /// pass over the playlist so an all-unplayable list can't loop forever.
@@ -1275,6 +1331,15 @@ impl LinAmpApp {
             let Some(track) = self.playlist.tracks.get(i).cloned() else {
                 break;
             };
+            // A queued CD track whose disc was swapped must not play the wrong disc's
+            // audio with the queued track's title/artist (#191). Skip it when it no
+            // longer matches the disc in the drive; best-effort when the disc's details
+            // aren't loaded yet.
+            if !self.cd_track_matches_disc(&track) {
+                skipped += 1;
+                i = (i + 1) % len;
+                continue;
+            }
             match self.player.play_file(&track.path) {
                 Ok(()) => {
                     self.playlist.current = Some(i);
@@ -4300,6 +4365,11 @@ impl eframe::App for LinAmpApp {
         // Rip/convert progress: drain the queue worker's messages into the job list.
         self.poll_convert();
 
+        // Audio-CD watcher (#191): drain the latest snapshot every frame so the Devices
+        // list and the cached disc info stay current even while the library window is
+        // closed, which the play-time disc-match check relies on.
+        self.poll_cd_devices();
+
         // Taskbar minimize (#209): bring the child windows back when the root is
         // restored from the taskbar.
         self.poll_taskbar_restore(ctx);
@@ -4584,8 +4654,54 @@ fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        crossfade_due, file_name_key, parse_time, reorder_play_next, taskbar_restore_step,
+        cd_entry_matches_disc, crossfade_due, file_name_key, parse_time, reorder_play_next,
+        taskbar_restore_step,
     };
+
+    #[test]
+    fn cd_entry_skips_a_swapped_disc() {
+        use crate::cdda::{CdInfo, CdTrack, DiscMeta};
+        use crate::playlist::Track;
+        use std::collections::HashMap;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        // A queued CD track with a given title/artist/length.
+        let entry = |title: &str, artist: &str, secs: u64| {
+            let mut t = Track::new(PathBuf::from("cdda://D:/1"));
+            t.title = title.into();
+            t.artist = artist.into();
+            t.duration = Some(Duration::from_secs(secs));
+            t
+        };
+        // The disc now in the drive: track 1 of `secs` length, optionally with titles.
+        let disc = |title: &str, artist: &str, secs: u32, titled: bool| {
+            let meta = titled.then(|| {
+                let mut tracks = HashMap::new();
+                tracks.insert(1u8, (title.to_string(), artist.to_string()));
+                DiscMeta { album: "Album".into(), album_artist: artist.into(), tracks }
+            });
+            CdInfo {
+                device: "D:".into(),
+                tracks: vec![CdTrack { number: 1, start_lba: 0, sectors: secs * 75 }],
+                meta,
+            }
+        };
+
+        // Same disc (title + artist match): play.
+        assert!(cd_entry_matches_disc(&entry("Song A", "Band A", 200), 1, Some(&disc("Song A", "Band A", 200, true))));
+        // Swapped disc, both titled, titles differ: skip (the bug we're preventing).
+        assert!(!cd_entry_matches_disc(&entry("Song A", "Band A", 200), 1, Some(&disc("Song B", "Band B", 180, true))));
+        // No recognised disc in the drive: best-effort (play).
+        assert!(cd_entry_matches_disc(&entry("Song A", "Band A", 200), 1, None));
+        // Titles not loaded yet but the length differs: skip (catches a swap pre-lookup).
+        assert!(!cd_entry_matches_disc(&entry("Song A", "Band A", 200), 1, Some(&disc("", "", 180, false))));
+        // Titles not loaded, same length: best-effort play (same disc).
+        assert!(cd_entry_matches_disc(&entry("Song A", "Band A", 200), 1, Some(&disc("", "", 200, false))));
+        // Placeholder entry ("Track 1") against a now-titled disc of the same length:
+        // don't falsely skip (it was queued before the titles loaded).
+        assert!(cd_entry_matches_disc(&entry("Track 1", "", 200), 1, Some(&disc("Real Title", "Band", 200, true))));
+    }
 
     #[test]
     fn taskbar_restore_waits_for_a_confirmed_minimize_edge() {
