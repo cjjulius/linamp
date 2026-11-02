@@ -297,7 +297,7 @@ enum UiMode {
 }
 
 /// Which classic window a pointer gesture is on.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum ClWin {
     Main,
     Eq,
@@ -566,6 +566,10 @@ struct WindowGeom {
     main_shade: bool,
     eq_shade: bool,
     pl_shade: bool,
+    /// The collapsed close/restore button currently held, with its window: it
+    /// presses in and only acts on release if the cursor is still over it,
+    /// matching the full windows (#210).
+    shade_press: Option<(ClWin, crate::classic::ShadeHit)>,
     /// App-level focus (true while any LinAmp window is focused) plus per-window
     /// focus, OR'd each frame.
     app_focused: bool,
@@ -1028,6 +1032,7 @@ impl LinAmpApp {
                 main_shade: false,
                 eq_shade: false,
                 pl_shade: false,
+                shade_press: None,
                 app_focused: true,
                 foc_root: true,
                 foc_eq: false,
@@ -2130,7 +2135,13 @@ impl LinAmpApp {
         MainState {
             focused: self.geom.app_focused,
             play,
-            pressed: self.render.pressed_btn,
+            // The collapsed main bar's close/restore buttons press in via shade_press
+            // (the expanded buttons use pressed_btn); both map onto the same sprites (#210).
+            pressed: self.render.pressed_btn.or(match self.geom.shade_press {
+                Some((ClWin::Main, classic::ShadeHit::Close)) => Some(Btn::Close),
+                Some((ClWin::Main, classic::ShadeHit::Restore)) => Some(Btn::Shade),
+                _ => None,
+            }),
             shuffle: self.shuffle,
             repeat: self.repeat_all,
             eq_on: self.eq_visible,

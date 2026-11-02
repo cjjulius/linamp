@@ -22,6 +22,8 @@ impl super::LinAmpApp {
         match win {
             ClWin::Main => {
                 self.geom.main_shade.hash(&mut h);
+                // The collapsed close/restore press-in state (#210).
+                self.geom.shade_press.hash(&mut h);
                 // Clutterbar lit indicators: A = always-on-top, D = double-size.
                 // Without these the cached texture wouldn't refresh when the toggle
                 // changes (from Preferences or the clutterbar), so the on-screen
@@ -62,6 +64,7 @@ impl super::LinAmpApp {
             }
             ClWin::Eq => {
                 self.geom.eq_shade.hash(&mut h);
+                self.geom.shade_press.hash(&mut h);
                 if self.geom.eq_shade {
                     // The collapsed EQ shows the (shared) volume + balance sliders.
                     self.player.volume().to_bits().hash(&mut h);
@@ -77,6 +80,7 @@ impl super::LinAmpApp {
             }
             ClWin::Pl => {
                 self.geom.pl_shade.hash(&mut h);
+                self.geom.shade_press.hash(&mut h);
                 self.plview.px_w.to_bits().hash(&mut h);
                 self.plview.px_h.to_bits().hash(&mut h);
                 self.plview.first.hash(&mut h);
@@ -230,7 +234,16 @@ impl super::LinAmpApp {
             }
             ClWin::Eq => {
                 if self.geom.eq_shade {
-                    cs.compose_eq_shade(self.geom.app_focused, self.player.volume(), self.balance)
+                    let pressed = match self.geom.shade_press {
+                        Some((ClWin::Eq, h)) => Some(h),
+                        _ => None,
+                    };
+                    cs.compose_eq_shade(
+                        self.geom.app_focused,
+                        self.player.volume(),
+                        self.balance,
+                        pressed,
+                    )
                 } else {
                     cs.compose_eq(&self.make_eq_state())
                 }
@@ -259,7 +272,17 @@ impl super::LinAmpApp {
                         }
                         None => (String::new(), String::new()),
                     };
-                    cs.compose_pl_shade(self.geom.app_focused, &text, &time, self.pl_colors().normal)
+                    let pressed = match self.geom.shade_press {
+                        Some((ClWin::Pl, h)) => Some(h),
+                        _ => None,
+                    };
+                    cs.compose_pl_shade(
+                        self.geom.app_focused,
+                        &text,
+                        &time,
+                        self.pl_colors().normal,
+                        pressed,
+                    )
                 } else {
                     // Build only the visible window; compose skips `first` rows, so
                     // the slice starts at pl_first and we pass first: 0 below.

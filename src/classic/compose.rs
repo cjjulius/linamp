@@ -262,8 +262,12 @@ impl ClassicSkin {
         if let Some(tb) = self.bmp("titlebar.bmp") {
             let sy = if st.focused { 29 } else { 42 };
             blit(&mut c, tb, 0, 0, 27, sy, 275, 14);
-            blit(&mut c, tb, 254, 3, 0, 18, 9, 9); // shade / restore button
-            blit(&mut c, tb, 264, 3, 18, 0, 9, 9); // close button
+            // Restore (expand) and Close press in while held, using the same sprites
+            // as the expanded title bar (normal at sx 0 / sy 0, pressed at sx 9 / sy 9) (#210).
+            let shade_sx = if st.pressed == Some(Btn::Shade) { 9 } else { 0 };
+            blit(&mut c, tb, 254, 3, shade_sx, 18, 9, 9); // shade / restore button
+            let close_sy = if st.pressed == Some(Btn::Close) { 9 } else { 0 };
+            blit(&mut c, tb, 264, 3, 18, close_sy, 9, 9); // close button
         }
         // The main windowshade sprite is a self-contained strip (branding, seek,
         // time slot, mini transport, buttons) with no song-title LCD, so we only
@@ -874,7 +878,13 @@ impl ClassicSkin {
         c
     }
 
-    pub fn compose_eq_shade(&self, focused: bool, volume: f32, balance: f32) -> RgbaImage {
+    pub fn compose_eq_shade(
+        &self,
+        focused: bool,
+        volume: f32,
+        balance: f32,
+        pressed: Option<ShadeHit>,
+    ) -> RgbaImage {
         let mut c = RgbaImage::new(275, 14);
         // Prefer the dedicated EQ-shade sheet (eq_ex.bmp): it carries the volume
         // and balance mini-sliders, which mirror the main window's. Skins without
@@ -951,6 +961,14 @@ impl ClassicSkin {
             // makes it visible).
             fill_rect(&mut c, 265, 4, 7, 7, thumb);
         }
+        // The EQ shade bar ships no pressed sprites for the close/restore boxes (the
+        // restore glyph is baked into the bar), so darken whichever is held (#210).
+        if pressed == Some(ShadeHit::Close) {
+            darken_rect(&mut c, 264, 3, 9, 9, 0.55);
+        }
+        if pressed == Some(ShadeHit::Restore) {
+            darken_rect(&mut c, 254, 3, 9, 9, 0.55);
+        }
         c
     }
 
@@ -963,6 +981,7 @@ impl ClassicSkin {
         text: &str,
         time: &str,
         color: [u8; 3],
+        pressed: Option<ShadeHit>,
     ) -> RgbaImage {
         let mut c = RgbaImage::new(275, 14);
         if let Some(p) = self.bmp("pledit.bmp") {
@@ -973,13 +992,17 @@ impl ClassicSkin {
                 x += 25;
             }
             let ry = if focused { 42 } else { 57 };
-            // The right-end sprite bakes in the normal close glyph at dest (264,3),
-            // the same way the expanded window's top-right corner does. The separate
-            // PLEDIT sprite at (52,42) is the *pressed* close; drawing it here
-            // unconditionally made the collapsed close always look pressed/boxed, so
-            // it is left to the baked glyph (the shade bar closes on click anyway, so
-            // there is no held frame to show a pressed state).
+            // The right-end sprite bakes in the normal close and restore glyphs (at
+            // dest 264,3 and 254,3), the same way the expanded window's top-right corner
+            // does. While a button is held, overlay the pressed close sprite (52,42) and
+            // darken the restore box, so they press in like the full windows (#210).
             blit(&mut c, p, 225, 0, 99, ry, 50, 14); // right end (with buttons, incl. close)
+            if pressed == Some(ShadeHit::Close) {
+                blit(&mut c, p, 264, 3, 52, 42, 9, 9); // close (pressed)
+            }
+            if pressed == Some(ShadeHit::Restore) {
+                darken_rect(&mut c, 254, 3, 9, 9, 0.55);
+            }
 
             // Shade-bar track + time: title at `PL_LIST_X` (aligned with the
             // expanded rows), time right-aligned before the button cluster, title

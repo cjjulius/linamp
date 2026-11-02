@@ -181,8 +181,12 @@ impl super::LinAmpApp {
                             classic::shade_region_at(nx, ny)
                         };
                         match hit {
-                            Some(H::Close) => self.close_window(ctx, win),
-                            Some(H::Restore) => self.toggle_shade(win),
+                            // Close and Restore press in while held and only act on
+                            // release if the cursor is still over them, matching the full
+                            // windows (so you can press, slide off, and release to cancel) (#210).
+                            Some(r @ (H::Close | H::Restore)) => {
+                                self.geom.shade_press = Some((win, r));
+                            }
                             // Minimize from the collapsed bar behaves exactly like the
                             // expanded button: tray-hide or taskbar-minimize (with the
                             // child windows), leaving the main window shaded.
@@ -482,6 +486,24 @@ impl super::LinAmpApp {
             if let Some(l) = local {
                 let nx = l.x / self.scale;
                 let ny = l.y / self.scale;
+                // Fire a held collapsed close/restore only if released over it (#210).
+                if let Some((pw, hit)) = self.geom.shade_press.take() {
+                    use classic::ShadeHit as H;
+                    if pw == win {
+                        let at = if win == ClWin::Main {
+                            classic::main_shade_region_at(nx, ny)
+                        } else {
+                            classic::shade_region_at(nx, ny)
+                        };
+                        if at == Some(hit) {
+                            match hit {
+                                H::Close => self.close_window(ctx, win),
+                                H::Restore => self.toggle_shade(win),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
                 if win == ClWin::Main {
                     if let Some(r) = self.render.active_region {
                         if classic::region_at(nx, ny) == Some(r) {
@@ -548,6 +570,7 @@ impl super::LinAmpApp {
             self.eq.active = None;
             self.plview.menu_press = None;
             self.plview.title_press = None;
+            self.geom.shade_press = None;
         }
 
         if win == ClWin::Main {
