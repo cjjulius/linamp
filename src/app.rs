@@ -793,6 +793,10 @@ pub struct LinAmpApp {
     /// main window on open) and the grab offset while its title bar is dragged.
     prefs_pos: Option<egui::Pos2>,
     prefs_drag: Option<egui::Vec2>,
+    /// Pixels-per-point at which the Preferences window's rounded corner region was
+    /// last applied (None when closed or not yet applied, so it re-rounds on open and
+    /// when the DPI changes). See `round_popup_window`.
+    prefs_rounded: Option<f32>,
     lib_visible: bool,
     /// Whether the Minibrowser window (a themed nod to the classic player's SHOUTcast pane)
     /// is open. Transient, it opens from the Options menu each session.
@@ -1132,6 +1136,7 @@ impl LinAmpApp {
             prefs_tab: PrefTab::Display,
             prefs_pos: None,
             prefs_drag: None,
+            prefs_rounded: None,
             lib_visible: false,
             mb_visible: false,
             tag_editor: None,
@@ -2954,8 +2959,10 @@ impl LinAmpApp {
 
     fn ui_prefs(&mut self, ctx: &egui::Context) {
         if !self.prefs_open {
-            // Re-anchor to the main window the next time it opens.
+            // Re-anchor to the main window the next time it opens, and re-apply the
+            // rounded corner region then (the OS window is destroyed on close).
             self.prefs_pos = None;
+            self.prefs_rounded = None;
             return;
         }
         // Render in its own real window so it is never clipped by the (small)
@@ -2982,6 +2989,13 @@ impl LinAmpApp {
         // whatever skin is applied.
         let (nav_list_fill, nav_row_col, nav_sel_bg, nav_sel_col, nav_dash) =
             self.skin_nav_colors();
+        // A themed 2px border with slightly rounded corners frames the window so it
+        // stays visually distinct from the Library (or anything else) when they sit
+        // overlapping. The skin accent matches the title bar for a cohesive frame; the
+        // OS window corners are clipped to the same radius below so the fill does not
+        // poke out past the rounded border.
+        let border_col = self.theme.accent;
+        let corner = 6.0_f32;
         let mut close = false;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             // Top: skin-accented title bar (the window is borderless). Drag it to
@@ -3151,11 +3165,37 @@ impl LinAmpApp {
                         PrefTab::About => self.prefs_page_about(ui),
                     });
             });
+            // Themed border just inside the window edge, matching the rounded corner
+            // region applied below. Inset one point so the whole 2px line stays inside
+            // the region (a line centred on the edge would have its outer half clipped
+            // at the corners). Same approach as the classic menus (#108).
+            let vr = ctx.screen_rect().shrink(1.0);
+            ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("linamp_prefs_border"),
+            ))
+            .rect_stroke(
+                vr,
+                egui::Rounding::same(corner - 1.0),
+                egui::Stroke::new(2.0_f32, border_col),
+            );
             self.apply_base_cursor(ctx, "LinAmp Preferences");
             if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }
         });
+        // Round the OS window's corners to match the painted border, scaled to physical
+        // pixels for the current DPI. Applied once the window exists and re-applied if
+        // the DPI changes; retried on later frames until it succeeds.
+        let ppp = ctx.pixels_per_point();
+        if self.prefs_rounded != Some(ppp) {
+            let radius = (corner * ppp).round() as i32;
+            if platform_win::round_popup_window("LinAmp Preferences", radius, true) {
+                self.prefs_rounded = Some(ppp);
+            } else {
+                ctx.request_repaint();
+            }
+        }
         if close {
             self.prefs_open = false;
         }
