@@ -683,7 +683,7 @@ pub struct LinAmpApp {
     /// Composed GEN.BMP library-window frame + a fingerprint (skin, active, size)
     /// so it is only re-composited when something changes.
     lib_tex: Option<egui::TextureHandle>,
-    lib_tex_sig: Option<(String, bool, u32, u32)>,
+    lib_tex_sig: Option<(String, bool, bool, u32, u32)>,
     /// Whether any X11 shape was ever set, to reset windows to rectangular when
     /// switching to a skin without regions.
     shaped_any: bool,
