@@ -579,6 +579,9 @@ impl super::LinAmpApp {
                             }
                             if item(ui, "Preferences…") {
                                 self.prefs_open = true;
+                                // Raise/focus it even if it was already open behind
+                                // another window.
+                                self.prefs_raise = true;
                                 close = true;
                             }
                             ui.separator();
