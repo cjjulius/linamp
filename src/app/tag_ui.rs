@@ -714,12 +714,7 @@ impl super::LinAmpApp {
                         row("Source", "Audio CD (CDDA, 1411 kbps, 44.1 kHz, stereo)");
                     });
                 ui.add_space(10.0);
-                ui.label(
-                    egui::RichText::new(
-                        "Read-only: an audio CD's tags come from the disc lookup and can't be edited.",
-                    )
-                    .weak(),
-                );
+                ui.label(egui::RichText::new("Read Only (Audio CD)").weak());
                 ui.add_space(10.0);
                 if ui.button("Close").clicked() {
                     close = true;
