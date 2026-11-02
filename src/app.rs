@@ -4958,7 +4958,12 @@ mod tests {
             let meta = titled.then(|| {
                 let mut tracks = HashMap::new();
                 tracks.insert(1u8, (title.to_string(), artist.to_string()));
-                DiscMeta { album: "Album".into(), album_artist: artist.into(), tracks }
+                DiscMeta {
+                    album: "Album".into(),
+                    album_artist: artist.into(),
+                    tracks,
+                    ..Default::default()
+                }
             });
             CdInfo {
                 device: "D:".into(),
