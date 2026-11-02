@@ -805,7 +805,10 @@ pub fn disc_id(tracks: &[CdTrack]) -> Option<String> {
     let last = tracks.last()?.number;
     let leadout = tracks.last()?;
     let mut offsets = [0u32; 100];
-    offsets[0] = leadout.start_lba + leadout.sectors + 150;
+    // offset[0] is the lead-out: the disc's total sector count (the lead-out's LBA),
+    // which is where the last track ends. Track offsets are the absolute address
+    // (LBA + 150), but the lead-out offset is the sector count itself (no +150).
+    offsets[0] = leadout.start_lba + leadout.sectors;
     for t in tracks {
         let n = t.number as usize;
         if (1..=99).contains(&n) {
@@ -1484,26 +1487,27 @@ mod tests {
     }
 
     #[test]
-    fn disc_id_matches_the_reference_algorithm() {
-        // A 15-track disc with these track-start offsets and lead-out. The expected disc
-        // ID was cross-checked against an independent implementation of the documented
-        // MusicBrainz algorithm (https://musicbrainz.org/doc/Disc_ID_Calculation): the
-        // uppercase-hex SHA-1 input layout plus the modified Base64. This pins the whole
-        // computation so a regression in either part is caught.
+    fn disc_id_matches_musicbrainz_for_a_real_disc() {
+        // "American Jet Set" (MusicBrainz release 8aca2911-9b49-4653-b108-068c29f2b5c8).
+        // The TOC was read from the physical disc; these track offsets (LBA + 150) and
+        // lead-out (the total sector count) produce the disc's canonical MusicBrainz
+        // Disc ID, confirmed by a live /ws/2/discid lookup. This pins the whole
+        // computation (SHA-1 input layout, lead-out handling, modified Base64) against a
+        // real, server-verified disc.
         let offsets = [
-            150u32, 17510, 33570, 51150, 71130, 92670, 107955, 125680, 138705, 153265,
-            170245, 187410, 207610, 230005, 246890,
+            150u32, 16467, 36215, 52995, 69427, 86862, 108230, 132405, 154510, 168400,
         ];
-        let leadout = 258725u32;
+        let leadout_lba = 197730u32; // MusicBrainz offset[0]: total sectors on the disc
         let tracks: Vec<CdTrack> = offsets
             .iter()
             .enumerate()
             .map(|(i, &off)| {
-                let next = offsets.get(i + 1).copied().unwrap_or(leadout);
-                CdTrack { number: (i + 1) as u8, start_lba: off - 150, sectors: next - off }
+                let start_lba = off - 150;
+                let next_lba = offsets.get(i + 1).map(|&o| o - 150).unwrap_or(leadout_lba);
+                CdTrack { number: (i + 1) as u8, start_lba, sectors: next_lba - start_lba }
             })
             .collect();
-        assert_eq!(disc_id(&tracks).as_deref(), Some("3qMWZydysnOXikvpDtgoNvKBl1w-"));
+        assert_eq!(disc_id(&tracks).as_deref(), Some("mxeV67091WHJmMYeQG4OMwMspvc-"));
     }
 
     #[test]
