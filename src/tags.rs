@@ -340,7 +340,7 @@ fn lofty_parses(ext: &str) -> bool {
 /// UTF-8 char boundary. ID3v1 fields are fixed-width; lofty truncates to the cap
 /// by byte index and panics if a multibyte character straddles it (#115), which
 /// aborts the save mid-write and corrupts the file. Capping here avoids that.
-fn v1_text(s: &str, max: usize) -> Option<String> {
+pub(crate) fn v1_text(s: &str, max: usize) -> Option<String> {
     // ID3v1 predates Unicode and carries no encoding flag, and the writer emits
     // these bytes as UTF-8, which a pre-Unicode ("circa 2001") player decodes as
     // Latin-1, turning any multi-byte character into mojibake. To stay in spec and
