@@ -449,6 +449,20 @@ impl super::LinAmpApp {
                         self.ui_library_titlebar(ctx, ui, &mut close);
                         self.ui_library(ui);
                     });
+                // A themed border (the skin window-background colour, matching the
+                // title bar) just inside the edge, so the fallback window reads as
+                // distinct where it overlaps another window. Square corners: the
+                // Library docks edge-to-edge, so it is not rounded like Preferences.
+                let vr = ctx.screen_rect().shrink(1.0);
+                ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::new("lib_border"),
+                ))
+                .rect_stroke(
+                    vr,
+                    egui::Rounding::ZERO,
+                    egui::Stroke::new(2.0_f32, self.skin_window_bg()),
+                );
             }
             self.apply_base_cursor(ctx, "LinAmp Library");
             if ctx.input(|i| i.viewport().close_requested()) {
@@ -568,9 +582,12 @@ impl super::LinAmpApp {
         let full = ui.available_width();
         let (bar, bar_resp) =
             ui.allocate_exact_size(egui::vec2(full, 20.0), egui::Sense::click_and_drag());
-        let accent = self.theme.accent;
-        let txt = skin::contrast_text(accent);
-        ui.painter().rect_filled(bar, 0.0, accent);
+        // Skin window-background colour (there is no GEN art on this fallback path, so
+        // the sampled window tone), matching the Preferences title bar so the window
+        // reads as the skin's own rather than a bright foreign dialog.
+        let bar_col = self.skin_window_bg();
+        let txt = skin::contrast_text(bar_col);
+        ui.painter().rect_filled(bar, 0.0, bar_col);
         ui.painter().text(
             bar.left_center() + egui::vec2(6.0, 0.0),
             egui::Align2::LEFT_CENTER,
@@ -2194,7 +2211,7 @@ impl super::LinAmpApp {
 /// the group, plus a short solid horizontal tick into each child at its centre. The solid
 /// tick keeps the corner joined to the trunk even where a trunk dash falls in a gap, so
 /// the trunk and label read as one connected branch (the classic Media Library look).
-fn paint_nav_tree(painter: &egui::Painter, rows: &[egui::Rect], col: Color32, s: f32) {
+pub(super) fn paint_nav_tree(painter: &egui::Painter, rows: &[egui::Rect], col: Color32, s: f32) {
     let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
         return;
     };
