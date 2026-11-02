@@ -780,7 +780,7 @@ fn cd_watch_loop(tx: std::sync::mpsc::Sender<CdSnapshot>) {
             _ => None,
         });
         if let Some((device, tracks)) = pending {
-            let meta = disc_id(&tracks).and_then(|id| lookup_musicbrainz(&id, tracks.len()));
+            let meta = lookup_disc(&tracks);
             if let Some(CachedDisc::Audio { meta: slot, looked_up, .. }) = cache.get_mut(&device) {
                 *slot = meta;
                 *looked_up = true; // one attempt per insert; re-insert the disc to retry
@@ -913,6 +913,144 @@ fn artist_credit(v: Option<&serde_json::Value>) -> String {
         }
     }
     s.trim().to_string()
+}
+
+/// Look up a disc's metadata: MusicBrainz first (richest, CC0), then the freedb
+/// database (gnudb-compatible) for discs MusicBrainz lacks (#191). `None` if neither
+/// knows the disc or there is no network.
+fn lookup_disc(tracks: &[CdTrack]) -> Option<DiscMeta> {
+    if let Some(id) = disc_id(tracks) {
+        if let Some(m) = lookup_musicbrainz(&id, tracks.len()) {
+            return Some(m);
+        }
+    }
+    lookup_freedb(tracks)
+}
+
+/// The sum of a number's decimal digits (the freedb/CDDB checksum step).
+fn cddb_digit_sum(mut n: u32) -> u32 {
+    let mut s = 0;
+    while n > 0 {
+        s += n % 10;
+        n /= 10;
+    }
+    s
+}
+
+/// The freedb/CDDB disc ID (8 lowercase hex digits) for a disc's tracks. This is a
+/// different, older scheme than the MusicBrainz Disc ID: a checksum over each track's
+/// start time in seconds, the disc length, and the track count. Computed from the TOC
+/// (no network). `None` for an empty TOC.
+pub fn freedb_disc_id(tracks: &[CdTrack]) -> Option<String> {
+    let first = tracks.first()?;
+    let last = tracks.last()?;
+    // Track offsets and the lead-out are absolute frame addresses (LBA + 150).
+    let checksum: u32 = tracks.iter().map(|t| cddb_digit_sum((t.start_lba + 150) / 75)).sum();
+    let leadout_secs = (last.start_lba + last.sectors + 150) / 75;
+    let total_secs = leadout_secs - (first.start_lba + 150) / 75;
+    let id = ((checksum % 255) << 24) | (total_secs << 8) | (tracks.len() as u32);
+    Some(format!("{id:08x}"))
+}
+
+/// An open freedb-protocol server. gnudb.org (the usual successor) blocks unregistered
+/// clients, so use this open mirror, which answers the same CDDB CGI protocol.
+const FREEDB_CGI: &str = "http://freedbtest.dyndns.org/~cddb/cddb.cgi";
+/// The CDDB `hello` identifies the client as user+host+app+version (user@host is the
+/// client email). A generic, non-personal LinAmp identity, not a registered account.
+const FREEDB_HELLO: &str =
+    concat!("linamp+users.noreply.github.com+linamp+", env!("CARGO_PKG_VERSION"));
+
+/// Look up a disc on the freedb database by its TOC. Runs the CDDB `query` (to find
+/// the disc's category) then `read` (to fetch the titles), parsing the classic xmcd
+/// text format. `None` on any failure. Used as a fallback when MusicBrainz has no
+/// match (#191).
+fn lookup_freedb(tracks: &[CdTrack]) -> Option<DiscMeta> {
+    let id = freedb_disc_id(tracks)?;
+    let last = tracks.last()?;
+    let leadout_secs = (last.start_lba + last.sectors + 150) / 75;
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(8))
+        .timeout(Duration::from_secs(15))
+        .build();
+    // cddb query <id> <ntracks> <offset1> .. <offsetN> <leadout_secs>
+    let mut query = format!("cddb+query+{id}+{}", tracks.len());
+    for t in tracks {
+        query.push('+');
+        query.push_str(&(t.start_lba + 150).to_string());
+    }
+    query.push('+');
+    query.push_str(&leadout_secs.to_string());
+    let q_url = format!("{FREEDB_CGI}?cmd={query}&hello={FREEDB_HELLO}&proto=6");
+    let resp = agent.get(&q_url).call().ok()?.into_string().ok()?;
+    let (category, read_id) = parse_cddb_query(&resp)?;
+    // cddb read <category> <discid>
+    let r_url = format!("{FREEDB_CGI}?cmd=cddb+read+{category}+{read_id}&hello={FREEDB_HELLO}&proto=6");
+    let body = agent.get(&r_url).call().ok()?.into_string().ok()?;
+    parse_cddb_read(&body)
+}
+
+/// Parse a CDDB `query` response for the (category, discid) of the best match. Handles
+/// an exact single match (200), a list of exact or inexact matches (210 / 211 followed
+/// by `category discid title` lines), and no-match / error codes.
+fn parse_cddb_query(resp: &str) -> Option<(String, String)> {
+    let mut lines = resp.lines();
+    let head = lines.next()?;
+    let code = head.split_whitespace().next()?;
+    match code {
+        // Single exact match: "200 <category> <discid> <title>"
+        "200" => {
+            let mut it = head.split_whitespace();
+            let _ = it.next();
+            let category = it.next()?.to_string();
+            let discid = it.next()?.to_string();
+            Some((category, discid))
+        }
+        // A list of matches follows (exact 210, inexact 211); take the first entry.
+        "210" | "211" => {
+            let entry = lines.next()?;
+            let mut it = entry.split_whitespace();
+            let category = it.next()?.to_string();
+            let discid = it.next()?.to_string();
+            Some((category, discid))
+        }
+        _ => None, // 202 no match, 403 corrupt, 409 no handshake, etc.
+    }
+}
+
+/// Parse a CDDB `read` (xmcd) record into a [`DiscMeta`]. `DTITLE` is "Artist / Album"
+/// and `TTITLEn` are the 0-based track titles; long values continue across repeated
+/// keys. The track artist falls back to the disc artist.
+fn parse_cddb_read(body: &str) -> Option<DiscMeta> {
+    use std::collections::HashMap;
+    let mut dtitle = String::new();
+    let mut titles: HashMap<usize, String> = HashMap::new();
+    for line in body.lines() {
+        if let Some(v) = line.strip_prefix("DTITLE=") {
+            dtitle.push_str(v);
+        } else if let Some(rest) = line.strip_prefix("TTITLE") {
+            if let Some((idx, val)) = rest.split_once('=') {
+                if let Ok(i) = idx.parse::<usize>() {
+                    titles.entry(i).or_default().push_str(val);
+                }
+            }
+        }
+    }
+    if dtitle.is_empty() && titles.is_empty() {
+        return None;
+    }
+    // DTITLE is "Artist / Album"; split on the first " / ".
+    let (album_artist, album) = match dtitle.split_once(" / ") {
+        Some((a, b)) => (a.trim().to_string(), b.trim().to_string()),
+        None => (String::new(), dtitle.trim().to_string()),
+    };
+    let mut tracks = HashMap::new();
+    for (i, title) in titles {
+        let n = i + 1; // CDDB TTITLE is 0-based; our track numbers are 1-based
+        if (1..=99).contains(&n) {
+            tracks.insert(n as u8, (title.trim().to_string(), album_artist.clone()));
+        }
+    }
+    Some(DiscMeta { album, album_artist, tracks })
 }
 
 /// The platform's default optical device, used when the UI opens a CD.
@@ -1513,6 +1651,59 @@ mod tests {
     #[test]
     fn disc_id_is_none_for_an_empty_toc() {
         assert_eq!(disc_id(&[]), None);
+    }
+
+    // Build a TOC from MusicBrainz-style offsets (LBA + 150) and a lead-out LBA.
+    fn toc_from_offsets(offsets: &[u32], leadout_lba: u32) -> Vec<CdTrack> {
+        offsets
+            .iter()
+            .enumerate()
+            .map(|(i, &off)| {
+                let start_lba = off - 150;
+                let next_lba = offsets.get(i + 1).map(|&o| o - 150).unwrap_or(leadout_lba);
+                CdTrack { number: (i + 1) as u8, start_lba, sectors: next_lba - start_lba }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn freedb_disc_id_matches_a_real_disc() {
+        // Green Day, "Saviors (édition de luxe)", read from the disc and confirmed
+        // against the freedb server (disc id 290fb416).
+        let offsets = [
+            150u32, 14118, 23382, 40204, 53170, 68043, 77768, 91039, 106657, 120318, 135076,
+            148992, 158451, 176032, 189210, 207348, 219988, 238751, 248009, 260456, 274075, 291585,
+        ];
+        let tracks = toc_from_offsets(&offsets, 301543);
+        assert_eq!(freedb_disc_id(&tracks).as_deref(), Some("290fb416"));
+    }
+
+    #[test]
+    fn parse_cddb_query_takes_the_first_match() {
+        // Inexact-match list (211) as the server returns it.
+        let resp = "211 Found inexact matches, list follows (until terminating `.')\n\
+                    data 290fb416 Green Day / Saviors (\u{e9}dition de luxe)\n.\n";
+        assert_eq!(parse_cddb_query(resp), Some(("data".into(), "290fb416".into())));
+        // Single exact match (200).
+        let resp = "200 rock abcd1234 Some Artist / Some Album";
+        assert_eq!(parse_cddb_query(resp), Some(("rock".into(), "abcd1234".into())));
+        // No match (202).
+        assert_eq!(parse_cddb_query("202 No match found"), None);
+    }
+
+    #[test]
+    fn parse_cddb_read_splits_artist_and_titles() {
+        let body = "# xmcd\nDISCID=290fb416\n\
+                    DTITLE=Green Day / Saviors (\u{e9}dition de luxe)\n\
+                    DYEAR=2024\n\
+                    TTITLE0=The American Dream Is Killing Me\n\
+                    TTITLE1=Look Ma\n\
+                    TTITLE2=Bobby Sox\n.\n";
+        let meta = parse_cddb_read(body).expect("should parse");
+        assert_eq!(meta.album_artist, "Green Day");
+        assert_eq!(meta.album, "Saviors (\u{e9}dition de luxe)");
+        assert_eq!(meta.tracks.get(&1).map(|t| t.0.as_str()), Some("The American Dream Is Killing Me"));
+        assert_eq!(meta.tracks.get(&3), Some(&("Bobby Sox".to_string(), "Green Day".to_string())));
     }
 
     // Shorthand for a TOC entry in the toc_from_entries tests.
