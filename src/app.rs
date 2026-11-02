@@ -3000,12 +3000,22 @@ impl LinAmpApp {
         // whatever skin is applied.
         let (nav_list_fill, nav_row_col, nav_sel_bg, nav_sel_col, nav_dash) =
             self.skin_nav_colors();
-        // A themed 2px border with slightly rounded corners frames the window so it
-        // stays visually distinct from the Library (or anything else) when they sit
-        // overlapping. The skin accent matches the title bar for a cohesive frame; the
-        // OS window corners are clipped to the same radius below so the fill does not
-        // poke out past the rounded border.
-        let border_col = self.theme.accent;
+        // Frame the window with the skin's window-background colour, on the title bar
+        // and the 2px border, so Preferences reads like one of the player's own skin
+        // windows instead of a foreign dialog. Use the GEN window background the Library
+        // uses when the skin ships GEN art, else the sampled window tone. The slight
+        // rounding and the OS corner region (below) keep it legible where it overlaps
+        // another window.
+        let win_bg = if self.ui_mode == UiMode::Classic {
+            self.classic
+                .as_ref()
+                .and_then(|c| c.gen_colors())
+                .map(|g| Color32::from_rgb(g.window_bg[0], g.window_bg[1], g.window_bg[2]))
+        } else {
+            None
+        }
+        .unwrap_or(self.theme.bg);
+        let border_col = win_bg;
         let corner = 6.0_f32;
         let mut close = false;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
@@ -3015,8 +3025,9 @@ impl LinAmpApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 self.prefs_raise = false;
             }
-            // Top: skin-accented title bar (the window is borderless). Drag it to
-            // move the window; the × closes it. Mirrors the Library's title bar.
+            // Top: title bar in the skin's window-background colour (the window is
+            // borderless). Drag it to move the window; the × closes it. Mirrors the
+            // Library's title bar.
             egui::TopBottomPanel::top("prefs_titlebar")
                 .exact_height(20.0)
                 .frame(egui::Frame::none())
@@ -3025,9 +3036,8 @@ impl LinAmpApp {
                         egui::vec2(ui.available_width(), 20.0),
                         egui::Sense::click_and_drag(),
                     );
-                    let accent = self.theme.accent;
-                    let txt = crate::skin::contrast_text(accent);
-                    ui.painter().rect_filled(bar, 0.0, accent);
+                    let txt = crate::skin::contrast_text(win_bg);
+                    ui.painter().rect_filled(bar, 0.0, win_bg);
                     ui.painter().text(
                         bar.left_center() + egui::vec2(6.0, 0.0),
                         egui::Align2::LEFT_CENTER,
