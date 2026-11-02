@@ -4,7 +4,7 @@
 
 A Winamp-inspired audio player for Linux and Windows, in Rust.
 
-Pixel-perfect classic skin with `.wsz` skin support - 10-band EQ - live analyzer - playlist - full keyboard shortcut support
+Pixel-perfect classic skin with `.wsz` skin support - 10-band EQ - live analyzer - playlist - audio conversion & CD ripping - full keyboard shortcut support
 
 <img src="assets/screenshot.png" alt="LinAmp in the classic skin, main player, equalizer and playlist" width="380">
 
@@ -21,14 +21,19 @@ coordinates, on a modern cross-platform stack (`eframe`/`egui` UI,
 
 - Classic skin UI, loads real Winamp `.wsz` skins; main + EQ + playlist as
   separate windows that dock and snap together, with window-shade mode.
-- Playback, MP3, MPEG Layer I/II, FLAC, OGG/Vorbis, WAV, AAC/M4A, AIFF, tracker
-  modules and MIDI; seek, volume, stereo balance, repeat/shuffle,
-  stop-after/stop-with-fade.
+- Plays MP3, MP1/MP2 (MPEG audio), FLAC, Ogg Vorbis, Opus, AAC/M4A, WAV, AIFF and
+  CAF, the audio track of MP4/M4V/3GP/MOV/MKV/WebM/OGV video, MIDI (via a bundled
+  SoundFont) and tracker modules (MOD/XM/S3M/IT); seek, volume, stereo balance,
+  repeat/shuffle, stop-after/stop-with-fade.
+- Audio CD, play and rip (TOC and titles looked up online); rip or convert any
+  track to MP3, Ogg Vorbis, Opus, WAV or AIFF through a background queue.
 - 10-band equalizer with presets, preamp and an auto-gain mode (live biquad DSP).
 - Visualizer, live FFT spectrum analyzer and oscilloscope, skin-coloured.
 - Playlist, add files/folders, drag-and-drop, reorder, sort, search, M3U/PLS.
 - Tags & library, read/edit tags (ID3 for MP3/MP2, Vorbis for FLAC/Ogg, MP4 for
   M4A); SQLite-backed media library.
+- System integration, global media keys, a system-tray mode and "Open with" file
+  associations (per-user, Windows and Linux).
 
 Full feature list and roadmap: [FEATURES.md](FEATURES.md). The backlog lives in
 [GitHub Issues](https://github.com/cjjulius/linamp/issues).
@@ -108,34 +113,20 @@ Packaging the installers (Inno Setup / tarball) is documented in
 
 ## Skins
 
-LinAmp auto-discovers `.wsz` skins in `./skins` (several are bundled). Load any
-Winamp classic skin from the options menu (Load .wsz…), or drop one in that
-folder. Headless preview: `linamp --render-all skin.wsz out.png`.
+Several Winamp classic skins are bundled and show up in the skin picker. To use
+any other classic `.wsz` skin, load it from the options menu (Load .wsz…); the
+last skin you loaded is remembered across runs.
 
-## Project layout
+## Documentation
 
-| File | Responsibility |
-|------|----------------|
-| `app.rs` + `app/` | app state and update loop, split into focused modules (`window`, `input`, `menu`, `render`, `library_ui`, `tag_ui`, `modern`, `theme`, `platform_win`) |
-| `classic.rs` | classic-skin compositor (main / EQ / playlist) |
-| `dock.rs` | window docking + magnetic-snap geometry |
-| `player.rs` | playback (rodio) + device following |
-| `eq.rs` - `balance.rs` - `viz.rs` | equalizer DSP, stereo balance, analyzer FFT |
-| `skin.rs` - `text.rs` | `.wsz` theming, LCD text helpers |
-| `playlist.rs` - `tags.rs` - `library.rs` - `config.rs` | playlist, metadata, media library, settings |
-
-For how the pieces fit together, the multi-window model, the fingerprint-cached
-render pipeline and the platform FFI boundary, see
+For how the pieces fit together, the module map, the multi-window model, the
+fingerprint-cached render pipeline and the platform FFI boundary, see
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The keyboard and mouse shortcuts are
 listed in [docs/SHORTCUTS.md](docs/SHORTCUTS.md), and the Winamp 2.666 parity
 status is tracked in [docs/PARITY.md](docs/PARITY.md).
 
 `cargo test` runs the suite (pure, cross-platform); CI builds and tests on Linux
 and Windows for every push and PR.
-
-> The screenshot is `assets/screenshot.png`, regenerated with
-> `cargo run -- --render-all skins/linamp_base_skin.wsz` (then scaled 2×) when the
-> UI changes substantially.
 
 ## License
 

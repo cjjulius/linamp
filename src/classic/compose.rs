@@ -1350,8 +1350,11 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
             },
             rows: &rows,
             first: 0,
+            // A non-zero scroll range so the playlist scrollbar thumb renders as a
+            // distinct partial handle (as on a real, longer list) rather than spanning
+            // the whole track; the visible rows are unchanged.
             scroll_first: 0,
-            scroll_range: 0,
+            scroll_range: 15,
             pressed: None,
             elapsed_secs: 73.0, // 1:13, matching the main display
             cur_duration: 325.0,
