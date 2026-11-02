@@ -340,7 +340,19 @@ fn lofty_parses(ext: &str) -> bool {
 /// UTF-8 char boundary. ID3v1 fields are fixed-width; lofty truncates to the cap
 /// by byte index and panics if a multibyte character straddles it (#115), which
 /// aborts the save mid-write and corrupts the file. Capping here avoids that.
-fn v1_text(s: &str, max: usize) -> Option<String> {
+/// The ID3v1 numeric genre index for a genre name (case-insensitive), or None when the
+/// name is empty or not one of the standard [`GENRES`]. ID3v1 genre is a single byte
+/// into that fixed list, so a free-form name (common from MusicBrainz) has no index and
+/// is left unset; the full name still lives in ID3v2.
+pub(crate) fn genre_index(name: &str) -> Option<u8> {
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    GENRES.iter().position(|g| g.eq_ignore_ascii_case(name)).map(|i| i as u8)
+}
+
+pub(crate) fn v1_text(s: &str, max: usize) -> Option<String> {
     // ID3v1 predates Unicode and carries no encoding flag, and the writer emits
     // these bytes as UTF-8, which a pre-Unicode ("circa 2001") player decodes as
     // Latin-1, turning any multi-byte character into mojibake. To stay in spec and
@@ -619,6 +631,15 @@ mod tests {
         assert_eq!(GENRES[0], "Blues");
         assert_eq!(GENRES[17], "Rock");
         assert!(GENRES.len() >= 80);
+    }
+
+    #[test]
+    fn genre_index_maps_standard_names() {
+        assert_eq!(genre_index("Rock"), Some(17));
+        assert_eq!(genre_index("rock"), Some(17)); // case-insensitive
+        assert_eq!(genre_index("Blues"), Some(0));
+        assert_eq!(genre_index(""), None);
+        assert_eq!(genre_index("Pop Punk"), None); // not a standard ID3v1 genre
     }
 
     #[test]

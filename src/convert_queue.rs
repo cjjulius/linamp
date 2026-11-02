@@ -104,13 +104,25 @@ pub fn short_fail_reason(raw: &str) -> String {
     }
 }
 
+/// Where a job's audio comes from: an existing file on disk (an ordinary conversion) or
+/// a track on an audio CD (a rip). A CD rip carries the tags to write onto the output,
+/// since a CD track has no embedded tags to copy.
+pub enum JobSource {
+    File(PathBuf),
+    Cd {
+        device: String,
+        track: u8,
+        tags: crate::encode::RipTags,
+    },
+}
+
 /// What the UI hands the worker to convert. The destination is given as a folder and a
 /// file stem (not a full path): the worker picks the final path just before it writes,
 /// so two different sources with the same name don't collide. The extension comes from
 /// `settings.format`.
 pub struct JobSpec {
     pub id: u64,
-    pub src: PathBuf,
+    pub source: JobSource,
     pub dir: PathBuf,
     pub stem: String,
     pub settings: ConvertSettings,
@@ -134,6 +146,77 @@ fn unique_output(dir: &Path, stem: &str, ext: &str) -> PathBuf {
         }
     }
     unreachable!()
+}
+
+/// Turn arbitrary text (an album, artist, or track title) into a safe file-name
+/// component. Characters that are illegal on Windows, and awkward elsewhere, are
+/// converted to similar-looking stand-ins rather than dropped (so "AC/DC" reads as
+/// "AC-DC", not "ACDC"); control characters become spaces; runs of whitespace collapse;
+/// and leading/trailing dots and spaces are trimmed. Guards the Windows reserved device
+/// names. Returns "_" if nothing usable remains. Used for the rip's album folder and
+/// track file names.
+pub fn sanitize_filename(s: &str) -> String {
+    let mapped: String = s
+        .chars()
+        .map(|c| match c {
+            '<' => '(',
+            '>' => ')',
+            ':' => '-',
+            '"' => '\'',
+            '/' | '\\' | '|' => '-',
+            '?' => '_',
+            '*' => '+',
+            c if (c as u32) < 0x20 => ' ',
+            c => c,
+        })
+        .collect();
+    let collapsed = mapped.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim_matches(|c| c == '.' || c == ' ');
+    if trimmed.is_empty() {
+        return "_".to_string();
+    }
+    // Windows reserves these device names (optionally with an extension), so prefix a
+    // "_" when the name would be one of them.
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let base = trimmed.split('.').next().unwrap_or(trimmed).to_ascii_uppercase();
+    if RESERVED.contains(&base.as_str()) {
+        return format!("_{trimmed}");
+    }
+    trimmed.to_string()
+}
+
+/// A compact UTC timestamp to the second, `YYYYMMDD-HHMMSS`, for disambiguating rip
+/// folders and file names (the album folder when one already exists, and tracks with no
+/// metadata or a name that is already taken). A whole track takes well over a second to
+/// rip, so second precision is enough to stay unique without noisy sub-second suffixes.
+pub fn rip_timestamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let (y, mo, d) = civil_from_days(days);
+    format!("{y:04}{mo:02}{d:02}-{h:02}{m:02}{s:02}")
+}
+
+/// Convert a day count since the Unix epoch into a `(year, month, day)` civil date
+/// (UTC), via Howard Hinnant's `civil_from_days` algorithm. Month and day are 1-based.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    (y + i64::from(m <= 2), m, d)
 }
 
 /// Progress messages the worker sends back to the UI.
@@ -223,7 +306,7 @@ fn worker_loop(
         let Some(spec) = queue.pop_front() else {
             continue;
         };
-        let id = spec.id;
+        let JobSpec { id, source, dir, stem, settings } = spec;
 
         // Skip a job cancelled before it ever started (no partial file to clean).
         if is_cancelled(&cancelled, id) {
@@ -246,10 +329,16 @@ fn worker_loop(
         let cancel = || is_cancelled(&cancel_set, id);
         // Resolve the output path now, not at enqueue time: an earlier same-named job has
         // already written its file, so this one gets a distinct name instead of clobbering.
-        let ext = spec.settings.format.ext();
-        let dst = unique_output(&spec.dir, &spec.stem, ext);
-        let outcome =
-            encode::convert_file_cb(&spec.src, &dst, spec.settings, &mut progress, &cancel);
+        let ext = settings.format.ext();
+        let dst = unique_output(&dir, &stem, ext);
+        let outcome = match &source {
+            JobSource::File(src) => {
+                encode::convert_file_cb(src, &dst, settings, &mut progress, &cancel)
+            }
+            JobSource::Cd { device, track, tags } => {
+                encode::convert_cd_cb(device, *track, &dst, settings, tags, &mut progress, &cancel)
+            }
+        };
         match outcome {
             Ok(ConvertOutcome::Completed) => {
                 if let Some(lib) = &lib {
@@ -308,6 +397,40 @@ mod tests {
 
         let _ = std::fs::remove_file(&p1);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn sanitize_filename_converts_reserved_chars() {
+        assert_eq!(sanitize_filename("AC/DC"), "AC-DC");
+        assert_eq!(sanitize_filename("Where Are You?"), "Where Are You_");
+        assert_eq!(sanitize_filename("a:b*c|d\"e<f>g\\h"), "a-b+c-d'e(f)g-h");
+        // Control characters become spaces, runs collapse, ends trimmed.
+        assert_eq!(sanitize_filename("  a\tb  "), "a b");
+        assert_eq!(sanitize_filename("trailing dots..."), "trailing dots");
+        // Nothing usable left.
+        assert_eq!(sanitize_filename("   "), "_");
+        assert_eq!(sanitize_filename("..."), "_");
+        // Windows reserved device name gets a guard prefix.
+        assert_eq!(sanitize_filename("CON"), "_CON");
+        assert_eq!(sanitize_filename("nul.mp3"), "_nul.mp3");
+    }
+
+    #[test]
+    fn rip_timestamp_is_sortable_and_formed() {
+        let ts = rip_timestamp();
+        // YYYYMMDD-HHMMSS: 15 chars with a dash at index 8, all else digits.
+        assert_eq!(ts.len(), 15);
+        assert_eq!(&ts[8..9], "-");
+        assert!(ts[..8].chars().all(|c| c.is_ascii_digit()));
+        assert!(ts[9..].chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn civil_from_days_matches_known_dates() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1)); // epoch
+        assert_eq!(civil_from_days(18_993), (2022, 1, 1)); // 2022-01-01
+        // 1700000000s / 86400 = 19675 days -> 2023-11-14 (UTC).
+        assert_eq!(civil_from_days(19_675), (2023, 11, 14));
     }
 
     #[test]

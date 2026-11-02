@@ -94,7 +94,9 @@ fn tag_box_height(editable: bool, basic_rows: f32) -> f32 {
 /// The genre dropdown shared by the ID3 tabs (closes on a keyboard pick).
 fn genre_combo(ui: &mut egui::Ui, salt: &str, val: &mut String) {
     let combo = egui::ComboBox::from_id_salt(salt)
-        .selected_text(if val.is_empty() { ", ".into() } else { val.clone() })
+        // Empty genre shows a blank box (not a stray "," placeholder); the dropdown
+        // arrow still signals it is a picker.
+        .selected_text(val.clone())
         .width(140.0)
         .show_ui(ui, |ui| {
             let mut picked = false;

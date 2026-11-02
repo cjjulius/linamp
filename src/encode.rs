@@ -172,13 +172,84 @@ pub fn convert_file_cb(
     progress: &mut dyn FnMut(f32),
     cancel: &dyn Fn() -> bool,
 ) -> Result<ConvertOutcome> {
-    let Some((mut samples, mut rate, channels)) =
+    let Some((samples, rate, channels)) =
         decode_pcm(src, &mut |f| progress(f * DECODE_WEIGHT), cancel)?
     else {
         return Ok(ConvertOutcome::Cancelled);
     };
-    // Resample to the requested rate (Opus resamples to 48 kHz itself, so skip it
-    // there and let encode_opus handle the rate).
+    let enc = &mut |f: f32| progress(DECODE_WEIGHT + f * (1.0 - DECODE_WEIGHT));
+    if encode_pcm(dst, samples, rate, channels, settings, enc, cancel)? == ConvertOutcome::Cancelled {
+        return Ok(ConvertOutcome::Cancelled);
+    }
+    // Carry the metadata across; a tag failure shouldn't fail the whole convert.
+    if let Err(e) = copy_tags(src, dst) {
+        eprintln!("convert: tags not copied to {}: {e}", dst.display());
+    }
+    progress(1.0);
+    Ok(ConvertOutcome::Completed)
+}
+
+/// Metadata to write onto a ripped CD track. A CD track has no source file tags to
+/// copy, so the rip supplies these from the disc's looked-up metadata. Empty fields
+/// are skipped. `id3v23` chooses the ID3v2.3 vs 2.4 flavour for MP3/WAV/AIFF, matching
+/// the tag editor's preference.
+#[derive(Clone, Debug, Default)]
+pub struct RipTags {
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub album_artist: String,
+    pub track: u32,
+    pub total_tracks: u32,
+    pub year: String,
+    pub genre: String,
+    pub id3v23: bool,
+}
+
+/// Rip one CD track to `dst`: read the track's PCM from `device`, encode it per
+/// `settings` (reusing the file-conversion encode path), then write `tags` from the
+/// disc metadata onto the output. `progress`/`cancel` behave as in [`convert_file_cb`].
+/// `dst`'s parent directory must already exist.
+pub fn convert_cd_cb(
+    device: &str,
+    track: u8,
+    dst: &Path,
+    settings: ConvertSettings,
+    tags: &RipTags,
+    progress: &mut dyn FnMut(f32),
+    cancel: &dyn Fn() -> bool,
+) -> Result<ConvertOutcome> {
+    let Some((samples, rate, channels)) =
+        crate::cdda::read_track_pcm(device, track, &mut |f| progress(f * DECODE_WEIGHT), cancel)?
+    else {
+        return Ok(ConvertOutcome::Cancelled);
+    };
+    let enc = &mut |f: f32| progress(DECODE_WEIGHT + f * (1.0 - DECODE_WEIGHT));
+    if encode_pcm(dst, samples, rate, channels, settings, enc, cancel)? == ConvertOutcome::Cancelled {
+        return Ok(ConvertOutcome::Cancelled);
+    }
+    // A CD track carries no embedded tags, so write them from the disc metadata. A tag
+    // failure shouldn't fail the whole rip.
+    if let Err(e) = write_rip_tags(dst, tags) {
+        eprintln!("rip: tags not written to {}: {e}", dst.display());
+    }
+    progress(1.0);
+    Ok(ConvertOutcome::Completed)
+}
+
+/// Encode already-decoded interleaved f32 PCM to `dst` per `settings`, resampling
+/// first when asked (Opus handles its own rate). `progress` spans the encode phase
+/// (0.0..=1.0). Removes the partial file and returns [`ConvertOutcome::Cancelled`] if
+/// an encoder is cancelled. Does not write tags; the caller does.
+fn encode_pcm(
+    dst: &Path,
+    mut samples: Vec<f32>,
+    mut rate: u32,
+    channels: u16,
+    settings: ConvertSettings,
+    progress: &mut dyn FnMut(f32),
+    cancel: &dyn Fn() -> bool,
+) -> Result<ConvertOutcome> {
     if settings.format != OutputFormat::Opus {
         if let Some(target) = settings.sample_rate {
             if target != rate && channels > 0 {
@@ -188,23 +259,17 @@ pub fn convert_file_cb(
         }
     }
     let br = settings.bitrate_kbps;
-    let enc = &mut |f: f32| progress(DECODE_WEIGHT + f * (1.0 - DECODE_WEIGHT));
     let completed = match settings.format {
-        OutputFormat::Mp3 => encode_mp3(dst, &samples, rate, channels, br, enc, cancel)?,
-        OutputFormat::Vorbis => encode_vorbis(dst, &samples, rate, channels, br, enc, cancel)?,
-        OutputFormat::Opus => encode_opus(dst, &samples, rate, channels, br, enc, cancel)?,
-        OutputFormat::Wav => encode_wav(dst, &samples, rate, channels, enc, cancel)?,
-        OutputFormat::Aiff => encode_aiff(dst, &samples, rate, channels, enc, cancel)?,
+        OutputFormat::Mp3 => encode_mp3(dst, &samples, rate, channels, br, progress, cancel)?,
+        OutputFormat::Vorbis => encode_vorbis(dst, &samples, rate, channels, br, progress, cancel)?,
+        OutputFormat::Opus => encode_opus(dst, &samples, rate, channels, br, progress, cancel)?,
+        OutputFormat::Wav => encode_wav(dst, &samples, rate, channels, progress, cancel)?,
+        OutputFormat::Aiff => encode_aiff(dst, &samples, rate, channels, progress, cancel)?,
     };
     if !completed {
         let _ = std::fs::remove_file(dst);
         return Ok(ConvertOutcome::Cancelled);
     }
-    // Carry the metadata across; a tag failure shouldn't fail the whole convert.
-    if let Err(e) = copy_tags(src, dst) {
-        eprintln!("convert: tags not copied to {}: {e}", dst.display());
-    }
-    progress(1.0);
     Ok(ConvertOutcome::Completed)
 }
 
@@ -794,9 +859,146 @@ fn copy_tags(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Write CD metadata onto a freshly ripped file. A CD track has no source tags to copy
+/// (unlike [`copy_tags`]), so build the tag from [`RipTags`]. For MP3/WAV/AIFF this
+/// writes ID3v2 (honouring the 2.3/2.4 preference) and, for MP3, ID3v1 as well; for
+/// Ogg/Opus and other formats it writes the format's own native tag.
+fn write_rip_tags(dst: &Path, t: &RipTags) -> Result<()> {
+    use anyhow::Context;
+    use lofty::config::WriteOptions;
+    use lofty::file::TaggedFileExt;
+    use lofty::tag::{Accessor, ItemKey, Tag, TagExt, TagType};
+
+    let dst_type = lofty::read_from_path(dst)?.primary_tag_type();
+    let mut tag = Tag::new(dst_type);
+    if !t.title.is_empty() {
+        tag.set_title(t.title.clone());
+    }
+    if !t.artist.is_empty() {
+        tag.set_artist(t.artist.clone());
+    }
+    if !t.album.is_empty() {
+        tag.set_album(t.album.clone());
+    }
+    if !t.album_artist.is_empty() {
+        tag.insert_text(ItemKey::AlbumArtist, t.album_artist.clone());
+    }
+    if t.track > 0 {
+        tag.set_track(t.track);
+    }
+    if t.total_tracks > 0 {
+        tag.set_track_total(t.total_tracks);
+    }
+    if let Ok(y) = t.year.parse::<u32>() {
+        if y > 0 {
+            tag.set_year(y);
+        }
+    }
+    if !t.genre.is_empty() {
+        tag.set_genre(t.genre.clone());
+    }
+
+    if dst_type == TagType::Id3v2 {
+        // Save through the concrete ID3v2 tag so the year frame writes correctly for the
+        // chosen 2.3/2.4 flavour (mirrors the tag editor, see tags.rs).
+        use lofty::id3::v2::Id3v2Tag;
+        let id3: Id3v2Tag = tag.into();
+        id3.save_to_path(dst, WriteOptions::new().use_id3v23(t.id3v23))
+            .with_context(|| format!("writing ID3v2 to {}", dst.display()))?;
+        // ID3v1 is an MP3-family tail tag; add it there so both are present.
+        if crate::tags::uses_id3(dst) {
+            write_rip_id3v1(dst, t)?;
+        }
+    } else {
+        tag.save_to_path(dst, WriteOptions::default())
+            .with_context(|| format!("writing tags to {}", dst.display()))?;
+    }
+    Ok(())
+}
+
+/// Write the ID3v1 tail tag for a ripped MP3 from [`RipTags`], folding text to ASCII and
+/// truncating to the fixed field widths (see [`crate::tags::v1_text`]).
+fn write_rip_id3v1(dst: &Path, t: &RipTags) -> Result<()> {
+    use anyhow::Context;
+    use lofty::config::WriteOptions;
+    use lofty::id3::v1::Id3v1Tag;
+    use lofty::tag::TagExt;
+    let v1 = Id3v1Tag {
+        title: crate::tags::v1_text(&t.title, crate::tags::V1_MAX_TEXT),
+        artist: crate::tags::v1_text(&t.artist, crate::tags::V1_MAX_TEXT),
+        album: crate::tags::v1_text(&t.album, crate::tags::V1_MAX_TEXT),
+        year: crate::tags::v1_text(&t.year, crate::tags::V1_MAX_YEAR),
+        comment: None,
+        track_number: (t.track > 0 && t.track <= u8::MAX as u32).then_some(t.track as u8),
+        // ID3v1 genre is a one-byte index into the standard list; map the name when it is
+        // one of those (free-form names have no index, so stay unset, full name is in ID3v2).
+        genre: crate::tags::genre_index(&t.genre),
+    };
+    v1.save_to_path(dst, WriteOptions::default())
+        .with_context(|| format!("writing ID3v1 to {}", dst.display()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Opt-in hardware rip test: reads a real audio CD in the default drive, rips its
+    /// first track to MP3 through the full rip path (CD raw read -> encode -> tags), and
+    /// checks the output and its tags. Run deliberately with a disc in the drive and the
+    /// app closed (it needs exclusive drive access): `LINAMP_RIP_HW_TEST=1 cargo test
+    /// hw_rip_first_track -- --nocapture`.
+    #[test]
+    fn hw_rip_first_track() {
+        if std::env::var("LINAMP_RIP_HW_TEST").is_err() {
+            return;
+        }
+        let device = crate::cdda::default_cd_device();
+        let toc = crate::cdda::read_cd_toc(&device).expect("read TOC");
+        assert!(!toc.is_empty(), "no audio tracks on the disc");
+        let track = toc[0].number;
+        let dir = std::env::temp_dir().join("linamp_rip_hw");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dst = dir.join("rip_test.mp3");
+        let _ = std::fs::remove_file(&dst);
+        let tags = RipTags {
+            title: "HW Test Track".into(),
+            artist: "Test Artist".into(),
+            album: "Test Album".into(),
+            album_artist: "Test Artist".into(),
+            track: u32::from(track),
+            total_tracks: toc.len() as u32,
+            year: "2026".into(),
+            genre: "Rock".into(),
+            id3v23: true,
+        };
+        let settings = ConvertSettings { format: OutputFormat::Mp3, ..Default::default() };
+        let outcome = convert_cd_cb(&device, track, &dst, settings, &tags, &mut |_| {}, &|| false)
+            .expect("rip failed");
+        assert_eq!(outcome, ConvertOutcome::Completed);
+        let len = std::fs::metadata(&dst).expect("output missing").len();
+        println!("HW_RIP: wrote {len} bytes to {}", dst.display());
+        assert!(len > 50_000, "output suspiciously small ({len} bytes)");
+        use lofty::file::TaggedFileExt;
+        use lofty::tag::{Accessor, TagType};
+        let tagged = lofty::read_from_path(&dst).expect("read tags back");
+        let tag = tagged.primary_tag().expect("no tag written");
+        println!(
+            "HW_RIP: title={:?} artist={:?} album={:?} track={:?} genre={:?}",
+            tag.title(),
+            tag.artist(),
+            tag.album(),
+            tag.track(),
+            tag.genre()
+        );
+        assert_eq!(tag.title().as_deref(), Some("HW Test Track"));
+        assert_eq!(tag.album().as_deref(), Some("Test Album"));
+        assert_eq!(tag.genre().as_deref(), Some("Rock"), "ID3v2 genre");
+        // ID3v1 carries the genre as a numeric index; confirm it round-trips to Rock.
+        let v1 = tagged.tag(TagType::Id3v1).expect("no ID3v1 written");
+        println!("HW_RIP: id3v1 genre={:?} title={:?}", v1.genre(), v1.title());
+        assert_eq!(v1.genre().as_deref(), Some("Rock"), "ID3v1 genre");
+    }
 
     /// Build a short stereo 44.1 kHz sine as a source WAV on disk.
     fn write_source_wav(path: &Path) {
