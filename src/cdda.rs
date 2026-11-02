@@ -1099,6 +1099,7 @@ mod linux {
     const CDROM_DRIVE_STATUS: libc::c_ulong = 0x5326; // is a disc loaded?
     const CDROMEJECT: libc::c_ulong = 0x5309; // open the tray / eject the disc
     const CDSL_CURRENT: libc::c_int = 0x7fff_ffff; // the current slot (INT_MAX)
+    const SG_IO: libc::c_ulong = 0x2285; // send a raw SCSI command (sg_io_hdr)
     const CDS_DISC_OK: libc::c_int = 4; // drive status: a disc is present and readable
     const CDROM_LBA: u8 = 0x01; // address format: logical block address
     const CDROM_LEADOUT: u8 = 0xAA; // pseudo-track: the disc lead-out (end)
@@ -1232,16 +1233,115 @@ mod linux {
         status == CDS_DISC_OK
     }
 
-    /// Eject the disc in `device` via the CDROMEJECT ioctl. Opening read-only is
-    /// enough to eject on Linux; a playing track's own fd keeps reading until the
-    /// tray opens and the read fails.
-    pub fn eject(device: &str) -> Result<()> {
-        let drive = LinuxCdDrive::open(device)?;
-        let r = unsafe { libc::ioctl(drive.fd(), CDROMEJECT as _, 0 as libc::c_int) };
-        if r != 0 {
-            return Err(anyhow!("eject {device}: {}", std::io::Error::last_os_error()));
+    /// The SCSI generic request header (`sg_io_hdr_t` from <scsi/sg.h>), used to send a
+    /// raw SCSI command through the `SG_IO` ioctl. `#[repr(C)]` so the layout matches the
+    /// kernel's; only the fields we set matter, the rest are zeroed.
+    #[repr(C)]
+    struct SgIoHdr {
+        interface_id: libc::c_int,
+        dxfer_direction: libc::c_int,
+        cmd_len: libc::c_uchar,
+        mx_sb_len: libc::c_uchar,
+        iovec_count: libc::c_ushort,
+        dxfer_len: libc::c_uint,
+        dxferp: *mut libc::c_void,
+        cmdp: *mut libc::c_uchar,
+        sbp: *mut libc::c_uchar,
+        timeout: libc::c_uint,
+        flags: libc::c_uint,
+        pack_id: libc::c_int,
+        usr_ptr: *mut libc::c_void,
+        status: libc::c_uchar,
+        masked_status: libc::c_uchar,
+        msg_status: libc::c_uchar,
+        sb_len_wr: libc::c_uchar,
+        host_status: libc::c_ushort,
+        driver_status: libc::c_ushort,
+        resid: libc::c_int,
+        duration: libc::c_uint,
+        info: libc::c_uint,
+    }
+
+    /// Eject via a direct SCSI START STOP UNIT (opcode 0x1B, LOEJ set + START clear)
+    /// through SG_IO. Unlike CDROMEJECT this is not gated on the cdrom driver's open
+    /// count, so it still works when the desktop's gvfsd-cdda (or anything else) also
+    /// holds the disc open. Needs a writable fd (SG_IO START STOP UNIT is a write
+    /// command for the block command filter).
+    /// Send a 6-byte SCSI CDB with no data transfer via SG_IO. Ok on GOOD status.
+    /// Retries on a UNIT ATTENTION (sense key 0x06): the first command after a media
+    /// change or fresh open reports it, and it is cleared by being reported.
+    fn sg_cmd6(fd: libc::c_int, cdb6: [u8; 6]) -> Result<()> {
+        for _ in 0..3 {
+            let mut cdb = cdb6;
+            let mut sense = [0u8; 32];
+            let mut hdr: SgIoHdr = unsafe { std::mem::zeroed() };
+            hdr.interface_id = b'S' as libc::c_int;
+            hdr.dxfer_direction = -1; // SG_DXFER_NONE
+            hdr.cmd_len = cdb.len() as libc::c_uchar;
+            hdr.mx_sb_len = sense.len() as libc::c_uchar;
+            hdr.cmdp = cdb.as_mut_ptr();
+            hdr.sbp = sense.as_mut_ptr();
+            hdr.timeout = 15_000; // ms
+            let r = unsafe { libc::ioctl(fd, SG_IO as _, &mut hdr as *mut SgIoHdr) };
+            if r != 0 {
+                return Err(anyhow!("sg_io: {}", std::io::Error::last_os_error()));
+            }
+            if hdr.status == 0 && hdr.host_status == 0 {
+                return Ok(());
+            }
+            let key = sense[2] & 0x0f;
+            if hdr.status == 0x02 && key == 0x06 {
+                continue; // UNIT ATTENTION cleared by this report; retry
+            }
+            return Err(anyhow!(
+                "cdb {:#04x} refused (status {:#x} key {:#x} asc {:#04x}/{:#04x})",
+                cdb6[0],
+                hdr.status,
+                key,
+                sense[12],
+                sense[13]
+            ));
         }
-        Ok(())
+        Err(anyhow!("cdb {:#04x}: repeated unit attention", cdb6[0]))
+    }
+
+    /// Eject via SCSI, unlocking the door first. The desktop/kernel sends PREVENT ALLOW
+    /// MEDIUM REMOVAL to lock an in-use disc, so START STOP UNIT alone is refused with
+    /// MEDIUM REMOVAL PREVENTED; ALLOW (prevent=0) clears that, then LOEJ opens the tray.
+    /// Mirrors what `eject -s` does, and ignores the open count, so it works while
+    /// gvfsd-cdda holds the disc.
+    fn scsi_eject(fd: libc::c_int) -> Result<()> {
+        let _ = sg_cmd6(fd, [0x1e, 0, 0, 0, 0x00, 0]); // ALLOW MEDIUM REMOVAL (best effort)
+        sg_cmd6(fd, [0x1b, 0, 0, 0, 0x02, 0]) // START STOP UNIT, LOEJ=1 START=0 (eject)
+    }
+
+    /// Eject the disc in `device`. Tries CDROMEJECT first (works when nothing else holds
+    /// the drive), then falls back to a direct SCSI eject: on a desktop the GNOME CDDA
+    /// backend (gvfsd-cdda) keeps an inserted audio CD open the whole time, so CDROMEJECT
+    /// returns EBUSY (use_count != 1) and only the SCSI path, which ignores the open
+    /// count, actually opens the tray (#191).
+    pub fn eject(device: &str) -> Result<()> {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Write access is needed for the SCSI eject; non-blocking avoids a stall when the
+        // tray is already open. Fall back to read-only if write is denied (CDROMEJECT
+        // still works read-only; the SCSI path would then need privileges).
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(device)
+            .or_else(|_| {
+                File::options()
+                    .read(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(device)
+            })
+            .map_err(|e| anyhow!("open {device}: {e}"))?;
+        let fd = file.as_raw_fd();
+        if unsafe { libc::ioctl(fd, CDROMEJECT as _, 0 as libc::c_int) } == 0 {
+            return Ok(());
+        }
+        scsi_eject(fd)
     }
 
     /// The disc TOC, cached briefly per device so adding a whole folder of GVfs CD
@@ -1628,6 +1728,21 @@ mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn hw_eject_when_requested() {
+        // Opt-in hardware check: actually ejects /dev/sr0 through the real eject path
+        // (CDROMEJECT then the SCSI fallback). Run with a disc in and the app closed:
+        // LINAMP_EJECT_TEST=1 cargo test --release hw_eject_when_requested -- --nocapture
+        if std::env::var_os("LINAMP_EJECT_TEST").is_none() {
+            return;
+        }
+        let dev = default_cd_device();
+        eprintln!("ejecting {dev} ...");
+        eject(&dev).expect("eject should open the tray");
+        eprintln!("eject returned Ok");
+    }
 
     #[test]
     fn track_duration_is_sectors_over_75() {

@@ -663,6 +663,12 @@ pub struct LinAmpApp {
     /// pause) while fading out (Shift+V, or the "fade out when stopping or
     /// pausing" preference).
     fade: Option<(f32, FadeEnd)>,
+    /// A drive to eject once playback has stopped, with the retries left. Set when Eject
+    /// is used on the CD that is playing: the disc must stay in while a fade-out runs,
+    /// and the Linux `sr` driver refuses CDROMEJECT (EBUSY) until the reader thread has
+    /// released its handle, so the eject waits for the fade to finish and then retries
+    /// across frames until the drive is free (#191).
+    pending_eject: Option<(String, u32)>,
     mode_init: bool,
     eq_visible: bool,
     pl_visible: bool,
@@ -889,6 +895,23 @@ fn taskbar_restore_step(min: bool, confirmed: bool) -> (bool, bool) {
     }
 }
 
+/// How many frames the deferred eject retries while the CD reader thread releases the
+/// drive (it exits a moment after playback stops). Ample: the handle frees within a
+/// frame or two, and the poller re-requests a repaint so these tick promptly.
+const EJECT_RETRIES: u32 = 90;
+
+/// Whether ejecting `device` should stop playback first: true when something is
+/// playing and the current track is a CD track on that same drive. Pure, so the
+/// decision is unit-tested. Ejecting an idle drive, or a drive other than the one
+/// playing, does not disturb playback.
+fn eject_should_stop(playing: bool, current_path: Option<&str>, device: &str) -> bool {
+    playing
+        && current_path
+            .and_then(crate::cdda::parse_track_path)
+            .map(|(d, _)| d == device)
+            .unwrap_or(false)
+}
+
 impl LinAmpApp {
     pub fn new(cc: &eframe::CreationContext<'_>, is_primary: bool) -> Self {
         install_fonts(&cc.egui_ctx);
@@ -1004,6 +1027,7 @@ impl LinAmpApp {
             time_blink_hidden: false,
             stop_after_current: false,
             fade: None,
+            pending_eject: None,
             mode_init: true,
             eq_visible: false,
             pl_visible: false,
@@ -1742,16 +1766,55 @@ impl LinAmpApp {
     }
 
     /// Eject the disc in `device` (the library's right-click Eject on an audio CD).
-    /// The Devices poll then drops the entry and, if that CD was being viewed, moves
-    /// the view elsewhere; a track playing off the drive ends on its next failed read
-    /// and the playlist advances (#191).
+    /// If the track playing now is on this drive, stop it first (respecting the
+    /// fade-on-stop pref) so playback ends cleanly instead of advancing to the next
+    /// track on the failed read. With a fade, the disc must stay in to play the fade,
+    /// so the physical eject is deferred until the fade reaches silence; otherwise it
+    /// ejects now. The Devices poll then drops the entry and moves the view if that CD
+    /// was being shown (#191).
     pub(crate) fn eject_cd(&mut self, device: &str) {
+        let cur = self.playlist.current_track().map(|t| t.path.to_string_lossy().into_owned());
+        if eject_should_stop(self.player.state() != PlayState::Stopped, cur.as_deref(), device) {
+            // Stop first (fading when fade-on-stop is on, else an immediate stop), then
+            // let the deferred poller eject: it waits for any fade to finish and retries
+            // until the CD reader thread has released the drive (`poll_pending_eject`).
+            self.stop_playback();
+            self.pending_eject = Some((device.to_string(), EJECT_RETRIES));
+            return;
+        }
+        // An idle drive (nothing playing off it): eject straight away.
+        self.do_eject(device);
+    }
+
+    /// Eject the drive queued by [`eject_cd`] once playback has fully stopped. The Linux
+    /// `sr` driver returns EBUSY while the reader thread's handle is still open, so retry
+    /// across frames until the drive frees or the budget runs out. Waits out any running
+    /// fade-out first (the disc is needed to play it). Re-requests a repaint so the retry
+    /// keeps ticking even when the app would otherwise go idle.
+    fn poll_pending_eject(&mut self, ctx: &egui::Context) {
+        if self.fade.is_some() {
+            return; // a fade-out is still playing off the disc; wait for it
+        }
+        let Some((dev, tries)) = self.pending_eject.take() else {
+            return;
+        };
+        if crate::cdda::eject(&dev).is_ok() {
+            self.status = format!("Ejected {}.", crate::cdda::drive_label(&dev));
+        } else if tries > 0 {
+            self.pending_eject = Some((dev, tries - 1));
+            ctx.request_repaint();
+        } else {
+            self.status = "Eject failed: drive busy".into();
+        }
+    }
+
+    /// Send the physical eject to `device` and report it. The background watcher then
+    /// notices the empty tray within a cycle and drops the Devices entry.
+    fn do_eject(&mut self, device: &str) {
         match crate::cdda::eject(device) {
             Ok(()) => self.status = format!("Ejected {}.", crate::cdda::drive_label(device)),
             Err(e) => self.status = format!("Eject failed: {e}"),
         }
-        // The background watcher notices the empty tray within a cycle and drops the
-        // Devices entry (and moves the view if it was showing this disc).
     }
 
     fn maybe_scan_tags(&mut self) {
@@ -4497,6 +4560,10 @@ impl eframe::App for LinAmpApp {
             }
         }
 
+        // Eject the drive queued by eject_cd once the fade-out (if any) has finished and
+        // the CD reader thread has let go of the drive (#191).
+        self.poll_pending_eject(ctx);
+
         // Advance any in-progress crossfade, then start one when the current track
         // nears its end (begins the next track overlapping this one's tail).
         self.player.tick_crossfade(dt);
@@ -4654,9 +4721,22 @@ fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        cd_entry_matches_disc, crossfade_due, file_name_key, parse_time, reorder_play_next,
-        taskbar_restore_step,
+        cd_entry_matches_disc, crossfade_due, eject_should_stop, file_name_key, parse_time,
+        reorder_play_next, taskbar_restore_step,
     };
+
+    #[test]
+    fn eject_stops_only_the_playing_drive() {
+        // Playing a CD track on the drive being ejected: stop first (#191).
+        assert!(eject_should_stop(true, Some("cdda:///dev/sr0/3"), "/dev/sr0"));
+        // Nothing playing: eject without touching playback.
+        assert!(!eject_should_stop(false, Some("cdda:///dev/sr0/3"), "/dev/sr0"));
+        // Playing a different drive: leave it alone.
+        assert!(!eject_should_stop(true, Some("cdda:///dev/sr1/3"), "/dev/sr0"));
+        // Playing a regular file, not a CD: leave it alone.
+        assert!(!eject_should_stop(true, Some("/music/song.flac"), "/dev/sr0"));
+        assert!(!eject_should_stop(true, None, "/dev/sr0"));
+    }
 
     #[test]
     fn cd_entry_skips_a_swapped_disc() {
