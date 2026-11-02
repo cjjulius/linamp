@@ -20,6 +20,9 @@ pub(super) enum LibAction {
     EnqueueAlbum(String),
     Rate(Vec<usize>, i64),
     EditTags(usize),
+    /// Show a read-only view of a row's tags (used for audio-CD tracks, which have no
+    /// file to edit) (#191).
+    ViewTags(usize),
     Explore(usize),
     Remove(Vec<usize>),
     SelectAll,
@@ -1654,45 +1657,62 @@ impl super::LinAmpApp {
                                     } else {
                                         "Remove from library"
                                     };
+                                    // Audio-CD tracks have no file on disk, so most of the
+                                    // library actions (rate, edit tags, explore folder,
+                                    // convert, remove, play-all-by-artist/album which query
+                                    // the DB) don't apply; the CD menu is trimmed to Play /
+                                    // Enqueue / View tags / Select all (#191).
+                                    let is_cd = self.lib.nav == LibView::AudioCd;
                                     if classic {
                                         if resp.secondary_clicked() {
                                             let anchor = self.geom.lib_pos
                                                 + ui.ctx().pointer_latest_pos().unwrap_or_default().to_vec2();
-                                            let mut menu = vec![
-                                                DynRow::Item { label: "Play".into(), act: LibAction::Play(rows.clone()) },
-                                                DynRow::Item { label: "Enqueue".into(), act: LibAction::Enqueue(rows.clone()) },
-                                                DynRow::Sep,
-                                            ];
-                                            if !t.artist.is_empty() {
+                                            let menu = if is_cd {
+                                                vec![
+                                                    DynRow::Item { label: "Play".into(), act: LibAction::Play(rows.clone()) },
+                                                    DynRow::Item { label: "Enqueue".into(), act: LibAction::Enqueue(rows.clone()) },
+                                                    DynRow::Sep,
+                                                    DynRow::Item { label: "View tags\u{2026}".into(), act: LibAction::ViewTags(i) },
+                                                    DynRow::Item { label: "Select all".into(), act: LibAction::SelectAll },
+                                                ]
+                                            } else {
+                                                let mut menu = vec![
+                                                    DynRow::Item { label: "Play".into(), act: LibAction::Play(rows.clone()) },
+                                                    DynRow::Item { label: "Enqueue".into(), act: LibAction::Enqueue(rows.clone()) },
+                                                    DynRow::Sep,
+                                                ];
+                                                if !t.artist.is_empty() {
+                                                    menu.push(DynRow::Item {
+                                                        label: format!("Play all by \u{201c}{}\u{201d}", t.artist),
+                                                        act: LibAction::PlayArtist(t.artist.clone()),
+                                                    });
+                                                }
+                                                if !t.album.is_empty() {
+                                                    menu.push(DynRow::Item {
+                                                        label: format!("Play all from \u{201c}{}\u{201d}", t.album),
+                                                        act: LibAction::PlayAlbum(t.album.clone()),
+                                                    });
+                                                }
+                                                menu.push(DynRow::Sep);
+                                                menu.push(DynRow::Item { label: "Select all".into(), act: LibAction::SelectAll });
+                                                menu.push(DynRow::RateSub { label: "Rate".into() });
+                                                menu.push(DynRow::Item { label: "Edit tags\u{2026}".into(), act: LibAction::EditTags(i) });
+                                                menu.push(DynRow::Item { label: "Explore folder".into(), act: LibAction::Explore(i) });
+                                                menu.push(DynRow::Sep);
+                                                // A single Convert action using the global Preferences
+                                                // settings (format shown in the label); it enqueues the
+                                                // selected rows onto the conversion queue.
                                                 menu.push(DynRow::Item {
-                                                    label: format!("Play all by \u{201c}{}\u{201d}", t.artist),
-                                                    act: LibAction::PlayArtist(t.artist.clone()),
+                                                    label: format!(
+                                                        "Convert to {}",
+                                                        self.prefs.convert_format.display()
+                                                    ),
+                                                    act: LibAction::Convert(rows.clone()),
                                                 });
-                                            }
-                                            if !t.album.is_empty() {
-                                                menu.push(DynRow::Item {
-                                                    label: format!("Play all from \u{201c}{}\u{201d}", t.album),
-                                                    act: LibAction::PlayAlbum(t.album.clone()),
-                                                });
-                                            }
-                                            menu.push(DynRow::Sep);
-                                            menu.push(DynRow::Item { label: "Select all".into(), act: LibAction::SelectAll });
-                                            menu.push(DynRow::RateSub { label: "Rate".into() });
-                                            menu.push(DynRow::Item { label: "Edit tags\u{2026}".into(), act: LibAction::EditTags(i) });
-                                            menu.push(DynRow::Item { label: "Explore folder".into(), act: LibAction::Explore(i) });
-                                            menu.push(DynRow::Sep);
-                                            // A single Convert action using the global Preferences
-                                            // settings (format shown in the label); it enqueues the
-                                            // selected rows onto the conversion queue.
-                                            menu.push(DynRow::Item {
-                                                label: format!(
-                                                    "Convert to {}",
-                                                    self.prefs.convert_format.display()
-                                                ),
-                                                act: LibAction::Convert(rows.clone()),
-                                            });
-                                            menu.push(DynRow::Sep);
-                                            menu.push(DynRow::Item { label: remove_label.into(), act: LibAction::Remove(rows.clone()) });
+                                                menu.push(DynRow::Sep);
+                                                menu.push(DynRow::Item { label: remove_label.into(), act: LibAction::Remove(rows.clone()) });
+                                                menu
+                                            };
                                             act.open_menu = Some((anchor, menu, rows.clone()));
                                         }
                                     } else {
@@ -1707,57 +1727,68 @@ impl super::LinAmpApp {
                                             ui.close_menu();
                                         }
                                         ui.separator();
-                                        if !t.artist.is_empty()
-                                            && ui.button(format!("Play all by \u{201c}{}\u{201d}", t.artist)).clicked()
-                                        {
-                                            act.lib_action = Some(LibAction::PlayArtist(t.artist.clone()));
-                                            ui.close_menu();
-                                        }
-                                        if !t.album.is_empty()
-                                            && ui.button(format!("Play all from \u{201c}{}\u{201d}", t.album)).clicked()
-                                        {
-                                            act.lib_action = Some(LibAction::PlayAlbum(t.album.clone()));
-                                            ui.close_menu();
-                                        }
-                                        ui.separator();
-                                        if ui.button("Select all").clicked() {
-                                            act.lib_action = Some(LibAction::SelectAll);
-                                            ui.close_menu();
-                                        }
-                                        ui.menu_button("Rate", |ui| {
-                                            for s in 1..=5i64 {
-                                                if ui.button("\u{2605}".repeat(s as usize)).clicked() {
-                                                    act.lib_action = Some(LibAction::Rate(rows.clone(), s));
-                                                    ui.close_menu();
-                                                }
-                                            }
-                                            if ui.button("Clear rating").clicked() {
-                                                act.lib_action = Some(LibAction::Rate(rows.clone(), 0));
+                                        if is_cd {
+                                            if ui.button("View tags\u{2026}").clicked() {
+                                                act.lib_action = Some(LibAction::ViewTags(i));
                                                 ui.close_menu();
                                             }
-                                        });
-                                        if ui
-                                            .button(format!(
-                                                "Convert to {}",
-                                                self.prefs.convert_format.display()
-                                            ))
-                                            .clicked()
-                                        {
-                                            act.lib_action = Some(LibAction::Convert(rows.clone()));
-                                            ui.close_menu();
-                                        }
-                                        if ui.button("Edit tags\u{2026}").clicked() {
-                                            act.lib_action = Some(LibAction::EditTags(i));
-                                            ui.close_menu();
-                                        }
-                                        if ui.button("Explore folder").clicked() {
-                                            act.lib_action = Some(LibAction::Explore(i));
-                                            ui.close_menu();
-                                        }
-                                        ui.separator();
-                                        if ui.button(remove_label).clicked() {
-                                            act.lib_action = Some(LibAction::Remove(rows.clone()));
-                                            ui.close_menu();
+                                            if ui.button("Select all").clicked() {
+                                                act.lib_action = Some(LibAction::SelectAll);
+                                                ui.close_menu();
+                                            }
+                                        } else {
+                                            if !t.artist.is_empty()
+                                                && ui.button(format!("Play all by \u{201c}{}\u{201d}", t.artist)).clicked()
+                                            {
+                                                act.lib_action = Some(LibAction::PlayArtist(t.artist.clone()));
+                                                ui.close_menu();
+                                            }
+                                            if !t.album.is_empty()
+                                                && ui.button(format!("Play all from \u{201c}{}\u{201d}", t.album)).clicked()
+                                            {
+                                                act.lib_action = Some(LibAction::PlayAlbum(t.album.clone()));
+                                                ui.close_menu();
+                                            }
+                                            ui.separator();
+                                            if ui.button("Select all").clicked() {
+                                                act.lib_action = Some(LibAction::SelectAll);
+                                                ui.close_menu();
+                                            }
+                                            ui.menu_button("Rate", |ui| {
+                                                for s in 1..=5i64 {
+                                                    if ui.button("\u{2605}".repeat(s as usize)).clicked() {
+                                                        act.lib_action = Some(LibAction::Rate(rows.clone(), s));
+                                                        ui.close_menu();
+                                                    }
+                                                }
+                                                if ui.button("Clear rating").clicked() {
+                                                    act.lib_action = Some(LibAction::Rate(rows.clone(), 0));
+                                                    ui.close_menu();
+                                                }
+                                            });
+                                            if ui
+                                                .button(format!(
+                                                    "Convert to {}",
+                                                    self.prefs.convert_format.display()
+                                                ))
+                                                .clicked()
+                                            {
+                                                act.lib_action = Some(LibAction::Convert(rows.clone()));
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Edit tags\u{2026}").clicked() {
+                                                act.lib_action = Some(LibAction::EditTags(i));
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Explore folder").clicked() {
+                                                act.lib_action = Some(LibAction::Explore(i));
+                                                ui.close_menu();
+                                            }
+                                            ui.separator();
+                                            if ui.button(remove_label).clicked() {
+                                                act.lib_action = Some(LibAction::Remove(rows.clone()));
+                                                ui.close_menu();
+                                            }
                                         }
                                     });
                                     }
@@ -2004,6 +2035,11 @@ impl super::LinAmpApp {
             LibAction::EditTags(i) => {
                 if let Some(t) = self.lib.results.get(i).cloned() {
                     self.open_tag_editor_path(t.path);
+                }
+            }
+            LibAction::ViewTags(i) => {
+                if let Some(t) = self.lib.results.get(i).cloned() {
+                    self.cd_tag_view = Some(t);
                 }
             }
             LibAction::Explore(i) => {

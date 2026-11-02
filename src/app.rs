@@ -766,6 +766,10 @@ pub struct LinAmpApp {
     /// is open. Transient, it opens from the Options menu each session.
     mb_visible: bool,
     tag_editor: Option<tag_ui::TagEditor>,
+    /// A read-only tag view for an audio-CD track (Some while its window is open). A CD
+    /// track has no file to edit, so the library's right-click offers "View tags" which
+    /// shows the looked-up metadata here instead of the editable tag editor (#191).
+    cd_tag_view: Option<crate::playlist::Track>,
     /// Jump-to-file search state (Some while the dialog is open).
     jump_file: Option<JumpFile>,
     /// Jump-to-time input buffer (Some while the dialog is open).
@@ -1099,6 +1103,7 @@ impl LinAmpApp {
             lib_visible: false,
             mb_visible: false,
             tag_editor: None,
+            cd_tag_view: None,
             jump_file: None,
             jump_time: None,
             location_entry: None,
@@ -4060,6 +4065,7 @@ impl LinAmpApp {
         self.ui_prefs(ctx);
         self.ui_library_window(ctx);
         self.ui_tag_editor(ctx);
+        self.ui_cd_tag_view(ctx);
         self.ui_jump_file(ctx);
         self.ui_jump_time(ctx);
         self.ui_eq_save_name(ctx);

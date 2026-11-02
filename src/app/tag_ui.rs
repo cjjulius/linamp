@@ -169,6 +169,13 @@ impl super::LinAmpApp {
             return;
         };
         let path = track.path.clone();
+        // An audio-CD track (cdda://) has no file to edit, so show the same read-only CD
+        // tag view the library's right-click uses, keeping "Edit File Tags…" consistent
+        // across the playlist and the library (#191).
+        if crate::cdda::is_cdda_path(&path.to_string_lossy()) {
+            self.cd_tag_view = Some(track.clone());
+            return;
+        }
         let (v1, v2, v1_on, v2_on, single) = read_editor_tags(&path);
         let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
@@ -643,6 +650,79 @@ impl super::LinAmpApp {
             self.tag_editor = None;
         } else if do_save && self.save_tag_editor() {
             self.tag_editor = None;
+        }
+    }
+
+    /// Read-only tag view for an audio-CD track (#191). A CD track has no file to edit,
+    /// so the library's right-click offers "View tags" which shows the looked-up
+    /// metadata in this small window instead of the editable tag editor.
+    pub(super) fn ui_cd_tag_view(&mut self, ctx: &egui::Context) {
+        let Some(track) = self.cd_tag_view.clone() else {
+            return;
+        };
+        let size = egui::vec2(440.0, 230.0);
+        let mut screen = self.geom.win_pos[0] + egui::vec2(40.0, 40.0);
+        if let Some(vr) = virtual_desktop_rect(ctx) {
+            screen.x = screen.x.clamp(vr.min.x, (vr.max.x - size.x).max(vr.min.x));
+            screen.y = screen.y.clamp(vr.min.y, (vr.max.y - size.y).max(vr.min.y));
+        }
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LinAmp, CD Track Info")
+            .with_position(screen)
+            .with_inner_size(size)
+            .with_resizable(false)
+            .with_taskbar(false)
+            .with_window_level(self.window_level());
+        let id = egui::ViewportId::from_hash_of("linamp_cd_tags");
+        let mut close = false;
+        ctx.show_viewport_immediate(id, builder, |ctx, _| {
+            if ctx.input(|i| i.viewport().close_requested())
+                || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            {
+                close = true;
+            }
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let secs = track.duration.map(|d| d.as_secs()).unwrap_or(0);
+                let len = format!("{}:{:02}", secs / 60, secs % 60);
+                let num = track
+                    .path
+                    .to_str()
+                    .and_then(crate::cdda::parse_track_path)
+                    .map(|(_, n)| n.to_string())
+                    .unwrap_or_default();
+                let artist = if track.artist.trim().is_empty() {
+                    "(unknown)".to_string()
+                } else {
+                    track.artist.clone()
+                };
+                egui::Grid::new("cd_tags_grid")
+                    .num_columns(2)
+                    .spacing([14.0, 8.0])
+                    .show(ui, |ui| {
+                        let mut row = |label: &str, value: &str| {
+                            ui.label(egui::RichText::new(label).strong());
+                            ui.label(value);
+                            ui.end_row();
+                        };
+                        if !num.is_empty() {
+                            row("Track", &num);
+                        }
+                        row("Title", &track.title);
+                        row("Artist", &artist);
+                        row("Album", &track.album);
+                        row("Length", &len);
+                        row("Source", "Audio CD (CDDA, 1411 kbps, 44.1 kHz, stereo)");
+                    });
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new("Read Only (Audio CD)").weak());
+                ui.add_space(10.0);
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close {
+            self.cd_tag_view = None;
         }
     }
 }
