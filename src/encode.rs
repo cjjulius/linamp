@@ -930,9 +930,9 @@ fn write_rip_id3v1(dst: &Path, t: &RipTags) -> Result<()> {
         year: crate::tags::v1_text(&t.year, crate::tags::V1_MAX_YEAR),
         comment: None,
         track_number: (t.track > 0 && t.track <= u8::MAX as u32).then_some(t.track as u8),
-        // ID3v1 genre is a numeric index; leave it unset (the full genre string lives in
-        // ID3v2). Avoids a lossy name-to-index mapping here.
-        genre: None,
+        // ID3v1 genre is a one-byte index into the standard list; map the name when it is
+        // one of those (free-form names have no index, so stay unset, full name is in ID3v2).
+        genre: crate::tags::genre_index(&t.genre),
     };
     v1.save_to_path(dst, WriteOptions::default())
         .with_context(|| format!("writing ID3v1 to {}", dst.display()))?;
@@ -980,18 +980,24 @@ mod tests {
         println!("HW_RIP: wrote {len} bytes to {}", dst.display());
         assert!(len > 50_000, "output suspiciously small ({len} bytes)");
         use lofty::file::TaggedFileExt;
-        use lofty::tag::Accessor;
+        use lofty::tag::{Accessor, TagType};
         let tagged = lofty::read_from_path(&dst).expect("read tags back");
         let tag = tagged.primary_tag().expect("no tag written");
         println!(
-            "HW_RIP: title={:?} artist={:?} album={:?} track={:?}",
+            "HW_RIP: title={:?} artist={:?} album={:?} track={:?} genre={:?}",
             tag.title(),
             tag.artist(),
             tag.album(),
-            tag.track()
+            tag.track(),
+            tag.genre()
         );
         assert_eq!(tag.title().as_deref(), Some("HW Test Track"));
         assert_eq!(tag.album().as_deref(), Some("Test Album"));
+        assert_eq!(tag.genre().as_deref(), Some("Rock"), "ID3v2 genre");
+        // ID3v1 carries the genre as a numeric index; confirm it round-trips to Rock.
+        let v1 = tagged.tag(TagType::Id3v1).expect("no ID3v1 written");
+        println!("HW_RIP: id3v1 genre={:?} title={:?}", v1.genre(), v1.title());
+        assert_eq!(v1.genre().as_deref(), Some("Rock"), "ID3v1 genre");
     }
 
     /// Build a short stereo 44.1 kHz sine as a source WAV on disk.
