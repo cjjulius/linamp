@@ -30,6 +30,8 @@ pub enum OutputFormat {
     /// Opus in Ogg via libopus (lossy, open, best quality at low bitrates). Always
     /// encoded at 48 kHz (Opus's native rate), resampling other rates with rubato.
     Opus,
+    /// FLAC via flacenc (lossless, compressed, open). 16-bit.
+    Flac,
     /// 16-bit PCM WAV (`hound`, lossless, uncompressed).
     Wav,
     /// 16-bit PCM AIFF (lossless, uncompressed; the Apple-world counterpart of WAV).
@@ -42,6 +44,7 @@ impl OutputFormat {
         OutputFormat::Mp3,
         OutputFormat::Vorbis,
         OutputFormat::Opus,
+        OutputFormat::Flac,
         OutputFormat::Wav,
         OutputFormat::Aiff,
     ];
@@ -52,6 +55,7 @@ impl OutputFormat {
             OutputFormat::Mp3 => "mp3",
             OutputFormat::Vorbis => "ogg",
             OutputFormat::Opus => "opus",
+            OutputFormat::Flac => "flac",
             OutputFormat::Wav => "wav",
             OutputFormat::Aiff => "aiff",
         }
@@ -63,6 +67,7 @@ impl OutputFormat {
             OutputFormat::Mp3 => "MP3",
             OutputFormat::Vorbis => "Ogg Vorbis",
             OutputFormat::Opus => "Opus",
+            OutputFormat::Flac => "FLAC",
             OutputFormat::Wav => "WAV",
             OutputFormat::Aiff => "AIFF",
         }
@@ -84,7 +89,7 @@ impl OutputFormat {
             OutputFormat::Vorbis => &[64, 96, 128, 160, 192, 256, 320],
             // Opus is efficient at low bitrates and tops out well below MP3's 320.
             OutputFormat::Opus => &[48, 64, 96, 128, 160, 192, 256],
-            OutputFormat::Wav | OutputFormat::Aiff => &[],
+            OutputFormat::Flac | OutputFormat::Wav | OutputFormat::Aiff => &[],
         }
     }
 
@@ -263,6 +268,7 @@ fn encode_pcm(
         OutputFormat::Mp3 => encode_mp3(dst, &samples, rate, channels, br, progress, cancel)?,
         OutputFormat::Vorbis => encode_vorbis(dst, &samples, rate, channels, br, progress, cancel)?,
         OutputFormat::Opus => encode_opus(dst, &samples, rate, channels, br, progress, cancel)?,
+        OutputFormat::Flac => encode_flac(dst, &samples, rate, channels, progress, cancel)?,
         OutputFormat::Wav => encode_wav(dst, &samples, rate, channels, progress, cancel)?,
         OutputFormat::Aiff => encode_aiff(dst, &samples, rate, channels, progress, cancel)?,
     };
@@ -281,7 +287,15 @@ fn decode_pcm(
     progress: &mut dyn FnMut(f32),
     cancel: &dyn Fn() -> bool,
 ) -> Result<Option<(Vec<f32>, u32, u16)>> {
-    let mut source = crate::decode::open_file(src)?;
+    // Monkey's Audio has no symphonia decoder, so route it through crate::ape like the
+    // player does; everything else uses the shared symphonia path (#182).
+    let mut source: Box<dyn Source<Item = f32> + Send> = if crate::ape::is_ape(src) {
+        Box::new(crate::ape::open_ape(src)?)
+    } else if crate::ac3::is_ac3(src) {
+        Box::new(crate::ac3::open_ac3(src)?)
+    } else {
+        Box::new(crate::decode::open_file(src)?)
+    };
     let rate = source.sample_rate();
     let channels = source.channels();
     // Estimate the total sample count from the reported duration, so decode progress
@@ -348,6 +362,81 @@ fn f32_to_i16(s: f32) -> i16 {
 /// enough that the per-sample hot loop stays cheap, small enough that a cancel takes
 /// effect promptly.
 const ENCODE_POLL: usize = 1 << 13;
+
+/// Encode interleaved f32 to a 16-bit FLAC file with flacenc (pure Rust). flacenc
+/// encodes the whole stream in one call, so progress covers the f32->i16 prep and
+/// then jumps to done; cancellation is honored up to the encode call.
+fn encode_flac(
+    dst: &Path,
+    samples: &[f32],
+    rate: u32,
+    channels: u16,
+    progress: &mut dyn FnMut(f32),
+    cancel: &dyn Fn() -> bool,
+) -> Result<bool> {
+    use flacenc::component::BitRepr;
+    use flacenc::error::Verify;
+    if channels == 0 {
+        anyhow::bail!("FLAC needs at least one channel");
+    }
+    // flacenc takes interleaved integer samples; encode 16-bit like WAV/AIFF.
+    let total = samples.len().max(1);
+    let mut ints: Vec<i32> = Vec::with_capacity(samples.len());
+    for (i, &s) in samples.iter().enumerate() {
+        if i % ENCODE_POLL == 0 {
+            if cancel() {
+                return Ok(false);
+            }
+            // Reserve the second half of the bar for the one-shot encode below.
+            progress(0.5 * i as f32 / total as f32);
+        }
+        ints.push(f32_to_i16(s) as i32);
+    }
+    if cancel() {
+        return Ok(false);
+    }
+    let config = flacenc::config::Encoder::default()
+        .into_verified()
+        .map_err(|e| anyhow::anyhow!("FLAC config: {e:?}"))?;
+    let source =
+        flacenc::source::MemSource::from_samples(&ints, channels as usize, 16, rate as usize);
+    let stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
+        .map_err(|e| anyhow::anyhow!("FLAC encode: {e:?}"))?;
+    let bits = stream.count_bits();
+    let mut sink = flacenc::bitsink::ByteSink::with_capacity(bits);
+    stream
+        .write(&mut sink)
+        .map_err(|e| anyhow::anyhow!("FLAC write: {e:?}"))?;
+    let mut bytes = sink.as_slice().to_vec();
+    // flacenc records the smaller final block as STREAMINFO's min_block_size, leaving
+    // min != max. libFLAC/ffmpeg instead report min == max == the nominal block size,
+    // and symphonia relies on that convention (it rejects the stream otherwise). The
+    // field is informational (decoders read each frame's own block size), so normalize
+    // min_block_size to max_block_size. Layout: "fLaC"(4) + block header(4) + STREAMINFO,
+    // whose first four bytes are min_block_size (8..10) then max_block_size (10..12).
+    if bytes.len() >= 12 {
+        let (lo, hi) = bytes.split_at_mut(10);
+        lo[8..10].copy_from_slice(&hi[0..2]);
+    }
+    // flacenc emits only a STREAMINFO block (flagged as the last metadata block);
+    // lofty's FLAC writer then silently refuses to add a VORBIS_COMMENT, so the tag
+    // copy that follows every convert would be a no-op. Reference encoders always
+    // leave a PADDING block for taggers, so add one: clear STREAMINFO's last-block
+    // flag and splice an empty PADDING block (the new last block) right after it.
+    const PADDING: usize = 4096;
+    let si_end = 8 + 34; // "fLaC"(4) + STREAMINFO header(4) + STREAMINFO body(34)
+    if bytes.len() >= si_end {
+        bytes[4] &= 0x7F; // STREAMINFO is no longer the last metadata block
+        let mut block = Vec::with_capacity(4 + PADDING);
+        block.push(0x80 | 1); // last-metadata-block flag + PADDING block type (1)
+        block.extend_from_slice(&(PADDING as u32).to_be_bytes()[1..4]); // 24-bit length
+        block.resize(4 + PADDING, 0);
+        bytes.splice(si_end..si_end, block);
+    }
+    std::fs::write(dst, &bytes).with_context(|| format!("write {}", dst.display()))?;
+    progress(1.0);
+    Ok(true)
+}
 
 fn encode_wav(
     dst: &Path,
@@ -1038,6 +1127,7 @@ mod tests {
             (OutputFormat::Mp3, dir.join("linamp_encode_out.mp3")),
             (OutputFormat::Vorbis, dir.join("linamp_encode_out.ogg")),
             (OutputFormat::Opus, dir.join("linamp_encode_out.opus")),
+            (OutputFormat::Flac, dir.join("linamp_encode_out.flac")),
             (OutputFormat::Wav, dir.join("linamp_encode_out.wav")),
             (OutputFormat::Aiff, dir.join("linamp_encode_out.aiff")),
         ] {
@@ -1076,7 +1166,11 @@ mod tests {
             t.save_to_path(&src, WriteOptions::default()).unwrap();
         }
         for (format, out) in [
+            (OutputFormat::Mp3, dir.join("linamp_tagcopy_out.mp3")),
             (OutputFormat::Vorbis, dir.join("linamp_tagcopy_out.ogg")),
+            (OutputFormat::Opus, dir.join("linamp_tagcopy_out.opus")),
+            (OutputFormat::Flac, dir.join("linamp_tagcopy_out.flac")),
+            (OutputFormat::Wav, dir.join("linamp_tagcopy_out.wav")),
             (OutputFormat::Aiff, dir.join("linamp_tagcopy_out.aiff")),
         ] {
             convert_file(&src, &out, format).unwrap_or_else(|e| panic!("{format:?}: {e}"));
