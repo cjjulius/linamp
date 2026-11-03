@@ -440,6 +440,40 @@ fn gen_font_table(g: &RgbaImage, fy: u32, key: [u8; 3]) -> Option<Vec<(u32, u32)
     (runs.len() == 26).then_some(runs)
 }
 
+/// Inter-letter and word spacing for the gen title font, in px. Letters advance by
+/// their real inked width plus `GEN_TRACKING`, so the gap between any two letters is
+/// the same regardless of how much blank padding a glyph carries in the width table.
+const GEN_TRACKING: u32 = 1;
+const GEN_SPACE_W: u32 = 4;
+
+/// The inked column span `(first, last)` of a glyph inside its cell `[sx, sx + w)` on
+/// font row `fy`, trimming columns that are entirely (near-)key. This lets letters be
+/// kerned by their real ink width instead of the padded cell width, so the base skin's
+/// hand-measured widths (which carry uneven trailing blanks) still space evenly.
+/// `None` when the cell is blank.
+fn gen_glyph_ink(g: &RgbaImage, sx: u32, w: u32, fy: u32, key: [u8; 3]) -> Option<(u32, u32)> {
+    const TOL: u8 = 60;
+    let near_key = |p: &image::Rgba<u8>| {
+        p[0].abs_diff(key[0]) <= TOL && p[1].abs_diff(key[1]) <= TOL && p[2].abs_diff(key[2]) <= TOL
+    };
+    let col_ink = |x: u32| {
+        (0..GEN_FONT_H).any(|j| {
+            let yy = fy + j;
+            yy < g.height() && !near_key(g.get_pixel(x, yy))
+        })
+    };
+    let end = (sx + w).min(g.width());
+    let mut first = None;
+    let mut last = sx;
+    for x in sx..end {
+        if col_ink(x) {
+            first.get_or_insert(x);
+            last = x;
+        }
+    }
+    first.map(|f| (f, last))
+}
+
 /// Draw `title` (uppercased) centred in the title bar using GEN.BMP's own font.
 fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool) {
     let up = title.to_uppercase();
@@ -457,36 +491,63 @@ fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool)
         }
     };
     let key = key_at(fy);
-    // Measure glyph widths from the SELECTED row for both variants. The glyph
-    // columns are identical in the selected and normal rows, but the normal
-    // (inactive) row has a stray pixel on some glyphs (example: Y) that would widen
-    // the measured run; using the clean selected widths excludes it and keeps
-    // kerning identical between the two variants (#106).
-    let table = gen_font_table(g, GEN_FONT_Y_SELECTED, key_at(GEN_FONT_Y_SELECTED));
-    let glyph = |c: char| -> Option<(u32, u32)> {
+    let key_sel = key_at(GEN_FONT_Y_SELECTED);
+    // The glyph cell `(src_x, width)` comes from the skin's own measured runs when its
+    // font layout matches (26 clean runs), else the hand-measured base-skin table. The
+    // measured runs are already tight; the base-skin table carries uneven trailing
+    // blanks, so in both cases we re-trim to the inked span below for even kerning.
+    let table = gen_font_table(g, GEN_FONT_Y_SELECTED, key_sel);
+    let cell = |c: char| -> Option<(u32, u32)> {
         c.is_ascii_uppercase().then(|| {
             let i = (c as u8 - b'A') as usize;
             table.as_ref().map(|t| t[i]).unwrap_or(GEN_FONT[i])
         })
     };
-    let total: u32 = up
-        .chars()
-        .map(|c| if c == ' ' { 4 } else { glyph(c).map(|(_, w)| w + 1).unwrap_or(0) })
-        .sum::<u32>()
-        .saturating_sub(1);
+    // Measure the inked span from the SELECTED row for both variants: the glyph columns
+    // are identical between rows, but the normal (inactive) row has a stray pixel on
+    // some glyphs (example: Y) that would widen the span; using the clean selected row
+    // keeps kerning identical between the two variants (#106).
+    let ink = |c: char| -> Option<(u32, u32)> {
+        let (sx, w) = cell(c)?;
+        gen_glyph_ink(g, sx, w, GEN_FONT_Y_SELECTED, key_sel)
+    };
+    // A per-letter left-kern nudge, applied only when drawing from the fallback
+    // base-skin width table (a skin that ships its own measured font is already tight,
+    // so it is left alone). The base skin's capital E sits one pixel proud of its
+    // neighbours, so pull it, and everything after it, one pixel left.
+    let fallback = table.is_none();
+    let kern = |c: char| -> i32 {
+        if fallback && c == 'E' {
+            -1
+        } else {
+            0
+        }
+    };
+    // Net horizontal space each char consumes: kern + inked width + tracking (a space
+    // is a fixed width). Used for both centring and drawing so the two cannot diverge.
+    let advance = |c: char| -> i32 {
+        if c == ' ' {
+            GEN_SPACE_W as i32
+        } else {
+            kern(c) + ink(c).map(|(f, l)| (l - f + 1 + GEN_TRACKING) as i32).unwrap_or(0)
+        }
+    };
+    let total = (up.chars().map(advance).sum::<i32>() - GEN_TRACKING as i32).max(0) as u32;
     let dw = dst.width();
-    let mut x = (dw / 2).saturating_sub((total + 1) / 2);
+    let mut x = (dw / 2).saturating_sub((total + 1) / 2) as i32;
     // Nudged up 2px from the geometric centre so the caption lines up with the
     // classic windows' own title text (which sits a little above centre).
     let ty = GEN_TB_H.saturating_sub(GEN_FONT_H) / 2 - 2;
     for c in up.chars() {
         if c == ' ' {
-            x += 4;
+            x += GEN_SPACE_W as i32;
             continue;
         }
-        if let Some((sx, w)) = glyph(c) {
-            blit_keyed(dst, g, x as i32, ty as i32, sx, fy, w, GEN_FONT_H, key);
-            x += w + 1;
+        if let Some((f, l)) = ink(c) {
+            let w = l - f + 1;
+            let dx = x + kern(c);
+            blit_keyed(dst, g, dx, ty as i32, f, fy, w, GEN_FONT_H, key);
+            x = dx + (w + GEN_TRACKING) as i32;
         }
     }
 }
@@ -1425,13 +1486,13 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
 
 /// Headless preview of the general-purpose (Media Library) window frame at a
 /// sample size, for eyeballing the gen.bmp chrome without the GUI.
-pub fn render_gen_png(skin_path: &Path, out: &Path) -> Result<()> {
+pub fn render_gen_png(skin_path: &Path, out: &Path, caption: &str) -> Result<()> {
     let skin = ClassicSkin::load(skin_path)?;
     if !skin.has_gen() {
         anyhow::bail!("skin has no GEN.BMP/GENEX.BMP");
     }
     let frame = skin
-        .compose_gen_window(550, 300, true, false, "LinAmp Library")
+        .compose_gen_window(550, 300, true, false, caption)
         .ok_or_else(|| anyhow::anyhow!("failed to compose gen window"))?;
     frame.save(out)?;
     Ok(())

@@ -91,16 +91,20 @@ fn main() -> eframe::Result<()> {
         }
     }
 
-    // Headless Media Library frame preview: `linamp --render-gen in.wsz out.png`.
+    // Headless general-purpose window frame preview (Media Library / Preferences):
+    // `linamp --render-gen in.wsz out.png [caption]`. The optional caption previews a
+    // specific title bar (default "LinAmp Library"); it is drawn in the skin's own
+    // uppercase title font.
     if let Some(i) = args.iter().position(|a| a == "--render-gen") {
         if let (Some(inp), Some(out)) = (args.get(i + 1), args.get(i + 2)) {
             let (inp, out) = (std::path::Path::new(inp), std::path::Path::new(out));
-            match classic::render_gen_png(inp, out) {
+            let caption = args.get(i + 3).map(String::as_str).unwrap_or("LinAmp Library");
+            match classic::render_gen_png(inp, out, caption) {
                 Ok(()) => println!("rendered gen {} -> {}", inp.display(), out.display()),
                 Err(e) => println!("render error: {e}"),
             }
         } else {
-            println!("usage: linamp --render-gen <in.wsz> <out.png>");
+            println!("usage: linamp --render-gen <in.wsz> <out.png> [caption]");
         }
         return Ok(());
     }

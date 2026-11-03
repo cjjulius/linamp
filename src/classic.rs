@@ -749,6 +749,30 @@ mod tests {
     }
 
     #[test]
+    fn gen_window_frames_library_and_preferences() {
+        // The base skin ships GEN.BMP/GENEX.BMP, so both the Media Library and the
+        // Preferences window composite their skinned frame (same compositor, different
+        // caption) at the requested size without panicking. The caption is drawn from
+        // the skin's own title font, so "LinAmp Preferences" shows as "LINAMP
+        // PREFERENCES". The pressed-close variant (used while the X is held) composes
+        // too. A skin without GEN art reports `has_gen() == false`, and both windows
+        // then take the flat fallback frame instead.
+        let skin = load_skin("linamp_base_skin.wsz");
+        assert!(skin.has_gen(), "base skin should ship GEN.BMP/GENEX.BMP");
+        for caption in ["LinAmp Library", "LinAmp Preferences"] {
+            let frame = skin
+                .compose_gen_window(520, 360, true, false, caption)
+                .expect("base skin composes a gen window");
+            assert_eq!(frame.dimensions(), (520, 360), "{caption}");
+        }
+        assert!(
+            skin.compose_gen_window(520, 360, true, true, "LinAmp Preferences")
+                .is_some(),
+            "pressed-close variant should compose"
+        );
+    }
+
+    #[test]
     fn skins_load_cursors_including_animated() {
         // Standard .cur (base) and animated .ani-in-.cur (Nucleo) both decode,
         // including the "normal" base cursor used on the auxiliary windows.
