@@ -21,13 +21,11 @@ keyboard and mouse reference is [SHORTCUTS.md](SHORTCUTS.md).
 
 ## Not yet matching 2.666
 
-These are the only in-scope gaps left:
+This is the only in-scope gap left:
 
 - #146, the minibrowser's SHOUTcast **directory** pane. The minibrowser window and
   "Open in browser" already work; the live directory listing is the remaining piece
   (and SHOUTcast's directory is largely defunct, so this is cosmetic parity).
-- #209 / #210, window-shade close-button polish: a collapsed window should show the
-  pressed close-X and act on release, matching the full windows.
 
 ## Audio formats
 
