@@ -577,6 +577,9 @@ struct WindowGeom {
     foc_eq: bool,
     foc_pl: bool,
     foc_lib: bool,
+    /// Preferences window focus, so the app stays "focused" (and the GEN frame stays
+    /// active) when Preferences is the frontmost LinAmp window.
+    foc_prefs: bool,
     /// Active window drag, and the playlist resize grab offsets (width, height) px.
     drag: Option<Dragging>,
     resize_pl: Option<egui::Vec2>,
@@ -1051,6 +1054,7 @@ impl LinAmpApp {
                 foc_eq: false,
                 foc_pl: false,
                 foc_lib: false,
+                foc_prefs: false,
                 drag: None,
                 resize_pl: None,
                 root_last: None,
@@ -3058,6 +3062,13 @@ impl LinAmpApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 self.prefs_raise = false;
             }
+            // Track this window's focus so the app stays "focused" (and the GEN frame
+            // shows its active variant) while Preferences is the frontmost window, the
+            // same way the Library feeds `app_focused`. Read next frame by
+            // `render_classic` (children render after the aggregate is computed).
+            self.geom.foc_prefs = ctx
+                .input(|i| i.viewport().focused)
+                .unwrap_or(self.geom.foc_prefs);
             if gen {
                 self.ui_prefs_gen(ctx, &mut close);
             } else {
@@ -4411,6 +4422,9 @@ impl LinAmpApp {
         if !self.lib_visible {
             self.geom.foc_lib = false;
         }
+        if !self.prefs_open {
+            self.geom.foc_prefs = false;
+        }
         // A classic popup menu is part of our app: keep the app considered focused
         // while one is open so the windows stay on their active title bars instead
         // of dimming (the popup is a separate OS window that may take focus).
@@ -4418,6 +4432,7 @@ impl LinAmpApp {
             || self.geom.foc_eq
             || self.geom.foc_pl
             || self.geom.foc_lib
+            || self.geom.foc_prefs
             || self.popups.cur.is_some();
 
         // Root viewport = main window.
