@@ -1557,9 +1557,16 @@ impl LinAmpApp {
     fn set_icon_dark_mode(&mut self, ctx: &egui::Context, dark: bool) {
         self.prefs.icon_dark_mode = dark;
         self.prefs.save();
-        // Window and taskbar icon: swap it in place without a restart.
+        // Window and taskbar icon: swap it in place without a restart. This runs
+        // from inside the Preferences window's own viewport closure, so the command
+        // must be addressed to the ROOT viewport explicitly; a bare send_viewport_cmd
+        // would retarget the Preferences window and leave the taskbar icon stale
+        // until the next launch.
         if let Some(icon) = crate::icon::window_icon(dark) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon))));
+            ctx.send_viewport_cmd_to(
+                egui::ViewportId::ROOT,
+                egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon))),
+            );
         }
         // The running tray baked in the old colour, so respawn it to pick up the new
         // one. Only when tray mode is on; otherwise there is no tray icon to update,

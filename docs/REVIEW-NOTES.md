@@ -1232,3 +1232,14 @@ plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.
   per-user desktop-entry icon written at first launch. Only the live, in-app surfaces
   (window, taskbar, tray) follow the setting. This is a candidate follow-up if we
   decide the program-list icon is worth the registry/desktop-file churn.
+
+### 2026-11-05 Icon Dark Mode follow-up (taskbar icon updated live)
+
+- Fix: toggling Icon Dark Mode in Normal (taskbar) mode did not recolour the window
+  and taskbar icon until the next restart, while System Tray mode updated instantly.
+  The toggle runs inside the Preferences window's own viewport closure, so a bare
+  send_viewport_cmd(Icon) was addressing the Preferences viewport, not the main
+  window. It now targets ViewportId::ROOT explicitly, so the main window and its
+  taskbar button recolour right away. Manual check (Windows): in Normal mode, toggle
+  the option and confirm the taskbar button and Alt-Tab/title-bar icon change colour
+  immediately, both directions; the tray-mode behaviour is unchanged.
