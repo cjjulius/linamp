@@ -1205,3 +1205,25 @@ plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.
   front and Preferences no longer covers it; after picking or cancelling, Preferences
   returns to the front. Known limitation: the per-window drop is Windows-only, so on
   X11 this specific case (pref off) is not yet addressed.
+
+### 2026-11-05 Icon Dark Mode (black and grey logo, #223)
+
+- New Preferences > Display > Icon option "Icon Dark Mode (black and grey logo)". When
+  on, the LinAmp logo is recoloured at runtime from its usual black and green to black
+  and grey (luminance desaturation of the one embedded logo, so there is a single
+  source to maintain). It covers the window icon, the taskbar button, and, while
+  running, the system tray icon. Off by default; persists across restarts.
+- Manual check (Windows): toggle the option on with the window in Normal mode and
+  confirm the taskbar button and the window's title-bar/Alt-Tab icon turn grey right
+  away, then toggle off and confirm they return to green. Switch to System Tray mode
+  and confirm the tray icon follows the setting (it respawns the tray to recolour).
+  Check that the look survives a restart.
+- Manual check (Pop!_OS): same toggle, confirm the StatusNotifierItem tray icon turns
+  grey and back. The window/taskbar icon is set via egui's viewport Icon command.
+- Known limitation (best effort, as scoped): the icon shown in OS program lists and
+  the "Open with" menu is not recoloured. On Windows that icon is baked into the
+  executable at build time (winresource embeds assets/linamp.ico) and cannot be
+  swapped per-user at runtime without fragile registry work; on Linux it is the
+  per-user desktop-entry icon written at first launch. Only the live, in-app surfaces
+  (window, taskbar, tray) follow the setting. This is a candidate follow-up if we
+  decide the program-list icon is worth the registry/desktop-file churn.
