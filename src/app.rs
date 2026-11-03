@@ -1753,20 +1753,33 @@ impl LinAmpApp {
     fn pick_dialog<T>(&self, pick: impl FnOnce() -> T) -> T {
         // Restore always-on-top from a Drop guard, so an unwind out of `pick` still
         // re-raises the windows. A bare restore after `pick()` would be skipped on a
-        // panic, leaving every window stuck non-topmost (#172).
-        struct TopmostGuard(bool);
+        // panic, leaving the windows stuck non-topmost (#172).
+        struct TopmostGuard {
+            group: bool,
+            prefs: bool,
+        }
         impl Drop for TopmostGuard {
             fn drop(&mut self) {
-                if self.0 {
+                if self.group {
                     set_windows_topmost(true);
+                } else if self.prefs {
+                    set_window_topmost("LinAmp Preferences", true);
                 }
             }
         }
-        let restore = self.prefs.always_on_top;
-        if restore {
+        let group = self.prefs.always_on_top;
+        // The Preferences window is always-on-top on its own, regardless of the global
+        // pref, so drop it below the dialog even when the group isn't topmost. Otherwise
+        // it floats over the file dialog and, being non-focusable while the dialog is
+        // modal, leaves the user unable to move or reach it (#172). When the group is
+        // topmost the group-level call already covers Preferences.
+        let prefs = self.prefs_open && !group;
+        if group {
             set_windows_topmost(false);
+        } else if prefs {
+            set_window_topmost("LinAmp Preferences", false);
         }
-        let _guard = TopmostGuard(restore);
+        let _guard = TopmostGuard { group, prefs };
         pick()
     }
 

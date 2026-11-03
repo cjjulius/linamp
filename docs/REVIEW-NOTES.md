@@ -1193,3 +1193,15 @@ plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.
   plus 1px, instead of the padded width table that left uneven gaps (worst in
   "PREFERENCES"). Verified with a headless render of both captions; still worth an
   eyeball in the running app at normal and double-size.
+
+### 2026-11-03 follow-up 2 (QA: Preferences trapped a file dialog)
+
+- Opening a native OS dialog (e.g. Load Skin...) while Preferences was open left the
+  Preferences window floating on top of the dialog but unmovable (it is always-on-top
+  on its own, and pick_dialog only suspended topmost when the global always-on-top
+  pref was on). pick_dialog now also drops the Preferences window below the dialog
+  when the pref is off, and restores it afterwards. Manual check (Windows): open
+  Preferences, then Options > Load Skin..., and confirm the file dialog comes to the
+  front and Preferences no longer covers it; after picking or cancelling, Preferences
+  returns to the front. Known limitation: the per-window drop is Windows-only, so on
+  X11 this specific case (pref off) is not yet addressed.
