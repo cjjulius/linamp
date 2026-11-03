@@ -256,19 +256,39 @@ mod tests {
         p.exists().then(|| p.to_path_buf())
     }
 
+    // All local .ac3 samples present (stereo plus, when present, a 5.1 file that
+    // exercises the downmix path). qa-music is gitignored, so this skips on CI.
+    fn samples() -> Vec<std::path::PathBuf> {
+        ["sample.ac3", "song-stereo.ac3", "song-5.1.ac3"]
+            .iter()
+            .map(|n| std::path::Path::new("qa-music/format-samples").join(n))
+            .filter(|p| p.exists())
+            .collect()
+    }
+
     #[test]
     fn decodes_to_stereo_in_range() {
-        let Some(p) = sample() else { return };
-        let src = open_ac3(&p).unwrap();
-        assert_eq!(src.channels(), 2);
-        assert!(matches!(src.sample_rate(), 32000 | 44100 | 48000));
-        let total = src.total.unwrap().as_secs_f64();
-        let got: Vec<f32> = src.collect();
-        assert!(!got.is_empty(), "AC-3 decoded no samples");
-        assert!(got.iter().all(|s| s.is_finite() && s.abs() <= 1.0), "samples out of range");
-        // Interleaved stereo, so the frame count lines up with the reported duration.
-        let secs = got.len() as f64 / 2.0 / open_ac3(&p).unwrap().sample_rate() as f64;
-        assert!((secs - total).abs() < 0.1, "decoded {secs:.3}s vs reported {total:.3}s");
+        let ps = samples();
+        if ps.is_empty() {
+            return;
+        }
+        for p in ps {
+            let src = open_ac3(&p).unwrap();
+            assert_eq!(src.channels(), 2, "{}", p.display());
+            assert!(matches!(src.sample_rate(), 32000 | 44100 | 48000));
+            let total = src.total.unwrap().as_secs_f64();
+            let rate = src.sample_rate();
+            let got: Vec<f32> = src.collect();
+            assert!(!got.is_empty(), "AC-3 decoded no samples for {}", p.display());
+            assert!(
+                got.iter().all(|s| s.is_finite() && s.abs() <= 1.0),
+                "samples out of range for {}",
+                p.display()
+            );
+            // Interleaved stereo, so the frame count lines up with the reported duration.
+            let secs = got.len() as f64 / 2.0 / rate as f64;
+            assert!((secs - total).abs() < 0.1, "{}: decoded {secs:.3}s vs {total:.3}s", p.display());
+        }
     }
 
     #[test]
