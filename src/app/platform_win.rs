@@ -951,24 +951,6 @@ pub(crate) fn hide_popup_window() {
 pub(crate) fn set_windows_topmost(on: bool) {
     #[cfg(windows)]
     {
-        #[allow(non_snake_case)]
-        extern "system" {
-            fn SetWindowPos(
-                hwnd: isize,
-                after: isize,
-                x: i32,
-                y: i32,
-                cx: i32,
-                cy: i32,
-                flags: u32,
-            ) -> i32;
-        }
-        const HWND_TOPMOST: isize = -1;
-        const HWND_NOTOPMOST: isize = -2;
-        const SWP_NOSIZE: u32 = 0x0001;
-        const SWP_NOMOVE: u32 = 0x0002;
-        const SWP_NOACTIVATE: u32 = 0x0010;
-        let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
         for title in [
             "LinAmp",
             "LinAmp Equalizer",
@@ -978,12 +960,7 @@ pub(crate) fn set_windows_topmost(on: bool) {
             "LinAmp, File Info",
             "LinAmp, Minibrowser",
         ] {
-            let h = find_window(title);
-            if h != 0 {
-                unsafe {
-                    SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                }
-            }
+            win_set_window_topmost(title, on);
         }
     }
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -993,6 +970,45 @@ pub(crate) fn set_windows_topmost(on: bool) {
     #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = on;
+    }
+}
+
+/// Clear (`false`) or restore (`true`) always-on-top for a single window by title.
+/// The Preferences window is topmost on its own (independent of the always-on-top
+/// pref), so it is dropped below a native file dialog and restored afterwards even
+/// when the pref is off, otherwise it floats over the dialog and, being
+/// non-focusable while the dialog is modal, traps the user (#172). Windows only; on
+/// X11 the group-level `set_windows_topmost` already covers the pref-on case.
+pub(crate) fn set_window_topmost(title: &str, on: bool) {
+    #[cfg(windows)]
+    {
+        win_set_window_topmost(title, on);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (title, on);
+    }
+}
+
+/// SetWindowPos one window to (not-)topmost by title. No-op when the window is gone.
+#[cfg(windows)]
+fn win_set_window_topmost(title: &str, on: bool) {
+    #[allow(non_snake_case)]
+    extern "system" {
+        fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, flags: u32)
+            -> i32;
+    }
+    const HWND_TOPMOST: isize = -1;
+    const HWND_NOTOPMOST: isize = -2;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
+    let h = find_window(title);
+    if h != 0 {
+        unsafe {
+            SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
     }
 }
 
