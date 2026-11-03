@@ -693,7 +693,6 @@ pub struct LinAmpApp {
     shaped_any: bool,
     classic_seek_preview: Option<f32>,
     balance: f32,
-    time_remaining: bool,
     /// True on the "off" half of the paused-time blink (the classic player flashes
     /// the time while paused). Recomputed each frame in `update`.
     time_blink_hidden: bool,
@@ -1076,7 +1075,6 @@ impl LinAmpApp {
             },
             classic_seek_preview: None,
             balance: 0.0,
-            time_remaining: false,
             time_blink_hidden: false,
             stop_after_current: false,
             fade: None,
@@ -1564,6 +1562,10 @@ impl LinAmpApp {
         if self.hidden_to_tray {
             return;
         }
+        // Capture the on-screen layout before hiding, so exiting from the tray (which
+        // skips the session save while hidden) restores exactly these windows and
+        // positions (#40).
+        self.build_session().save();
         self.tray_prev_vis = (self.eq_visible, self.pl_visible, self.lib_visible);
         self.eq_visible = false;
         self.pl_visible = false;
@@ -2155,7 +2157,7 @@ impl LinAmpApp {
             double_size: self.prefs.double_size,
             pos,
             duration: dur,
-            time_remaining: self.time_remaining,
+            time_remaining: self.prefs.time_remaining,
             time_hidden: self.time_blink_hidden,
             volume: self.player.volume(),
             balance: self.balance,
@@ -2558,7 +2560,10 @@ impl LinAmpApp {
                     self.minimize_to_taskbar(ctx);
                 }
             }
-            Btn::Time => self.time_remaining = !self.time_remaining,
+            Btn::Time => {
+                self.prefs.time_remaining = !self.prefs.time_remaining;
+                self.prefs.save();
+            }
             Btn::Viz => self.viz_mode = self.viz_mode.next(),
             // Clutterbar: A=always-on-top, I=file info, D=doublesize, V=viz mode.
             // O opens the Options menu (handled on release in window.rs).
@@ -4716,7 +4721,15 @@ impl eframe::App for LinAmpApp {
                 // Save before the teardown below hides the child windows, which must
                 // not be recorded as the closed layout.
                 self.prefs.save();
-                self.build_session().save();
+                // Only record the session when the windows are actually on screen.
+                // Exiting from the system tray (or while minimized to the taskbar)
+                // reaches here with the windows hidden, so their visibility and
+                // layout are not the real ones; persisting that would forget which
+                // windows were open and where (#40). The last on-screen session,
+                // saved by the periodic check and by hide_to_tray, is kept instead.
+                if !self.hidden_to_tray && !self.minimized_to_taskbar {
+                    self.build_session().save();
+                }
                 self.eq_visible = false;
                 self.pl_visible = false;
                 self.lib_visible = false;
