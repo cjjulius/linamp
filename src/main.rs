@@ -1,6 +1,7 @@
 // Hide the console window on Windows release builds (GUI app).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ape;
 mod app;
 mod balance;
 mod cdda;

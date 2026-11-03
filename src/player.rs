@@ -351,6 +351,10 @@ impl Player {
             // Tracker modules (.mod/.xm/.s3m/.it) are rendered by xmrs (#158).
             let source = crate::tracker::open_tracker(path)?;
             self.append_source(source, None, true)?;
+        } else if crate::ape::is_ape(path) {
+            // Monkey's Audio (.ape) is decoded by ape-decoder (#182).
+            let source = crate::ape::open_ape(path)?;
+            self.append_source(source, None, true)?;
         } else {
             let source = crate::decode::open_file(path)?;
             self.append_source(source, None, true)?;

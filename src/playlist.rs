@@ -23,6 +23,8 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "mid", "midi",
     // Tracker modules, rendered via crate::tracker (xmrs/xmrsplayer, pure Rust) (#158).
     "mod", "xm", "s3m", "it",
+    // Monkey's Audio, decoded via crate::ape (ape-decoder, pure Rust) (#182).
+    "ape",
 ];
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
@@ -149,6 +151,7 @@ impl Track {
         if self.duration.is_none() {
             self.duration = crate::midi::duration(&self.path)
                 .or_else(|| crate::tracker::duration(&self.path))
+                .or_else(|| crate::ape::duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
     }
