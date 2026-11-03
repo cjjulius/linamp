@@ -53,7 +53,7 @@ pub struct FileInfo {
 /// Extensions LinAmp can currently *write* tags for. Reading isn't restricted.
 /// MP2/MP1 are MPEG audio too, so they carry ID3 tags like MP3.
 pub const EDITABLE_EXTS: &[&str] =
-    &["mp3", "mp2", "mp1", "mpa", "flac", "ogg", "oga", "opus", "m4a", "m4b", "mp4"];
+    &["mp3", "mp2", "mp1", "mpa", "flac", "ogg", "oga", "opus", "m4a", "m4b", "mp4", "ape"];
 
 /// True when `path` uses ID3 tags (the v1/v2 model), i.e. any MPEG audio layer.
 /// Other editable formats (FLAC/Ogg Vorbis comments, MP4 atoms) carry a single
@@ -303,6 +303,7 @@ pub fn read_info(path: &Path) -> FileInfo {
         if let Some(d) = crate::midi::duration(path)
             .or_else(|| crate::tracker::duration(path))
             .or_else(|| crate::ape::duration(path))
+            .or_else(|| crate::ac3::duration(path))
         {
             info.length_secs = d.as_secs();
         }
@@ -499,9 +500,16 @@ fn apply_v2(tag: &mut lofty::tag::Tag, f: &Id3Fields) {
         if y.is_empty() {
             tag.remove_year();
             tag.remove_key(&ItemKey::RecordingDate);
-        } else if y.parse::<u32>().is_ok() {
+        } else if let Ok(n) = y.parse::<u32>() {
             tag.remove_year(); // drop any legacy TYER so the TDRC year is read
-            tag.insert_text(ItemKey::RecordingDate, y.to_string());
+            tag.remove_key(&ItemKey::RecordingDate);
+            if tag.tag_type() == lofty::tag::TagType::Ape {
+                // APEv2 has no RecordingDate mapping in lofty; it keeps the year under
+                // the "Year" item (the Accessor year), so write it there instead.
+                tag.set_year(n);
+            } else {
+                tag.insert_text(ItemKey::RecordingDate, y.to_string());
+            }
         }
     }
     num_f!(f.track, set_track, remove_track);
@@ -611,6 +619,8 @@ mod tests {
             compilation: true,
             ..Default::default()
         };
+        // APEv2 is covered by the file round-trip test below; it maps the core fields
+        // but not every extended one (bpm/compilation), so it is not in this strict set.
         for tt in [TagType::VorbisComments, TagType::Mp4Ilst] {
             let mut tag = Tag::new(tt);
             apply_v2(&mut tag, &f);
@@ -627,6 +637,34 @@ mod tests {
             assert_eq!(g.bpm, "90", "{tt:?}");
             assert!(g.compilation, "{tt:?}");
         }
+    }
+
+    #[test]
+    fn ape_tags_write_and_read_back() {
+        // Full path through lofty's Monkey's Audio writer (APEv2), gated on a local
+        // sample (qa-music is gitignored, so this skips on CI). Confirms .ape joins the
+        // tag-editable formats, not just the in-memory field mapping above.
+        let src = std::path::Path::new("qa-music/format-samples/sample.ape");
+        if !src.exists() {
+            return;
+        }
+        assert!(can_edit(src), ".ape must be tag-editable");
+        let tmp = std::env::temp_dir().join("linamp_ape_tag_test.ape");
+        std::fs::copy(src, &tmp).unwrap();
+        let fields = Id3Fields {
+            title: "Scale Test".into(),
+            artist: "LinAmp".into(),
+            album: "QA".into(),
+            year: "2026".into(),
+            ..Default::default()
+        };
+        write_single(&tmp, &fields).expect("write APEv2 tags");
+        let back = read_single(&tmp);
+        assert_eq!(back.title, "Scale Test");
+        assert_eq!(back.artist, "LinAmp");
+        assert_eq!(back.album, "QA");
+        assert_eq!(back.year, "2026");
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]

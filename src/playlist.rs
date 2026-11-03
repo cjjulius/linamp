@@ -25,6 +25,8 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "mod", "xm", "s3m", "it",
     // Monkey's Audio, decoded via crate::ape (ape-decoder, pure Rust) (#182).
     "ape",
+    // Dolby Digital, decoded via crate::ac3 (filmcraft-ac3, pure Rust) (#161).
+    "ac3", "eac3", "ec3",
 ];
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
@@ -152,6 +154,7 @@ impl Track {
             self.duration = crate::midi::duration(&self.path)
                 .or_else(|| crate::tracker::duration(&self.path))
                 .or_else(|| crate::ape::duration(&self.path))
+                .or_else(|| crate::ac3::duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
     }
