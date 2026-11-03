@@ -30,7 +30,7 @@ This is the only in-scope gap left:
 ## Audio formats
 
 Local playback flows through one symphonia path (`src/decode.rs`), with
-special-cased MIDI, tracker and Monkey's Audio renderers:
+special-cased MIDI, tracker, Monkey's Audio and Dolby Digital renderers:
 
 - MPEG audio (`.mp3`, `.mp1` / `.mp2` / `.mpa`), FLAC, Ogg Vorbis, Opus, WAV, AIFF,
   CAF and the AAC / ISO-MP4 family (`.m4a` / `.m4b` / `.mp4` / `.aac`).
@@ -39,11 +39,12 @@ special-cased MIDI, tracker and Monkey's Audio renderers:
 - MIDI (`.mid` / `.midi`) via a bundled SoundFont; tracker modules
   (`.mod` / `.xm` / `.s3m` / `.it`).
 - Monkey's Audio (`.ape`), decoded by the pure-Rust `ape-decoder` crate (#182).
+- Dolby Digital (`.ac3` / `.eac3`), decoded by the clean-room pure-Rust
+  `filmcraft-ac3` crate and downmixed to stereo (#161).
 
-Converts / rips to MP3, Ogg Vorbis, Opus, WAV and AIFF. Not offered, by design:
-AC-3 (#161) and WMA (#162) are won't-fix (proprietary / licensing); FLAC as a
-convert *output* is deferred (#190); WavPack (#182) has no viable decoder in the
-current engine.
+Converts / rips to MP3, Ogg Vorbis, Opus, FLAC, WAV and AIFF. Not offered, by
+design: WMA (#162) is won't-fix (proprietary / licensing); WavPack (#182) has no
+viable decoder in the current engine.
 
 ## Beyond 2.666 (tracked, out of scope)
 
