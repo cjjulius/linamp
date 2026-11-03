@@ -1181,3 +1181,15 @@ plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.
 - Known edge case: switching between a GEN skin and a non-GEN skin while Preferences
   is open is not specially handled (the frame updates next frame, but the OS corner
   rounding only re-applies on reopen). Closing and reopening gives the correct frame.
+
+### 2026-11-03 follow-up (QA feedback)
+
+- Preferences now shows the active title-bar variant when it is the frontmost LinAmp
+  window (its focus feeds `app_focused`, like the Library), so it no longer renders
+  dimmed while in use. Manual check: focus Preferences and confirm its title bar is
+  the bright active variant, matching the player; click away to another app and it
+  dims.
+- Title caption kerning is now even: each letter advances by its real inked width
+  plus 1px, instead of the padded width table that left uneven gaps (worst in
+  "PREFERENCES"). Verified with a headless render of both captions; still worth an
+  eyeball in the running app at normal and double-size.
