@@ -1220,6 +1220,11 @@ plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.
   Check that the look survives a restart.
 - Manual check (Pop!_OS): same toggle, confirm the StatusNotifierItem tray icon turns
   grey and back. The window/taskbar icon is set via egui's viewport Icon command.
+  Caveat: Wayland compositors do not honour per-window icons (the dock/taskbar icon
+  comes from the installed .desktop entry), so on a Wayland session only the SNI tray
+  icon will follow the toggle; the window/taskbar icon updates on X11. Verify on the
+  session type Pop!_OS/Mint actually run, and treat an unchanged taskbar icon on
+  Wayland as expected, not a bug.
 - Known limitation (best effort, as scoped): the icon shown in OS program lists and
   the "Open with" menu is not recoloured. On Windows that icon is baked into the
   executable at build time (winresource embeds assets/linamp.ico) and cannot be
