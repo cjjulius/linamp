@@ -1157,3 +1157,27 @@ whether or not LinAmp is already open:
 Manual check (Windows): with LinAmp open and a playlist built, open an audio file
 from Explorer and confirm the running window takes focus and (Enqueue) appends +
 plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.
+
+## 2026-11-03 (skinned Preferences window, needs visual QA)
+
+- The Preferences window now builds its frame from the skin's own general-purpose
+  window art (GEN.BMP/GENEX.BMP), the same parts the Media Library uses, so the two
+  windows read as one themed pair. The title bar shows "LINAMP PREFERENCES" in the
+  skin's own caption font, the side walls and bottom bar are the skin's, and the
+  close button is the skin's GEN close (press-in while held, fires on release only
+  if the cursor is still over it, like the other windows). The base skin ships these
+  parts, so this is the default look.
+- Fallback is unchanged: a skin with no GEN art falls back to the previous flat
+  title bar (skin window-background colour, boxed X) plus the 2px themed border and
+  rounded corners, exactly as before. The content (category tree, pages, footer) is
+  shared between both frames, painted on the Media Library nav palette.
+- The base skin (which has GEN) is composited in a unit test; the rest needs eyes.
+  Manual check: open Preferences with the default skin and confirm the frame matches
+  the Media Library (title bar, walls, bottom bar, caption, close button). Press and
+  hold the close button, drag off it, release, and confirm it does not close (then
+  release over it and confirm it does). Drag the title bar to move the window. Then
+  load a skin that has no GEN art and confirm Preferences falls back to the flat
+  bordered look. Check both at normal and double-size, and on a HiDPI display.
+- Known edge case: switching between a GEN skin and a non-GEN skin while Preferences
+  is open is not specially handled (the frame updates next frame, but the OS corner
+  rounding only re-applies on reopen). Closing and reopening gives the correct frame.
