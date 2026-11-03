@@ -511,28 +511,43 @@ fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool)
         let (sx, w) = cell(c)?;
         gen_glyph_ink(g, sx, w, GEN_FONT_Y_SELECTED, key_sel)
     };
-    let advance = |c: char| -> u32 {
-        if c == ' ' {
-            GEN_SPACE_W
+    // A per-letter left-kern nudge, applied only when drawing from the fallback
+    // base-skin width table (a skin that ships its own measured font is already tight,
+    // so it is left alone). The base skin's capital E sits one pixel proud of its
+    // neighbours, so pull it, and everything after it, one pixel left.
+    let fallback = table.is_none();
+    let kern = |c: char| -> i32 {
+        if fallback && c == 'E' {
+            -1
         } else {
-            ink(c).map(|(f, l)| l - f + 1 + GEN_TRACKING).unwrap_or(0)
+            0
         }
     };
-    let total: u32 = up.chars().map(advance).sum::<u32>().saturating_sub(GEN_TRACKING);
+    // Net horizontal space each char consumes: kern + inked width + tracking (a space
+    // is a fixed width). Used for both centring and drawing so the two cannot diverge.
+    let advance = |c: char| -> i32 {
+        if c == ' ' {
+            GEN_SPACE_W as i32
+        } else {
+            kern(c) + ink(c).map(|(f, l)| (l - f + 1 + GEN_TRACKING) as i32).unwrap_or(0)
+        }
+    };
+    let total = (up.chars().map(advance).sum::<i32>() - GEN_TRACKING as i32).max(0) as u32;
     let dw = dst.width();
-    let mut x = (dw / 2).saturating_sub((total + 1) / 2);
+    let mut x = (dw / 2).saturating_sub((total + 1) / 2) as i32;
     // Nudged up 2px from the geometric centre so the caption lines up with the
     // classic windows' own title text (which sits a little above centre).
     let ty = GEN_TB_H.saturating_sub(GEN_FONT_H) / 2 - 2;
     for c in up.chars() {
         if c == ' ' {
-            x += GEN_SPACE_W;
+            x += GEN_SPACE_W as i32;
             continue;
         }
         if let Some((f, l)) = ink(c) {
             let w = l - f + 1;
-            blit_keyed(dst, g, x as i32, ty as i32, f, fy, w, GEN_FONT_H, key);
-            x += w + GEN_TRACKING;
+            let dx = x + kern(c);
+            blit_keyed(dst, g, dx, ty as i32, f, fy, w, GEN_FONT_H, key);
+            x = dx + (w + GEN_TRACKING) as i32;
         }
     }
 }
