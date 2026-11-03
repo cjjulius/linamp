@@ -1557,16 +1557,15 @@ impl LinAmpApp {
     fn set_icon_dark_mode(&mut self, ctx: &egui::Context, dark: bool) {
         self.prefs.icon_dark_mode = dark;
         self.prefs.save();
-        // Window and taskbar icon: swap it in place without a restart. This runs
-        // from inside the Preferences window's own viewport closure, so the command
-        // must be addressed to the ROOT viewport explicitly; a bare send_viewport_cmd
-        // would retarget the Preferences window and leave the taskbar icon stale
-        // until the next launch.
-        if let Some(icon) = crate::icon::window_icon(dark) {
-            ctx.send_viewport_cmd_to(
-                egui::ViewportId::ROOT,
-                egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon))),
-            );
+        // Window, taskbar and Alt-Tab icon: set it on the main window directly. We
+        // cannot go through egui/winit here: its runtime Icon command only updates the
+        // small (title-bar) icon, while the taskbar button and Alt-Tab use the big
+        // icon, which otherwise would not change until the next launch. set_app_window_icon
+        // sets both on the main window (Windows WM_SETICON, X11 _NET_WM_ICON).
+        if let (Some(big), Some(small)) =
+            (crate::icon::window_rgba(dark), crate::icon::tray_rgba(dark))
+        {
+            set_app_window_icon((big.0, big.1, &big.2), (small.0, small.1, &small.2));
         }
         // The running tray baked in the old colour, so respawn it to pick up the new
         // one. Only when tray mode is on; otherwise there is no tray icon to update,

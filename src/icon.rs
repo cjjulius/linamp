@@ -40,12 +40,21 @@ fn load(bytes: &[u8], dark: bool) -> Option<RgbaImage> {
     Some(img)
 }
 
-/// The window / taskbar icon (256px), recoloured for dark mode when `dark`.
-pub fn window_icon(dark: bool) -> Option<egui::IconData> {
+/// The window / taskbar icon as raw RGBA pixels (256px), recoloured for dark mode
+/// when `dark`. Returns `(width, height, rgba)`. This is the large icon Windows uses
+/// for the taskbar button and Alt-Tab, and the one X11 stores in `_NET_WM_ICON`.
+pub fn window_rgba(dark: bool) -> Option<(u32, u32, Vec<u8>)> {
     let img = load(LOGO_256, dark)?;
-    let (width, height) = img.dimensions();
+    let (w, h) = img.dimensions();
+    Some((w, h, img.into_raw()))
+}
+
+/// The window / taskbar icon as egui `IconData` (256px), for the startup
+/// `ViewportBuilder::with_icon`, recoloured for dark mode when `dark`.
+pub fn window_icon(dark: bool) -> Option<egui::IconData> {
+    let (width, height, rgba) = window_rgba(dark)?;
     Some(egui::IconData {
-        rgba: img.into_raw(),
+        rgba,
         width,
         height,
     })
