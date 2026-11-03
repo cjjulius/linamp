@@ -129,7 +129,11 @@ fn downmix_stereo(d: &Decoded, out: &mut Vec<f32>) {
     // downmix picks the right planes regardless of how many are present.
     let (li, ri, ci, lsi, rsi) = roles(d.header.acmod, d.header.lfeon, ch.len());
     const K: f32 = 0.707_106_77; // -3 dB
-    let get = |opt: Option<usize>, i: usize| opt.map(|c| ch[c][i]).unwrap_or(0.0);
+    // Bounds-checked: a malformed frame could report an acmod implying more channels
+    // than it actually decoded, so missing planes read as silence rather than panic.
+    let get = |opt: Option<usize>, i: usize| {
+        opt.and_then(|c| ch.get(c)).and_then(|v| v.get(i)).copied().unwrap_or(0.0)
+    };
     out.reserve(n * 2);
     for i in 0..n {
         let c = get(ci, i) * K;
