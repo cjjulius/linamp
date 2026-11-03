@@ -300,7 +300,10 @@ pub fn read_info(path: &Path) -> FileInfo {
     } else {
         // MIDI and tracker modules aren't parsed by lofty, so reuse the same length
         // readers the playlist uses (SoundFont-free), so at least the duration shows.
-        if let Some(d) = crate::midi::duration(path).or_else(|| crate::tracker::duration(path)) {
+        if let Some(d) = crate::midi::duration(path)
+            .or_else(|| crate::tracker::duration(path))
+            .or_else(|| crate::ape::duration(path))
+        {
             info.length_secs = d.as_secs();
         }
         // Enrich the MIDI Format row with the SMF type (0/1/2) and track count,
