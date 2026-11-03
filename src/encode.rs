@@ -281,7 +281,13 @@ fn decode_pcm(
     progress: &mut dyn FnMut(f32),
     cancel: &dyn Fn() -> bool,
 ) -> Result<Option<(Vec<f32>, u32, u16)>> {
-    let mut source = crate::decode::open_file(src)?;
+    // Monkey's Audio has no symphonia decoder, so route it through crate::ape like the
+    // player does; everything else uses the shared symphonia path (#182).
+    let mut source: Box<dyn Source<Item = f32> + Send> = if crate::ape::is_ape(src) {
+        Box::new(crate::ape::open_ape(src)?)
+    } else {
+        Box::new(crate::decode::open_file(src)?)
+    };
     let rate = source.sample_rate();
     let channels = source.channels();
     // Estimate the total sample count from the reported duration, so decode progress
