@@ -1157,3 +1157,51 @@ whether or not LinAmp is already open:
 Manual check (Windows): with LinAmp open and a playlist built, open an audio file
 from Explorer and confirm the running window takes focus and (Enqueue) appends +
 plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.
+
+## 2026-11-03 (skinned Preferences window, needs visual QA)
+
+- The Preferences window now builds its frame from the skin's own general-purpose
+  window art (GEN.BMP/GENEX.BMP), the same parts the Media Library uses, so the two
+  windows read as one themed pair. The title bar shows "LINAMP PREFERENCES" in the
+  skin's own caption font, the side walls and bottom bar are the skin's, and the
+  close button is the skin's GEN close (press-in while held, fires on release only
+  if the cursor is still over it, like the other windows). The base skin ships these
+  parts, so this is the default look.
+- Fallback is unchanged: a skin with no GEN art falls back to the previous flat
+  title bar (skin window-background colour, boxed X) plus the 2px themed border and
+  rounded corners, exactly as before. The content (category tree, pages, footer) is
+  shared between both frames, painted on the Media Library nav palette.
+- The base skin (which has GEN) is composited in a unit test; the rest needs eyes.
+  Manual check: open Preferences with the default skin and confirm the frame matches
+  the Media Library (title bar, walls, bottom bar, caption, close button). Press and
+  hold the close button, drag off it, release, and confirm it does not close (then
+  release over it and confirm it does). Drag the title bar to move the window. Then
+  load a skin that has no GEN art and confirm Preferences falls back to the flat
+  bordered look. Check both at normal and double-size, and on a HiDPI display.
+- Known edge case: switching between a GEN skin and a non-GEN skin while Preferences
+  is open is not specially handled (the frame updates next frame, but the OS corner
+  rounding only re-applies on reopen). Closing and reopening gives the correct frame.
+
+### 2026-11-03 follow-up (QA feedback)
+
+- Preferences now shows the active title-bar variant when it is the frontmost LinAmp
+  window (its focus feeds `app_focused`, like the Library), so it no longer renders
+  dimmed while in use. Manual check: focus Preferences and confirm its title bar is
+  the bright active variant, matching the player; click away to another app and it
+  dims.
+- Title caption kerning is now even: each letter advances by its real inked width
+  plus 1px, instead of the padded width table that left uneven gaps (worst in
+  "PREFERENCES"). Verified with a headless render of both captions; still worth an
+  eyeball in the running app at normal and double-size.
+
+### 2026-11-03 follow-up 2 (QA: Preferences trapped a file dialog)
+
+- Opening a native OS dialog (e.g. Load Skin...) while Preferences was open left the
+  Preferences window floating on top of the dialog but unmovable (it is always-on-top
+  on its own, and pick_dialog only suspended topmost when the global always-on-top
+  pref was on). pick_dialog now also drops the Preferences window below the dialog
+  when the pref is off, and restores it afterwards. Manual check (Windows): open
+  Preferences, then Options > Load Skin..., and confirm the file dialog comes to the
+  front and Preferences no longer covers it; after picking or cancelling, Preferences
+  returns to the front. Known limitation: the per-window drop is Windows-only, so on
+  X11 this specific case (pref off) is not yet addressed.

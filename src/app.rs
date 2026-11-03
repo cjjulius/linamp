@@ -577,6 +577,9 @@ struct WindowGeom {
     foc_eq: bool,
     foc_pl: bool,
     foc_lib: bool,
+    /// Preferences window focus, so the app stays "focused" (and the GEN frame stays
+    /// active) when Preferences is the frontmost LinAmp window.
+    foc_prefs: bool,
     /// Active window drag, and the playlist resize grab offsets (width, height) px.
     drag: Option<Dragging>,
     resize_pl: Option<egui::Vec2>,
@@ -807,6 +810,16 @@ pub struct LinAmpApp {
     /// Set when Preferences is (re)selected from the menu, so the next frame raises and
     /// focuses the window even if it was already open and had been covered.
     prefs_raise: bool,
+    /// Composed GEN.BMP Preferences-window frame + a fingerprint (skin, active,
+    /// close-pressed, size), so it is only re-composited when something changes.
+    /// Mirrors the Media Library's `lib_tex`/`lib_tex_sig`; only used when the skin
+    /// ships GEN art (the fallback path paints a flat title bar instead).
+    prefs_tex: Option<egui::TextureHandle>,
+    prefs_tex_sig: Option<(String, bool, bool, u32, u32)>,
+    /// The Preferences close button is held: armed on a press over it, it keeps the
+    /// pressed sprite for the whole press (even if the cursor moves off) and fires on
+    /// release only if the cursor is still over it, like the classic windows.
+    prefs_close_armed: bool,
     lib_visible: bool,
     /// Whether the Minibrowser window (a themed nod to the classic player's SHOUTcast pane)
     /// is open. Transient, it opens from the Options menu each session.
@@ -1041,6 +1054,7 @@ impl LinAmpApp {
                 foc_eq: false,
                 foc_pl: false,
                 foc_lib: false,
+                foc_prefs: false,
                 drag: None,
                 resize_pl: None,
                 root_last: None,
@@ -1149,6 +1163,9 @@ impl LinAmpApp {
             prefs_drag: None,
             prefs_rounded: None,
             prefs_raise: false,
+            prefs_tex: None,
+            prefs_tex_sig: None,
+            prefs_close_armed: false,
             lib_visible: false,
             mb_visible: false,
             tag_editor: None,
@@ -1736,20 +1753,33 @@ impl LinAmpApp {
     fn pick_dialog<T>(&self, pick: impl FnOnce() -> T) -> T {
         // Restore always-on-top from a Drop guard, so an unwind out of `pick` still
         // re-raises the windows. A bare restore after `pick()` would be skipped on a
-        // panic, leaving every window stuck non-topmost (#172).
-        struct TopmostGuard(bool);
+        // panic, leaving the windows stuck non-topmost (#172).
+        struct TopmostGuard {
+            group: bool,
+            prefs: bool,
+        }
         impl Drop for TopmostGuard {
             fn drop(&mut self) {
-                if self.0 {
+                if self.group {
                     set_windows_topmost(true);
+                } else if self.prefs {
+                    set_window_topmost("LinAmp Preferences", true);
                 }
             }
         }
-        let restore = self.prefs.always_on_top;
-        if restore {
+        let group = self.prefs.always_on_top;
+        // The Preferences window is always-on-top on its own, regardless of the global
+        // pref, so drop it below the dialog even when the group isn't topmost. Otherwise
+        // it floats over the file dialog and, being non-focusable while the dialog is
+        // modal, leaves the user unable to move or reach it (#172). When the group is
+        // topmost the group-level call already covers Preferences.
+        let prefs = self.prefs_open && !group;
+        if group {
             set_windows_topmost(false);
+        } else if prefs {
+            set_window_topmost("LinAmp Preferences", false);
         }
-        let _guard = TopmostGuard(restore);
+        let _guard = TopmostGuard { group, prefs };
         pick()
     }
 
@@ -3030,17 +3060,13 @@ impl LinAmpApp {
             // windows where a sibling can still come forward.
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
         let id = egui::ViewportId::from_hash_of("linamp_prefs");
-        // Skin nav colours for the category tree, so it matches the Media Library nav
-        // whatever skin is applied.
-        let (nav_list_fill, nav_row_col, nav_sel_bg, nav_sel_col, nav_dash) =
-            self.skin_nav_colors();
-        // Frame the window with the skin's window-background colour, on the title bar
-        // and the 2px border, so Preferences reads like one of the player's own skin
-        // windows instead of a foreign dialog. The slight rounding and the OS corner
-        // region (below) keep it legible where it overlaps another window.
-        let win_bg = self.skin_window_bg();
-        let border_col = win_bg;
-        let corner = 6.0_f32;
+        // When the current skin ships general-purpose window art (GEN.BMP/GENEX.BMP),
+        // frame Preferences with the skin's own composited window exactly like the Media
+        // Library, so the two read as one themed pair. Otherwise fall back to the flat
+        // skin-coloured title bar and border (the look before this change), so a skin
+        // without the parts still gets a legible, on-theme dialog.
+        let gen = self.ui_mode == UiMode::Classic
+            && self.classic.as_ref().map(|c| c.has_gen()).unwrap_or(false);
         let mut close = false;
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             // Raise and focus the window when Preferences was just (re)selected, so it
@@ -3049,164 +3075,342 @@ impl LinAmpApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 self.prefs_raise = false;
             }
-            // Top: title bar in the skin's window-background colour (the window is
-            // borderless). Drag it to move the window; the × closes it. Mirrors the
-            // Library's title bar.
-            egui::TopBottomPanel::top("prefs_titlebar")
-                .exact_height(20.0)
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    let (bar, bar_resp) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), 20.0),
-                        egui::Sense::click_and_drag(),
-                    );
-                    let txt = crate::skin::contrast_text(win_bg);
-                    ui.painter().rect_filled(bar, 0.0, win_bg);
-                    ui.painter().text(
-                        bar.left_center() + egui::vec2(6.0, 0.0),
-                        egui::Align2::LEFT_CENTER,
-                        "LinAmp Preferences",
-                        egui::FontId::proportional(13.0),
-                        txt,
-                    );
-                    // Close box on the right.
-                    let x_rect = egui::Rect::from_min_size(
-                        egui::pos2(bar.right() - 18.0, bar.center().y - 7.0),
-                        egui::vec2(14.0, 14.0),
-                    );
-                    let x_resp =
-                        ui.interact(x_rect, ui.id().with("prefs_close"), egui::Sense::click());
-                    ui.painter()
-                        .rect_stroke(x_rect, 2.0, egui::Stroke::new(1.0_f32, txt));
-                    ui.painter().text(
-                        x_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "×",
-                        egui::FontId::proportional(13.0),
-                        txt,
-                    );
-                    if x_resp.clicked() {
-                        close = true;
-                    }
-                    // Drag the title bar to move the window (skip when over the ×).
-                    if bar_resp.drag_started() && !x_resp.hovered() {
-                        if let Some(g) = global_cursor_points(ctx) {
-                            self.prefs_drag = Some(g - pos);
-                        }
-                    }
-                    if bar_resp.dragged() {
-                        if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.prefs_drag) {
-                            let np = g - grab;
-                            self.prefs_pos = Some(np);
-                            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(np));
-                        }
-                    }
-                    if bar_resp.drag_stopped() {
-                        self.prefs_drag = None;
-                    }
+            // Track this window's focus so the app stays "focused" (and the GEN frame
+            // shows its active variant) while Preferences is the frontmost window, the
+            // same way the Library feeds `app_focused`. Read next frame by
+            // `render_classic` (children render after the aggregate is computed).
+            self.geom.foc_prefs = ctx
+                .input(|i| i.viewport().focused)
+                .unwrap_or(self.geom.foc_prefs);
+            if gen {
+                self.ui_prefs_gen(ctx, &mut close);
+            } else {
+                self.ui_prefs_fallback(ctx, &mut close);
+            }
+            self.apply_base_cursor(ctx, "LinAmp Preferences");
+            if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
+                close = true;
+            }
+        });
+        // Round the OS window's corners to match the painted border, scaled to physical
+        // pixels for the current DPI. Only the flat fallback is rounded; the GEN frame
+        // paints its own square classic corners, so there the window stays rectangular.
+        if gen {
+            self.prefs_rounded = None;
+        } else {
+            let corner = 6.0_f32;
+            let ppp = ctx.pixels_per_point();
+            if self.prefs_rounded != Some(ppp) {
+                let radius = (corner * ppp).round() as i32;
+                if platform_win::round_popup_window("LinAmp Preferences", radius, true) {
+                    self.prefs_rounded = Some(ppp);
+                } else {
+                    ctx.request_repaint();
+                }
+            }
+        }
+        if close {
+            self.prefs_open = false;
+        }
+    }
+
+    /// Preferences framed by the skin's GEN.BMP window (title bar with the caption in
+    /// the skin's own font, side walls, bottom bar and close button), mirroring the
+    /// Media Library's `ui_library_gen`. The content is inset into the frame interior.
+    fn ui_prefs_gen(&mut self, ctx: &egui::Context, close: &mut bool) {
+        // Shared app-level focus, so Preferences doesn't dim merely because another
+        // LinAmp window was clicked (matches the Library).
+        let active = self.geom.app_focused;
+        // The frame insets (native px). Preferences is a fixed-size dialog drawn 1:1 in
+        // points, so the insets are used directly as points (no per-window scaling like
+        // the Library, whose window zooms with the player).
+        let (top, right, bottom, left) = classic::ClassicSkin::gen_insets();
+        let (top, right, bottom, left) = (top as f32, right as f32, bottom as f32, left as f32);
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none())
+            .show(ctx, |ui| {
+                let full = ui.max_rect();
+                let (w, h) = (full.width().round() as u32, full.height().round() as u32);
+                // Close button (top-right corner of the frame). Interact before composing
+                // so the pressed sprite can be baked into the frame texture. Armed on a
+                // press over it, it keeps the pressed sprite for the whole press even if
+                // the cursor moves off, and fires on release only if the cursor is still
+                // over it, matching the classic windows and the Library.
+                let close_rect = egui::Rect::from_min_max(
+                    egui::pos2(full.right() - 20.0, full.top() + 3.0),
+                    egui::pos2(full.right() - 6.0, full.top() + 17.0),
+                );
+                let (p_pressed, p_released, p_down, p_pos) = ui.input(|i| {
+                    (
+                        i.pointer.primary_pressed(),
+                        i.pointer.primary_released(),
+                        i.pointer.primary_down(),
+                        i.pointer.latest_pos(),
+                    )
                 });
-            // Left: the category tree, painted like the Media Library nav so it reads the
-            // same whatever skin is applied: a list-fill background, skin item text, the
-            // skin selection colours, and a dashed gray tree guide under each group. The
-            // categories sit under bold group headings, indented beneath them; a None
-            // heading renders its categories at the top level with no guide.
-            let nav_frame = egui::Frame::none()
-                .fill(nav_list_fill)
-                .inner_margin(egui::Margin::same(4.0));
-            egui::SidePanel::left("prefs_cats")
-                .resizable(false)
-                .exact_width(160.0)
-                .frame(nav_frame)
-                .show(ctx, |ui| {
-                    ui.add_space(2.0);
-                    ui.visuals_mut().selection.bg_fill = nav_sel_bg;
-                    ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
-                    // Flush the selectable rows to the left margin so top-level nodes line
-                    // up with the headings.
-                    ui.spacing_mut().button_padding.x = 0.0;
-                    let font = egui::FontId::proportional(13.0);
-                    let groups: &[(Option<&str>, &[PrefTab])] = &[
-                        (
-                            Some("General Preferences"),
-                            &[PrefTab::Display, PrefTab::Playback, PrefTab::Playlist, PrefTab::Tags],
-                        ),
-                        (Some("Media Library"), &[PrefTab::Conversion]),
-                        (None, &[PrefTab::OptionalFeatures, PrefTab::About]),
-                    ];
-                    for (heading, tabs) in groups {
-                        let indent = heading.is_some();
-                        if let Some(h) = heading {
-                            ui.add_space(2.0);
-                            ui.label(
-                                egui::RichText::new(*h)
-                                    .strong()
-                                    .color(nav_row_col)
-                                    .font(font.clone()),
-                            );
+                let over_close = p_pos.is_some_and(|p| close_rect.contains(p));
+                if p_pressed && over_close {
+                    self.prefs_close_armed = true;
+                }
+                let close_pressed = self.prefs_close_armed && p_down;
+                if p_released {
+                    if self.prefs_close_armed && over_close {
+                        *close = true;
+                    }
+                    self.prefs_close_armed = false;
+                }
+                // (Re)compose and cache the frame texture, now including the press state.
+                let sig = (self.theme.name.clone(), active, close_pressed, w, h);
+                if self.prefs_tex_sig.as_ref() != Some(&sig) {
+                    if let Some(img) = self.classic.as_ref().and_then(|c| {
+                        c.compose_gen_window(w, h, active, close_pressed, "LinAmp Preferences")
+                    }) {
+                        let color = egui::ColorImage::from_rgba_unmultiplied(
+                            [w as usize, h as usize],
+                            img.as_raw(),
+                        );
+                        self.prefs_tex = Some(ctx.load_texture(
+                            "prefs_gen",
+                            color,
+                            egui::TextureOptions::NEAREST,
+                        ));
+                        self.prefs_tex_sig = Some(sig);
+                    }
+                }
+                if let Some(tex) = &self.prefs_tex {
+                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                    ui.painter().image(tex.id(), full, uv, Color32::WHITE);
+                }
+                // Drag the title bar (minus the close corner) to move the window.
+                let drag_rect = egui::Rect::from_min_max(
+                    full.min,
+                    egui::pos2(full.right() - 24.0, full.top() + top),
+                );
+                let dresp = ui.interact(
+                    drag_rect,
+                    ui.id().with("prefs_gen_drag"),
+                    egui::Sense::click_and_drag(),
+                );
+                self.handle_prefs_drag(ctx, &dresp);
+                // Inset the content into the frame interior.
+                let content = egui::Rect::from_min_max(
+                    egui::pos2(full.left() + left, full.top() + top),
+                    egui::pos2(full.right() - right, full.bottom() - bottom),
+                );
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(content), |ui| {
+                    self.ui_prefs_body(ctx, ui, close);
+                });
+            });
+    }
+
+    /// Preferences framed by the flat skin-coloured title bar and a 2px border, used
+    /// when the skin has no GEN.BMP window art. This is the look before the skinned
+    /// frame existed, kept as the fallback. Mirrors the Library's fallback title bar.
+    fn ui_prefs_fallback(&mut self, ctx: &egui::Context, close: &mut bool) {
+        let win_bg = self.skin_window_bg();
+        let nav_list_fill = self.skin_nav_colors().0;
+        let corner = 6.0_f32;
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(nav_list_fill))
+            .show(ctx, |ui| {
+                self.ui_prefs_flat_titlebar(ctx, ui, win_bg, close);
+                self.ui_prefs_body(ctx, ui, close);
+            });
+        // Themed border just inside the window edge, matching the rounded corner region
+        // applied in `ui_prefs`. Inset one point so the whole 2px line stays inside the
+        // region (a line centred on the edge would have its outer half clipped at the
+        // corners). Same approach as the classic menus (#108).
+        let vr = ctx.screen_rect().shrink(1.0);
+        ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("linamp_prefs_border"),
+        ))
+        .rect_stroke(
+            vr,
+            egui::Rounding::same(corner - 1.0),
+            egui::Stroke::new(2.0_f32, win_bg),
+        );
+    }
+
+    /// The flat fallback title bar: the skin window-background colour, the caption on
+    /// the left, and a boxed × on the right. Drag it to move the window (skip when over
+    /// the ×). Drawn into `ui` so it sits above the shared content body.
+    fn ui_prefs_flat_titlebar(
+        &mut self,
+        ctx: &egui::Context,
+        ui: &mut egui::Ui,
+        win_bg: Color32,
+        close: &mut bool,
+    ) {
+        let (bar, bar_resp) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 20.0),
+            egui::Sense::click_and_drag(),
+        );
+        let txt = crate::skin::contrast_text(win_bg);
+        ui.painter().rect_filled(bar, 0.0, win_bg);
+        ui.painter().text(
+            bar.left_center() + egui::vec2(6.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            "LinAmp Preferences",
+            egui::FontId::proportional(13.0),
+            txt,
+        );
+        let x_rect = egui::Rect::from_min_size(
+            egui::pos2(bar.right() - 18.0, bar.center().y - 7.0),
+            egui::vec2(14.0, 14.0),
+        );
+        let x_resp = ui.interact(x_rect, ui.id().with("prefs_close"), egui::Sense::click());
+        ui.painter()
+            .rect_stroke(x_rect, 2.0, egui::Stroke::new(1.0_f32, txt));
+        ui.painter().text(
+            x_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "×",
+            egui::FontId::proportional(13.0),
+            txt,
+        );
+        if x_resp.clicked() {
+            *close = true;
+        }
+        // Drag starts only off the × box; the move/stop handling is shared.
+        if bar_resp.drag_started() && !x_resp.hovered() {
+            if let (Some(g), Some(p)) = (global_cursor_points(ctx), self.prefs_pos) {
+                self.prefs_drag = Some(g - p);
+            }
+        }
+        if bar_resp.dragged() || bar_resp.drag_stopped() {
+            self.handle_prefs_drag(ctx, &bar_resp);
+        }
+    }
+
+    /// Move the Preferences window while its title bar is dragged, mirroring the
+    /// Library's `handle_lib_drag`. `drag_started` arming is done by the caller (the
+    /// flat title bar skips the × box; the GEN path uses a dedicated drag rect).
+    fn handle_prefs_drag(&mut self, ctx: &egui::Context, resp: &egui::Response) {
+        if resp.drag_started() {
+            if let (Some(g), Some(p)) = (global_cursor_points(ctx), self.prefs_pos) {
+                self.prefs_drag = Some(g - p);
+            }
+        }
+        if resp.dragged() {
+            if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.prefs_drag) {
+                let np = g - grab;
+                self.prefs_pos = Some(np);
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(np));
+            }
+        }
+        if resp.drag_stopped() {
+            self.prefs_drag = None;
+        }
+    }
+
+    /// The Preferences content: the category tree, the selected page, and the footer.
+    /// Laid out with `show_inside` so it sits inside either the flat fallback window or
+    /// the GEN frame interior, painted on the Media Library nav palette so it matches
+    /// the library whatever skin is applied.
+    fn ui_prefs_body(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, close: &mut bool) {
+        let (nav_list_fill, nav_row_col, nav_sel_bg, nav_sel_col, nav_dash) =
+            self.skin_nav_colors();
+        // Left: the category tree, a list-fill background with skin item text, the skin
+        // selection colours, and a dashed gray tree guide under each group. Categories
+        // sit under bold group headings, indented beneath them; a None heading renders
+        // its categories at the top level with no guide.
+        let nav_frame = egui::Frame::none()
+            .fill(nav_list_fill)
+            .inner_margin(egui::Margin::same(4.0));
+        egui::SidePanel::left("prefs_cats")
+            .resizable(false)
+            .exact_width(160.0)
+            .frame(nav_frame)
+            .show_inside(ui, |ui| {
+                ui.add_space(2.0);
+                ui.visuals_mut().selection.bg_fill = nav_sel_bg;
+                ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
+                // Flush the selectable rows to the left margin so top-level nodes line
+                // up with the headings.
+                ui.spacing_mut().button_padding.x = 0.0;
+                let font = egui::FontId::proportional(13.0);
+                let groups: &[(Option<&str>, &[PrefTab])] = &[
+                    (
+                        Some("General Preferences"),
+                        &[PrefTab::Display, PrefTab::Playback, PrefTab::Playlist, PrefTab::Tags],
+                    ),
+                    (Some("Media Library"), &[PrefTab::Conversion]),
+                    (None, &[PrefTab::OptionalFeatures, PrefTab::About]),
+                ];
+                for (heading, tabs) in groups {
+                    let indent = heading.is_some();
+                    if let Some(h) = heading {
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new(*h)
+                                .strong()
+                                .color(nav_row_col)
+                                .font(font.clone()),
+                        );
+                    }
+                    let mut rects: Vec<egui::Rect> = Vec::with_capacity(tabs.len());
+                    for &tab in *tabs {
+                        let selected = self.prefs_tab == tab;
+                        let txt = if selected { nav_sel_col } else { nav_row_col };
+                        // Leading space clears the gutter for the painted guide on
+                        // indented children; top-level rows start flush.
+                        let mut job = egui::text::LayoutJob::default();
+                        job.append(
+                            tab.label(),
+                            if indent { 15.0 } else { 0.0 },
+                            egui::text::TextFormat {
+                                font_id: font.clone(),
+                                color: txt,
+                                ..Default::default()
+                            },
+                        );
+                        let resp = ui.selectable_label(selected, job);
+                        if resp.clicked() {
+                            self.prefs_tab = tab;
                         }
-                        let mut rects: Vec<egui::Rect> = Vec::with_capacity(tabs.len());
-                        for &tab in *tabs {
-                            let selected = self.prefs_tab == tab;
-                            let txt = if selected { nav_sel_col } else { nav_row_col };
-                            // Leading space clears the gutter for the painted guide on
-                            // indented children; top-level rows start flush.
-                            let mut job = egui::text::LayoutJob::default();
-                            job.append(
-                                tab.label(),
-                                if indent { 15.0 } else { 0.0 },
-                                egui::text::TextFormat {
-                                    font_id: font.clone(),
-                                    color: txt,
-                                    ..Default::default()
-                                },
-                            );
-                            let resp = ui.selectable_label(selected, job);
-                            if resp.clicked() {
-                                self.prefs_tab = tab;
-                            }
-                            if indent {
-                                rects.push(resp.rect);
-                            }
-                        }
-                        if indent && !rects.is_empty() {
-                            library_ui::paint_nav_tree(ui.painter(), &rects, nav_dash, 1.0);
+                        if indent {
+                            rects.push(resp.rect);
                         }
                     }
-                });
-            // Bottom: Close on the left, a compact version on the right (always
-            // visible, whichever category is open). Painted on the nav's list fill so
-            // the footer matches the category tree.
-            egui::TopBottomPanel::bottom("prefs_footer")
-                .frame(egui::Frame::side_top_panel(&ctx.style()).fill(nav_list_fill))
-                .show(ctx, |ui| {
-                    style_prefs_panel(ui, nav_list_fill, nav_row_col, nav_sel_bg, nav_sel_col);
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Close").clicked() {
-                            close = true;
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("LinAmp {}", env!("CARGO_PKG_VERSION")))
-                                    .small()
-                                    .weak(),
-                            );
-                        });
+                    if indent && !rects.is_empty() {
+                        library_ui::paint_nav_tree(ui.painter(), &rects, nav_dash, 1.0);
+                    }
+                }
+            });
+        // Bottom: Close on the left, a compact version on the right (always visible,
+        // whichever category is open). Painted on the nav's list fill so the footer
+        // matches the category tree.
+        egui::TopBottomPanel::bottom("prefs_footer")
+            .frame(egui::Frame::side_top_panel(&ctx.style()).fill(nav_list_fill))
+            .show_inside(ui, |ui| {
+                style_prefs_panel(ui, nav_list_fill, nav_row_col, nav_sel_bg, nav_sel_col);
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Close").clicked() {
+                        *close = true;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("LinAmp {}", env!("CARGO_PKG_VERSION")))
+                                .small()
+                                .weak(),
+                        );
                     });
-                    ui.add_space(4.0);
                 });
-            // Right: the selected category's options.
-            // Right: the selected category's page, in a scroll area so a category
-            // can grow tall without the fixed window clipping it. Each arm just
-            // dispatches to a `prefs_page_*` method, see `pref_section` for the
-            // pattern that keeps every page consistent as options are added.
-            egui::CentralPanel::default()
-                .frame(egui::Frame::central_panel(&ctx.style()).fill(nav_list_fill))
-                .show(ctx, |ui| {
-                    style_prefs_panel(ui, nav_list_fill, nav_row_col, nav_sel_bg, nav_sel_col);
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| match self.prefs_tab {
+                ui.add_space(4.0);
+            });
+        // Right: the selected category's page, in a scroll area so a category can grow
+        // tall without the fixed window clipping it. Each arm just dispatches to a
+        // `prefs_page_*` method, see `pref_section` for the pattern that keeps every
+        // page consistent as options are added.
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(&ctx.style()).fill(nav_list_fill))
+            .show_inside(ui, |ui| {
+                style_prefs_panel(ui, nav_list_fill, nav_row_col, nav_sel_bg, nav_sel_col);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match self.prefs_tab {
                         PrefTab::Display => self.prefs_page_display(ctx, ui),
                         PrefTab::Playback => self.prefs_page_playback(ui),
                         PrefTab::Conversion => self.prefs_page_conversion(ui),
@@ -3216,40 +3420,6 @@ impl LinAmpApp {
                         PrefTab::About => self.prefs_page_about(ui),
                     });
             });
-            // Themed border just inside the window edge, matching the rounded corner
-            // region applied below. Inset one point so the whole 2px line stays inside
-            // the region (a line centred on the edge would have its outer half clipped
-            // at the corners). Same approach as the classic menus (#108).
-            let vr = ctx.screen_rect().shrink(1.0);
-            ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                egui::Id::new("linamp_prefs_border"),
-            ))
-            .rect_stroke(
-                vr,
-                egui::Rounding::same(corner - 1.0),
-                egui::Stroke::new(2.0_f32, border_col),
-            );
-            self.apply_base_cursor(ctx, "LinAmp Preferences");
-            if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
-                close = true;
-            }
-        });
-        // Round the OS window's corners to match the painted border, scaled to physical
-        // pixels for the current DPI. Applied once the window exists and re-applied if
-        // the DPI changes; retried on later frames until it succeeds.
-        let ppp = ctx.pixels_per_point();
-        if self.prefs_rounded != Some(ppp) {
-            let radius = (corner * ppp).round() as i32;
-            if platform_win::round_popup_window("LinAmp Preferences", radius, true) {
-                self.prefs_rounded = Some(ppp);
-            } else {
-                ctx.request_repaint();
-            }
-        }
-        if close {
-            self.prefs_open = false;
-        }
     }
 
     /// One titled group of related settings, drawn with uniform spacing so every
@@ -4265,6 +4435,9 @@ impl LinAmpApp {
         if !self.lib_visible {
             self.geom.foc_lib = false;
         }
+        if !self.prefs_open {
+            self.geom.foc_prefs = false;
+        }
         // A classic popup menu is part of our app: keep the app considered focused
         // while one is open so the windows stay on their active title bars instead
         // of dimming (the popup is a separate OS window that may take focus).
@@ -4272,6 +4445,7 @@ impl LinAmpApp {
             || self.geom.foc_eq
             || self.geom.foc_pl
             || self.geom.foc_lib
+            || self.geom.foc_prefs
             || self.popups.cur.is_some();
 
         // Root viewport = main window.
