@@ -35,7 +35,7 @@ impl super::LinAmpApp {
                 self.repeat_all.hash(&mut h);
                 self.eq_visible.hash(&mut h);
                 self.pl_visible.hash(&mut h);
-                self.time_remaining.hash(&mut h);
+                self.prefs.time_remaining.hash(&mut h);
                 self.time_blink_hidden.hash(&mut h);
                 (self.viz_mode as u8).hash(&mut h);
                 self.player.volume().to_bits().hash(&mut h);
@@ -85,7 +85,7 @@ impl super::LinAmpApp {
                 self.plview.px_h.to_bits().hash(&mut h);
                 self.plview.first.hash(&mut h);
                 self.pl_pressed_button().hash(&mut h);
-                self.time_remaining.hash(&mut h);
+                self.prefs.time_remaining.hash(&mut h);
                 self.time_blink_hidden.hash(&mut h);
                 self.playlist.len().hash(&mut h);
                 self.playlist.current.hash(&mut h);
@@ -261,7 +261,7 @@ impl super::LinAmpApp {
                                 classic::fmt_pl_time_signed(
                                     self.player.position().as_secs_f32(),
                                     dur,
-                                    self.time_remaining,
+                                    self.prefs.time_remaining,
                                 )
                             } else if dur > 0.0 {
                                 classic::fmt_pl_time(dur)
@@ -322,7 +322,7 @@ impl super::LinAmpApp {
                         pressed: self.pl_pressed_button(),
                         elapsed_secs,
                         cur_duration,
-                        time_remaining: self.time_remaining,
+                        time_remaining: self.prefs.time_remaining,
                         total_secs,
                         total_partial,
                         time_hidden: self.time_blink_hidden,
