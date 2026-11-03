@@ -4,7 +4,7 @@
 //! black and grey for people who would rather it not stand out, without touching the
 //! installed files: the recolour happens at runtime from the one embedded source, so
 //! there is a single logo to maintain and both looks stay in sync. It applies to the
-//! window and taskbar icon and, while running, the tray icon. See [`recolour`].
+//! window and taskbar icon and, while running, the tray icon. See [`desaturate`].
 
 use image::RgbaImage;
 

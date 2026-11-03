@@ -775,9 +775,19 @@ mod windows_impl {
             d[2] = s[0]; // R
             d[3] = s[3]; // A
         }
-        // A monochrome mask bitmap; all-zero means "use the colour (and its alpha)
-        // everywhere", so transparency comes entirely from the 32bpp alpha channel.
-        let mask = CreateBitmap(w as i32, h as i32, 1, 1, std::ptr::null());
+        // A monochrome mask bitmap, explicitly zeroed: all-zero means "use the
+        // colour (and its alpha) everywhere", so transparency comes entirely from the
+        // 32bpp alpha channel. CreateBitmap leaves the bits undefined when given a
+        // null pointer, so pass a zeroed buffer (monochrome rows are WORD-aligned).
+        let mask_stride = ((w as usize + 15) / 16) * 2;
+        let mask_bits = vec![0u8; mask_stride * h as usize];
+        let mask = CreateBitmap(
+            w as i32,
+            h as i32,
+            1,
+            1,
+            mask_bits.as_ptr() as *const core::ffi::c_void,
+        );
         if mask == 0 {
             DeleteObject(color);
             return None;

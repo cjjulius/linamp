@@ -1543,12 +1543,7 @@ impl LinAmpApp {
         self.prefs.save();
         // Re-create the tray to match: spawning disabled drops the icon, enabled
         // adds it, and the old tray's Drop removes the previous icon.
-        let (tray, rx) = crate::tray::Tray::spawn(ctx, enabled, self.prefs.icon_dark_mode);
-        self._tray = tray;
-        self.tray_rx = rx;
-        self.tray_mode = enabled && self._tray.is_active();
-        // The fresh tray starts on default colours; push the current skin's.
-        self.push_tray_theme();
+        self.respawn_tray(ctx, enabled);
         set_taskbar_button("LinAmp", !self.tray_mode);
         // Leaving tray mode while the window is hidden would strand it; bring it back.
         if !self.tray_mode && self.hidden_to_tray {
@@ -1570,12 +1565,20 @@ impl LinAmpApp {
         // one. Only when tray mode is on; otherwise there is no tray icon to update,
         // and the window mode (taskbar button, hidden state) is unchanged.
         if self.prefs.tray_enabled {
-            let (tray, rx) = crate::tray::Tray::spawn(ctx, true, dark);
-            self._tray = tray;
-            self.tray_rx = rx;
-            self.tray_mode = self._tray.is_active();
-            self.push_tray_theme();
+            self.respawn_tray(ctx, true);
         }
+    }
+
+    /// Respawn the tray to match the current state: drop the old icon and start a
+    /// fresh one for `enabled`, using the current `icon_dark_mode` colour, then push
+    /// the skin's menu palette (a fresh tray starts on default colours). Shared by
+    /// the window-mode and icon-colour toggles so the respawn stays in one place.
+    fn respawn_tray(&mut self, ctx: &egui::Context, enabled: bool) {
+        let (tray, rx) = crate::tray::Tray::spawn(ctx, enabled, self.prefs.icon_dark_mode);
+        self._tray = tray;
+        self.tray_rx = rx;
+        self.tray_mode = enabled && self._tray.is_active();
+        self.push_tray_theme();
     }
 
     /// Push the current skin's menu palette to the tray so its native menu matches
