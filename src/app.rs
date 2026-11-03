@@ -984,7 +984,8 @@ impl LinAmpApp {
         let fft = FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE);
         let prefs = Prefs::load();
         let scale = prefs.scale();
-        let (tray, tray_rx) = crate::tray::Tray::spawn(&cc.egui_ctx, prefs.tray_enabled);
+        let (tray, tray_rx) =
+            crate::tray::Tray::spawn(&cc.egui_ctx, prefs.tray_enabled, prefs.icon_dark_mode);
         // Global media keys (#165) are independent of tray mode, so they always
         // spawn; the listener is a no-op where unsupported.
         let (media_keys, media_keys_rx) = crate::mediakeys::MediaKeys::spawn(&cc.egui_ctx);
@@ -1542,7 +1543,7 @@ impl LinAmpApp {
         self.prefs.save();
         // Re-create the tray to match: spawning disabled drops the icon, enabled
         // adds it, and the old tray's Drop removes the previous icon.
-        let (tray, rx) = crate::tray::Tray::spawn(ctx, enabled);
+        let (tray, rx) = crate::tray::Tray::spawn(ctx, enabled, self.prefs.icon_dark_mode);
         self._tray = tray;
         self.tray_rx = rx;
         self.tray_mode = enabled && self._tray.is_active();
@@ -1552,6 +1553,28 @@ impl LinAmpApp {
         // Leaving tray mode while the window is hidden would strand it; bring it back.
         if !self.tray_mode && self.hidden_to_tray {
             self.show_from_tray(ctx);
+        }
+    }
+
+    /// Switch Icon Dark Mode live (#223): recolour the window and taskbar icon now,
+    /// and respawn the tray (when it is running) so its icon matches. Persists the
+    /// choice, so the next launch starts with the chosen look.
+    fn set_icon_dark_mode(&mut self, ctx: &egui::Context, dark: bool) {
+        self.prefs.icon_dark_mode = dark;
+        self.prefs.save();
+        // Window and taskbar icon: swap it in place without a restart.
+        if let Some(icon) = crate::icon::window_icon(dark) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon))));
+        }
+        // The running tray baked in the old colour, so respawn it to pick up the new
+        // one. Only when tray mode is on; otherwise there is no tray icon to update,
+        // and the window mode (taskbar button, hidden state) is unchanged.
+        if self.prefs.tray_enabled {
+            let (tray, rx) = crate::tray::Tray::spawn(ctx, true, dark);
+            self._tray = tray;
+            self.tray_rx = rx;
+            self.tray_mode = self._tray.is_active();
+            self.push_tray_theme();
         }
     }
 
@@ -3468,6 +3491,17 @@ impl LinAmpApp {
                     self.render.cur_cursor = [None; 3];
                 }
             }
+        });
+        Self::pref_section(ui, "Icon", |ui| {
+            let mut dark = self.prefs.icon_dark_mode;
+            if ui
+                .checkbox(&mut dark, "Icon Dark Mode (black and grey logo)")
+                .changed()
+            {
+                self.set_icon_dark_mode(ctx, dark);
+            }
+            ui.add_space(4.0);
+            ui.weak("Recolours the LinAmp logo from black and green to black and grey for the window, taskbar and tray icon. Applies right away.");
         });
         Self::pref_section(ui, "System tray", |ui| {
             let mut tray = self.prefs.tray_enabled;

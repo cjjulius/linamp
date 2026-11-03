@@ -136,14 +136,16 @@ impl Tray {
     /// Build the tray icon (when `enabled`) and return it together with the
     /// receiver the app drains. A disabled or unsupported tray still returns a
     /// valid receiver, it just never yields, so callers need no platform checks.
-    pub fn spawn(ctx: &egui::Context, enabled: bool) -> (Tray, Receiver<TrayAction>) {
+    /// `dark` picks the Icon Dark Mode (black-and-grey) logo over the usual
+    /// black-and-green one (#223); the app respawns the tray to switch looks.
+    pub fn spawn(ctx: &egui::Context, enabled: bool, dark: bool) -> (Tray, Receiver<TrayAction>) {
         let (tx, rx) = std::sync::mpsc::channel();
         let colors = Arc::new(MenuColors::new());
 
         #[cfg(windows)]
         {
             let win = if enabled {
-                windows_impl::WinTray::spawn(ctx.clone(), tx, colors.clone())
+                windows_impl::WinTray::spawn(ctx.clone(), tx, colors.clone(), dark)
             } else {
                 None
             };
@@ -153,7 +155,7 @@ impl Tray {
         #[cfg(target_os = "linux")]
         {
             let linux = if enabled {
-                linux_impl::LinuxTray::spawn(ctx.clone(), tx)
+                linux_impl::LinuxTray::spawn(ctx.clone(), tx, dark)
             } else {
                 None
             };
@@ -163,7 +165,7 @@ impl Tray {
         #[cfg(not(any(windows, target_os = "linux")))]
         {
             // No tray backend on this target; a no-op so the app still runs.
-            let _ = (ctx, enabled, tx);
+            let _ = (ctx, enabled, tx, dark);
             (Tray { colors, _noop: () }, rx)
         }
     }
@@ -276,11 +278,11 @@ mod linux_impl {
     }
 
     impl LinuxTray {
-        pub(super) fn spawn(egui: egui::Context, tx: Sender<TrayAction>) -> Option<Self> {
+        pub(super) fn spawn(egui: egui::Context, tx: Sender<TrayAction>, dark: bool) -> Option<Self> {
             let tray = LinampTray {
                 tx,
                 egui,
-                icon: load_icon_pixmap(),
+                icon: load_icon_pixmap(dark),
             };
             // A failure here means no StatusNotifierItem host is running (e.g. a
             // bare window manager with no tray). Run on without a tray.
@@ -298,17 +300,15 @@ mod linux_impl {
     }
 
     /// Decode the embedded logo into the ARGB32 pixmap the SNI spec expects
-    /// (one icon; bytes ordered A, R, G, B per pixel).
-    fn load_icon_pixmap() -> Vec<Icon> {
-        let bytes = include_bytes!("../assets/linamp_logo_32.png");
-        let Ok(img) = image::load_from_memory(bytes) else {
+    /// (one icon; bytes ordered A, R, G, B per pixel). `dark` recolours it to the
+    /// Icon Dark Mode grey (#223).
+    fn load_icon_pixmap(dark: bool) -> Vec<Icon> {
+        let Some((w, h, rgba)) = crate::icon::tray_rgba(dark) else {
             return Vec::new();
         };
-        let img = img.to_rgba8();
-        let (w, h) = img.dimensions();
-        let mut data = Vec::with_capacity((w * h * 4) as usize);
-        for px in img.pixels() {
-            let [r, g, b, a] = px.0;
+        let mut data = Vec::with_capacity(rgba.len());
+        for px in rgba.chunks_exact(4) {
+            let [r, g, b, a] = [px[0], px[1], px[2], px[3]];
             data.extend_from_slice(&[a, r, g, b]);
         }
         vec![Icon {
@@ -533,6 +533,8 @@ mod windows_impl {
         fn LoadImageW(inst: Hinstance, name: *const u16, ty: u32, cx: i32, cy: i32, flags: u32)
             -> isize;
         fn LoadIconW(inst: Hinstance, name: *const u16) -> Hicon;
+        fn CreateIconIndirect(info: *const IconInfo) -> Hicon;
+        fn DestroyIcon(icon: Hicon) -> i32;
         fn GetSystemMetrics(index: i32) -> i32;
         fn SetMenuInfo(menu: Hmenu, info: *const MenuInfo) -> i32;
         fn FillRect(h_dc: isize, rc: *const Rect, brush: isize) -> i32;
@@ -549,6 +551,15 @@ mod windows_impl {
     extern "system" {
         fn CreateSolidBrush(color: u32) -> isize;
         fn DeleteObject(obj: isize) -> i32;
+        fn CreateDIBSection(
+            hdc: isize,
+            bmi: *const BitmapInfoHeader,
+            usage: u32,
+            bits: *mut *mut core::ffi::c_void,
+            section: isize,
+            offset: u32,
+        ) -> isize;
+        fn CreateBitmap(w: i32, h: i32, planes: u32, bpp: u32, bits: *const core::ffi::c_void) -> isize;
         fn SelectObject(h_dc: isize, obj: isize) -> isize;
         fn GetStockObject(obj: i32) -> isize;
         fn SetTextColor(h_dc: isize, color: u32) -> u32;
@@ -589,6 +600,33 @@ mod windows_impl {
     #[link(name = "shell32")]
     extern "system" {
         fn Shell_NotifyIconW(message: u32, data: *mut NotifyIconDataW) -> i32;
+    }
+
+    /// `BITMAPINFOHEADER`. For the 32bpp BI_RGB DIB we build the tray icon from,
+    /// no colour table follows, so a bare header stands in for `BITMAPINFO`.
+    #[repr(C)]
+    struct BitmapInfoHeader {
+        size: u32,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bit_count: u16,
+        compression: u32,
+        size_image: u32,
+        x_ppm: i32,
+        y_ppm: i32,
+        clr_used: u32,
+        clr_important: u32,
+    }
+
+    /// `ICONINFO` for `CreateIconIndirect`: a colour bitmap plus a mask bitmap.
+    #[repr(C)]
+    struct IconInfo {
+        f_icon: i32,
+        x_hotspot: u32,
+        y_hotspot: u32,
+        h_bm_mask: isize,
+        h_bm_color: isize,
     }
 
     #[repr(C)]
@@ -678,8 +716,16 @@ mod windows_impl {
     }
 
     /// Load the executable's embedded application icon at tray size, falling
-    /// back to the generic system icon if the resource can't be found.
-    unsafe fn load_tray_icon(hinst: Hinstance) -> Hicon {
+    /// back to the generic system icon if the resource can't be found. In Icon
+    /// Dark Mode (#223) the baked-in `.ico` resource is the wrong colour, so the
+    /// icon is built from the recoloured logo pixels instead.
+    unsafe fn load_tray_icon(hinst: Hinstance, dark: bool) -> Hicon {
+        if dark {
+            if let Some(icon) = dark_tray_icon() {
+                return icon;
+            }
+            // Fall through to the resource icon if building the grey one failed.
+        }
         let cx = GetSystemMetrics(SM_CXSMICON).max(16);
         let cy = GetSystemMetrics(SM_CYSMICON).max(16);
         // winresource embeds assets/linamp.ico as the first icon (resource id 1).
@@ -688,6 +734,70 @@ mod windows_impl {
             return icon;
         }
         LoadIconW(0, IDI_APPLICATION as *const u16)
+    }
+
+    /// Build a tray `HICON` from the Icon Dark Mode (grey) logo pixels. Creates a
+    /// 32bpp top-down DIB for the colour (so the alpha channel carries the
+    /// transparency) plus an all-zero mask, hands both to `CreateIconIndirect`,
+    /// which copies them, then frees the bitmaps. Returns `None` on any failure so
+    /// the caller falls back to the resource icon. The returned icon is owned and
+    /// is released with `DestroyIcon` when the tray tears down.
+    unsafe fn dark_tray_icon() -> Option<Hicon> {
+        let (w, h, rgba) = crate::icon::tray_rgba(true)?;
+        let bmi = BitmapInfoHeader {
+            size: std::mem::size_of::<BitmapInfoHeader>() as u32,
+            width: w as i32,
+            // Negative height = top-down, so rows match the image's row order.
+            height: -(h as i32),
+            planes: 1,
+            bit_count: 32,
+            compression: 0, // BI_RGB
+            size_image: 0,
+            x_ppm: 0,
+            y_ppm: 0,
+            clr_used: 0,
+            clr_important: 0,
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        // hdc may be NULL for a DIB_RGB_COLORS section.
+        let color = CreateDIBSection(0, &bmi, 0, &mut bits, 0, 0);
+        if color == 0 || bits.is_null() {
+            if color != 0 {
+                DeleteObject(color);
+            }
+            return None;
+        }
+        // Copy the pixels as BGRA (the byte order a 32bpp Windows DIB expects).
+        let dst = std::slice::from_raw_parts_mut(bits as *mut u8, rgba.len());
+        for (d, s) in dst.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+            d[0] = s[2]; // B
+            d[1] = s[1]; // G
+            d[2] = s[0]; // R
+            d[3] = s[3]; // A
+        }
+        // A monochrome mask bitmap; all-zero means "use the colour (and its alpha)
+        // everywhere", so transparency comes entirely from the 32bpp alpha channel.
+        let mask = CreateBitmap(w as i32, h as i32, 1, 1, std::ptr::null());
+        if mask == 0 {
+            DeleteObject(color);
+            return None;
+        }
+        let info = IconInfo {
+            f_icon: 1,
+            x_hotspot: 0,
+            y_hotspot: 0,
+            h_bm_mask: mask,
+            h_bm_color: color,
+        };
+        let icon = CreateIconIndirect(&info);
+        // CreateIconIndirect copies the bitmaps, so free our originals either way.
+        DeleteObject(color);
+        DeleteObject(mask);
+        if icon == 0 {
+            None
+        } else {
+            Some(icon)
+        }
     }
 
     /// Build the owner-drawn tray menu and the background brush it uses. Every row
@@ -930,13 +1040,14 @@ mod windows_impl {
             egui: egui::Context,
             tx: Sender<TrayAction>,
             colors: Arc<MenuColors>,
+            dark: bool,
         ) -> Option<Self> {
             let hwnd_slot = Arc::new(AtomicIsize::new(0));
             let hwnd_for_thread = hwnd_slot.clone();
 
             let thread = std::thread::Builder::new()
                 .name("linamp-tray".into())
-                .spawn(move || unsafe { tray_thread(egui, tx, colors, hwnd_for_thread) })
+                .spawn(move || unsafe { tray_thread(egui, tx, colors, hwnd_for_thread, dark) })
                 .ok()?;
 
             // Wait for the thread to publish its HWND (or the failure sentinel),
@@ -987,6 +1098,7 @@ mod windows_impl {
         tx: Sender<TrayAction>,
         colors: Arc<MenuColors>,
         hwnd_slot: Arc<AtomicIsize>,
+        dark: bool,
     ) {
         let hinst = GetModuleHandleW(std::ptr::null());
         let class_name = wide("LinAmpTrayWindow");
@@ -1066,7 +1178,7 @@ mod windows_impl {
             u_id: 1,
             u_flags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
             u_callback_message: WM_APP_TRAY,
-            h_icon: load_tray_icon(hinst),
+            h_icon: load_tray_icon(hinst, dark),
             sz_tip: tip,
             dw_state: 0,
             dw_state_mask: 0,
@@ -1093,6 +1205,12 @@ mod windows_impl {
 
         // Tear down: remove the icon, drop the context, destroy the window.
         Shell_NotifyIconW(NIM_DELETE, &mut nid);
+        // Release the icon handle. The dark-mode icon is one we built with
+        // CreateIconIndirect, so it must be destroyed to avoid leaking it on every
+        // tray respawn; DestroyIcon is also correct for the LoadImageW resource icon.
+        if nid.h_icon != 0 {
+            DestroyIcon(nid.h_icon);
+        }
         if font != 0 {
             DeleteObject(font);
         }
@@ -1134,7 +1252,7 @@ mod tests {
     #[test]
     fn a_disabled_tray_still_hands_back_a_usable_receiver() {
         let ctx = egui::Context::default();
-        let (_tray, rx) = Tray::spawn(&ctx, false);
+        let (_tray, rx) = Tray::spawn(&ctx, false, false);
         // Nothing is queued, and the receiver is open (not hung up), so the
         // app's per-frame drain sees an empty, non-erroring channel.
         assert!(rx.try_recv().is_err());
