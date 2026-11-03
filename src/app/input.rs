@@ -250,7 +250,8 @@ impl super::LinAmpApp {
             self.prefs_open = !self.prefs_open;
         }
         if k.ctrl && k.key_t {
-            self.time_remaining = !self.time_remaining;
+            self.prefs.time_remaining = !self.prefs.time_remaining;
+            self.prefs.save();
         }
         if k.alt && k.key_3 {
             self.open_tag_editor();

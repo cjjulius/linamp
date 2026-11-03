@@ -23,6 +23,9 @@ fn write_atomic(path: &std::path::Path, contents: &[u8]) {
 pub struct Prefs {
     /// true = 2x scaled (readable on modern screens), false = 1x pixel-for-pixel.
     pub double_size: bool,
+    /// true = the time display counts down (time remaining); false = counts up
+    /// (time elapsed). Toggled by Ctrl+T or clicking the time; persists across restarts.
+    pub time_remaining: bool,
     /// true = read ID3 tags when files are added; false = lazily as rows are viewed.
     pub tag_on_load: bool,
     /// Path to the skin loaded last; restored on next launch.
@@ -89,6 +92,7 @@ impl Default for Prefs {
             // First launch opens at classic 1x size (authentic the classic player scale);
             // the user can switch to 2x, which then persists.
             double_size: false,
+            time_remaining: false,
             tag_on_load: true,
             last_skin: None,
             fade_on_stop: false,
