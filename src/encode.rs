@@ -418,6 +418,21 @@ fn encode_flac(
         let (lo, hi) = bytes.split_at_mut(10);
         lo[8..10].copy_from_slice(&hi[0..2]);
     }
+    // flacenc emits only a STREAMINFO block (flagged as the last metadata block);
+    // lofty's FLAC writer then silently refuses to add a VORBIS_COMMENT, so the tag
+    // copy that follows every convert would be a no-op. Reference encoders always
+    // leave a PADDING block for taggers, so add one: clear STREAMINFO's last-block
+    // flag and splice an empty PADDING block (the new last block) right after it.
+    const PADDING: usize = 4096;
+    let si_end = 8 + 34; // "fLaC"(4) + STREAMINFO header(4) + STREAMINFO body(34)
+    if bytes.len() >= si_end {
+        bytes[4] &= 0x7F; // STREAMINFO is no longer the last metadata block
+        let mut block = Vec::with_capacity(4 + PADDING);
+        block.push(0x80 | 1); // last-metadata-block flag + PADDING block type (1)
+        block.extend_from_slice(&(PADDING as u32).to_be_bytes()[1..4]); // 24-bit length
+        block.resize(4 + PADDING, 0);
+        bytes.splice(si_end..si_end, block);
+    }
     std::fs::write(dst, &bytes).with_context(|| format!("write {}", dst.display()))?;
     progress(1.0);
     Ok(true)
@@ -1151,7 +1166,11 @@ mod tests {
             t.save_to_path(&src, WriteOptions::default()).unwrap();
         }
         for (format, out) in [
+            (OutputFormat::Mp3, dir.join("linamp_tagcopy_out.mp3")),
             (OutputFormat::Vorbis, dir.join("linamp_tagcopy_out.ogg")),
+            (OutputFormat::Opus, dir.join("linamp_tagcopy_out.opus")),
+            (OutputFormat::Flac, dir.join("linamp_tagcopy_out.flac")),
+            (OutputFormat::Wav, dir.join("linamp_tagcopy_out.wav")),
             (OutputFormat::Aiff, dir.join("linamp_tagcopy_out.aiff")),
         ] {
             convert_file(&src, &out, format).unwrap_or_else(|e| panic!("{format:?}: {e}"));
