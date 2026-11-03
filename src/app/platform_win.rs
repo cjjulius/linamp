@@ -617,6 +617,51 @@ mod x11util {
         });
     }
 
+    /// Replace the window's `_NET_WM_ICON` so the dock/Alt-Tab icon updates live
+    /// (Icon Dark Mode, #223). EWMH stores icons as a CARDINAL array laid out as
+    /// `[width, height, then width*height ARGB pixels]`, each element a 32-bit value
+    /// `0xAARRGGBB` held in a long. `rgba` is row-major RGBA. Best-effort: a no-op if
+    /// the window is not found or X11 is unavailable. (Native Wayland ignores this and
+    /// uses the `.desktop` entry instead.)
+    pub fn set_net_wm_icon(title: &str, w: u32, h: u32, rgba: &[u8]) {
+        if (w as usize) * (h as usize) * 4 > rgba.len() {
+            return;
+        }
+        with_conn(|xlib, d| unsafe {
+            let prev = (xlib.XSetErrorHandler)(Some(ignore_err));
+            let win = window_by_title(xlib, d, title);
+            if win != 0 {
+                let prop = intern(xlib, d, "_NET_WM_ICON");
+                const XA_CARDINAL: xlib::Atom = 6;
+                const PROP_MODE_REPLACE: c_int = 0;
+                let mut data: Vec<c_long> = Vec::with_capacity(2 + (w * h) as usize);
+                data.push(w as c_long);
+                data.push(h as c_long);
+                for px in rgba.chunks_exact(4) {
+                    let (r, g, b, a) = (
+                        px[0] as c_long,
+                        px[1] as c_long,
+                        px[2] as c_long,
+                        px[3] as c_long,
+                    );
+                    data.push((a << 24) | (r << 16) | (g << 8) | b);
+                }
+                (xlib.XChangeProperty)(
+                    d,
+                    win,
+                    prop,
+                    XA_CARDINAL,
+                    32,
+                    PROP_MODE_REPLACE,
+                    data.as_ptr() as *const c_uchar,
+                    data.len() as c_int,
+                );
+                (xlib.XFlush)(d);
+            }
+            (xlib.XSetErrorHandler)(prev);
+        });
+    }
+
     /// Horizontal run rectangles filling a `w`×`h` rounded rectangle with corner
     /// radius `r`, one per scanline, the shape the Shape extension clips to.
     fn rounded_rect_rects(w: i32, h: i32, r: i32) -> Vec<(i16, i16, u16, u16)> {
@@ -1163,6 +1208,174 @@ pub(crate) fn set_taskbar_button(title: &str, show: bool) {
     {
         let _ = (title, show);
     }
+}
+
+/// Recolour the main window's icon live (Icon Dark Mode, #223). This is needed
+/// because winit only ever updates the *small* window icon at runtime: egui's
+/// `ViewportCommand::Icon` calls winit's `set_window_icon`, which sets `ICON_SMALL`
+/// only, while the taskbar button and Alt-Tab use the *big* icon, which otherwise
+/// does not change until the next launch. So set both icons on the main window
+/// ourselves. `big` and `small` are `(w, h, rgba)` at the large and small sizes.
+/// Windows sends `WM_SETICON` (`ICON_BIG` and `ICON_SMALL`); X11 replaces
+/// `_NET_WM_ICON`, which docks and Alt-Tab read. A no-op elsewhere, and on native
+/// Wayland (where the icon comes from the installed `.desktop` entry).
+pub(crate) fn set_app_window_icon(big: (u32, u32, &[u8]), small: (u32, u32, &[u8])) {
+    #[cfg(windows)]
+    {
+        win_set_app_window_icon(big, small);
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = small; // X11 keeps one icon list and scales; the big image is enough.
+        x11util::set_net_wm_icon("LinAmp", big.0, big.1, big.2);
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+    {
+        let _ = (big, small);
+    }
+}
+
+/// Set the main window's big (taskbar/Alt-Tab) and small icons via `WM_SETICON`,
+/// building each `HICON` from recoloured RGBA pixels. The icons we create are owned,
+/// so the previous pair *we* set is destroyed after each swap; the very first
+/// previous icons belong to winit (tracked as 0) and are left alone.
+#[cfg(windows)]
+fn win_set_app_window_icon(big: (u32, u32, &[u8]), small: (u32, u32, &[u8])) {
+    use std::sync::atomic::{AtomicIsize, Ordering};
+    #[allow(non_snake_case)]
+    extern "system" {
+        fn SendMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
+        fn DestroyIcon(icon: isize) -> i32;
+    }
+    const WM_SETICON: u32 = 0x0080;
+    const ICON_SMALL: usize = 0;
+    const ICON_BIG: usize = 1;
+    // The icons we last set, so they can be freed on the next swap (0 = none of ours
+    // yet, i.e. winit's startup icons, which we must not destroy).
+    static LAST_BIG: AtomicIsize = AtomicIsize::new(0);
+    static LAST_SMALL: AtomicIsize = AtomicIsize::new(0);
+
+    let hwnd = find_window("LinAmp");
+    if hwnd == 0 {
+        return;
+    }
+    unsafe {
+        let hbig = win_hicon_from_rgba(big.0, big.1, big.2);
+        let hsmall = win_hicon_from_rgba(small.0, small.1, small.2);
+        if hbig != 0 {
+            SendMessageW(hwnd, WM_SETICON, ICON_BIG, hbig);
+        }
+        if hsmall != 0 {
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hsmall);
+        }
+        // Swap in the new handles and destroy the previous pair we owned.
+        let prev_big = LAST_BIG.swap(hbig, Ordering::Relaxed);
+        if prev_big != 0 {
+            DestroyIcon(prev_big);
+        }
+        let prev_small = LAST_SMALL.swap(hsmall, Ordering::Relaxed);
+        if prev_small != 0 {
+            DestroyIcon(prev_small);
+        }
+    }
+}
+
+/// Build an `HICON` from straight-alpha RGBA pixels: a 32bpp top-down DIB for the
+/// colour (alpha carries transparency) plus a zeroed monochrome mask, handed to
+/// `CreateIconIndirect` (which copies both, so the bitmaps are freed after).
+/// Returns 0 on failure. Mirrors the tray's icon builder; kept here so the window
+/// icon does not depend on the tray module's private Win32 glue.
+#[cfg(windows)]
+unsafe fn win_hicon_from_rgba(w: u32, h: u32, rgba: &[u8]) -> isize {
+    use core::ffi::c_void;
+    #[repr(C)]
+    struct BitmapInfoHeader {
+        size: u32,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bit_count: u16,
+        compression: u32,
+        size_image: u32,
+        x_ppm: i32,
+        y_ppm: i32,
+        clr_used: u32,
+        clr_important: u32,
+    }
+    #[repr(C)]
+    struct IconInfo {
+        f_icon: i32,
+        x_hotspot: u32,
+        y_hotspot: u32,
+        h_bm_mask: isize,
+        h_bm_color: isize,
+    }
+    #[allow(non_snake_case)]
+    extern "system" {
+        fn CreateDIBSection(
+            hdc: isize,
+            bmi: *const BitmapInfoHeader,
+            usage: u32,
+            bits: *mut *mut c_void,
+            section: isize,
+            offset: u32,
+        ) -> isize;
+        fn CreateBitmap(w: i32, h: i32, planes: u32, bpp: u32, bits: *const c_void) -> isize;
+        fn CreateIconIndirect(info: *const IconInfo) -> isize;
+        fn DeleteObject(obj: isize) -> i32;
+    }
+    if rgba.len() < (w * h * 4) as usize {
+        return 0;
+    }
+    let bmi = BitmapInfoHeader {
+        size: std::mem::size_of::<BitmapInfoHeader>() as u32,
+        width: w as i32,
+        height: -(h as i32), // top-down, matching the image's row order
+        planes: 1,
+        bit_count: 32,
+        compression: 0, // BI_RGB
+        size_image: 0,
+        x_ppm: 0,
+        y_ppm: 0,
+        clr_used: 0,
+        clr_important: 0,
+    };
+    let mut bits: *mut c_void = std::ptr::null_mut();
+    let color = CreateDIBSection(0, &bmi, 0, &mut bits, 0, 0);
+    if color == 0 || bits.is_null() {
+        if color != 0 {
+            DeleteObject(color);
+        }
+        return 0;
+    }
+    // Copy RGBA -> BGRA (the byte order a 32bpp Windows DIB expects).
+    let dst = std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
+    for (d, s) in dst.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+        d[0] = s[2];
+        d[1] = s[1];
+        d[2] = s[0];
+        d[3] = s[3];
+    }
+    // A zeroed monochrome mask (WORD-aligned rows): all-zero means the colour (and
+    // its alpha) is used everywhere, so transparency comes from the alpha channel.
+    let mask_stride = ((w as usize + 15) / 16) * 2;
+    let mask_bits = vec![0u8; mask_stride * h as usize];
+    let mask = CreateBitmap(w as i32, h as i32, 1, 1, mask_bits.as_ptr() as *const c_void);
+    if mask == 0 {
+        DeleteObject(color);
+        return 0;
+    }
+    let info = IconInfo {
+        f_icon: 1,
+        x_hotspot: 0,
+        y_hotspot: 0,
+        h_bm_mask: mask,
+        h_bm_color: color,
+    };
+    let icon = CreateIconIndirect(&info);
+    DeleteObject(color);
+    DeleteObject(mask);
+    icon
 }
 
 /// Clip the borderless context-menu window to a rounded rectangle (corner radius

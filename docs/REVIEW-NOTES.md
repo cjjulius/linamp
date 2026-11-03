@@ -1233,13 +1233,21 @@ plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.
   (window, taskbar, tray) follow the setting. This is a candidate follow-up if we
   decide the program-list icon is worth the registry/desktop-file churn.
 
-### 2026-11-05 Icon Dark Mode follow-up (taskbar icon updated live)
+### 2026-11-05 Icon Dark Mode follow-up (taskbar/Alt-Tab icon updated live)
 
-- Fix: toggling Icon Dark Mode in Normal (taskbar) mode did not recolour the window
-  and taskbar icon until the next restart, while System Tray mode updated instantly.
-  The toggle runs inside the Preferences window's own viewport closure, so a bare
-  send_viewport_cmd(Icon) was addressing the Preferences viewport, not the main
-  window. It now targets ViewportId::ROOT explicitly, so the main window and its
-  taskbar button recolour right away. Manual check (Windows): in Normal mode, toggle
-  the option and confirm the taskbar button and Alt-Tab/title-bar icon change colour
-  immediately, both directions; the tray-mode behaviour is unchanged.
+- Fix: toggling Icon Dark Mode in Normal (taskbar) mode did not recolour the window,
+  taskbar or Alt-Tab icon until the next restart, while System Tray mode updated
+  instantly. Root cause: egui/winit's runtime icon command only ever updates the
+  *small* window icon (winit's set_window_icon sets ICON_SMALL only), while the
+  taskbar button and Alt-Tab use the *big* icon, which it never updates after window
+  creation. (An earlier attempt to retarget the egui command at ViewportId::ROOT did
+  not help, for this reason.) The toggle now sets the icon on the main window
+  directly, outside egui: Windows sends WM_SETICON for both ICON_BIG and ICON_SMALL
+  (icons built from the recoloured pixels, previous ones destroyed), and X11 replaces
+  _NET_WM_ICON. See platform_win::set_app_window_icon.
+- Verified on the Windows box: with the window in Normal mode, toggling the option
+  recolours the taskbar button green<->grey immediately, both directions, no restart
+  (before/after captured). Alt-Tab uses the same big icon, so it follows too.
+- Pop!_OS QA: confirm the _NET_WM_ICON path recolours the dock/Alt-Tab icon live on an
+  X11 session; native Wayland still ignores per-window icons (uses the .desktop entry),
+  as noted in the main Icon Dark Mode entry above.
