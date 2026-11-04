@@ -31,6 +31,9 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // MPEG-TS video/broadcast containers: crate::ts extracts the audio elementary
     // stream and decodes it (AAC/MP2 via symphonia, AC-3 via crate::ac3).
     "ts", "m2ts", "mts",
+    // AVI: crate::avi (filmcraft-avi) extracts the audio stream (MP3/MP2/PCM via
+    // symphonia, AC-3 via crate::ac3).
+    "avi",
 ];
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
@@ -161,6 +164,7 @@ impl Track {
                 .or_else(|| crate::ac3::duration(&self.path))
                 .or_else(|| crate::wavpack::duration(&self.path))
                 .or_else(|| crate::ts::duration(&self.path))
+                .or_else(|| crate::avi::duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
     }

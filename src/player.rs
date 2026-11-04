@@ -369,6 +369,11 @@ impl Player {
             // audio elementary stream out and decodes it through the shared path.
             let source = crate::ts::open_ts(path)?;
             self.append_source(source, None, true)?;
+        } else if crate::avi::is_avi(path) {
+            // AVI (.avi): crate::avi (filmcraft-avi) pulls the audio stream out and
+            // decodes it the same way (MP3/MP2/PCM via symphonia, AC-3 via crate::ac3).
+            let source = crate::avi::open_avi(path)?;
+            self.append_source(source, None, true)?;
         } else {
             let source = crate::decode::open_file(path)?;
             self.append_source(source, None, true)?;

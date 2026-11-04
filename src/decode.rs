@@ -171,6 +171,56 @@ impl Source for SymphoniaSource {
     }
 }
 
+/// Audio decoded from a container LinAmp demuxes itself (MPEG-TS, AVI): the extracted
+/// elementary stream is either the shared symphonia path (AAC / MP2 / MP3 / wrapped
+/// PCM) or the AC-3 side-decoder. Wrapped in one `Source` so the player appends either
+/// uniformly. (AC-3's state dwarfs the symphonia source, so it is boxed.)
+pub enum ContainerAudio {
+    Symphonia(SymphoniaSource),
+    Ac3(Box<crate::ac3::Ac3Source>),
+}
+impl Iterator for ContainerAudio {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        match self {
+            ContainerAudio::Symphonia(s) => s.next(),
+            ContainerAudio::Ac3(s) => s.next(),
+        }
+    }
+}
+impl Source for ContainerAudio {
+    fn current_frame_len(&self) -> Option<usize> {
+        match self {
+            ContainerAudio::Symphonia(s) => s.current_frame_len(),
+            ContainerAudio::Ac3(s) => s.current_frame_len(),
+        }
+    }
+    fn channels(&self) -> u16 {
+        match self {
+            ContainerAudio::Symphonia(s) => s.channels(),
+            ContainerAudio::Ac3(s) => s.channels(),
+        }
+    }
+    fn sample_rate(&self) -> u32 {
+        match self {
+            ContainerAudio::Symphonia(s) => s.sample_rate(),
+            ContainerAudio::Ac3(s) => s.sample_rate(),
+        }
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        match self {
+            ContainerAudio::Symphonia(s) => s.total_duration(),
+            ContainerAudio::Ac3(s) => s.total_duration(),
+        }
+    }
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        match self {
+            ContainerAudio::Symphonia(s) => s.try_seek(pos),
+            ContainerAudio::Ac3(s) => s.try_seek(pos),
+        }
+    }
+}
+
 /// Open a local audio file as a lazy, seekable symphonia source, with an extension
 /// hint (which rodio 0.20's `Decoder` can't pass). The single decode path for every
 /// local file (#163). The first audio packet is decoded here so the real sample

@@ -20,13 +20,12 @@ use mpeg2ts_reader::demultiplex::{
 };
 use mpeg2ts_reader::packet::{Packet, Pid};
 use mpeg2ts_reader::{pes, psi, StreamType};
-use rodio::source::SeekError;
 use rodio::Source;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::io::MediaSourceStream;
 
-use crate::ac3::{open_ac3_bytes, Ac3Source};
-use crate::decode::{open_stream, SymphoniaSource};
+use crate::ac3::open_ac3_bytes;
+use crate::decode::{open_stream, ContainerAudio};
 
 /// TS container extensions handled here.
 pub const TS_EXTS: &[&str] = &["ts", "m2ts", "mts"];
@@ -184,64 +183,13 @@ fn extract_audio_es(path: &Path) -> Result<(StreamType, Vec<u8>)> {
     Ok((st, data))
 }
 
-/// A decoded TS audio track. TS audio is AAC/MP2 (symphonia) or AC-3 (the
-/// `crate::ac3` side-decoder), so we wrap both in one `Source` type and let the
-/// player append it uniformly.
-pub enum TsSource {
-    Symphonia(SymphoniaSource),
-    // Boxed: the AC-3 decoder state dwarfs SymphoniaSource, so box it to keep the
-    // enum small.
-    Ac3(Box<Ac3Source>),
-}
-impl Iterator for TsSource {
-    type Item = f32;
-    fn next(&mut self) -> Option<f32> {
-        match self {
-            TsSource::Symphonia(s) => s.next(),
-            TsSource::Ac3(s) => s.next(),
-        }
-    }
-}
-impl Source for TsSource {
-    fn current_frame_len(&self) -> Option<usize> {
-        match self {
-            TsSource::Symphonia(s) => s.current_frame_len(),
-            TsSource::Ac3(s) => s.current_frame_len(),
-        }
-    }
-    fn channels(&self) -> u16 {
-        match self {
-            TsSource::Symphonia(s) => s.channels(),
-            TsSource::Ac3(s) => s.channels(),
-        }
-    }
-    fn sample_rate(&self) -> u32 {
-        match self {
-            TsSource::Symphonia(s) => s.sample_rate(),
-            TsSource::Ac3(s) => s.sample_rate(),
-        }
-    }
-    fn total_duration(&self) -> Option<Duration> {
-        match self {
-            TsSource::Symphonia(s) => s.total_duration(),
-            TsSource::Ac3(s) => s.total_duration(),
-        }
-    }
-    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
-        match self {
-            TsSource::Symphonia(s) => s.try_seek(pos),
-            TsSource::Ac3(s) => s.try_seek(pos),
-        }
-    }
-}
-
 /// Open a Transport Stream's audio as a seekable source: extract the audio ES and
 /// decode it. AAC and MPEG audio go through the shared symphonia path; AC-3 is fed
 /// to the `crate::ac3` decoder (downmixed to stereo).
-pub fn open_ts(path: &Path) -> Result<TsSource> {
+pub fn open_ts(path: &Path) -> Result<ContainerAudio> {
     let (st, es) = extract_audio_es(path)?;
     if st == StreamType::ATSC_DOLBY_DIGITAL_AUDIO {
-        return Ok(TsSource::Ac3(Box::new(open_ac3_bytes(es, "mpeg-ts ac-3")?)));
+        return Ok(ContainerAudio::Ac3(Box::new(open_ac3_bytes(es, "mpeg-ts ac-3")?)));
     }
     let hint_ext = if st == StreamType::ADTS || st == StreamType::AUDIO_WITHOUT_TRANSPORT_SYNTAX {
         "aac"
@@ -253,7 +201,7 @@ pub fn open_ts(path: &Path) -> Result<TsSource> {
     let mut hint = Hint::new();
     hint.with_extension(hint_ext);
     let mss = MediaSourceStream::new(Box::new(Cursor::new(es)), Default::default());
-    Ok(TsSource::Symphonia(open_stream(mss, hint, "mpeg-ts audio")?))
+    Ok(ContainerAudio::Symphonia(open_stream(mss, hint, "mpeg-ts audio")?))
 }
 
 /// The length of a TS file's audio, so the playlist can show a time. `None` when it

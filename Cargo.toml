@@ -77,6 +77,10 @@ rubato = "0.15"
 # them to noise while returning Ok).
 wavicle = "0.1.0"
 mpeg2ts-reader = "0.18.2"
+# AVI (.avi) demuxing. symphonia can't demux AVI, so crate::avi pulls the audio
+# stream out and reuses the decoders (MP3/MP2/PCM via symphonia, AC-3 via crate::ac3).
+# Pure Rust, MIT/Apache-2.0, same author as the trusted filmcraft-ac3 we already ship.
+filmcraft-avi = "0.9.0"
 
 # Linux/X11 only: query the global cursor position (XQueryPointer) so classic
 # windows can be dragged and docked as a group, matching the Windows behaviour.
