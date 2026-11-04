@@ -29,8 +29,7 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // Dolby Digital, decoded via crate::ac3 (filmcraft-ac3, pure Rust) (#161).
     "ac3", "eac3", "ec3",
     // MPEG-TS video/broadcast containers: crate::ts extracts the audio elementary
-    // stream (AAC/MP2) and decodes it through the shared path. AC-3 in TS is not yet
-    // routed, but the container is still advertised (such files skip cleanly).
+    // stream and decodes it (AAC/MP2 via symphonia, AC-3 via crate::ac3).
     "ts", "m2ts", "mts",
 ];
 
