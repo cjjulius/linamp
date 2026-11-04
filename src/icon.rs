@@ -16,6 +16,10 @@ const LOGO_32: &[u8] = include_bytes!("../assets/linamp_logo_32.png");
 /// desktop icon theme serves. On GNOME the dock and the app launcher render this
 /// (or the PNG) by icon name, never the window's `_NET_WM_ICON`, so Icon Dark Mode
 /// has to recolour this file too. See [`logo_svg`].
+///
+/// Only the Linux file-association path reads this; on other platforms the icon is
+/// set live from the raster assets, so the SVG source and its recolour are unused.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const LOGO_SVG: &str = include_str!("../assets/linamp_logo.svg");
 
 /// Recolour the logo in place for Icon Dark Mode: desaturate every pixel to its
@@ -81,6 +85,10 @@ pub fn tray_rgba(dark: bool) -> Option<(u32, u32, Vec<u8>)> {
 /// the desaturated logo re-encoded, which is deterministic, so the installer also
 /// settles to a no-op after the first write. `None` only on a decode/encode
 /// failure, which cannot happen for the bundled asset.
+///
+/// Only the Linux file-association installer calls this; elsewhere the taskbar
+/// icon is set live from raw RGBA, not an installed PNG file.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn window_png(dark: bool) -> Option<Vec<u8>> {
     if !dark {
         return Some(LOGO_256.to_vec());
@@ -98,6 +106,9 @@ pub fn window_png(dark: bool) -> Option<Vec<u8>> {
 /// raster [`desaturate`]; already-grey literals map to themselves, so light mode
 /// returns the asset unchanged. `url(#id)` references are left alone. This feeds the
 /// per-user `scalable/apps/linamp.svg` the desktop theme serves.
+///
+/// Only the Linux file-association installer calls this.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn logo_svg(dark: bool) -> String {
     if !dark {
         return LOGO_SVG.to_string();
@@ -110,6 +121,9 @@ pub fn logo_svg(dark: bool) -> String {
 /// [`desaturate`] without an XML parse. A `#` run that is not exactly 3 or 6 hex
 /// digits (example: a `url(#glow)` id) is left as is, as is any `#` that directly
 /// follows `(`, which guards `url(#abc)` ids that happen to be all hex.
+///
+/// Reached only through [`logo_svg`], i.e. the Linux file-association path.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn desaturate_hex_colors(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = String::with_capacity(s.len());
