@@ -81,7 +81,9 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 - SQLite media library (scan folders, search, add to playlist)
   - stored at `%LOCALAPPDATA%/LinAmp/library.db` (Win) / `~/.local/share/LinAmp/` (Linux)
   - reachable in the classic UI via the options menu's Media Library item (opens
-  in its own window)
+  in its own window); resizable from the bottom-right grip, between its default size
+  and the monitor size, and double-click the title bar to maximize / restore. The
+  navigation pane keeps its width and the track columns take the extra room
   - tag edits made in the editor update the library row immediately (no rescan);
   search treats `_` and `%` as literal text, not SQL wildcards
 - Bookmarks, Alt+I bookmarks the current track; Media Library, Bookmarks
@@ -96,7 +98,9 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 - Window-shade mode (double-click a title bar to collapse)
 - Keyboard shortcuts matching Winamp, see the [README](README.md#keyboard-shortcuts)
 - Preferences window (Ctrl+P): tag-load mode and 1×/2× sizing, persisted;
-  shows the running `LinAmp <version>` (with build hash + date)
+  shows the running `LinAmp <version>` (with build hash + date). Resizable from the
+  bottom-right grip, between its default size and twice that in each dimension; the
+  navigation pane keeps its width
 - Accented / Vietnamese track text is ASCII-folded in the classic bitmap font
   (example: "Trường Sơn" becomes "Truong Son") instead of showing blank gaps
 - Always on top (options menu + Preferences)

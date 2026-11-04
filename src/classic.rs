@@ -319,13 +319,14 @@ mod tests {
     #[test]
     fn eq_sprite_index_maps_and_snaps() {
         let full: Vec<i32> = (0..28).collect();
-        assert_eq!(eq_sprite_index(1.0, &full), Some(0)); // boost to top
-        assert_eq!(eq_sprite_index(-1.0, &full), Some(27)); // cut to bottom
-        assert_eq!(eq_sprite_index(0.0, &full), Some(14)); // centre
-        assert_eq!(eq_sprite_index(2.0, &full), Some(0)); // clamps high
-        assert_eq!(eq_sprite_index(-2.0, &full), Some(27)); // clamps low
-        assert_eq!(eq_sprite_index(0.5, &[0, 27]), Some(0)); // snap to nearer
-        assert_eq!(eq_sprite_index(-0.5, &[0, 27]), Some(27));
+        // Index 0 = cut colour (green), 27 = boost colour (red), so boost maps high.
+        assert_eq!(eq_sprite_index(1.0, &full), Some(27)); // boost -> red
+        assert_eq!(eq_sprite_index(-1.0, &full), Some(0)); // cut -> green
+        assert_eq!(eq_sprite_index(0.0, &full), Some(14)); // centre -> yellow
+        assert_eq!(eq_sprite_index(2.0, &full), Some(27)); // clamps high
+        assert_eq!(eq_sprite_index(-2.0, &full), Some(0)); // clamps low
+        assert_eq!(eq_sprite_index(0.5, &[0, 27]), Some(27)); // snap to nearer
+        assert_eq!(eq_sprite_index(-0.5, &[0, 27]), Some(0));
         assert_eq!(eq_sprite_index(0.0, &[]), None); // no bank, so thumb only
     }
 

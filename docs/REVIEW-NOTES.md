@@ -1461,3 +1461,63 @@ the MP3s only while the ID3v2 column still applies to the FLACs' native tag.
 - Needs a visual check (the maintainer/Windows box): that the staged outline reads as
   subtle, is distinct from the active-field outline, and tracks edits across both
   columns and the Copy to/from ID3v1 buttons. 341 tests pass, clippy at 48.
+
+## 2026-11-04 Resizable Preferences and Media Library windows (feat/resizable-windows)
+
+- Both windows are borderless, custom-drawn egui viewports, so resizing is a manual
+  bottom-right grip rather than OS chrome. resize_grip (app.rs) draws three diagonal
+  notches in the skin window tone on a foreground Area at the corner, senses
+  click-and-drag, and returns the new on-screen inner size clamped to [min, max]. The
+  caller stores it, sends ViewportCommand::InnerSize, and re-pins OuterPosition so the
+  top-left stays put (pull from the bottom-right only). Area state is per-viewport in
+  egui, so the shared grip Id does not clash when both windows are open.
+- Preferences: new prefs_size / prefs_resize fields. Min = default (520x360,
+  PREFS_DEFAULT_SIZE); max = twice the default in each dimension. The nav pane is a
+  fixed-width SidePanel and the page body takes the extra room; Preferences does not
+  dock and has no columns. The rounded-corner region is re-applied after a resize.
+  Size is kept for the session, not persisted across runs (matching its position).
+- Media Library: new geom.lib_user_size (base, unscaled) / lib_resize / lib_pre_max.
+  lib_size() = lib_user_size (or the default) x the double-size scale. Min = the
+  default on screen; max = the monitor size (viewport().monitor_size). The nav pane is
+  a fixed exact-width SidePanel, so widening gives the artist/album and track columns
+  the room; the column fractions redistribute. Double-click the title bar (gen and flat
+  paths) maximizes to the monitor and back via lib_maximize_toggle, which remembers the
+  pre-maximize position and base size; a manual grip resize clears that memory. No
+  minimize. The size persists across runs (Session.lib_size, serde default so old
+  session.json still loads; clamped to at least the default on load).
+- 341 tests pass (plus the config round-trip/default assertions for lib_size); clippy
+  clean for the new code (resize_grip folds pos+size into a Rect to stay under the
+  argument-count lint).
+- Needs a hands-on look (the maintainer/Windows box, since the Linux box must not drive
+  its own live desktop): drag the bottom-right grip on each window (smooth, pins the
+  top-left, honours min/max), the Preferences 2x cap, the Library filling to the
+  monitor, double-click-to-maximize/restore on the Library title bar, that the Library
+  nav pane stays fixed while the columns grow, and that a resized Library size is
+  restored on the next launch.
+
+## 2026-11-04 Resizable windows: QA fixes + EQ slider colour (feat/resizable-windows)
+
+Follow-ups after hands-on QA of the resize feature, all on the same branch:
+- GEN library frame stretched when maximized: ui_library_gen composed the frame at the
+  fixed default base size, so a resized/maximized window upscaled a 640-wide frame. Now
+  composes at the window's actual unscaled size (lib_size()/scale).
+- Resize cursor: the grip now shows the skin's resize cursor (the playlist "psize",
+  falling back to "normal") via set_resize_cursor, held through an off-window drag.
+- Library resize snaps: snap_lib_size snaps the dragged right/bottom edges to a nearby
+  Main/EQ/Playlist or screen edge on release (the move-time magnetic snap's counterpart).
+- Preferences lock-up: the grip was an egui Area/widget, which could keep the pointer
+  interaction captured after an off-window release and swallow every click on the real
+  widgets (settings, title-bar drag) while the raw-input GEN close still worked. The grip
+  is now driven entirely from raw pointer reads (like the GEN close and the classic PL
+  grip), so it can never capture egui's interaction.
+- Resize "trails": the in-closure ViewportCommand::InnerSize resized the OS window a step
+  ahead of the builder+paint, leaving the newly exposed band unpainted each frame. Resize
+  now rides the viewport builder's with_inner_size only (like the classic windows), so
+  paint and window size stay in lockstep.
+- EQ slider colours were inverted vs the graph. Verified against the base skin's
+  EQMAIN.BMP: the colour-sprite bank runs index 0 = green (cut) .. 27 = red (boost), and
+  the graph gradient is red-boost-top / green-cut-bottom (same pixel values). eq_sprite_index
+  mapped boost to index 0 (green); it now uses frac = (1+v)/2 so boost maps to the red
+  indices, matching the graph. Thumb position (a separate fraction) was already correct.
+  Updated the test and regenerated assets/screenshot.png (via --render-all, upscaled 2x).
+- 341 tests pass, clippy clean for the new code.
