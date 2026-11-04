@@ -11,14 +11,17 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 
 ## Core playback
 - Decode MP3, MPEG Layer I/II (`.mp1`/`.mp2`/`.mpa`), FLAC, OGG/Vorbis, Opus, WAV,
-  AIFF, CAF, AAC/M4A (`.m4a`/`.mp4`/`.m4b`/`.aac`), Monkey's Audio (`.ape`), AC-3
-  (`.ac3`/`.eac3`, stereo and 5.1 downmix), the audio track of video containers
-  (`.mp4`/`.m4v`/`.3gp`/`.mov`/`.mkv`/`.webm`/`.ogv`), tracker modules
+  AIFF, CAF, AAC/M4A (`.m4a`/`.mp4`/`.m4b`/`.aac`), Monkey's Audio (`.ape`), WavPack
+  (`.wv`), AC-3 (`.ac3`/`.eac3`, stereo and 5.1 downmix), the audio track of video
+  containers (`.mp4`/`.m4v`/`.3gp`/`.mov`/`.mkv`/`.webm`/`.ogv`), tracker modules
   (`.mod`/`.xm`/`.s3m`/`.it`) and MIDI (`.mid`/`.midi`, via a bundled SoundFont)
+- WavPack is decoded by the pure-Rust `wavicle` crate (symphonia 0.6's wavpack
+  feature is a non-functional stub); lossless 16- and 24-bit integer, mono/stereo,
+  any sample rate. Float, 8-bit, hybrid/lossy and multichannel `.wv` are refused
+  cleanly (skipped, never played as noise)
 - Audio CD playback (#160), verified on Windows and Linux hardware
-- Won't-fix / not decodable: WMA (#162) is won't-fix (proprietary licensing); WavPack
-  has no viable symphonia decoder, so it isn't offered. AC-3 is raw `.ac3`/`.eac3`
-  only (not yet inside mkv/mp4 containers)
+- Won't-fix / not decodable: WMA (#162) is won't-fix (proprietary licensing). AC-3 is
+  raw `.ac3`/`.eac3` only (not yet inside mkv/mp4 containers)
 - Play / Pause / Stop / Next / Previous
 - Seek bar (scrub) with position + total time
 - Time display toggles elapsed / remaining (−mm:ss), Ctrl+T or click the time

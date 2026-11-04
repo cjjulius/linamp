@@ -32,6 +32,7 @@ mod text;
 mod tracker;
 mod tray;
 mod viz;
+mod wavpack;
 #[cfg(windows)]
 mod wincursor;
 

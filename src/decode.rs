@@ -462,8 +462,8 @@ mod tests {
         // Guard the SUPPORTED_EXTS list against advertising formats we can't decode.
         // The symphonia-registry decoders we rely on must be registered. Opus and
         // WavPack have no decoder in symphonia 0.6 (their features are non-functional
-        // stubs), but Opus IS supported because crate::decode decodes it with libopus
-        // instead (#181); WavPack has no viable decoder, so it stays off the list.
+        // stubs), but both ARE supported out-of-band: Opus via libopus (#181) and
+        // WavPack via the pure-Rust wavicle crate (crate::wavpack).
         use symphonia::core::codecs::audio::well_known::{
             CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP3, CODEC_ID_OPUS,
             CODEC_ID_VORBIS, CODEC_ID_WAVPACK,
@@ -474,7 +474,8 @@ mod tests {
         ] {
             assert!(codecs.get_audio_decoder(c).is_some(), "expected a decoder for {c:?}");
         }
-        // symphonia itself still has no Opus/WavPack decoder; Opus is handled by libopus.
+        // symphonia itself still has no Opus/WavPack decoder; they are handled by
+        // libopus and wavicle respectively.
         for c in [CODEC_ID_OPUS, CODEC_ID_WAVPACK] {
             assert!(codecs.get_audio_decoder(c).is_none(), "unexpected decoder for {c:?}");
         }
@@ -483,8 +484,8 @@ mod tests {
             "opus is decoded via libopus, so it must be advertised as supported"
         );
         assert!(
-            !crate::playlist::SUPPORTED_EXTS.contains(&"wv"),
-            "wavpack can't be decoded, so it must not be advertised as supported"
+            crate::playlist::SUPPORTED_EXTS.contains(&"wv"),
+            "wavpack is decoded via wavicle, so it must be advertised as supported"
         );
     }
 
