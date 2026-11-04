@@ -200,6 +200,8 @@ pub struct Session {
     pub lib_visible: bool,
     /// User-resized Media Library column fractions [artist, title]; None = defaults.
     pub lib_col_fr: Option<[f32; 2]>,
+    /// User-resized Media Library base (unscaled) size; None = the default size.
+    pub lib_size: Option<(f32, f32)>,
     /// Last on-screen top-left (logical points) of each window; `None` until the
     /// window has been positioned. When `main_pos` is present the saved layout is
     /// restored instead of the default dock arrangement.
@@ -426,6 +428,7 @@ mod tests {
         assert_eq!(s.eq_pos, None);
         assert_eq!(s.pl_pos, None);
         assert_eq!(s.lib_pos, None);
+        assert_eq!(s.lib_size, None);
     }
 
     #[test]
@@ -516,6 +519,7 @@ mod tests {
             pl_shade: true,
             lib_visible: true,
             lib_col_fr: Some([0.3, 0.4]),
+            lib_size: Some((800.0, 520.0)),
             main_pos: Some((100.0, 200.0)),
             eq_pos: Some((100.0, 316.0)),
             pl_pos: None,
@@ -536,6 +540,7 @@ mod tests {
         assert_eq!(q.main_pos, Some((100.0, 200.0)));
         assert_eq!(q.pl_pos, None);
         assert_eq!(q.lib_pos, Some((375.0, 200.0)));
+        assert_eq!(q.lib_size, Some((800.0, 520.0)));
     }
 
     #[test]

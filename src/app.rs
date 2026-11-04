@@ -183,6 +183,107 @@ fn style_prefs_panel(
     v.selection.stroke = egui::Stroke::NONE;
 }
 
+/// The Preferences window's default (and minimum) inner size in points. It can
+/// be grown from the bottom-right grip up to twice this in each dimension.
+const PREFS_DEFAULT_SIZE: egui::Vec2 = egui::vec2(520.0, 360.0);
+
+/// Side of the square resize grip at a window's bottom-right corner, at 1x scale.
+const RESIZE_GRIP: f32 = 16.0;
+
+/// The outcome of a resize-grip frame.
+struct GripResult {
+    /// The new desired on-screen inner size while the grip is dragged, clamped to
+    /// `[min, max]`; `None` when not dragging this frame.
+    size: Option<egui::Vec2>,
+    /// The grip is hovered or being dragged, so the caller should show the skin's
+    /// resize cursor (held even when a drag has pulled the pointer off-window).
+    active: bool,
+    /// The drag ended this frame, so the caller can snap the final size.
+    released: bool,
+}
+
+/// Draw the bottom-right resize grip over the current viewport and drive a
+/// bottom-right-only resize. The window's top-left stays pinned; the caller stores
+/// the size, sends `ViewportCommand::InnerSize`, and re-pins the position. `grab`
+/// holds the grip offset across frames.
+///
+/// Driven entirely from raw pointer reads (never a widget / `Area`), like the GEN
+/// close button and the classic playlist grip: registering an interactive widget
+/// here risks egui leaving the grip holding the pointer interaction after a drag
+/// that releases off-window, which then swallows every click on the window's real
+/// widgets (settings, the title-bar drag) and locks the window up. Reading the
+/// pointer state cannot get stuck, and the release is taken from the button state,
+/// which the X11 implicit grab still delivers when the pointer is off-window.
+fn resize_grip(
+    ctx: &egui::Context,
+    win: egui::Rect,
+    grab: &mut Option<egui::Vec2>,
+    min: egui::Vec2,
+    max: egui::Vec2,
+    col: Color32,
+    grip: f32,
+) -> GripResult {
+    let win_pos = win.min;
+    let size = win.size();
+    let full = ctx.screen_rect();
+    let corner = full.max;
+    let gr = egui::Rect::from_min_max(egui::pos2(corner.x - grip, corner.y - grip), corner);
+    // Paint three subtle diagonal notches on a foreground layer. A painter never
+    // registers a widget, so it cannot capture egui's pointer interaction.
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("linamp_resize_grip"),
+    ));
+    let stroke = egui::Stroke::new(1.0_f32, col);
+    for i in 1..=3 {
+        let o = i as f32 * (grip / 4.0);
+        painter.line_segment(
+            [
+                egui::pos2(corner.x - o - 1.0, corner.y - 2.0),
+                egui::pos2(corner.x - 2.0, corner.y - o - 1.0),
+            ],
+            stroke,
+        );
+    }
+    let (pressed, down, pos) = ctx.input(|i| {
+        (
+            i.pointer.primary_pressed(),
+            i.pointer.primary_down(),
+            i.pointer.interact_pos().or(i.pointer.latest_pos()),
+        )
+    });
+    let over = pos.is_some_and(|p| gr.contains(p));
+    // Arm on a press that lands on the grip.
+    if pressed && over {
+        if let Some(g) = global_cursor_points(ctx) {
+            // Offset from the cursor to the window's bottom-right corner, so the
+            // corner tracks the cursor exactly for the rest of the drag.
+            *grab = Some((win_pos + size) - g);
+        }
+    }
+    let was_grabbing = grab.is_some();
+    let mut out = None;
+    if was_grabbing && down {
+        if let (Some(g), Some(off)) = (global_cursor_points(ctx), *grab) {
+            let mut ns = (g + off) - win_pos;
+            ns.x = ns.x.clamp(min.x, max.x);
+            ns.y = ns.y.clamp(min.y, max.y);
+            out = Some(ns);
+        }
+    }
+    // The button going up ends the resize, whether or not the pointer is still over
+    // the window (a resize usually releases off-window, past the corner).
+    let released = was_grabbing && !down;
+    if released {
+        *grab = None;
+    }
+    GripResult {
+        size: out,
+        active: over || was_grabbing,
+        released,
+    }
+}
+
 /// Open the folder containing `path` in the system file manager.
 fn open_in_file_manager(path: &std::path::Path) {
     let dir = path.parent().unwrap_or(path);
@@ -563,6 +664,16 @@ struct WindowGeom {
     lib_pos: egui::Pos2,
     lib_pos_init: bool,
     lib_drag: Option<egui::Vec2>,
+    /// User-chosen Media Library base (unscaled) size; None keeps `lib_base_size`.
+    /// The on-screen size is this times the double-size scale. Resizes from the
+    /// bottom-right grip between the default and the monitor size; the nav pane
+    /// keeps its fixed width and the track columns take the extra room.
+    lib_user_size: Option<egui::Vec2>,
+    /// Grip grab offset while the Library window is being resized (points).
+    lib_resize: Option<egui::Vec2>,
+    /// Saved (position, base size) from before a title-bar-double-click maximize,
+    /// so the next double-click restores it; None when not maximized.
+    lib_pre_max: Option<(egui::Pos2, egui::Vec2)>,
     /// Window-shade (collapsed) flags per classic window.
     main_shade: bool,
     eq_shade: bool,
@@ -827,6 +938,12 @@ pub struct LinAmpApp {
     /// pressed sprite for the whole press (even if the cursor moves off) and fires on
     /// release only if the cursor is still over it, like the classic windows.
     prefs_close_armed: bool,
+    /// User-chosen Preferences window size; None keeps the default. The window
+    /// resizes from the bottom-right grip between the default and twice the default
+    /// in each dimension; the navigation pane keeps its fixed width.
+    prefs_size: Option<egui::Vec2>,
+    /// Grip grab offset while the Preferences window is being resized (points).
+    prefs_resize: Option<egui::Vec2>,
     lib_visible: bool,
     /// Whether the Minibrowser window (a themed nod to the classic player's SHOUTcast pane)
     /// is open. Transient, it opens from the Options menu each session.
@@ -1059,6 +1176,9 @@ impl LinAmpApp {
                 lib_pos: egui::Pos2::ZERO,
                 lib_pos_init: false,
                 lib_drag: None,
+                lib_user_size: None,
+                lib_resize: None,
+                lib_pre_max: None,
                 main_shade: false,
                 eq_shade: false,
                 pl_shade: false,
@@ -1181,6 +1301,8 @@ impl LinAmpApp {
             prefs_tex: None,
             prefs_tex_sig: None,
             prefs_close_armed: false,
+            prefs_size: None,
+            prefs_resize: None,
             lib_visible: false,
             mb_visible: false,
             tag_editor: None,
@@ -1246,6 +1368,13 @@ impl LinAmpApp {
             app.lib_visible = session.lib_visible;
             if let Some(fr) = session.lib_col_fr {
                 app.lib.col_fr = fr;
+            }
+            if let Some((w, h)) = session.lib_size {
+                // Never smaller than the default; the monitor cap is re-applied live
+                // while resizing, so a saved size from a larger display is left as-is
+                // here and clamped on screen when the window is next resized.
+                let base = app.lib_base_size();
+                app.geom.lib_user_size = Some(egui::vec2(w.max(base.x), h.max(base.y)));
             }
             // Restore the saved window layout (absolute top-lefts). When present
             // it replaces the default dock arrangement; frame 1 clamps it on-
@@ -2085,9 +2214,10 @@ impl LinAmpApp {
     }
 
     /// The library window's on-screen size, scaled with the double-size setting
-    /// so it grows with the classic windows.
+    /// so it grows with the classic windows. The base size is the user's chosen
+    /// size (from the bottom-right resize grip) or the default when unset.
     fn lib_size(&self) -> egui::Vec2 {
-        self.lib_base_size() * self.scale
+        self.geom.lib_user_size.unwrap_or_else(|| self.lib_base_size()) * self.scale
     }
 
     /// Show/hide the Media Library window.
@@ -2554,6 +2684,7 @@ impl LinAmpApp {
             pl_shade: self.geom.pl_shade,
             lib_visible: self.lib_visible,
             lib_col_fr: Some(self.lib.col_fr),
+            lib_size: self.geom.lib_user_size.map(|s| (s.x, s.y)),
             // Remember the window layout once it's been established on frame 1.
             main_pos: self.geom.positions_init.then_some((self.geom.win_pos[0].x, self.geom.win_pos[0].y)),
             eq_pos: self.geom.positions_init.then_some((self.geom.win_pos[1].x, self.geom.win_pos[1].y)),
@@ -3104,7 +3235,7 @@ impl LinAmpApp {
             // heading is wider than the old flat labels) has room. Kept well under the
             // combined Main/EQ/PL/Library footprint at 1x (the rule of thumb is to stay
             // under ~95% of the open dashboard, so it never dwarfs the player).
-            .with_inner_size(egui::vec2(520.0, 360.0))
+            .with_inner_size(self.prefs_size.unwrap_or(PREFS_DEFAULT_SIZE))
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
@@ -3143,7 +3274,39 @@ impl LinAmpApp {
             } else {
                 self.ui_prefs_fallback(ctx, &mut close);
             }
+            // Bottom-right resize grip: grow from the default size up to twice it in
+            // each dimension. The navigation pane keeps its fixed width (egui gives the
+            // extra room to the open page), and Preferences neither docks nor has
+            // columns to redistribute.
+            let cur = ctx.screen_rect().size();
+            let grip_col = self.skin_window_bg();
+            let grip = resize_grip(
+                ctx,
+                egui::Rect::from_min_size(pos, cur),
+                &mut self.prefs_resize,
+                PREFS_DEFAULT_SIZE,
+                PREFS_DEFAULT_SIZE * 2.0,
+                grip_col,
+                RESIZE_GRIP,
+            );
+            if let Some(ns) = grip.size {
+                // Resize through the viewport builder (its `with_inner_size` is read
+                // from `prefs_size` at the top of the next frame and applied by eframe
+                // before the UI is drawn, so the paint always matches the window size).
+                // Sending a ViewportCommand::InnerSize here instead would resize the OS
+                // window a second time, out of sync with the builder and the paint,
+                // leaving the newly exposed band unpainted on every frame of the drag
+                // (the "trails" artifact).
+                self.prefs_size = Some(ns);
+                // The rounded-corner region is sized to the window; re-apply it next frame.
+                self.prefs_rounded = None;
+            }
             self.apply_base_cursor(ctx, "LinAmp Preferences");
+            // Show the skin's resize cursor over the grip (and through an off-window
+            // drag). Preferences does not dock, so there is nothing to snap to.
+            if grip.active {
+                self.set_resize_cursor(ctx, "LinAmp Preferences");
+            }
             if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }
@@ -3447,6 +3610,8 @@ impl LinAmpApp {
                         *close = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Keep the version label clear of the bottom-right resize grip.
+                        ui.add_space(RESIZE_GRIP - 4.0);
                         ui.label(
                             egui::RichText::new(format!("LinAmp {}", env!("CARGO_PKG_VERSION")))
                                 .small()
@@ -4466,6 +4631,28 @@ impl LinAmpApp {
         ctx.set_cursor_icon(egui::CursorIcon::Default);
         if let Some(ci) = cs.cursor("normal") {
             set_window_cursor(title, &format!("{}:normal", self.theme.name), ci);
+        }
+    }
+
+    /// While the bottom-right resize grip is hovered or dragged, show the skin's
+    /// resize cursor (the playlist "psize" cursor, falling back to the normal skin
+    /// cursor) over the window. Unlike `apply_base_cursor` this is not gated on the
+    /// pointer being inside the window, so the resize cursor holds while a drag has
+    /// pulled the pointer past the corner. Call it after `apply_base_cursor` so it
+    /// overrides the normal cursor over the grip.
+    fn set_resize_cursor(&self, ctx: &egui::Context, title: &str) {
+        if self.prefs.disable_skin_cursors {
+            return;
+        }
+        let Some(cs) = self.classic.as_ref() else {
+            return;
+        };
+        if !cs.has_cursors() {
+            return;
+        }
+        ctx.set_cursor_icon(egui::CursorIcon::Default);
+        if let Some(ci) = cs.cursor("psize").or_else(|| cs.cursor("normal")) {
+            set_window_cursor(title, &format!("{}:psize", self.theme.name), ci);
         }
     }
 

@@ -1124,8 +1124,9 @@ impl ClassicSkin {
 }
 
 /// Which of the 28 EQ slider sprites (two rows of 14 in EQMAIN.BMP, 14×63 at
-/// x=13+col*15, y=164+row*65) a skin ships, index 0..28 (0=boost, 27=cut). Skins
-/// differ wildly, so a sprite counts as present on colour OR light/dark variation.
+/// x=13+col*15, y=164+row*65) a skin ships, index 0..28 (0=cut colour, 27=boost
+/// colour). Skins differ wildly, so a sprite counts as present on colour OR
+/// light/dark variation.
 /// Bounds-checked: a short EQMAIN (example: Alita, no slider bank) yields an empty list.
 pub(crate) fn eq_valid_sprites(e: &RgbaImage) -> Vec<i32> {
     let (ew, eh) = e.dimensions();
@@ -1431,7 +1432,7 @@ pub fn render_all_png(skin_path: &Path, out: &Path) -> Result<()> {
         viz_peak: [150, 150, 150],
     });
     // Rock preset (band gains 8,5,-4,-7,-3,2,6,9,10,10 dB over ±12) so the
-    // colored sliders show their green-boost / red-cut range.
+    // colored sliders show their red-boost / green-cut range.
     let eq = skin.compose_eq(&EqState {
         focused: true,
         on: true,

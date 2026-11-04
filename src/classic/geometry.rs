@@ -668,11 +668,14 @@ pub fn pl_max_width(desktop_right: f32, left_x: f32, scale: f32) -> Option<f32> 
 /// Format a playlist time like the classic player's bottom bar: `M:SS`, or `H:MM:SS` once it
 /// reaches an hour. Minutes/hours have no leading zero; seconds (and minutes
 /// inside an H:MM:SS) are zero-padded. Negative input clamps to zero.
-/// EQ slider sprite index (0 = top/boost .. 27 = bottom/cut) for value `v`
-/// (-1..=1), snapped to the nearest sprite the skin ships. None when the skin
-/// has no slider bank (only the thumb is drawn).
+/// EQ slider colour-sprite index for value `v` (-1..=1), snapped to the nearest
+/// sprite the skin ships. None when the skin has no slider bank (only the thumb is
+/// drawn). The bank runs index 0 = the cut colour (green in the base skin) .. 27 =
+/// the boost colour (red), matching the graph gradient (red boost at top, green cut
+/// at bottom), so a boosted band (`v` near +1) maps to the high, red indices and a
+/// cut band (`v` near -1) to the low, green ones.
 pub(crate) fn eq_sprite_index(v: f32, valid: &[i32]) -> Option<i32> {
-    let frac = ((1.0 - v) / 2.0).clamp(0.0, 1.0);
+    let frac = ((1.0 + v) / 2.0).clamp(0.0, 1.0);
     let idx = (frac * 27.0).round() as i32;
     valid.iter().min_by_key(|&&vi| (vi - idx).abs()).copied()
 }
