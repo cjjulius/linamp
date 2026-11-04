@@ -63,6 +63,7 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         "ape" => "audio/x-ape",
         "wv" => "audio/x-wavpack",
         "ts" | "m2ts" | "mts" => "video/mp2t",
+        "avi" => "video/x-msvideo",
         "ac3" => "audio/ac3",
         "eac3" | "ec3" => "audio/eac3",
         // Video containers opened for their audio track (#180), plus CAF.

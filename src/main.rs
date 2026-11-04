@@ -4,6 +4,7 @@
 mod ac3;
 mod ape;
 mod app;
+mod avi;
 mod balance;
 mod cdda;
 mod classic;
