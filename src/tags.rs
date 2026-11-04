@@ -567,6 +567,80 @@ pub fn write_mass(path: &Path, new: &Id3Fields, mask: &FieldMask, id3v23: bool) 
     Ok(true)
 }
 
+/// Merge a mass edit into one MP3's ID3v1 and ID3v2 tags at once, each with its own
+/// field set and mask, so the mass editor can edit the v1/v2 pair like the single-file
+/// editor. Only the marked fields in each mask are applied; every unedited field and
+/// every unmanaged ID3v2 frame (art, album artist, …) is preserved. A tag that does
+/// not exist is created only when one of its fields is actually edited, so editing
+/// only v2 never fabricates an empty ID3v1 (and the reverse). A non-MP3 path falls
+/// back to the single-tag mass write (v2 only). Returns `Ok(false)` when nothing
+/// changed (so the file is skipped), `Ok(true)` when written.
+pub fn write_mass_id3_dual(
+    path: &Path,
+    v1_new: &Id3Fields,
+    v1_mask: &FieldMask,
+    v2_new: &Id3Fields,
+    v2_mask: &FieldMask,
+    id3v23: bool,
+) -> Result<bool> {
+    if !can_edit(path) {
+        anyhow::bail!(
+            "editing tags for this file type isn't supported yet (only {})",
+            EDITABLE_EXTS.join(", ")
+        );
+    }
+    if !uses_id3(path) {
+        // Not an MP3/MP2/MP1: no ID3v1 pair, so apply the v2 (main) column to its
+        // single native tag.
+        return write_mass(path, v2_new, v2_mask, id3v23);
+    }
+    let (v1_cur_opt, v2_cur_opt) = read_id3(path);
+    let v1_cur = v1_cur_opt.clone().unwrap_or_default();
+    let v2_cur = v2_cur_opt.clone().unwrap_or_default();
+    let merged_v1 = v1_mask.overlay(&v1_cur, v1_new);
+    let merged_v2 = v2_mask.overlay(&v2_cur, v2_new);
+    // Write a tag when it already exists, or when this edit sets one of its fields.
+    let write_v1 = v1_cur_opt.is_some() || v1_mask.any();
+    let write_v2 = v2_cur_opt.is_some() || v2_mask.any();
+    let v1_changed = write_v1 && merged_v1 != v1_cur;
+    let v2_changed = write_v2 && merged_v2 != v2_cur;
+    if !v1_changed && !v2_changed {
+        return Ok(false);
+    }
+    // Write only the tags that should exist, and never pass `None` to `write_id3`:
+    // its removal path spuriously writes an empty ID3v1 trailer for a file that has
+    // none. The mass editor has no "remove tag" control, so we never need removal.
+    match (write_v1, write_v2) {
+        (true, true) => write_id3(path, Some(&merged_v1), Some(&merged_v2), id3v23)?,
+        (true, false) => write_id3v1_only(path, &merged_v1)?,
+        (false, true) => write_id3v2_only(path, &merged_v2, id3v23)?,
+        (false, false) => {}
+    }
+    Ok(true)
+}
+
+/// Write the ID3v1 tag only, leaving any ID3v2 tag untouched. The mass editor's
+/// ID3v1 column uses this when a file has no ID3v2 (so it does not go through
+/// [`write_id3`], whose `v2: None` branch would spuriously stamp an empty tag).
+fn write_id3v1_only(path: &Path, f: &Id3Fields) -> Result<()> {
+    use lofty::config::WriteOptions;
+    use lofty::id3::v1::Id3v1Tag;
+    use lofty::tag::TagExt;
+    let t = Id3v1Tag {
+        title: v1_text(&f.title, V1_MAX_TEXT),
+        artist: v1_text(&f.artist, V1_MAX_TEXT),
+        album: v1_text(&f.album, V1_MAX_TEXT),
+        year: v1_text(&f.year, V1_MAX_YEAR),
+        // ID3v1.1 reserves the comment's last 2 bytes for the track number.
+        comment: v1_text(&f.comment, V1_MAX_TEXT - 2),
+        track_number: f.track.trim().parse::<u8>().ok(),
+        genre: genre_index(&f.genre),
+    };
+    t.save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("writing ID3v1 to {}", path.display()))?;
+    Ok(())
+}
+
 /// A friendly format name from a file's extension, for the mass editor's format
 /// breakdown. Thin public wrapper over the Basic Info label.
 pub fn format_name(path: &Path) -> String {
@@ -1354,6 +1428,103 @@ mod tests {
             false,
             "empty mask is a no-op"
         );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn write_mass_id3_dual_edits_v1_and_v2_independently() {
+        // The mass editor's ID3v1/ID3v2 column pair: a v1-column edit writes ID3v1, a
+        // v2-column edit writes ID3v2, each preserving the other tag's unedited fields.
+        let src = Path::new("music/Aria Nocturne - Crystal Harbor.mp3");
+        if !src.exists() {
+            return;
+        }
+        let tmp = std::env::temp_dir().join("linamp_mass_dual.mp3");
+        std::fs::copy(src, &tmp).unwrap();
+        // Seed both tags with distinct known values.
+        let v1_seed = Id3Fields {
+            title: "V1 Title".into(), artist: "V1 Artist".into(), album: "V1 Album".into(),
+            year: "1999".into(), ..Default::default()
+        };
+        let v2_seed = Id3Fields {
+            title: "V2 Title".into(), artist: "V2 Artist".into(), album: "V2 Album".into(),
+            year: "2000".into(), ..Default::default()
+        };
+        write_id3(&tmp, Some(&v1_seed), Some(&v2_seed), true).unwrap();
+
+        // Mass edit: change only the v1 Artist and only the v2 Album.
+        let v1_new = Id3Fields { artist: "Mass V1 Artist".into(), ..Default::default() };
+        let v1_mask = FieldMask { artist: true, ..Default::default() };
+        let v2_new = Id3Fields { album: "Mass V2 Album".into(), ..Default::default() };
+        let v2_mask = FieldMask { album: true, ..Default::default() };
+        assert!(
+            write_mass_id3_dual(&tmp, &v1_new, &v1_mask, &v2_new, &v2_mask, true).unwrap(),
+            "a real change writes"
+        );
+
+        let (g1, g2) = read_id3(&tmp);
+        let (g1, g2) = (g1.expect("v1 present"), g2.expect("v2 present"));
+        // v1: artist changed, the rest of ID3v1 preserved.
+        assert_eq!(g1.artist, "Mass V1 Artist");
+        assert_eq!(g1.title, "V1 Title");
+        assert_eq!(g1.album, "V1 Album");
+        assert_eq!(g1.year, "1999");
+        // v2: album changed, the rest of ID3v2 preserved.
+        assert_eq!(g2.album, "Mass V2 Album");
+        assert_eq!(g2.title, "V2 Title");
+        assert_eq!(g2.artist, "V2 Artist");
+        assert_eq!(g2.year, "2000");
+
+        // Re-applying the same values is a no-op (skipped).
+        assert!(
+            !write_mass_id3_dual(&tmp, &v1_new, &v1_mask, &v2_new, &v2_mask, true).unwrap(),
+            "no net change is skipped"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn write_mass_id3_dual_creates_v1_only_when_edited() {
+        // Editing a v1 field on a file that has no ID3v1 creates one; editing only v2
+        // never fabricates an empty ID3v1.
+        let src = Path::new("music/Aria Nocturne - Crystal Harbor.mp3");
+        if !src.exists() {
+            return;
+        }
+        let tmp = std::env::temp_dir().join("linamp_mass_dual_create.mp3");
+        std::fs::copy(src, &tmp).unwrap();
+        // Start with ID3v2 only, no ID3v1. (write_id3v2_only leaves v1 untouched;
+        // write_id3 with v2: None would spuriously stamp an empty ID3v1 trailer.)
+        write_id3v2_only(&tmp, &Id3Fields { title: "T".into(), ..Default::default() }, true)
+            .unwrap();
+        assert!(read_id3(&tmp).0.is_none(), "no ID3v1 to start");
+
+        // Editing only a v2 field must not create an ID3v1.
+        let v2_mask = FieldMask { album: true, ..Default::default() };
+        write_mass_id3_dual(
+            &tmp,
+            &Id3Fields::default(),
+            &FieldMask::default(),
+            &Id3Fields { album: "A".into(), ..Default::default() },
+            &v2_mask,
+            true,
+        )
+        .unwrap();
+        assert!(read_id3(&tmp).0.is_none(), "v2-only edit does not create ID3v1");
+
+        // Editing a v1 field creates the ID3v1 tag.
+        let v1_mask = FieldMask { artist: true, ..Default::default() };
+        write_mass_id3_dual(
+            &tmp,
+            &Id3Fields { artist: "New V1".into(), ..Default::default() },
+            &v1_mask,
+            &Id3Fields::default(),
+            &FieldMask::default(),
+            true,
+        )
+        .unwrap();
+        let v1 = read_id3(&tmp).0.expect("v1 created by a v1 edit");
+        assert_eq!(v1.artist, "New V1");
         let _ = std::fs::remove_file(&tmp);
     }
 
