@@ -11,13 +11,14 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 
 ## Core playback
 - Decode MP3, MPEG Layer I/II (`.mp1`/`.mp2`/`.mpa`), FLAC, OGG/Vorbis, Opus, WAV,
-  AIFF, CAF, AAC/M4A (`.m4a`/`.mp4`/`.m4b`/`.aac`), the audio track of video
-  containers (`.mp4`/`.m4v`/`.3gp`/`.mov`/`.mkv`/`.webm`/`.ogv`), tracker modules
+  AIFF, CAF, AAC/M4A (`.m4a`/`.mp4`/`.m4b`/`.aac`), Monkey's Audio (`.ape`), AC-3
+  (`.ac3`/`.eac3`, stereo and 5.1 downmix), the audio track of video containers
+  (`.mp4`/`.m4v`/`.3gp`/`.mov`/`.mkv`/`.webm`/`.ogv`), tracker modules
   (`.mod`/`.xm`/`.s3m`/`.it`) and MIDI (`.mid`/`.midi`, via a bundled SoundFont)
 - Audio CD playback (#160), verified on Windows and Linux hardware
-- Won't-fix / not decodable: AC-3 (#161) and WMA (#162) are won't-fix (restrictive
-  / proprietary licensing; AC-3 was never a native classic-Winamp format); WavPack
-  and Monkey's Audio (#182) have no viable symphonia decoder, so they aren't offered
+- Won't-fix / not decodable: WMA (#162) is won't-fix (proprietary licensing); WavPack
+  has no viable symphonia decoder, so it isn't offered. AC-3 is raw `.ac3`/`.eac3`
+  only (not yet inside mkv/mp4 containers)
 - Play / Pause / Stop / Next / Previous
 - Seek bar (scrub) with position + total time
 - Time display toggles elapsed / remaining (−mm:ss), Ctrl+T or click the time
@@ -34,7 +35,7 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 - Planned: Playback speed / pitch
 
 ## Audio conversion and CD ripping
-- Convert any library or playlist track to MP3, Ogg Vorbis, Opus, WAV or AIFF
+- Convert any library or playlist track to MP3, Ogg Vorbis, Opus, FLAC, WAV or AIFF
 - Rip audio CD tracks, the whole disc or a selection, into a folder named after the
   album, named `[Artist] - [Track]` and tagged from the online lookup (ID3v1+ID3v2,
   or Vorbis comments for Ogg/Opus)
@@ -42,7 +43,6 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   cancel while it runs, shown in the Media Library's Converting pane; finished files
   are added to the library automatically
 - Format, bitrate, sample rate and output folder set in Preferences > Conversion
-- Planned: FLAC output (#190)
 
 ## Playlist
 - Add files, add folder (recursive), remove, clear
@@ -64,14 +64,19 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 - Jump-to-file (J) and jump-to-time (Ctrl+J)
 
 ## Metadata / Library
-- Read ID3v2 / Vorbis / FLAC tags (title/artist/album)
-- Tag editor (Alt+3 / options menu, Edit file tags): view and edit
-  title / artist / album / album-artist / year / track / genre / comment, saved
-  back to the file. Select several rows in the playlist or library for the mass
-  editor ("Mass Edit Tags", Update All): it pre-fills each field with the most
-  common value and writes the fields you edit to every selected file, across tag
-  types, leaving untouched fields alone. MP3 (ID3v2) today; modular, so more formats follow (reading
-  already works for all)
+- Read tags for every supported format (ID3v1/ID3v2, Vorbis comments, MP4 atoms,
+  APEv2)
+- Tag editor (Alt+3 / options menu, Edit file tags): view and edit the full field
+  set (track / disc / title / artist / album / year / genre / comment / composer /
+  original artist / copyright / URL / encoded-by / BPM / compilation), saved back to
+  the file. MP3 shows the ID3v1 and ID3v2 tags as a column pair (with Copy to/from
+  ID3v1); other formats edit their single native tag. Writes to MP3, FLAC, Ogg, Opus,
+  M4A/MP4 and APE, each field in the key other players read (native MP4 cpil/tmpo,
+  standard Vorbis/APE keys)
+- Mass editor: select several rows in the playlist or library ("Mass Edit Tags",
+  Update All). It pre-fills each field with the most common value across the
+  selection, outlines the fields you change, and writes only those to every selected
+  file, leaving untouched fields alone
 - Audio properties (kbps / kHz / channels)
 - SQLite media library (scan folders, search, add to playlist)
   - stored at `%LOCALAPPDATA%/LinAmp/library.db` (Win) / `~/.local/share/LinAmp/` (Linux)
@@ -81,7 +86,7 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   search treats `_` and `%` as literal text, not SQL wildcards
 - Bookmarks, Alt+I bookmarks the current track; Media Library, Bookmarks
   view lists them (play, search filter, remove)
-- Planned: Album art, smart views / playlists
+- Planned: smart views / playlists
 
 ## UI / UX (Winamp feel)
 - Dark skin, LCD-style display, scrolling marquee title

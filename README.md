@@ -21,17 +21,18 @@ coordinates, on a modern cross-platform stack (`eframe`/`egui` UI,
 
 - Classic skin UI, loads real Winamp `.wsz` skins; main + EQ + playlist as
   separate windows that dock and snap together, with window-shade mode.
-- Plays MP3, MP1/MP2 (MPEG audio), FLAC, Ogg Vorbis, Opus, AAC/M4A, WAV, AIFF and
-  CAF, the audio track of MP4/M4V/3GP/MOV/MKV/WebM/OGV video, MIDI (via a bundled
-  SoundFont) and tracker modules (MOD/XM/S3M/IT); seek, volume, stereo balance,
-  repeat/shuffle, stop-after/stop-with-fade.
+- Plays MP3, MP1/MP2 (MPEG audio), FLAC, Ogg Vorbis, Opus, AAC/M4A, Monkey's Audio
+  (APE), AC-3, WAV, AIFF and CAF, the audio track of MP4/M4V/3GP/MOV/MKV/WebM/OGV
+  video, MIDI (via a bundled SoundFont) and tracker modules (MOD/XM/S3M/IT); seek,
+  volume, stereo balance, repeat/shuffle, stop-after/stop-with-fade.
 - Audio CD, play and rip (TOC and titles looked up online); rip or convert any
-  track to MP3, Ogg Vorbis, Opus, WAV or AIFF through a background queue.
+  track to MP3, Ogg Vorbis, Opus, FLAC, WAV or AIFF through a background queue.
 - 10-band equalizer with presets, preamp and an auto-gain mode (live biquad DSP).
 - Visualizer, live FFT spectrum analyzer and oscilloscope, skin-coloured.
 - Playlist, add files/folders, drag-and-drop, reorder, sort, search, M3U/PLS.
-- Tags & library, read/edit tags (ID3 for MP3/MP2, Vorbis for FLAC/Ogg, MP4 for
-  M4A); SQLite-backed media library.
+- Tags & library, read/edit tags (ID3v1/ID3v2 for MP3, Vorbis for FLAC/Ogg/Opus,
+  MP4 for M4A, APEv2), one file at a time or many at once with the mass editor;
+  SQLite-backed media library.
 - System integration, global media keys, a system-tray mode and "Open with" file
   associations (per-user, Windows and Linux).
 

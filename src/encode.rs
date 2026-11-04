@@ -5,14 +5,10 @@
 //! per format behind a small registry (`OutputFormat`), so later formats drop in by
 //! adding a variant and an encode arm.
 //!
-//! Formats: MP3 (libmp3lame, lossy), Ogg Vorbis (libvorbis, lossy), WAV and AIFF
-//! (both 16-bit PCM, lossless/uncompressed). Each output round-trips back through
-//! `decode::open_file`, so everything the converter writes also plays in LinAmp.
-//!
-//! FLAC was the intended lossless-compressed target but is deferred: the pure-Rust
-//! `flacenc` produces output symphonia 0.6 cannot decode (its partial final frame),
-//! and the libFLAC bindings need a system library absent on Windows. It is tracked as
-//! a follow-up (#190). Opus encoding (Ogg muxing + resampling) is tracked separately.
+//! Formats: MP3 (libmp3lame, lossy), Ogg Vorbis (libvorbis, lossy), Opus (libopus in
+//! Ogg, lossy), FLAC (lossless, compressed), and WAV and AIFF (both 16-bit PCM,
+//! lossless/uncompressed). Each output round-trips back through `decode::open_file`,
+//! so everything the converter writes also plays in LinAmp.
 
 use std::path::Path;
 
