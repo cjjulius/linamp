@@ -61,6 +61,7 @@ pub(super) enum MenuAct {
     PlayTarget,
     PlayNext,
     EditTagsTarget,
+    MassEditTags,
     ExploreTarget,
     Stop,
     ToggleStopAfter,
@@ -80,7 +81,11 @@ pub(super) enum MenuEntry {
 /// runtime state in `draw_popup_viewport`. `stop_after_current` only affects the
 /// Stop menu's toggle label, not the row count. This one list drives the draw
 /// loop, the height in `popup_dims` and the layout test.
-pub(super) fn fixed_menu_entries(kind: Popup, stop_after_current: bool) -> Option<Vec<MenuEntry>> {
+pub(super) fn fixed_menu_entries(
+    kind: Popup,
+    stop_after_current: bool,
+    pl_multi: bool,
+) -> Option<Vec<MenuEntry>> {
     use MenuAct::*;
     let it = |label: &str, shortcut: &'static str, act: MenuAct| MenuEntry::Item {
         label: label.to_string(),
@@ -124,16 +129,25 @@ pub(super) fn fixed_menu_entries(kind: Popup, stop_after_current: bool) -> Optio
             it("Save list…", "", SaveList),
             it("Load list…", "", LoadList),
         ],
-        Popup::PlTrack => vec![
-            it("Play", "Enter", PlayTarget),
-            it("Play Next", "", PlayNext),
-            MenuEntry::Sep,
-            it("Edit file tags…", "Alt+3", EditTagsTarget),
-            it("Explore folder", "", ExploreTarget),
-            MenuEntry::Sep,
-            it("Remove", "Del", RemoveSelected),
-            it("Crop (keep selected)", "", Crop),
-        ],
+        Popup::PlTrack => {
+            // With more than one row selected the "Mass Edit Tags…" item appears and
+            // takes the Alt+3 hint (Alt+3 opens the mass editor then); the single-row
+            // "Edit file tags…" still edits just the clicked row.
+            let mut v = vec![
+                it("Play", "Enter", PlayTarget),
+                it("Play Next", "", PlayNext),
+                MenuEntry::Sep,
+                it("Edit file tags…", if pl_multi { "" } else { "Alt+3" }, EditTagsTarget),
+            ];
+            if pl_multi {
+                v.push(it("Mass Edit Tags…", "Alt+3", MassEditTags));
+            }
+            v.push(it("Explore folder", "", ExploreTarget));
+            v.push(MenuEntry::Sep);
+            v.push(it("Remove", "Del", RemoveSelected));
+            v.push(it("Crop (keep selected)", "", Crop));
+            v
+        }
         Popup::PlVoid => {
             let mut v = vec![
                 it("Add file(s)…", "Ins", OpenFiles),
@@ -203,7 +217,7 @@ pub(super) fn popup_dims(kind: Popup) -> (f32, f32) {
     // the test use, so the three can't drift (#154). The dynamic menus
     // (Options / EqPresets / Bookmarks / EqDelete) recompute their height from
     // runtime item counts in draw_popup_viewport; these are only fallbacks.
-    let height = if let Some(entries) = fixed_menu_entries(kind, false) {
+    let height = if let Some(entries) = fixed_menu_entries(kind, false, false) {
         let (items, seps) = count_entries(&entries);
         popup_height(items, seps)
     } else {
@@ -359,6 +373,7 @@ impl super::LinAmpApp {
                 Some(i) => self.open_tag_editor_at(i),
                 None => self.open_tag_editor(),
             },
+            MassEditTags => self.open_mass_tag_editor_playlist(),
             ExploreTarget => {
                 if let Some(t) = target().and_then(|i| self.playlist.tracks.get(i)) {
                     open_in_file_manager(&t.path);
@@ -432,6 +447,15 @@ impl super::LinAmpApp {
             Popup::EqDelete => {
                 let rows = self.eq.presets.items.len().clamp(1, 12) as i32;
                 (200.0, popup_height(rows, 0))
+            }
+            Popup::PlTrack => {
+                // Height tracks the conditional "Mass Edit Tags…" row (shown only on a
+                // multi-row selection), like the other dynamic menus above.
+                let pl_multi = self.plview.selection.len() > 1;
+                let entries = fixed_menu_entries(kind, self.stop_after_current, pl_multi)
+                    .expect("PlTrack is a fixed menu");
+                let (items, seps) = count_entries(&entries);
+                (210.0, popup_height(items, seps))
             }
             _ => popup_dims(kind),
         };
@@ -610,9 +634,11 @@ impl super::LinAmpApp {
                             // Fixed menus: one entry list (fixed_menu_entries)
                             // drives the rows, the window height and the layout
                             // test, so they can't drift (#154).
-                            if let Some(entries) =
-                                fixed_menu_entries(kind, self.stop_after_current)
-                            {
+                            if let Some(entries) = fixed_menu_entries(
+                                kind,
+                                self.stop_after_current,
+                                self.plview.selection.len() > 1,
+                            ) {
                                 for e in entries {
                                     match e {
                                         MenuEntry::Sep => {
@@ -1128,7 +1154,8 @@ mod tests {
             (Popup::PlVoid, 14, 4),
             (Popup::StopMenu, 3, 0),
         ] {
-            let entries = fixed_menu_entries(kind, false).expect("fixed menu has entries");
+            let entries =
+                fixed_menu_entries(kind, false, false).expect("fixed menu has entries");
             assert_eq!(count_entries(&entries), (items, seps), "{kind:?} layout changed");
             // popup_dims derives height from the same list the draw loop consumes.
             let (_, h) = popup_dims(kind);
@@ -1136,7 +1163,21 @@ mod tests {
         }
         // The dynamic menus size themselves from runtime state, not a fixed list.
         for kind in [Popup::Options, Popup::EqPresets, Popup::EqDelete, Popup::Bookmarks] {
-            assert!(fixed_menu_entries(kind, false).is_none(), "{kind:?} should be dynamic");
+            assert!(fixed_menu_entries(kind, false, false).is_none(), "{kind:?} should be dynamic");
         }
+    }
+
+    #[test]
+    fn pl_track_gains_mass_edit_row_on_multi_select() {
+        // Single-row selection: the base layout (no Mass Edit row).
+        let single = fixed_menu_entries(Popup::PlTrack, false, false).unwrap();
+        assert_eq!(count_entries(&single), (6, 2));
+        // Multi-row selection: one extra item, the "Mass Edit Tags…" row.
+        let multi = fixed_menu_entries(Popup::PlTrack, false, true).unwrap();
+        assert_eq!(count_entries(&multi), (7, 2));
+        assert!(multi.iter().any(|e| matches!(
+            e,
+            MenuEntry::Item { label, .. } if label.contains("Mass Edit")
+        )));
     }
 }

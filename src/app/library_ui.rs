@@ -20,6 +20,9 @@ pub(super) enum LibAction {
     EnqueueAlbum(String),
     Rate(Vec<usize>, i64),
     EditTags(usize),
+    /// Edit the tags of several selected rows at once (shown only on a multi-row
+    /// selection). Carries the selected result-row indices.
+    MassEditTags(Vec<usize>),
     /// Show a read-only view of a row's tags (used for audio-CD tracks, which have no
     /// file to edit) (#191).
     ViewTags(usize),
@@ -1746,6 +1749,9 @@ impl super::LinAmpApp {
                                                 menu.push(DynRow::Item { label: "Select all".into(), act: LibAction::SelectAll });
                                                 menu.push(DynRow::RateSub { label: "Rate".into() });
                                                 menu.push(DynRow::Item { label: "Edit tags\u{2026}".into(), act: LibAction::EditTags(i) });
+                                                if rows.len() > 1 {
+                                                    menu.push(DynRow::Item { label: "Mass Edit tags\u{2026}".into(), act: LibAction::MassEditTags(rows.clone()) });
+                                                }
                                                 menu.push(DynRow::Item { label: "Explore folder".into(), act: LibAction::Explore(i) });
                                                 menu.push(DynRow::Sep);
                                                 // A single Convert action using the global Preferences
@@ -1831,6 +1837,12 @@ impl super::LinAmpApp {
                                             }
                                             if ui.button("Edit tags\u{2026}").clicked() {
                                                 act.lib_action = Some(LibAction::EditTags(i));
+                                                ui.close_menu();
+                                            }
+                                            if rows.len() > 1
+                                                && ui.button("Mass Edit tags\u{2026}").clicked()
+                                            {
+                                                act.lib_action = Some(LibAction::MassEditTags(rows.clone()));
                                                 ui.close_menu();
                                             }
                                             if ui.button("Explore folder").clicked() {
@@ -2089,6 +2101,9 @@ impl super::LinAmpApp {
                 if let Some(t) = self.lib.results.get(i).cloned() {
                     self.open_tag_editor_path(t.path);
                 }
+            }
+            LibAction::MassEditTags(rows) => {
+                self.open_mass_tag_editor_library(&rows);
             }
             LibAction::ViewTags(i) => {
                 if let Some(t) = self.lib.results.get(i).cloned() {

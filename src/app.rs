@@ -24,6 +24,7 @@ use crate::text::{fmt_time, marquee, scroll_text};
 use crate::viz::{self, VizShared};
 
 mod tag_ui;
+mod mass_tag_ui;
 mod menu;
 mod library_ui;
 mod modern;
@@ -831,6 +832,9 @@ pub struct LinAmpApp {
     /// is open. Transient, it opens from the Options menu each session.
     mb_visible: bool,
     tag_editor: Option<tag_ui::TagEditor>,
+    /// The mass tag editor (Some while its window is open): edits the tags of
+    /// several selected files at once, from the playlist or the library.
+    mass_tag_editor: Option<mass_tag_ui::MassTagEditor>,
     /// A read-only tag view for an audio-CD track (Some while its window is open). A CD
     /// track has no file to edit, so the library's right-click offers "View tags" which
     /// shows the looked-up metadata here instead of the editable tag editor (#191).
@@ -1180,6 +1184,7 @@ impl LinAmpApp {
             lib_visible: false,
             mb_visible: false,
             tag_editor: None,
+            mass_tag_editor: None,
             cd_tag_view: None,
             jump_file: None,
             jump_time: None,
@@ -4520,6 +4525,7 @@ impl LinAmpApp {
         self.ui_prefs(ctx);
         self.ui_library_window(ctx);
         self.ui_tag_editor(ctx);
+        self.ui_mass_tag_editor(ctx);
         self.ui_cd_tag_view(ctx);
         self.ui_jump_file(ctx);
         self.ui_jump_time(ctx);
