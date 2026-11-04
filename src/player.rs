@@ -364,6 +364,11 @@ impl Player {
             // feature is a non-functional stub.
             let source = crate::wavpack::open_wavpack(path)?;
             self.append_source(source, None, true)?;
+        } else if crate::ts::is_ts(path) {
+            // MPEG-TS (.ts/.m2ts): symphonia can't demux it, so crate::ts pulls the
+            // audio elementary stream out and decodes it through the shared path.
+            let source = crate::ts::open_ts(path)?;
+            self.append_source(source, None, true)?;
         } else {
             let source = crate::decode::open_file(path)?;
             self.append_source(source, None, true)?;

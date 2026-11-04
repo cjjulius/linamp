@@ -179,12 +179,23 @@ impl Source for SymphoniaSource {
 pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
     let file = File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
     }
+    open_stream(mss, hint, &path.display().to_string())
+}
 
+/// Decode audio from any [`MediaSourceStream`] with a format `hint`: a file (via
+/// `open_file`), or an in-memory elementary stream extracted from a container that
+/// symphonia can't demux itself (crate::ts feeds the audio ES of an MPEG-TS here).
+/// `name` only labels it in error messages. This is the shared decode path for every
+/// symphonia format plus libopus Opus.
+pub fn open_stream(
+    mss: MediaSourceStream<'static>,
+    hint: Hint,
+    name: &str,
+) -> Result<SymphoniaSource> {
     let mut format = symphonia::default::get_probe().probe(
         &hint,
         mss,
@@ -198,7 +209,7 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
     let track_id = track.id;
     let audio_params = match track.codec_params {
         Some(CodecParameters::Audio(p)) => p,
-        _ => bail!("no audio codec parameters in {}", path.display()),
+        _ => bail!("no audio codec parameters in {}", name),
     };
     // Opus: symphonia 0.6 demuxes the container but ships no Opus decoder, so decode
     // its packets with libopus; every other codec goes through symphonia (#181).
@@ -213,11 +224,11 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
         .unwrap_or(2);
     let mut decoder = if is_opus {
         if opus_channels == 0 || opus_channels > 2 {
-            bail!("unsupported Opus channel count ({opus_channels}) in {}", path.display());
+            bail!("unsupported Opus channel count ({opus_channels}) in {}", name);
         }
         let ch = if opus_channels == 1 { OpusChannels::Mono } else { OpusChannels::Stereo };
         let dec = OpusDecoder::new(48_000, ch)
-            .map_err(|e| anyhow!("opus decoder init failed for {}: {e}", path.display()))?;
+            .map_err(|e| anyhow!("opus decoder init failed for {}: {e}", name))?;
         PacketDecoder::Opus {
             dec,
             channels: opus_channels,
@@ -244,8 +255,8 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
     let (sample_rate, channels, mut samples) = loop {
         let packet = match format.next_packet() {
             Ok(Some(p)) => p,
-            Ok(None) => bail!("no audio in {}", path.display()),
-            Err(e) => return Err(anyhow!("no audio in {}: {e}", path.display())),
+            Ok(None) => bail!("no audio in {}", name),
+            Err(e) => return Err(anyhow!("no audio in {}: {e}", name)),
         };
         if packet.track_id != track_id {
             continue;
@@ -261,7 +272,7 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
                     break (rate, ch, v);
                 }
                 Err(SymError::DecodeError(_)) => continue,
-                Err(e) => bail!("decode error in {}: {e}", path.display()),
+                Err(e) => bail!("decode error in {}: {e}", name),
             },
             PacketDecoder::Opus { dec, channels, scratch } => {
                 match dec.decode_float(&packet.data, scratch, false) {
@@ -274,7 +285,7 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
         }
     };
     if sample_rate == 0 || channels == 0 {
-        bail!("no audio decoded from {}", path.display());
+        bail!("no audio decoded from {}", name);
     }
     // Drop pre-skip from the primed samples; any remainder is dropped as fill() runs.
     if preskip > 0 {
@@ -607,3 +618,4 @@ mod tests {
         }
     }
 }
+
