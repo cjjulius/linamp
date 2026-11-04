@@ -31,6 +31,7 @@ mod tags;
 mod text;
 mod tracker;
 mod tray;
+mod ts;
 mod viz;
 mod wavpack;
 #[cfg(windows)]

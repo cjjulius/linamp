@@ -28,6 +28,10 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "ape",
     // Dolby Digital, decoded via crate::ac3 (filmcraft-ac3, pure Rust) (#161).
     "ac3", "eac3", "ec3",
+    // MPEG-TS video/broadcast containers: crate::ts extracts the audio elementary
+    // stream (AAC/MP2) and decodes it through the shared path. AC-3 in TS is not yet
+    // routed, but the container is still advertised (such files skip cleanly).
+    "ts", "m2ts", "mts",
 ];
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
@@ -157,6 +161,7 @@ impl Track {
                 .or_else(|| crate::ape::duration(&self.path))
                 .or_else(|| crate::ac3::duration(&self.path))
                 .or_else(|| crate::wavpack::duration(&self.path))
+                .or_else(|| crate::ts::duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
     }

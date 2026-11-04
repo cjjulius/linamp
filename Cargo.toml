@@ -76,6 +76,7 @@ rubato = "0.15"
 # (wavicle 0.1 errors on them), and float streams are rejected up front (0.1 decodes
 # them to noise while returning Ok).
 wavicle = "0.1.0"
+mpeg2ts-reader = "0.18.2"
 
 # Linux/X11 only: query the global cursor position (XQueryPointer) so classic
 # windows can be dragged and docked as a group, matching the Windows behaviour.
