@@ -20,11 +20,18 @@
 /// any failure is ignored so a registry/permissions hiccup never blocks startup.
 /// Called once per launch, which also keeps the registered path current if the
 /// executable moves.
-pub fn register() {
+pub fn register(icon_dark_mode: bool) {
     #[cfg(windows)]
-    windows_impl::register();
+    {
+        // The Windows taskbar icon is set live via `WM_SETICON`, not from an
+        // installed file, so the colour does not affect the registry writes.
+        let _ = icon_dark_mode;
+        windows_impl::register();
+    }
     #[cfg(target_os = "linux")]
-    linux_impl::register();
+    linux_impl::register(icon_dark_mode);
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let _ = icon_dark_mode;
 }
 
 /// Remove the registrations `register` created. Not called in normal operation
@@ -335,12 +342,6 @@ mod linux_impl {
     const DESKTOP_FILE: &str = "linamp.desktop";
     const MIME_PACKAGE: &str = "linamp.xml";
 
-    // The icon the desktop entry refers to as `Icon=linamp`. Installed per-user so
-    // the name resolves however LinAmp was launched (run from a build tree, the
-    // installer never ran). Same bytes the app uses for its window/taskbar icon.
-    const ICON_PNG: &[u8] = include_bytes!("../assets/linamp_logo_256.png");
-    const ICON_SVG: &str = include_str!("../assets/linamp_logo.svg");
-
     // A small shared-mime-info package for the tracker formats. Standard
     // shared-mime-info often does not define these, so without it the file manager
     // gives a .mod/.xm/.s3m/.it file a generic type and never offers LinAmp.
@@ -409,7 +410,7 @@ mod linux_impl {
             .status();
     }
 
-    pub(super) fn register() {
+    pub(super) fn register(icon_dark_mode: bool) {
         let Some(data) = dirs::data_local_dir() else {
             return;
         };
@@ -419,13 +420,25 @@ mod linux_impl {
 
         // Install the icon per-user so `Icon=linamp` resolves however LinAmp was
         // launched (run from a build tree, the installer never ran). Without this
-        // the "Open with" list shows a generic icon. Refresh the icon cache only
-        // when a file changed.
+        // the "Open with" list shows a generic icon. This is also the only icon a
+        // GNOME dock or the app launcher shows for the running app (they render the
+        // theme icon by name, not the window's `_NET_WM_ICON`), so it has to track
+        // Icon Dark Mode (#223): writing the recoloured logo here is what makes the
+        // taskbar/launcher follow the toggle, live (set_icon_dark_mode re-runs this)
+        // and across restarts. Refresh the icon cache only when a file changed.
         let icons = data.join("icons").join("hicolor");
-        let mut icon_changed =
-            write_bytes_if_changed(&icons.join("256x256").join("apps").join("linamp.png"), ICON_PNG);
-        icon_changed |=
-            write_if_changed(&icons.join("scalable").join("apps").join("linamp.svg"), ICON_SVG);
+        let png = crate::icon::window_png(icon_dark_mode);
+        let mut icon_changed = match &png {
+            Some(bytes) => write_bytes_if_changed(
+                &icons.join("256x256").join("apps").join("linamp.png"),
+                bytes,
+            ),
+            None => false,
+        };
+        icon_changed |= write_if_changed(
+            &icons.join("scalable").join("apps").join("linamp.svg"),
+            &crate::icon::logo_svg(icon_dark_mode),
+        );
 
         // The desktop entry: a complete entry with the running executable as Exec
         // and the full MIME list, so "Open with" and the Default Apps UI offer

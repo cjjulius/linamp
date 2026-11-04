@@ -16,6 +16,7 @@ mod encode;
 mod eq;
 mod eqf;
 mod fileassoc;
+mod icon;
 mod library;
 mod mediakeys;
 mod midi;
@@ -153,11 +154,15 @@ fn main() -> eframe::Result<()> {
         Instance::Unavailable => (None, true),
     };
 
+    let prefs = config::Prefs::load();
+
     // Register LinAmp as a candidate handler for its audio types (#166), so it
     // shows in Open with / Default Apps and opens files launched with it. Per-user
     // and idempotent; done each launch so it also tracks a moved executable. Only
-    // on a real GUI launch (the headless flags above have already returned).
-    fileassoc::register();
+    // on a real GUI launch (the headless flags above have already returned). The
+    // icon it installs follows Icon Dark Mode (#223), so the launcher/dock icon
+    // starts in the chosen colour.
+    fileassoc::register(prefs.icon_dark_mode);
 
     // Start borderless at classic skin size (the app sets the real mode on the
     // first frame once it knows whether a skin loaded).
@@ -166,13 +171,15 @@ fn main() -> eframe::Result<()> {
         .with_decorations(false)
         .with_resizable(false)
         .with_title("LinAmp");
-    if let Some(icon) = load_icon() {
+    // Icon Dark Mode (#223) recolours the logo to black and grey; the pref chooses
+    // which version the window and taskbar start with.
+    if let Some(icon) = icon::window_icon(prefs.icon_dark_mode) {
         viewport = viewport.with_icon(icon);
     }
     // System tray mode (#40) hides the taskbar button, so the tray icon is the
     // app's only presence. egui can only set this at window creation, which is why
     // the window mode applies at launch. A missing/false pref keeps the taskbar.
-    if config::Prefs::load().tray_enabled {
+    if prefs.tray_enabled {
         viewport = viewport.with_taskbar(false);
     }
     let options = eframe::NativeOptions {
@@ -191,18 +198,6 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| Ok(Box::new(LinAmpApp::new(cc, is_primary)))),
     )
-}
-
-/// Decode the embedded LinAmp logo into an egui window/taskbar icon.
-fn load_icon() -> Option<egui::IconData> {
-    let bytes = include_bytes!("../assets/linamp_logo_256.png");
-    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
-    let (width, height) = img.dimensions();
-    Some(egui::IconData {
-        rgba: img.into_raw(),
-        width,
-        height,
-    })
 }
 
 /// Outcome of the single-instance check.
