@@ -254,7 +254,14 @@ impl super::LinAmpApp {
             self.prefs.save();
         }
         if k.alt && k.key_3 {
-            self.open_tag_editor();
+            // More than one playlist row selected opens the mass editor; a single
+            // row (or none) opens the normal single-file editor. Nothing is written
+            // until "Update All", so an accidental multi-select is harmless.
+            if self.plview.selection.len() > 1 {
+                self.open_mass_tag_editor_playlist();
+            } else {
+                self.open_tag_editor();
+            }
         }
         if k.alt && k.key_i {
             self.add_bookmark();
