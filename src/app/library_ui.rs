@@ -145,6 +145,52 @@ impl super::LinAmpApp {
         snap_rect(r, &others, monitor)
     }
 
+    /// Snap a just-resized library window's right/bottom edges to a nearby window
+    /// (Main/EQ/Playlist) or screen edge, adjusting its on-screen size while the
+    /// top-left stays put. The move-time magnetic snap pulls the top-left; this is
+    /// its counterpart for the dragged bottom-right corner, so a resize that lands
+    /// near an edge clicks flush to it, the same feel as the playlist grip.
+    fn snap_lib_size(&self, size: egui::Vec2, monitor: Option<egui::Vec2>) -> egui::Vec2 {
+        let r = egui::Rect::from_min_size(self.geom.lib_pos, size);
+        let mut others = vec![self.win_rect_pts(0)];
+        if self.eq_visible {
+            others.push(self.win_rect_pts(1));
+        }
+        if self.pl_visible {
+            others.push(self.win_rect_pts(2));
+        }
+        let s = crate::dock::SNAP;
+        let mut best_dw: Option<f32> = None; // right-edge offset (adjusts width)
+        let mut best_dh: Option<f32> = None; // bottom-edge offset (adjusts height)
+        let consider = |cur: &mut Option<f32>, off: f32| {
+            if off.abs() < s && cur.is_none_or(|b: f32| off.abs() < b.abs()) {
+                *cur = Some(off);
+            }
+        };
+        if let Some(m) = monitor {
+            consider(&mut best_dw, m.x - r.right());
+            consider(&mut best_dh, m.y - r.bottom());
+        }
+        for o in &others {
+            // Right edge snaps to a neighbour's vertical edge when they share rows.
+            let yover = r.top() < o.bottom() + s && r.bottom() > o.top() - s;
+            if yover {
+                consider(&mut best_dw, o.left() - r.right());
+                consider(&mut best_dw, o.right() - r.right());
+            }
+            // Bottom edge snaps to a neighbour's horizontal edge when they share columns.
+            let xover = r.left() < o.right() + s && r.right() > o.left() - s;
+            if xover {
+                consider(&mut best_dh, o.top() - r.bottom());
+                consider(&mut best_dh, o.bottom() - r.bottom());
+            }
+        }
+        egui::vec2(
+            size.x + best_dw.unwrap_or(0.0),
+            size.y + best_dh.unwrap_or(0.0),
+        )
+    }
+
     /// Rebuild the library panes/results from the active nav node, search text
     /// and artist/album selection.
     pub(super) fn refresh_library(&mut self) {
@@ -469,7 +515,50 @@ impl super::LinAmpApp {
                     egui::Stroke::new(2.0_f32, self.skin_window_bg()),
                 );
             }
+            // Bottom-right resize grip: grow from the default size up to the monitor
+            // resolution. The nav pane keeps its fixed width (a `SidePanel` with an
+            // exact width); the artist/album and track columns take the extra room.
+            let monitor = ctx.input(|i| i.viewport().monitor_size);
+            let min = self.lib_base_size() * self.scale;
+            let max = monitor
+                .map(|m| egui::vec2(m.x.max(min.x), m.y.max(min.y)))
+                .unwrap_or_else(|| egui::vec2(4000.0, 4000.0));
+            let grip_col = self.skin_window_bg();
+            let grip = super::resize_grip(
+                ctx,
+                egui::Rect::from_min_size(self.geom.lib_pos, self.lib_size()),
+                &mut self.geom.lib_resize,
+                min,
+                max,
+                grip_col,
+                super::RESIZE_GRIP * self.scale,
+            );
+            if let Some(ns) = grip.size {
+                // Resize through the viewport builder only (its `with_inner_size` reads
+                // `lib_size()` next frame and eframe applies it before the UI draws, so
+                // the paint matches the window size). A ViewportCommand::InnerSize here
+                // would resize a second time, out of sync with the paint, leaving the
+                // newly exposed band unpainted every frame of the drag (the "trails").
+                self.geom.lib_user_size = Some(ns / self.scale);
+                // A manual resize leaves the maximized state, so the next title-bar
+                // double-click maximizes afresh rather than restoring an old size.
+                self.geom.lib_pre_max = None;
+            }
+            if grip.released {
+                // On release, snap the dragged right/bottom edges to a nearby window or
+                // screen edge (like the playlist), then re-clamp to [default, monitor].
+                let snapped = self.snap_lib_size(self.lib_size(), monitor);
+                let snapped = egui::vec2(
+                    snapped.x.clamp(min.x, max.x),
+                    snapped.y.clamp(min.y, max.y),
+                );
+                self.geom.lib_user_size = Some(snapped / self.scale);
+            }
             self.apply_base_cursor(ctx, "LinAmp Library");
+            // Show the skin's resize cursor over the grip and through an off-window drag.
+            if grip.active {
+                self.set_resize_cursor(ctx, "LinAmp Library");
+            }
             if ctx.input(|i| i.viewport().close_requested()) {
                 close = true;
             }
@@ -479,6 +568,36 @@ impl super::LinAmpApp {
         }
     }
 
+    /// Toggle the Media Library between its current size and filling the monitor, on
+    /// a title-bar double-click. Remembers the pre-maximize position and base size so
+    /// the next double-click restores them. No minimize.
+    fn lib_maximize_toggle(&mut self, ctx: &egui::Context) {
+        if let Some((pos, base)) = self.geom.lib_pre_max.take() {
+            self.geom.lib_pos = pos;
+            self.geom.lib_user_size = Some(base);
+        } else {
+            let Some(m) = ctx.input(|i| i.viewport().monitor_size) else {
+                return;
+            };
+            let base = self
+                .geom
+                .lib_user_size
+                .unwrap_or_else(|| self.lib_base_size());
+            self.geom.lib_pre_max = Some((self.geom.lib_pos, base));
+            // Fill the monitor at the current double-size scale.
+            self.geom.lib_user_size = Some(m / self.scale);
+            // Pin the top-left so the maximized footprint stays on the desktop.
+            if let Some(vr) = virtual_desktop_rect(ctx) {
+                let maxp = (vr.max - m).max(vr.min);
+                self.geom.lib_pos = self.geom.lib_pos.clamp(vr.min, maxp);
+            }
+        }
+        // The size follows the viewport builder's `with_inner_size(lib_size())` next
+        // frame (so it stays in sync with the paint, no trails); only the position
+        // change needs an explicit command, and maximize is a one-shot, not a drag.
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.geom.lib_pos));
+    }
+
     /// Library window themed with the skin's GEN.BMP frame: composite the frame
     /// behind the content, draw the caption and inset the browser into the frame.
     fn ui_library_gen(&mut self, ctx: &egui::Context, close: &mut bool) {
@@ -486,11 +605,14 @@ impl super::LinAmpApp {
         // Use the shared app-level focus so the library doesn't dim merely because
         // another LinAmp window was clicked.
         let active = self.geom.app_focused;
-        // Compose the frame at the base (1x) size; it is drawn to the (possibly
-        // scaled) window rect and upscaled like the classic windows.
-        let base = self.lib_base_size();
-        let (w, h) = (base.x as u32, base.y as u32);
         let s = self.scale;
+        // Compose the frame at the window's current (unscaled) size, not the default,
+        // so the title bar and walls tile correctly after a resize or maximize instead
+        // of a fixed 640-wide frame being stretched across a wider window. It is drawn
+        // to the (possibly double-size-scaled) window rect and upscaled from there, like
+        // the classic windows.
+        let base = self.lib_size() / s;
+        let (w, h) = (base.x.round() as u32, base.y.round() as u32);
         let (top, right, bottom, left) = classic::ClassicSkin::gen_insets();
         // Insets scale with the window (the 1x frame is upscaled into it).
         let (top, right, bottom, left) = (
@@ -565,6 +687,10 @@ impl super::LinAmpApp {
                 let dresp =
                     ui.interact(drag_rect, ui.id().with("lib_gen_drag"), egui::Sense::click_and_drag());
                 self.handle_lib_drag(ctx, &dresp);
+                // Double-click the title bar to maximize to the monitor / restore.
+                if dresp.double_clicked() {
+                    self.lib_maximize_toggle(ctx);
+                }
                 // Inset the browser into the frame interior.
                 let content = egui::Rect::from_min_max(
                     egui::pos2(full.left() + left, full.top() + top),
@@ -658,6 +784,10 @@ impl super::LinAmpApp {
             let monitor = ctx.input(|i| i.viewport().monitor_size);
             self.geom.lib_pos = self.snap_lib_pos(self.geom.lib_pos, monitor);
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.geom.lib_pos));
+        }
+        // Double-click the title bar to maximize to the monitor / restore.
+        if bar_resp.double_clicked() && !x_resp.hovered() {
+            self.lib_maximize_toggle(ctx);
         }
         ui.add_space(2.0);
     }
@@ -860,6 +990,8 @@ impl super::LinAmpApp {
                         }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Keep the status clear of the bottom-right resize grip.
+                        ui.add_space(super::RESIZE_GRIP * s - 4.0);
                         let status =
                             format!("{} items  [{}]", self.lib.results.len(), hms(total_secs));
                         ui.label(RichText::new(status).color(dim));
