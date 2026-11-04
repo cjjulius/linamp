@@ -8,6 +8,33 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use lofty::tag::ItemKey;
 
+/// Fallback tag keys for fields lofty maps only for ID3v2. For Vorbis comments,
+/// MP4 atoms and APEv2, lofty silently drops these on write (Original Artist and
+/// URL have no non-ID3v2 mapping at all; MP4 `cpil` and APE disc/bpm don't
+/// round-trip through lofty's typed writers). The mass/single-tag writer stores
+/// them under these explicit keys for the formats that need it, and the reader
+/// falls back to them, so a mass edit round-trips across every editable format.
+/// ID3v2 keeps its standard frames (TOPE/WOAS/TCMP/TPOS/TBPM) and never uses these.
+mod fallback {
+    pub const ORIG_ARTIST: &str = "ORIGINALARTIST";
+    pub const URL: &str = "URL";
+    pub const COMPILATION: &str = "COMPILATION";
+    pub const DISC: &str = "DISCNUMBER";
+    pub const BPM: &str = "BPM";
+}
+
+/// The concrete tag key for a fallback field in a given tag type. MP4 stores custom
+/// values as freeform `----:mean:name` atoms (lofty only round-trips an unknown MP4
+/// key in that form); Vorbis comments and APEv2 take the bare name. Used by both
+/// [`apply_v2`] (write) and [`fields_from_tag`] (read) so the two always agree.
+fn fallback_key(tt: lofty::tag::TagType, base: &str) -> ItemKey {
+    if tt == lofty::tag::TagType::Mp4Ilst {
+        ItemKey::Unknown(format!("----:com.apple.iTunes:{base}"))
+    } else {
+        ItemKey::Unknown(base.to_string())
+    }
+}
+
 /// Editable ID3 fields. ID3v1 uses only `track`..=`comment`; ID3v2 uses all.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Id3Fields {
@@ -209,6 +236,47 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
     // the editor shows the real characters (matching the playlist display).
     use crate::playlist::repair_mojibake as fix;
     let text = |k: &ItemKey| fix(&tag.get_string(k).map(|s| s.to_string()).unwrap_or_default());
+    // Read a fallback key (see `fallback` and `apply_v2`); empty when absent. The
+    // concrete key depends on the tag type (MP4 uses a freeform atom).
+    let tt = tag.tag_type();
+    let unk = |base: &str| {
+        tag.get_string(&fallback_key(tt, base)).map(|s| s.to_string()).unwrap_or_default()
+    };
+    // Prefer the standard typed value; fall back to the explicit key for formats
+    // where lofty can't persist the typed one.
+    let orig_artist = {
+        let v = text(&ItemKey::OriginalArtist);
+        if v.is_empty() { fix(&unk(fallback::ORIG_ARTIST)) } else { v }
+    };
+    let url = {
+        let v = tag
+            .get(&ItemKey::AudioSourceUrl)
+            .and_then(|i| match i.value() {
+                lofty::tag::ItemValue::Text(s) | lofty::tag::ItemValue::Locator(s) => Some(s.clone()),
+                _ => None,
+            })
+            .map(|s| fix(&s))
+            .unwrap_or_default();
+        if v.is_empty() { fix(&unk(fallback::URL)) } else { v }
+    };
+    let disc = {
+        let v = tag.disk().map(|d| d.to_string()).unwrap_or_default();
+        if v.is_empty() { unk(fallback::DISC) } else { v }
+    };
+    let bpm = {
+        let v = tag
+            .get_string(&ItemKey::IntegerBpm)
+            .or_else(|| tag.get_string(&ItemKey::Bpm))
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        if v.is_empty() { unk(fallback::BPM) } else { v }
+    };
+    // Any non-empty, non-"0" value (typed TCMP/cpil or the fallback key) counts as set.
+    let compilation = {
+        let typed = tag.get_string(&ItemKey::FlagCompilation);
+        let set = !matches!(typed, None | Some("") | Some("0"));
+        set || !matches!(unk(fallback::COMPILATION).as_str(), "" | "0")
+    };
     Id3Fields {
         track: tag.track().map(|t| t.to_string()).unwrap_or_default(),
         title: fix(&tag.title().map(|s| s.to_string()).unwrap_or_default()),
@@ -226,32 +294,15 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
         genre: fix(&tag.genre().map(|s| s.to_string()).unwrap_or_default()),
         comment: fix(&tag.comment().map(|s| s.to_string()).unwrap_or_default()),
         composer: text(&ItemKey::Composer),
-        orig_artist: text(&ItemKey::OriginalArtist),
+        // Original Artist, URL, disc and bpm each prefer the standard frame and fall
+        // back to an explicit key for formats lofty can't persist them in (computed above).
+        orig_artist,
         copyright: text(&ItemKey::CopyrightMessage),
-        // URL lives in a WOAS locator frame, not a text frame.
-        url: tag
-            .get(&ItemKey::AudioSourceUrl)
-            .and_then(|i| match i.value() {
-                lofty::tag::ItemValue::Text(s) | lofty::tag::ItemValue::Locator(s) => {
-                    Some(s.clone())
-                }
-                _ => None,
-            })
-            .map(|s| fix(&s))
-            .unwrap_or_default(),
+        url,
         encoded_by: text(&ItemKey::EncodedBy),
-        disc: tag.disk().map(|d| d.to_string()).unwrap_or_default(),
-        bpm: {
-            let b = tag
-                .get_string(&ItemKey::IntegerBpm)
-                .or_else(|| tag.get_string(&ItemKey::Bpm));
-            b.map(|s| s.to_string()).unwrap_or_default()
-        },
-        // Any non-empty, non-"0" value counts as set (iTunes writes "1").
-        compilation: !matches!(
-            tag.get_string(&ItemKey::FlagCompilation),
-            None | Some("") | Some("0")
-        ),
+        disc,
+        bpm,
+        compilation,
     }
 }
 
@@ -268,7 +319,10 @@ pub fn read_single(path: &Path) -> Id3Fields {
 }
 
 /// The metadata block types present in a FLAC byte stream (1 byte each), for the
-/// splice check and its test. Empty when `data` is not a FLAC stream.
+/// splice check and its test. Empty when `data` is not a FLAC stream. Test-only:
+/// the `ensure_flac_writable` splice above reads the header directly, so this is
+/// used only to assert the result in [`tests::minimal_flac_gets_a_writable_comments_block`].
+#[cfg(test)]
 fn flac_block_types(data: &[u8]) -> Vec<u8> {
     let mut types = Vec::new();
     if data.len() < 4 || &data[0..4] != b"fLaC" {
@@ -777,6 +831,39 @@ fn apply_v2(tag: &mut lofty::tag::Tag, f: &Id3Fields) {
             ));
         }
     }
+
+    // Cross-format fallbacks. lofty maps Original Artist and URL only for ID3v2, and
+    // MP4 `cpil` / APE disc+bpm don't round-trip through its typed writers, so those
+    // fields silently vanish on a non-ID3v2 save. Mirror them into explicit keys for
+    // the formats that need it (the reader prefers the standard frame, then these).
+    // ID3v2 keeps its clean standard frames and never gets these extra items.
+    let tt = tag.tag_type();
+    let set_fallback = |tag: &mut lofty::tag::Tag, base: &str, val: &str| {
+        let k = fallback_key(tt, base);
+        tag.remove_key(&k);
+        if !val.trim().is_empty() {
+            // `insert` re-maps the key and silently drops `ItemKey::Unknown` (no
+            // mapping), so use the unchecked insert, as lofty's docs direct.
+            tag.insert_unchecked(lofty::tag::TagItem::new(
+                k,
+                lofty::tag::ItemValue::Text(val.to_string()),
+            ));
+        }
+    };
+    if tt != lofty::tag::TagType::Id3v2 {
+        // No non-ID3v2 mapping exists for these two in lofty.
+        set_fallback(tag, fallback::ORIG_ARTIST, &f.orig_artist);
+        set_fallback(tag, fallback::URL, &f.url);
+    }
+    if tt == lofty::tag::TagType::Mp4Ilst {
+        // `cpil` written as text "1" does not read back; keep a parallel flag.
+        set_fallback(tag, fallback::COMPILATION, if f.compilation { "1" } else { "" });
+    }
+    if tt == lofty::tag::TagType::Ape {
+        // APEv2 disc/bpm don't survive lofty's typed writers; store them explicitly.
+        set_fallback(tag, fallback::DISC, &f.disc);
+        set_fallback(tag, fallback::BPM, &f.bpm);
+    }
 }
 
 #[cfg(test)]
@@ -1226,6 +1313,80 @@ mod tests {
         assert_eq!(back.artist, "Green Day");
         assert_eq!(back.album, "Saviors");
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn mass_edit_round_trips_every_field_across_formats() {
+        // Real-file matrix: write the full field set through the mass path
+        // (write_mass -> read_primary) for every editable format, and assert nothing
+        // is dropped. This is the regression guard for the cross-format fallback keys
+        // (see `apply_v2`). The non-MP3 samples live in the gitignored qa-music, so
+        // each missing sample is skipped (CI runs the bundled MP3; a dev checkout with
+        // qa-music covers all). Two passes with distinct values confirm an edit also
+        // overwrites a prior value (the "set everything to 1234, then 5678" check).
+        let samples: &[(&str, &str)] = &[
+            ("mp3", "music/Aria Nocturne - Crystal Harbor.mp3"),
+            ("flac", "qa-music/format-samples/hypno-this.flac"),
+            ("ogg", "qa-music/format-samples/hypno-this.ogg"),
+            ("opus", "qa-music/format-samples/hypno-this.opus"),
+            ("m4a", "qa-music/format-samples/hypno-this.m4a"),
+            ("mp4", "qa-music/format-samples/hypno-this.mp4"),
+            ("ape", "qa-music/format-samples/sample.ape"),
+        ];
+        let all = FieldMask {
+            track: true, title: true, artist: true, album: true, year: true, genre: true,
+            comment: true, composer: true, orig_artist: true, copyright: true, url: true,
+            encoded_by: true, disc: true, bpm: true, compilation: true,
+        };
+        // Two value sets; genre stays a standard name so ID3v1's index survives too.
+        let passes = [
+            Id3Fields {
+                track: "1".into(), title: "T1".into(), artist: "Ar1".into(), album: "Al1".into(),
+                year: "2001".into(), genre: "Rock".into(), comment: "C1".into(),
+                composer: "Cm1".into(), orig_artist: "OA1".into(), copyright: "Cp1".into(),
+                url: "http://one".into(), encoded_by: "E1".into(), disc: "1".into(),
+                bpm: "111".into(), compilation: true,
+            },
+            Id3Fields {
+                track: "2".into(), title: "T2".into(), artist: "Ar2".into(), album: "Al2".into(),
+                year: "2002".into(), genre: "Jazz".into(), comment: "C2".into(),
+                composer: "Cm2".into(), orig_artist: "OA2".into(), copyright: "Cp2".into(),
+                url: "http://two".into(), encoded_by: "E2".into(), disc: "2".into(),
+                bpm: "222".into(), compilation: false,
+            },
+        ];
+        let mut ran = 0usize;
+        for (ext, src) in samples {
+            let src = Path::new(src);
+            if !src.exists() {
+                continue;
+            }
+            ran += 1;
+            let tmp =
+                std::env::temp_dir().join(format!("linamp_matrix_{ext}.{ext}"));
+            std::fs::copy(src, &tmp).unwrap();
+            for f in &passes {
+                write_mass(&tmp, f, &all, true).unwrap();
+                let g = read_primary(&tmp);
+                assert_eq!(&g.track, &f.track, "{ext} track");
+                assert_eq!(&g.title, &f.title, "{ext} title");
+                assert_eq!(&g.artist, &f.artist, "{ext} artist");
+                assert_eq!(&g.album, &f.album, "{ext} album");
+                assert_eq!(&g.year, &f.year, "{ext} year");
+                assert_eq!(&g.genre, &f.genre, "{ext} genre");
+                assert_eq!(&g.comment, &f.comment, "{ext} comment");
+                assert_eq!(&g.composer, &f.composer, "{ext} composer");
+                assert_eq!(&g.orig_artist, &f.orig_artist, "{ext} orig_artist");
+                assert_eq!(&g.copyright, &f.copyright, "{ext} copyright");
+                assert_eq!(&g.url, &f.url, "{ext} url");
+                assert_eq!(&g.encoded_by, &f.encoded_by, "{ext} encoded_by");
+                assert_eq!(&g.disc, &f.disc, "{ext} disc");
+                assert_eq!(&g.bpm, &f.bpm, "{ext} bpm");
+                assert_eq!(g.compilation, f.compilation, "{ext} compilation");
+            }
+            let _ = std::fs::remove_file(&tmp);
+        }
+        assert!(ran >= 1, "expected at least the bundled MP3 sample to run");
     }
 
     #[test]

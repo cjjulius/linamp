@@ -35,8 +35,12 @@ struct MassBasic {
     selected: usize,
     total_size: u64,
     total_secs: u64,
-    /// Format label and count, most common first.
+    /// Editable formats, label and count, most common first.
     formats: Vec<(String, usize)>,
+    /// Selected formats we can't tag-edit (MIDI, tracker modules, …), shown in
+    /// parentheses after the editable ones so the Formats counts still sum to the
+    /// selection.
+    formats_other: Vec<(String, usize)>,
     artists: usize,
     albums: usize,
 }
@@ -78,7 +82,7 @@ fn mode_str(vals: &[String]) -> String {
     // Keep the first-seen value on a tie: replace only on a strictly greater count.
     let mut best: Option<(&str, usize)> = None;
     for (k, c) in counts {
-        if best.map_or(true, |(_, bc)| c > bc) {
+        if best.is_none_or(|(_, bc)| c > bc) {
             best = Some((k, c));
         }
     }
@@ -254,18 +258,20 @@ impl super::LinAmpApp {
     /// does not open and a status line says so.
     pub(super) fn open_mass_tag_editor(&mut self, sources: Vec<MassSource>) {
         let selected = sources.len();
-        let editable: Vec<MassSource> = sources
+        // Drop audio-CD tracks (no file), then split real files into the tag-editable
+        // ones and the rest (MIDI, tracker modules, …). Both halves feed the Basic
+        // Info format breakdown so its counts match the selection; only the editable
+        // half is actually edited.
+        let (editable, other): (Vec<MassSource>, Vec<MassSource>) = sources
             .into_iter()
-            .filter(|s| {
-                !crate::cdda::is_cdda_path(&s.path.to_string_lossy())
-                    && crate::tags::can_edit(&s.path)
-            })
-            .collect();
+            .filter(|s| !crate::cdda::is_cdda_path(&s.path.to_string_lossy()))
+            .partition(|s| crate::tags::can_edit(&s.path));
         if editable.is_empty() {
             self.status = "No editable files selected.".into();
             return;
         }
         let paths: Vec<PathBuf> = editable.iter().map(|s| s.path.clone()).collect();
+        let other_paths: Vec<PathBuf> = other.iter().map(|s| s.path.clone()).collect();
         let pl_indices: Vec<usize> = editable.iter().filter_map(|s| s.pl_index).collect();
 
         // Read each file's fields once (needed for the mode); reuse for the
@@ -284,6 +290,7 @@ impl super::LinAmpApp {
             total_size,
             total_secs,
             formats: format_breakdown(&paths),
+            formats_other: format_breakdown(&other_paths),
             artists: distinct_nonempty(&read, |i| &i.artist),
             albums: distinct_nonempty(&read, |i| &i.album),
         };
@@ -505,12 +512,18 @@ impl super::LinAmpApp {
                                         let s = b.total_secs % 60;
                                         r("Total length", format!("{m}:{s:02}"));
                                     }
-                                    let fmts = b
-                                        .formats
-                                        .iter()
-                                        .map(|(k, c)| format!("{c} {k}"))
-                                        .collect::<Vec<_>>()
-                                        .join(", ");
+                                    let join = |v: &[(String, usize)]| {
+                                        v.iter()
+                                            .map(|(k, c)| format!("{c} {k}"))
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    };
+                                    // Editable formats, then any uneditable ones in
+                                    // parentheses, e.g. "8 MP3, 1 FLAC (2 MIDI, 1 Tracker module)".
+                                    let mut fmts = join(&b.formats);
+                                    if !b.formats_other.is_empty() {
+                                        fmts = format!("{fmts} ({})", join(&b.formats_other));
+                                    }
                                     r("Formats", fmts);
                                     r("Artists", format!("{}", b.artists));
                                     r("Albums", format!("{}", b.albums));
@@ -592,9 +605,9 @@ impl super::LinAmpApp {
                 close = true;
             }
         });
-        if close {
-            self.mass_tag_editor = None;
-        } else if do_save && self.save_mass_tag_editor() {
+        // Close on Cancel/Escape, or after a successful save. `close` short-circuits
+        // so a save is not attempted when the user is just closing.
+        if close || (do_save && self.save_mass_tag_editor()) {
             self.mass_tag_editor = None;
         }
     }
