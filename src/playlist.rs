@@ -7,10 +7,11 @@ use walkdir::WalkDir;
 pub const SUPPORTED_EXTS: &[&str] = &[
     "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "aiff", "aif",
     // Opus (in Ogg): symphonia demuxes it but has no decoder, so crate::decode
-    // decodes the packets with libopus (#181). Not WavPack: symphonia 0.6 ships no
-    // decoder and there is no viable one, so listing it would accept the file then
-    // fail at play time (decode::tests guards this).
+    // decodes the packets with libopus (#181).
     "opus",
+    // WavPack: symphonia 0.6's wavpack feature is a non-functional stub, so
+    // crate::wavpack decodes it with the pure-Rust wavicle crate instead.
+    "wv",
     // MPEG Layer I/II and the rest of the ISO-MP4 family, decoded via a symphonia
     // hint in crate::decode (rodio 0.20 can't open these directly) (#157/#164).
     "mp1", "mp2", "mpa", "mp4", "m4b",
@@ -155,6 +156,7 @@ impl Track {
                 .or_else(|| crate::tracker::duration(&self.path))
                 .or_else(|| crate::ape::duration(&self.path))
                 .or_else(|| crate::ac3::duration(&self.path))
+                .or_else(|| crate::wavpack::duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
     }

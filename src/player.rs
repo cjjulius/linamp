@@ -359,6 +359,11 @@ impl Player {
             // Dolby Digital (.ac3/.eac3) is decoded by filmcraft-ac3 (#161).
             let source = crate::ac3::open_ac3(path)?;
             self.append_source(source, None, true)?;
+        } else if crate::wavpack::is_wavpack(path) {
+            // WavPack (.wv) is decoded by wavicle (pure Rust); symphonia's wavpack
+            // feature is a non-functional stub.
+            let source = crate::wavpack::open_wavpack(path)?;
+            self.append_source(source, None, true)?;
         } else {
             let source = crate::decode::open_file(path)?;
             self.append_source(source, None, true)?;

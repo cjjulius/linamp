@@ -67,6 +67,15 @@ vorbis_rs = "0.5.6"
 flacenc = "0.5.1"
 ogg = "0.9.2"
 rubato = "0.15"
+# WavPack (.wv) decoding. symphonia 0.6's `wavpack` feature is a non-functional
+# stub, so crate::wavpack wraps wavicle (pure Rust, MIT/Apache-2.0,
+# #![forbid(unsafe_code)], verified against the reference wvunpack/wavpack) as a
+# seekable source, like ape/ac3/midi. Lossless 16- and 24-bit integer mono/stereo;
+# float/8-bit/multichannel are refused cleanly. Vetted bit-exact against the source
+# PCM across variants before adding. Trailing APEv2/ID3 tags are trimmed first
+# (wavicle 0.1 errors on them), and float streams are rejected up front (0.1 decodes
+# them to noise while returning Ok).
+wavicle = "0.1.0"
 
 # Linux/X11 only: query the global cursor position (XQueryPointer) so classic
 # windows can be dragged and docked as a group, matching the Windows behaviour.
