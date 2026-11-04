@@ -1365,3 +1365,39 @@ Still open from QA (not yet done this round):
   isolation; the one that did not update most likely already held the target value
   (a no-op skip) or its edit was missed by the old change tracking, which the
   effective_mask fix should also address. Worth a re-test after this round.
+
+## 2026-11-04 Mass tag editing: QA fixes (round 2, from the Linux box)
+
+Fixes from the second QA pass on feat/mass-tag-edit (details and the full matrix
+are in [MASS-TAG-EDIT-QA.md](MASS-TAG-EDIT-QA.md)):
+
+- Cross-format field drops squashed. Several fields were silently dropped on save
+  for non-MP3 formats because lofty maps them only for ID3v2: Original Artist and
+  URL (all of FLAC/Ogg/Opus/M4A/MP4/APE), Compilation (M4A/MP4), and Disc and BPM
+  (APE). The writer now also stores these under explicit keys for the formats that
+  need them and the reader falls back to them (apply_v2 / fields_from_tag /
+  fallback_key in src/tags.rs). ID3v2 is untouched and keeps its standard frames.
+  MP4 uses a freeform ----:com.apple.iTunes:<NAME> atom (the only shape lofty
+  round-trips for an unknown MP4 key), and the write uses insert_unchecked because
+  Tag::insert silently drops an ItemKey::Unknown. Guarded by a real-file matrix
+  test, mass_edit_round_trips_every_field_across_formats, which writes every field
+  twice with different values for each editable format and asserts it reads back
+  (skips a format when its qa-music sample is absent; the bundled MP3 always runs).
+  Nothing to verify by hand for the round-trip itself, but the manual checklist in
+  the QA doc is worth a pass.
+- Basic Info Formats row now lists uneditable formats too, in parentheses after the
+  editable ones, so the counts sum to the selection (example:
+  "8 MP3, 1 FLAC (2 MIDI, 1 Tracker module)"). Before, only editable formats showed,
+  so the numbers did not match "N of M selected". MIDI and tracker modules are not
+  tag-editable, so they are reported but not edited.
+- Dead code warning cleared: tags::flac_block_types is test-only and is now
+  cfg(test). Clippy is back at the 48 baseline, 338 tests pass.
+
+Interop note: on non-MP3 formats, Original Artist and URL (and APE disc/bpm, MP4
+compilation) are stored under LinAmp's fallback keys, not a format-native frame,
+because no native lofty mapping exists. Other players may not surface them under
+those labels; MP3 is unaffected. See the QA doc for the rationale.
+
+Still open (unchanged from round 1): ID3v1 is not yet editable in mass mode (the
+maintainer wants a separate v1/v2 column pair like the single-file editor), the
+next task on this branch.
