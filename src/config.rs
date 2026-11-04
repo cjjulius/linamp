@@ -58,6 +58,11 @@ pub struct Prefs {
     /// only the main-menu Exit or the tray's Exit quit. A change applies live and
     /// sets the launch state for next time.
     pub tray_enabled: bool,
+    /// Icon Dark Mode (#223). true = recolour the LinAmp logo to black and grey
+    /// instead of its usual black and green, for the window, taskbar and tray icon.
+    /// Off by default. Does not touch the installed files; the recolour is done at
+    /// runtime from the one embedded logo (see [`crate::icon`]).
+    pub icon_dark_mode: bool,
     /// What "Open with" (files passed on the command line) does to the playlist:
     /// Enqueue adds them to the current playlist (the default), Clear replaces it
     /// with just the opened file(s). Either way the first opened item plays.
@@ -107,6 +112,9 @@ impl Default for Prefs {
             // Normal window mode by default (taskbar button, no tray icon); the
             // user opts into System tray mode in Preferences.
             tray_enabled: false,
+            // The logo keeps its classic black-and-green look unless the user opts
+            // into Icon Dark Mode in Preferences.
+            icon_dark_mode: false,
             // "Open with" adds to the current playlist by default (classic
             // enqueue); the user can switch to replacing it in Preferences.
             open_with: OpenWith::Enqueue,

@@ -790,6 +790,12 @@ pub struct LinAmpApp {
     /// this deadline, which reliably beats the race. `None` once done or in Normal mode.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     tray_taskbar_deadline: Option<Instant>,
+    /// The Icon Dark Mode value the dock/launcher icon was installed with at startup
+    /// (Linux). A GNOME dock only re-reads the theme icon on a session restart, so
+    /// while this differs from the live pref the Preferences page tells the user a
+    /// restart is needed. Captured once at launch.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    icon_dark_mode_applied: bool,
     /// Set by a genuine quit (main-menu Exit or the tray's Exit) so the close
     /// handler really quits instead of hiding to the tray in System tray mode.
     force_quit: bool,
@@ -984,7 +990,11 @@ impl LinAmpApp {
         let fft = FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE);
         let prefs = Prefs::load();
         let scale = prefs.scale();
-        let (tray, tray_rx) = crate::tray::Tray::spawn(&cc.egui_ctx, prefs.tray_enabled);
+        // The dock/launcher icon is installed in this colour at startup; captured now
+        // because `prefs` is moved into the struct below.
+        let icon_dark_mode_applied = prefs.icon_dark_mode;
+        let (tray, tray_rx) =
+            crate::tray::Tray::spawn(&cc.egui_ctx, prefs.tray_enabled, prefs.icon_dark_mode);
         // Global media keys (#165) are independent of tray mode, so they always
         // spawn; the listener is a no-op where unsupported.
         let (media_keys, media_keys_rx) = crate::mediakeys::MediaKeys::spawn(&cc.egui_ctx);
@@ -1154,6 +1164,7 @@ impl LinAmpApp {
             // from the taskbar; a plain window needs nothing.
             tray_taskbar_deadline: tray_mode
                 .then(|| Instant::now() + std::time::Duration::from_secs(3)),
+            icon_dark_mode_applied,
             force_quit: false,
             skin_path: None,
             scale,
@@ -1542,17 +1553,57 @@ impl LinAmpApp {
         self.prefs.save();
         // Re-create the tray to match: spawning disabled drops the icon, enabled
         // adds it, and the old tray's Drop removes the previous icon.
-        let (tray, rx) = crate::tray::Tray::spawn(ctx, enabled);
-        self._tray = tray;
-        self.tray_rx = rx;
-        self.tray_mode = enabled && self._tray.is_active();
-        // The fresh tray starts on default colours; push the current skin's.
-        self.push_tray_theme();
+        self.respawn_tray(ctx, enabled);
         set_taskbar_button("LinAmp", !self.tray_mode);
         // Leaving tray mode while the window is hidden would strand it; bring it back.
         if !self.tray_mode && self.hidden_to_tray {
             self.show_from_tray(ctx);
         }
+    }
+
+    /// Switch Icon Dark Mode live (#223): recolour the window and taskbar icon now,
+    /// and respawn the tray (when it is running) so its icon matches. Persists the
+    /// choice, so the next launch starts with the chosen look.
+    fn set_icon_dark_mode(&mut self, ctx: &egui::Context, dark: bool) {
+        self.prefs.icon_dark_mode = dark;
+        self.prefs.save();
+        // Window, taskbar and Alt-Tab icon: set it on the main window directly. We
+        // cannot go through egui/winit here: its runtime Icon command only updates the
+        // small (title-bar) icon, while the taskbar button and Alt-Tab use the big
+        // icon, which otherwise would not change until the next launch. set_app_window_icon
+        // sets both on the main window (Windows WM_SETICON, X11 _NET_WM_ICON).
+        if let (Some(big), Some(small)) =
+            (crate::icon::window_rgba(dark), crate::icon::tray_rgba(dark))
+        {
+            set_app_window_icon((big.0, big.1, &big.2), (small.0, small.1, &small.2));
+        }
+        // The per-user theme icon that a GNOME dock and the app launcher render is
+        // installed at startup (fileassoc::register, driven by this same pref), so a
+        // fresh launch starts in the right colour. We deliberately do NOT rewrite it
+        // here on a live toggle: GNOME caches a running app's icon and only re-reads
+        // it, laggily, when its window re-associates, which detaches the window into a
+        // fresh dock entry (it visibly jumps to the end of the dock). Toggling the
+        // theme file live is what triggered that, so the dock/launcher now follows the
+        // pref on the next launch instead. The tray (below) and the X11 _NET_WM_ICON
+        // (above, for KDE/XFCE/tiling bars) still update live.
+        // The running tray baked in the old colour, so respawn it to pick up the new
+        // one. Only when tray mode is on; otherwise there is no tray icon to update,
+        // and the window mode (taskbar button, hidden state) is unchanged.
+        if self.prefs.tray_enabled {
+            self.respawn_tray(ctx, true);
+        }
+    }
+
+    /// Respawn the tray to match the current state: drop the old icon and start a
+    /// fresh one for `enabled`, using the current `icon_dark_mode` colour, then push
+    /// the skin's menu palette (a fresh tray starts on default colours). Shared by
+    /// the window-mode and icon-colour toggles so the respawn stays in one place.
+    fn respawn_tray(&mut self, ctx: &egui::Context, enabled: bool) {
+        let (tray, rx) = crate::tray::Tray::spawn(ctx, enabled, self.prefs.icon_dark_mode);
+        self._tray = tray;
+        self.tray_rx = rx;
+        self.tray_mode = enabled && self._tray.is_active();
+        self.push_tray_theme();
     }
 
     /// Push the current skin's menu palette to the tray so its native menu matches
@@ -3467,6 +3518,22 @@ impl LinAmpApp {
                 } else {
                     self.render.cur_cursor = [None; 3];
                 }
+            }
+        });
+        Self::pref_section(ui, "Icon", |ui| {
+            let mut dark = self.prefs.icon_dark_mode;
+            if ui.checkbox(&mut dark, "Dark Mode").changed() {
+                self.set_icon_dark_mode(ctx, dark);
+            }
+            // On Linux a GNOME dock draws the taskbar/launcher icon from a cached theme
+            // icon it only refreshes on a session restart. Show the caveat only when it
+            // actually applies: Normal (taskbar) mode, and the choice differs from the
+            // colour installed at startup. Windows updates its taskbar button live.
+            #[cfg(target_os = "linux")]
+            if !self.prefs.tray_enabled && self.prefs.icon_dark_mode != self.icon_dark_mode_applied
+            {
+                ui.add_space(4.0);
+                ui.weak("Requires a restart of LinAmp and Gnome Panel to take effect.");
             }
         });
         Self::pref_section(ui, "System tray", |ui| {
