@@ -8,6 +8,33 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use lofty::tag::ItemKey;
 
+/// Fallback tag keys for fields lofty maps only for ID3v2. For Vorbis comments,
+/// MP4 atoms and APEv2, lofty silently drops these on write (Original Artist and
+/// URL have no non-ID3v2 mapping at all; MP4 `cpil` and APE disc/bpm don't
+/// round-trip through lofty's typed writers). The mass/single-tag writer stores
+/// them under these explicit keys for the formats that need it, and the reader
+/// falls back to them, so a mass edit round-trips across every editable format.
+/// ID3v2 keeps its standard frames (TOPE/WOAS/TCMP/TPOS/TBPM) and never uses these.
+mod fallback {
+    pub const ORIG_ARTIST: &str = "ORIGINALARTIST";
+    pub const URL: &str = "URL";
+    pub const COMPILATION: &str = "COMPILATION";
+    pub const DISC: &str = "DISCNUMBER";
+    pub const BPM: &str = "BPM";
+}
+
+/// The concrete tag key for a fallback field in a given tag type. MP4 stores custom
+/// values as freeform `----:mean:name` atoms (lofty only round-trips an unknown MP4
+/// key in that form); Vorbis comments and APEv2 take the bare name. Used by both
+/// [`apply_v2`] (write) and [`fields_from_tag`] (read) so the two always agree.
+fn fallback_key(tt: lofty::tag::TagType, base: &str) -> ItemKey {
+    if tt == lofty::tag::TagType::Mp4Ilst {
+        ItemKey::Unknown(format!("----:com.apple.iTunes:{base}"))
+    } else {
+        ItemKey::Unknown(base.to_string())
+    }
+}
+
 /// Editable ID3 fields. ID3v1 uses only `track`..=`comment`; ID3v2 uses all.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Id3Fields {
@@ -30,6 +57,94 @@ pub struct Id3Fields {
     pub bpm: String,
     /// Part of a compilation (iTunes TCMP / `FlagCompilation`).
     pub compilation: bool,
+}
+
+/// Which fields a mass edit changed, so [`write_mass`] applies only those and
+/// leaves every other field of each file untouched. Mirrors [`Id3Fields`] one bit
+/// per field.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct FieldMask {
+    pub track: bool,
+    pub title: bool,
+    pub artist: bool,
+    pub album: bool,
+    pub year: bool,
+    pub genre: bool,
+    pub comment: bool,
+    pub composer: bool,
+    pub orig_artist: bool,
+    pub copyright: bool,
+    pub url: bool,
+    pub encoded_by: bool,
+    pub disc: bool,
+    pub bpm: bool,
+    pub compilation: bool,
+}
+
+impl FieldMask {
+    /// True when at least one field is marked (so a mass save has work to do).
+    pub fn any(&self) -> bool {
+        let Self {
+            track,
+            title,
+            artist,
+            album,
+            year,
+            genre,
+            comment,
+            composer,
+            orig_artist,
+            copyright,
+            url,
+            encoded_by,
+            disc,
+            bpm,
+            compilation,
+        } = *self;
+        track
+            || title
+            || artist
+            || album
+            || year
+            || genre
+            || comment
+            || composer
+            || orig_artist
+            || copyright
+            || url
+            || encoded_by
+            || disc
+            || bpm
+            || compilation
+    }
+
+    /// Start from `base` and replace each marked field with `new`'s value, so an
+    /// unmarked field keeps the file's own value and a marked one takes the mass
+    /// edit's. This is how a mass save merges the changed fields into one file.
+    pub fn overlay(&self, base: &Id3Fields, new: &Id3Fields) -> Id3Fields {
+        macro_rules! pick {
+            ($f:ident) => {
+                if self.$f { new.$f.clone() } else { base.$f.clone() }
+            };
+        }
+        Id3Fields {
+            track: pick!(track),
+            title: pick!(title),
+            artist: pick!(artist),
+            album: pick!(album),
+            year: pick!(year),
+            genre: pick!(genre),
+            comment: pick!(comment),
+            composer: pick!(composer),
+            orig_artist: pick!(orig_artist),
+            copyright: pick!(copyright),
+            url: pick!(url),
+            encoded_by: pick!(encoded_by),
+            disc: pick!(disc),
+            bpm: pick!(bpm),
+            compilation: if self.compilation { new.compilation } else { base.compilation },
+        }
+    }
 }
 
 /// Read-only format / file info for the Basic Info tab.
@@ -62,6 +177,17 @@ pub fn uses_id3(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| matches!(e.to_ascii_lowercase().as_str(), "mp3" | "mp2" | "mp1" | "mpa"))
+        .unwrap_or(false)
+}
+
+/// True for MP4 container audio (M4A/M4B/MP4), which stores tags as iTunes-style
+/// atoms. A few numeric/flag fields (compilation `cpil`, BPM `tmpo`) only persist
+/// as native atoms, which lofty's generic tag writer can't emit, so they get a
+/// dedicated pass (see [`write_mp4_native_atoms`] and [`read_mp4_bpm`]).
+fn is_mp4(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "m4a" | "m4b" | "mp4"))
         .unwrap_or(false)
 }
 
@@ -121,6 +247,47 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
     // the editor shows the real characters (matching the playlist display).
     use crate::playlist::repair_mojibake as fix;
     let text = |k: &ItemKey| fix(&tag.get_string(k).map(|s| s.to_string()).unwrap_or_default());
+    // Read a fallback key (see `fallback` and `apply_v2`); empty when absent. The
+    // concrete key depends on the tag type (MP4 uses a freeform atom).
+    let tt = tag.tag_type();
+    let unk = |base: &str| {
+        tag.get_string(&fallback_key(tt, base)).map(|s| s.to_string()).unwrap_or_default()
+    };
+    // Prefer the standard typed value; fall back to the explicit key for formats
+    // where lofty can't persist the typed one.
+    let orig_artist = {
+        let v = text(&ItemKey::OriginalArtist);
+        if v.is_empty() { fix(&unk(fallback::ORIG_ARTIST)) } else { v }
+    };
+    let url = {
+        let v = tag
+            .get(&ItemKey::AudioSourceUrl)
+            .and_then(|i| match i.value() {
+                lofty::tag::ItemValue::Text(s) | lofty::tag::ItemValue::Locator(s) => Some(s.clone()),
+                _ => None,
+            })
+            .map(|s| fix(&s))
+            .unwrap_or_default();
+        if v.is_empty() { fix(&unk(fallback::URL)) } else { v }
+    };
+    let disc = {
+        let v = tag.disk().map(|d| d.to_string()).unwrap_or_default();
+        if v.is_empty() { unk(fallback::DISC) } else { v }
+    };
+    let bpm = {
+        let v = tag
+            .get_string(&ItemKey::IntegerBpm)
+            .or_else(|| tag.get_string(&ItemKey::Bpm))
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        if v.is_empty() { unk(fallback::BPM) } else { v }
+    };
+    // Any non-empty, non-"0" value (typed TCMP/cpil or the fallback key) counts as set.
+    let compilation = {
+        let typed = tag.get_string(&ItemKey::FlagCompilation);
+        let set = !matches!(typed, None | Some("") | Some("0"));
+        set || !matches!(unk(fallback::COMPILATION).as_str(), "" | "0")
+    };
     Id3Fields {
         track: tag.track().map(|t| t.to_string()).unwrap_or_default(),
         title: fix(&tag.title().map(|s| s.to_string()).unwrap_or_default()),
@@ -138,32 +305,15 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
         genre: fix(&tag.genre().map(|s| s.to_string()).unwrap_or_default()),
         comment: fix(&tag.comment().map(|s| s.to_string()).unwrap_or_default()),
         composer: text(&ItemKey::Composer),
-        orig_artist: text(&ItemKey::OriginalArtist),
+        // Original Artist, URL, disc and bpm each prefer the standard frame and fall
+        // back to an explicit key for formats lofty can't persist them in (computed above).
+        orig_artist,
         copyright: text(&ItemKey::CopyrightMessage),
-        // URL lives in a WOAS locator frame, not a text frame.
-        url: tag
-            .get(&ItemKey::AudioSourceUrl)
-            .and_then(|i| match i.value() {
-                lofty::tag::ItemValue::Text(s) | lofty::tag::ItemValue::Locator(s) => {
-                    Some(s.clone())
-                }
-                _ => None,
-            })
-            .map(|s| fix(&s))
-            .unwrap_or_default(),
+        url,
         encoded_by: text(&ItemKey::EncodedBy),
-        disc: tag.disk().map(|d| d.to_string()).unwrap_or_default(),
-        bpm: {
-            let b = tag
-                .get_string(&ItemKey::IntegerBpm)
-                .or_else(|| tag.get_string(&ItemKey::Bpm));
-            b.map(|s| s.to_string()).unwrap_or_default()
-        },
-        // Any non-empty, non-"0" value counts as set (iTunes writes "1").
-        compilation: !matches!(
-            tag.get_string(&ItemKey::FlagCompilation),
-            None | Some("") | Some("0")
-        ),
+        disc,
+        bpm,
+        compilation,
     }
 }
 
@@ -173,20 +323,176 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
 /// format-agnostic `ItemKey`.
 pub fn read_single(path: &Path) -> Id3Fields {
     use lofty::file::TaggedFileExt;
-    lofty::read_from_path(path)
+    let mut f = lofty::read_from_path(path)
         .ok()
         .and_then(|t| t.primary_tag().map(fields_from_tag))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // MP4 BPM lives in the native tmpo atom, which the generic read drops; patch it in.
+    // Compilation (cpil) is surfaced by the generic read, so it needs no patch.
+    if is_mp4(path) {
+        if let Some(bpm) = read_mp4_bpm(path) {
+            f.bpm = bpm;
+        }
+    }
+    f
+}
+
+/// The metadata block types present in a FLAC byte stream (1 byte each), for the
+/// splice check and its test. Empty when `data` is not a FLAC stream. Test-only:
+/// the `ensure_flac_writable` splice above reads the header directly, so this is
+/// used only to assert the result in [`tests::minimal_flac_gets_a_writable_comments_block`].
+#[cfg(test)]
+fn flac_block_types(data: &[u8]) -> Vec<u8> {
+    let mut types = Vec::new();
+    if data.len() < 4 || &data[0..4] != b"fLaC" {
+        return types;
+    }
+    let mut pos = 4;
+    while pos + 4 <= data.len() {
+        let header = data[pos];
+        types.push(header & 0x7f);
+        let len = u32::from_be_bytes([0, data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        if header & 0x80 != 0 {
+            break; // last metadata block
+        }
+        pos += 4 + len;
+    }
+    types
+}
+
+/// lofty 0.21 silently fails to add a tag to a "minimal" FLAC whose only metadata
+/// block is STREAMINFO (marked as the last block), which is common in fresh rips:
+/// the save returns `Ok` but writes no VorbisComments block, so the edit is lost.
+/// Work around it by splicing an empty VorbisComments block in after STREAMINFO, so
+/// a following write has a block to update. Only that exact shape is touched; any
+/// other FLAC (which lofty writes correctly) and any non-FLAC file is left as is.
+fn ensure_flac_writable(path: &Path) -> Result<()> {
+    use std::io::Read;
+    let mut head = [0u8; 8];
+    {
+        let mut f =
+            std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+        if f.read_exact(&mut head).is_err() {
+            return Ok(());
+        }
+    }
+    if &head[0..4] != b"fLaC" {
+        return Ok(());
+    }
+    // The first metadata block is always STREAMINFO (type 0). lofty only chokes when
+    // it is also the last block, so there is no other block to carry the tag.
+    let streaminfo_is_last = head[4] & 0x80 != 0;
+    let block_type = head[4] & 0x7f;
+    if !streaminfo_is_last || block_type != 0 {
+        return Ok(());
+    }
+    let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let si_len = u32::from_be_bytes([0, data[5], data[6], data[7]]) as usize;
+    let si_end = 8 + si_len; // 4 ("fLaC") + 1 (header) + 3 (length) + STREAMINFO data
+    if si_end > data.len() {
+        return Ok(()); // malformed; do not touch it
+    }
+    // "fLaC" + STREAMINFO (last-block flag cleared) + empty VorbisComments (new last
+    // block) + the original audio frames.
+    let vendor = b"LinAmp";
+    let mut body = Vec::with_capacity(8 + vendor.len());
+    body.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+    body.extend_from_slice(vendor);
+    body.extend_from_slice(&0u32.to_le_bytes()); // zero user comments
+    let mut out = Vec::with_capacity(data.len() + body.len() + 4);
+    out.extend_from_slice(&data[0..4]);
+    out.push(head[4] & 0x7f); // STREAMINFO header, last-block flag cleared
+    out.extend_from_slice(&data[5..si_end]); // STREAMINFO length + data
+    out.push(0x80 | 4); // VorbisComments, marked as the last metadata block
+    out.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..4]); // 24-bit length
+    out.extend_from_slice(&body);
+    out.extend_from_slice(&data[si_end..]); // original audio frames
+    std::fs::write(path, &out).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+/// Write the MP4 compilation (`cpil`) and BPM (`tmpo`) as native iTunes atoms, which
+/// every MP4-aware player reads. lofty's generic tag writer drops both on a file
+/// save (it keeps them only in memory), so this sets them on the concrete `Ilst`
+/// after the main write, and removes the freeform fallbacks the generic writer
+/// leaves behind, so there is exactly one, native, copy of each. `cpil` uses the
+/// 1-byte iTunes boolean; a blank/absent BPM or a false compilation removes its atom.
+fn write_mp4_native_atoms(path: &Path, f: &Id3Fields) -> Result<()> {
+    use lofty::config::WriteOptions;
+    use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
+    use lofty::tag::TagExt;
+
+    let mut fh = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut ilst: Ilst = {
+        use lofty::config::ParseOptions;
+        use lofty::file::AudioFile;
+        use lofty::mp4::Mp4File;
+        match Mp4File::read_from(&mut fh, ParseOptions::new()) {
+            Ok(mp4) => mp4.ilst().cloned().unwrap_or_default(),
+            Err(_) => return Ok(()), // not a parseable MP4; nothing to do
+        }
+    };
+    let freeform = |name: &str| AtomIdent::Freeform {
+        mean: std::borrow::Cow::Borrowed("com.apple.iTunes"),
+        name: std::borrow::Cow::Owned(name.to_string()),
+    };
+    // Compilation: native cpil, or removed when off.
+    let _ = ilst.remove(&AtomIdent::Fourcc(*b"cpil"));
+    let _ = ilst.remove(&freeform(fallback::COMPILATION));
+    if f.compilation {
+        ilst.insert(Atom::new(
+            AtomIdent::Fourcc(*b"cpil"),
+            AtomData::Unknown { code: 21, data: vec![1] },
+        ));
+    }
+    // BPM: native tmpo integer, or removed when blank/non-numeric.
+    let _ = ilst.remove(&AtomIdent::Fourcc(*b"tmpo"));
+    let _ = ilst.remove(&freeform(fallback::BPM));
+    if let Ok(n) = f.bpm.trim().parse::<i32>() {
+        ilst.insert(Atom::new(AtomIdent::Fourcc(*b"tmpo"), AtomData::SignedInteger(n)));
+    }
+    ilst.save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("writing MP4 atoms to {}", path.display()))?;
+    Ok(())
+}
+
+/// Read the MP4 BPM from the native `tmpo` atom. lofty's generic tag read drops it
+/// (it lands in the preserved remainder, not an `ItemKey`), so read it off the
+/// concrete `Ilst`. `None` when absent; compilation (`cpil`) needs no such helper
+/// because lofty does surface it through the generic tag.
+fn read_mp4_bpm(path: &Path) -> Option<String> {
+    use lofty::config::ParseOptions;
+    use lofty::file::AudioFile;
+    use lofty::mp4::{AtomData, AtomIdent, Mp4File};
+    let mut fh = std::fs::File::open(path).ok()?;
+    let mp4 = Mp4File::read_from(&mut fh, ParseOptions::new()).ok()?;
+    let atom = mp4.ilst()?.get(&AtomIdent::Fourcc(*b"tmpo"))?;
+    let bpm = match atom.data().next()? {
+        AtomData::SignedInteger(i) => i.to_string(),
+        AtomData::UnsignedInteger(u) => u.to_string(),
+        AtomData::Bool(b) => u8::from(*b).to_string(),
+        AtomData::Unknown { data, .. } if !data.is_empty() => {
+            data.iter().fold(0u64, |acc, b| (acc << 8) | u64::from(*b)).to_string()
+        }
+        _ => return None,
+    };
+    Some(bpm)
 }
 
 /// Write the single native tag of a non-ID3 file from the shared field set,
 /// preserving items we don't edit. The file's primary tag type is used (Vorbis
 /// comments for FLAC/Ogg, the MP4 item list for M4A), so the fields land in the
-/// format's own keys via lofty's `ItemKey` mapping.
+/// format's own keys via lofty's `ItemKey` mapping. For MP4, compilation and BPM
+/// are then written as native atoms (see [`write_mp4_native_atoms`]).
 pub fn write_single(path: &Path, fields: &Id3Fields) -> Result<()> {
     use lofty::config::WriteOptions;
     use lofty::file::TaggedFileExt;
     use lofty::tag::{Tag, TagExt};
+    // A minimal FLAC needs a comments block spliced in first (lofty 0.21 can't add
+    // one), or the write below silently no-ops. No-op for every other file.
+    if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("flac")) {
+        ensure_flac_writable(path)?;
+    }
     let tagged = lofty::read_from_path(path)
         .with_context(|| format!("reading {}", path.display()))?;
     let mut tag = tagged
@@ -196,7 +502,154 @@ pub fn write_single(path: &Path, fields: &Id3Fields) -> Result<()> {
     apply_v2(&mut tag, fields);
     tag.save_to_path(path, WriteOptions::default())
         .with_context(|| format!("writing tags to {}", path.display()))?;
+    // MP4 compilation/BPM only persist as native atoms, which the generic write above
+    // can't emit, so finish them on the concrete Ilst.
+    if is_mp4(path) {
+        write_mp4_native_atoms(path, fields)?;
+    }
     Ok(())
+}
+
+/// Read a file's editable fields as one set, for the mass editor's mode pre-fill.
+/// MP3 prefers its ID3v2 tag and falls back to ID3v1; other formats read their one
+/// native tag. Returns the defaults when the file has no tag yet.
+pub fn read_primary(path: &Path) -> Id3Fields {
+    if uses_id3(path) {
+        let (v1, v2) = read_id3(path);
+        v2.or(v1).unwrap_or_default()
+    } else {
+        read_single(path)
+    }
+}
+
+/// Write the ID3v2 tag only, leaving any ID3v1 tag in place. Used by the mass
+/// editor, which merges changed fields into a file's modern tag without disturbing
+/// the legacy ID3v1 trailer. Starts from the existing ID3v2 tag so other frames
+/// (album art, album artist, and so on) survive.
+pub fn write_id3v2_only(path: &Path, f: &Id3Fields, id3v23: bool) -> Result<()> {
+    use lofty::config::WriteOptions;
+    use lofty::file::TaggedFileExt;
+    use lofty::id3::v2::Id3v2Tag;
+    use lofty::tag::{Tag, TagExt, TagType};
+    let existing = lofty::read_from_path(path)
+        .ok()
+        .and_then(|t| t.tag(TagType::Id3v2).cloned());
+    let mut tag = existing.unwrap_or_else(|| Tag::new(TagType::Id3v2));
+    apply_v2(&mut tag, f);
+    let id3: Id3v2Tag = tag.into();
+    id3.save_to_path(path, WriteOptions::new().use_id3v23(id3v23))
+        .with_context(|| format!("writing ID3v2 to {}", path.display()))?;
+    Ok(())
+}
+
+/// Merge a mass edit into one file: apply only the fields marked in `mask`,
+/// keeping every unedited field and every unmanaged frame. MP3 writes its ID3v2
+/// tag (ID3v1 untouched); other formats write their native tag. Returns
+/// `Ok(false)` when the overlay leaves the tag unchanged (so the file is skipped),
+/// `Ok(true)` when it was written.
+pub fn write_mass(path: &Path, new: &Id3Fields, mask: &FieldMask, id3v23: bool) -> Result<bool> {
+    if !can_edit(path) {
+        anyhow::bail!(
+            "editing tags for this file type isn't supported yet (only {})",
+            EDITABLE_EXTS.join(", ")
+        );
+    }
+    let cur = read_primary(path);
+    let merged = mask.overlay(&cur, new);
+    if merged == cur {
+        return Ok(false);
+    }
+    if uses_id3(path) {
+        write_id3v2_only(path, &merged, id3v23)?;
+    } else {
+        write_single(path, &merged)?;
+    }
+    Ok(true)
+}
+
+/// Merge a mass edit into one MP3's ID3v1 and ID3v2 tags at once, each with its own
+/// field set and mask, so the mass editor can edit the v1/v2 pair like the single-file
+/// editor. Only the marked fields in each mask are applied; every unedited field and
+/// every unmanaged ID3v2 frame (art, album artist, …) is preserved. A tag that does
+/// not exist is created only when one of its fields is actually edited, so editing
+/// only v2 never fabricates an empty ID3v1 (and the reverse). A non-MP3 path falls
+/// back to the single-tag mass write (v2 only). Returns `Ok(false)` when nothing
+/// changed (so the file is skipped), `Ok(true)` when written.
+pub fn write_mass_id3_dual(
+    path: &Path,
+    v1_new: &Id3Fields,
+    v1_mask: &FieldMask,
+    v2_new: &Id3Fields,
+    v2_mask: &FieldMask,
+    id3v23: bool,
+) -> Result<bool> {
+    if !can_edit(path) {
+        anyhow::bail!(
+            "editing tags for this file type isn't supported yet (only {})",
+            EDITABLE_EXTS.join(", ")
+        );
+    }
+    if !uses_id3(path) {
+        // Not an MP3/MP2/MP1: no ID3v1 pair, so apply the v2 (main) column to its
+        // single native tag.
+        return write_mass(path, v2_new, v2_mask, id3v23);
+    }
+    let (v1_cur_opt, v2_cur_opt) = read_id3(path);
+    let v1_cur = v1_cur_opt.clone().unwrap_or_default();
+    let v2_cur = v2_cur_opt.clone().unwrap_or_default();
+    let merged_v1 = v1_mask.overlay(&v1_cur, v1_new);
+    let merged_v2 = v2_mask.overlay(&v2_cur, v2_new);
+    // Write a tag when it already exists, or when this edit sets one of its fields.
+    let write_v1 = v1_cur_opt.is_some() || v1_mask.any();
+    let write_v2 = v2_cur_opt.is_some() || v2_mask.any();
+    let v1_changed = write_v1 && merged_v1 != v1_cur;
+    let v2_changed = write_v2 && merged_v2 != v2_cur;
+    if !v1_changed && !v2_changed {
+        return Ok(false);
+    }
+    // Write only the tags that should exist, and never pass `None` to `write_id3`:
+    // its removal path spuriously writes an empty ID3v1 trailer for a file that has
+    // none. The mass editor has no "remove tag" control, so we never need removal.
+    match (write_v1, write_v2) {
+        (true, true) => write_id3(path, Some(&merged_v1), Some(&merged_v2), id3v23)?,
+        (true, false) => write_id3v1_only(path, &merged_v1)?,
+        (false, true) => write_id3v2_only(path, &merged_v2, id3v23)?,
+        (false, false) => {}
+    }
+    Ok(true)
+}
+
+/// Write the ID3v1 tag only, leaving any ID3v2 tag untouched. The mass editor's
+/// ID3v1 column uses this when a file has no ID3v2 (so it does not go through
+/// [`write_id3`], whose `v2: None` branch would spuriously stamp an empty tag).
+fn write_id3v1_only(path: &Path, f: &Id3Fields) -> Result<()> {
+    use lofty::config::WriteOptions;
+    use lofty::id3::v1::Id3v1Tag;
+    use lofty::tag::TagExt;
+    let t = Id3v1Tag {
+        title: v1_text(&f.title, V1_MAX_TEXT),
+        artist: v1_text(&f.artist, V1_MAX_TEXT),
+        album: v1_text(&f.album, V1_MAX_TEXT),
+        year: v1_text(&f.year, V1_MAX_YEAR),
+        // ID3v1.1 reserves the comment's last 2 bytes for the track number.
+        comment: v1_text(&f.comment, V1_MAX_TEXT - 2),
+        track_number: f.track.trim().parse::<u8>().ok(),
+        genre: genre_index(&f.genre),
+    };
+    t.save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("writing ID3v1 to {}", path.display()))?;
+    Ok(())
+}
+
+/// A friendly format name from a file's extension, for the mass editor's format
+/// breakdown. Thin public wrapper over the Basic Info label.
+pub fn format_name(path: &Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    format_label(&ext)
 }
 
 /// A friendly format name from the file extension, so the Basic Info tab names
@@ -545,6 +998,37 @@ fn apply_v2(tag: &mut lofty::tag::Tag, f: &Id3Fields) {
             ));
         }
     }
+
+    // Cross-format fallbacks. lofty maps Original Artist and URL only for ID3v2, and
+    // MP4 `cpil` / APE disc+bpm don't round-trip through its typed writers, so those
+    // fields silently vanish on a non-ID3v2 save. Mirror them into explicit keys for
+    // the formats that need it (the reader prefers the standard frame, then these).
+    // ID3v2 keeps its clean standard frames and never gets these extra items.
+    let tt = tag.tag_type();
+    let set_fallback = |tag: &mut lofty::tag::Tag, base: &str, val: &str| {
+        let k = fallback_key(tt, base);
+        tag.remove_key(&k);
+        if !val.trim().is_empty() {
+            // `insert` re-maps the key and silently drops `ItemKey::Unknown` (no
+            // mapping), so use the unchecked insert, as lofty's docs direct.
+            tag.insert_unchecked(lofty::tag::TagItem::new(
+                k,
+                lofty::tag::ItemValue::Text(val.to_string()),
+            ));
+        }
+    };
+    if tt != lofty::tag::TagType::Id3v2 {
+        // No non-ID3v2 mapping exists for these two in lofty.
+        set_fallback(tag, fallback::ORIG_ARTIST, &f.orig_artist);
+        set_fallback(tag, fallback::URL, &f.url);
+    }
+    if tt == lofty::tag::TagType::Ape {
+        // APEv2 disc/bpm don't survive lofty's typed writers; store them explicitly.
+        set_fallback(tag, fallback::DISC, &f.disc);
+        set_fallback(tag, fallback::BPM, &f.bpm);
+    }
+    // MP4 compilation/BPM are finished as native atoms in write_mp4_native_atoms, not
+    // here: the generic tag writer can't emit cpil/tmpo to the file.
 }
 
 #[cfg(test)]
@@ -877,5 +1361,339 @@ mod tests {
         assert_eq!(major(&tmp), Some(4), "id3v23=false should write ID3v2.4");
 
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn field_mask_any_and_overlay() {
+        let mut m = FieldMask::default();
+        assert!(!m.any(), "an empty mask has no work");
+        m.artist = true;
+        m.compilation = true;
+        assert!(m.any());
+
+        let base = Id3Fields {
+            title: "Keep Me".into(),
+            artist: "Old".into(),
+            compilation: false,
+            ..Default::default()
+        };
+        let new = Id3Fields {
+            title: "Ignored".into(),
+            artist: "New".into(),
+            compilation: true,
+            ..Default::default()
+        };
+        let merged = m.overlay(&base, &new);
+        // Marked fields take the new value; unmarked keep the base value.
+        assert_eq!(merged.artist, "New");
+        assert!(merged.compilation);
+        assert_eq!(merged.title, "Keep Me", "unmarked field is preserved");
+    }
+
+    #[test]
+    fn write_mass_writes_only_changed_fields_and_skips_noops() {
+        // Full path through the merge writer on the bundled sample; skips in a
+        // checkout without it. Confirms a marked field is applied, an unmarked field
+        // is preserved, and a no-op overlay reports Ok(false).
+        let src = Path::new("music/Aria Nocturne - Crystal Harbor.mp3");
+        if !src.exists() {
+            return;
+        }
+        let tmp = std::env::temp_dir().join("linamp_mass_write.mp3");
+        std::fs::copy(src, &tmp).unwrap();
+        // Seed a known starting point.
+        let seed = Id3Fields {
+            title: "Seed Title".into(),
+            artist: "Seed Artist".into(),
+            album: "Seed Album".into(),
+            ..Default::default()
+        };
+        write_id3v2_only(&tmp, &seed, true).unwrap();
+
+        // Change only the album.
+        let mask = FieldMask { album: true, ..Default::default() };
+        let new = Id3Fields { album: "Mass Album".into(), artist: "Should Not Apply".into(), ..Default::default() };
+        assert_eq!(write_mass(&tmp, &new, &mask, true).unwrap(), true, "a real change writes");
+        let got = read_primary(&tmp);
+        assert_eq!(got.album, "Mass Album", "marked field applied");
+        assert_eq!(got.title, "Seed Title", "unmarked field preserved");
+        assert_eq!(got.artist, "Seed Artist", "unmarked field preserved even when new carries a value");
+
+        // Re-applying the same album is a no-op and is skipped.
+        assert_eq!(write_mass(&tmp, &new, &mask, true).unwrap(), false, "no net change is skipped");
+
+        // An empty mask never writes.
+        assert_eq!(
+            write_mass(&tmp, &new, &FieldMask::default(), true).unwrap(),
+            false,
+            "empty mask is a no-op"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn write_mass_id3_dual_edits_v1_and_v2_independently() {
+        // The mass editor's ID3v1/ID3v2 column pair: a v1-column edit writes ID3v1, a
+        // v2-column edit writes ID3v2, each preserving the other tag's unedited fields.
+        let src = Path::new("music/Aria Nocturne - Crystal Harbor.mp3");
+        if !src.exists() {
+            return;
+        }
+        let tmp = std::env::temp_dir().join("linamp_mass_dual.mp3");
+        std::fs::copy(src, &tmp).unwrap();
+        // Seed both tags with distinct known values.
+        let v1_seed = Id3Fields {
+            title: "V1 Title".into(), artist: "V1 Artist".into(), album: "V1 Album".into(),
+            year: "1999".into(), ..Default::default()
+        };
+        let v2_seed = Id3Fields {
+            title: "V2 Title".into(), artist: "V2 Artist".into(), album: "V2 Album".into(),
+            year: "2000".into(), ..Default::default()
+        };
+        write_id3(&tmp, Some(&v1_seed), Some(&v2_seed), true).unwrap();
+
+        // Mass edit: change only the v1 Artist and only the v2 Album.
+        let v1_new = Id3Fields { artist: "Mass V1 Artist".into(), ..Default::default() };
+        let v1_mask = FieldMask { artist: true, ..Default::default() };
+        let v2_new = Id3Fields { album: "Mass V2 Album".into(), ..Default::default() };
+        let v2_mask = FieldMask { album: true, ..Default::default() };
+        assert!(
+            write_mass_id3_dual(&tmp, &v1_new, &v1_mask, &v2_new, &v2_mask, true).unwrap(),
+            "a real change writes"
+        );
+
+        let (g1, g2) = read_id3(&tmp);
+        let (g1, g2) = (g1.expect("v1 present"), g2.expect("v2 present"));
+        // v1: artist changed, the rest of ID3v1 preserved.
+        assert_eq!(g1.artist, "Mass V1 Artist");
+        assert_eq!(g1.title, "V1 Title");
+        assert_eq!(g1.album, "V1 Album");
+        assert_eq!(g1.year, "1999");
+        // v2: album changed, the rest of ID3v2 preserved.
+        assert_eq!(g2.album, "Mass V2 Album");
+        assert_eq!(g2.title, "V2 Title");
+        assert_eq!(g2.artist, "V2 Artist");
+        assert_eq!(g2.year, "2000");
+
+        // Re-applying the same values is a no-op (skipped).
+        assert!(
+            !write_mass_id3_dual(&tmp, &v1_new, &v1_mask, &v2_new, &v2_mask, true).unwrap(),
+            "no net change is skipped"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn write_mass_id3_dual_creates_v1_only_when_edited() {
+        // Editing a v1 field on a file that has no ID3v1 creates one; editing only v2
+        // never fabricates an empty ID3v1.
+        let src = Path::new("music/Aria Nocturne - Crystal Harbor.mp3");
+        if !src.exists() {
+            return;
+        }
+        let tmp = std::env::temp_dir().join("linamp_mass_dual_create.mp3");
+        std::fs::copy(src, &tmp).unwrap();
+        // Start with ID3v2 only, no ID3v1. (write_id3v2_only leaves v1 untouched;
+        // write_id3 with v2: None would spuriously stamp an empty ID3v1 trailer.)
+        write_id3v2_only(&tmp, &Id3Fields { title: "T".into(), ..Default::default() }, true)
+            .unwrap();
+        assert!(read_id3(&tmp).0.is_none(), "no ID3v1 to start");
+
+        // Editing only a v2 field must not create an ID3v1.
+        let v2_mask = FieldMask { album: true, ..Default::default() };
+        write_mass_id3_dual(
+            &tmp,
+            &Id3Fields::default(),
+            &FieldMask::default(),
+            &Id3Fields { album: "A".into(), ..Default::default() },
+            &v2_mask,
+            true,
+        )
+        .unwrap();
+        assert!(read_id3(&tmp).0.is_none(), "v2-only edit does not create ID3v1");
+
+        // Editing a v1 field creates the ID3v1 tag.
+        let v1_mask = FieldMask { artist: true, ..Default::default() };
+        write_mass_id3_dual(
+            &tmp,
+            &Id3Fields { artist: "New V1".into(), ..Default::default() },
+            &v1_mask,
+            &Id3Fields::default(),
+            &FieldMask::default(),
+            true,
+        )
+        .unwrap();
+        let v1 = read_id3(&tmp).0.expect("v1 created by a v1 edit");
+        assert_eq!(v1.artist, "New V1");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn minimal_flac_gets_a_writable_comments_block() {
+        // A FLAC whose only metadata block is STREAMINFO, marked last. lofty 0.21
+        // cannot add a tag to this shape; ensure_flac_writable splices an empty
+        // VorbisComments block so a later write lands. Built by hand so it runs on CI.
+        let streaminfo = [0u8; 34]; // contents don't matter for the splice logic
+        let mut data = Vec::new();
+        data.extend_from_slice(b"fLaC");
+        data.push(0x80); // last-block flag set, type 0 (STREAMINFO)
+        data.extend_from_slice(&[0, 0, 34]); // 24-bit length
+        data.extend_from_slice(&streaminfo);
+        data.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // stand-in audio frames
+        let tmp = std::env::temp_dir().join("linamp_minimal.flac");
+        std::fs::write(&tmp, &data).unwrap();
+
+        ensure_flac_writable(&tmp).unwrap();
+        let out = std::fs::read(&tmp).unwrap();
+        // STREAMINFO is no longer the last block, a VorbisComments block now exists,
+        // and the audio frames are preserved at the end.
+        assert!(flac_block_types(&out).contains(&4u8), "VorbisComments block present");
+        assert_eq!(out[4] & 0x80, 0, "STREAMINFO last-block flag cleared");
+        assert_eq!(&out[out.len() - 4..], &[0xDE, 0xAD, 0xBE, 0xEF], "frames preserved");
+
+        // A second call is a no-op (a comments block already exists).
+        let before = std::fs::read(&tmp).unwrap();
+        ensure_flac_writable(&tmp).unwrap();
+        assert_eq!(std::fs::read(&tmp).unwrap(), before, "idempotent");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn minimal_flac_round_trips_tags_after_fix() {
+        // End-to-end on a real minimal (rip-style) FLAC: without the fix the write is
+        // silently dropped. Gated on a local sample (skips on CI).
+        let src = Path::new("qa-music/rip_testing/Green Day - Bobby Sox.flac");
+        if !src.exists() {
+            return;
+        }
+        let tmp = std::env::temp_dir().join("linamp_minflac_rt.flac");
+        std::fs::copy(src, &tmp).unwrap();
+        let mask = FieldMask { artist: true, album: true, ..Default::default() };
+        let new = Id3Fields { artist: "Green Day".into(), album: "Saviors".into(), ..Default::default() };
+        assert_eq!(write_mass(&tmp, &new, &mask, true).unwrap(), true);
+        let back = read_single(&tmp);
+        assert_eq!(back.artist, "Green Day");
+        assert_eq!(back.album, "Saviors");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn mass_edit_round_trips_every_field_across_formats() {
+        // Real-file matrix: write the full field set through the mass path
+        // (write_mass -> read_primary) for every editable format, and assert nothing
+        // is dropped. This is the regression guard for the cross-format fallback keys
+        // (see `apply_v2`). The non-MP3 samples live in the gitignored qa-music, so
+        // each missing sample is skipped (CI runs the bundled MP3; a dev checkout with
+        // qa-music covers all). Two passes with distinct values confirm an edit also
+        // overwrites a prior value (the "set everything to 1234, then 5678" check).
+        let samples: &[(&str, &str)] = &[
+            ("mp3", "music/Aria Nocturne - Crystal Harbor.mp3"),
+            ("flac", "qa-music/format-samples/hypno-this.flac"),
+            ("ogg", "qa-music/format-samples/hypno-this.ogg"),
+            ("opus", "qa-music/format-samples/hypno-this.opus"),
+            ("m4a", "qa-music/format-samples/hypno-this.m4a"),
+            ("mp4", "qa-music/format-samples/hypno-this.mp4"),
+            ("ape", "qa-music/format-samples/sample.ape"),
+        ];
+        let all = FieldMask {
+            track: true, title: true, artist: true, album: true, year: true, genre: true,
+            comment: true, composer: true, orig_artist: true, copyright: true, url: true,
+            encoded_by: true, disc: true, bpm: true, compilation: true,
+        };
+        // Two value sets; genre stays a standard name so ID3v1's index survives too.
+        let passes = [
+            Id3Fields {
+                track: "1".into(), title: "T1".into(), artist: "Ar1".into(), album: "Al1".into(),
+                year: "2001".into(), genre: "Rock".into(), comment: "C1".into(),
+                composer: "Cm1".into(), orig_artist: "OA1".into(), copyright: "Cp1".into(),
+                url: "http://one".into(), encoded_by: "E1".into(), disc: "1".into(),
+                bpm: "111".into(), compilation: true,
+            },
+            Id3Fields {
+                track: "2".into(), title: "T2".into(), artist: "Ar2".into(), album: "Al2".into(),
+                year: "2002".into(), genre: "Jazz".into(), comment: "C2".into(),
+                composer: "Cm2".into(), orig_artist: "OA2".into(), copyright: "Cp2".into(),
+                url: "http://two".into(), encoded_by: "E2".into(), disc: "2".into(),
+                bpm: "222".into(), compilation: false,
+            },
+        ];
+        let mut ran = 0usize;
+        for (ext, src) in samples {
+            let src = Path::new(src);
+            if !src.exists() {
+                continue;
+            }
+            ran += 1;
+            let tmp =
+                std::env::temp_dir().join(format!("linamp_matrix_{ext}.{ext}"));
+            std::fs::copy(src, &tmp).unwrap();
+            for f in &passes {
+                write_mass(&tmp, f, &all, true).unwrap();
+                let g = read_primary(&tmp);
+                assert_eq!(&g.track, &f.track, "{ext} track");
+                assert_eq!(&g.title, &f.title, "{ext} title");
+                assert_eq!(&g.artist, &f.artist, "{ext} artist");
+                assert_eq!(&g.album, &f.album, "{ext} album");
+                assert_eq!(&g.year, &f.year, "{ext} year");
+                assert_eq!(&g.genre, &f.genre, "{ext} genre");
+                assert_eq!(&g.comment, &f.comment, "{ext} comment");
+                assert_eq!(&g.composer, &f.composer, "{ext} composer");
+                assert_eq!(&g.orig_artist, &f.orig_artist, "{ext} orig_artist");
+                assert_eq!(&g.copyright, &f.copyright, "{ext} copyright");
+                assert_eq!(&g.url, &f.url, "{ext} url");
+                assert_eq!(&g.encoded_by, &f.encoded_by, "{ext} encoded_by");
+                assert_eq!(&g.disc, &f.disc, "{ext} disc");
+                assert_eq!(&g.bpm, &f.bpm, "{ext} bpm");
+                assert_eq!(g.compilation, f.compilation, "{ext} compilation");
+            }
+            let _ = std::fs::remove_file(&tmp);
+        }
+        assert!(ran >= 1, "expected at least the bundled MP3 sample to run");
+    }
+
+    #[test]
+    fn mp4_compilation_and_bpm_write_native_atoms() {
+        // Interop guard: MP4 compilation and BPM must land in the native cpil/tmpo
+        // atoms (what iTunes/foobar/Picard read), not a freeform fallback, and LinAmp
+        // must read them back. Gated on the local sample (qa-music is gitignored).
+        let src = Path::new("qa-music/format-samples/hypno-this.m4a");
+        if !src.exists() {
+            return;
+        }
+        let tmp = std::env::temp_dir().join("linamp_mp4_native.m4a");
+        std::fs::copy(src, &tmp).unwrap();
+        let f = Id3Fields { compilation: true, bpm: "140".into(), ..Default::default() };
+        let mask = FieldMask { compilation: true, bpm: true, ..Default::default() };
+        write_mass(&tmp, &f, &mask, true).unwrap();
+        // The native atoms are present.
+        use lofty::config::ParseOptions;
+        use lofty::file::AudioFile;
+        use lofty::mp4::{AtomIdent, Mp4File};
+        let mut fh = std::fs::File::open(&tmp).unwrap();
+        let mp4 = Mp4File::read_from(&mut fh, ParseOptions::new()).unwrap();
+        let ilst = mp4.ilst().expect("ilst present");
+        assert!(ilst.get(&AtomIdent::Fourcc(*b"cpil")).is_some(), "native cpil written");
+        assert!(ilst.get(&AtomIdent::Fourcc(*b"tmpo")).is_some(), "native tmpo written");
+        // And LinAmp reads them back through the normal path.
+        let g = read_primary(&tmp);
+        assert!(g.compilation, "compilation reads back");
+        assert_eq!(g.bpm, "140", "bpm reads back from tmpo");
+        // Turning compilation off and clearing BPM removes the native atoms.
+        let off = Id3Fields { compilation: false, bpm: String::new(), ..Default::default() };
+        write_mass(&tmp, &off, &mask, true).unwrap();
+        let mut fh = std::fs::File::open(&tmp).unwrap();
+        let mp4 = Mp4File::read_from(&mut fh, ParseOptions::new()).unwrap();
+        if let Some(ilst) = mp4.ilst() {
+            assert!(ilst.get(&AtomIdent::Fourcc(*b"cpil")).is_none(), "cpil removed when off");
+            assert!(ilst.get(&AtomIdent::Fourcc(*b"tmpo")).is_none(), "tmpo removed when blank");
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn format_name_labels_by_extension() {
+        assert_eq!(format_name(Path::new("a.mp3")), "MP3");
+        assert_eq!(format_name(Path::new("a.flac")), "FLAC");
+        assert_eq!(format_name(Path::new("a.ogg")), "Ogg Vorbis");
     }
 }

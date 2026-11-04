@@ -343,9 +343,12 @@ impl super::LinAmpApp {
         let mut to_play: Option<usize> = None;
         let mut to_play_next: Option<usize> = None;
         let mut to_tag: Option<usize> = None;
+        let mut to_mass_tag = false;
         let mut to_explore: Option<std::path::PathBuf> = None;
         let mut to_remove: Option<usize> = None;
         let mut reorder: Option<(usize, usize)> = None;
+        // The mass editor's menu item shows only when more than one row is selected.
+        let pl_multi = self.plview.selection.len() > 1;
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -395,6 +398,10 @@ impl super::LinAmpApp {
                                 ui.separator();
                                 if ui.button("Edit file tags…").clicked() {
                                     to_tag = Some(i);
+                                    ui.close_menu();
+                                }
+                                if pl_multi && ui.button("Mass Edit Tags…").clicked() {
+                                    to_mass_tag = true;
                                     ui.close_menu();
                                 }
                                 if ui.button("Explore folder").clicked() {
@@ -463,6 +470,9 @@ impl super::LinAmpApp {
         if let Some(i) = to_tag {
             // Edit by row index (not path) so saving refreshes the playlist entry.
             self.open_tag_editor_at(i);
+        }
+        if to_mass_tag {
+            self.open_mass_tag_editor_playlist();
         }
         if let Some(p) = to_explore {
             open_in_file_manager(&p);

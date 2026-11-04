@@ -1304,3 +1304,160 @@ plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.
   change (platform limit, documented in-app). (2) On KDE/XFCE a fresh launch with the pref
   persisted shows the startup colour from _NET_WM_ICON, which eframe/winit 0.29 leaves empty,
   so those panels recolour only after a live toggle. Neither addressed further here.
+
+## 2026-11-03 Mass tag editing (playlist + library)
+
+A new mass tag editor edits the tags of several selected files in one pass. It
+opens from the playlist and the Media Library (classic and modern menus), and from
+Alt+3 when more than one playlist row is selected. Design and rationale are in
+docs/MASS-TAG-EDIT-PLAN.md. Behaviour and judgment calls a human should check:
+
+- Non-destructive write: a field is written to every selected file only if the user
+  edits it in the dialog (tracked per field); untouched fields are left as each
+  file's own value, so unique Titles and Track numbers are not flattened to the
+  mode. Editing a field to any value (including the pre-filled mode) applies it to
+  all. Verify that unedited fields survive and edited ones propagate, including the
+  "normalize to the dominant value" case (re-affirming the mode value).
+- Mode pre-fill: each field shows the most common value across the selection, ties
+  to the first in selection order. Confirm the "Cowboy Man" example (two of three
+  share Artist -> pre-fills that Artist).
+- Mixed file types: changed fields are applied to every file through its own native
+  keys, so a value entered on a selection of MP3s and a FLAC lands in the FLAC's
+  Vorbis comments too. A field a format can't map is dropped silently. When the
+  selection spans more than one file type a single footer line reads "Multiple File
+  Types Selected". Check a 3 MP3 + 1 FLAC selection writes the FLAC and shows the
+  line.
+- ID3v1 on MP3 is left untouched in mass mode (not created, not removed); the
+  edits go to ID3v2. A file's existing ID3v1 could therefore show stale values in
+  players that read v1. Flagged as a possible follow-up (opt-in v1 update).
+- Alt+3 opens the mass editor only when more than one playlist row is selected; a
+  single selection still opens the normal editor. Nothing writes until "Update All",
+  so an accidental multi-select is recoverable with Cancel/Escape.
+- Basic Info tab shows aggregates only: file count (and "N of M selected" when some
+  selected rows were not editable), total size, total length, format breakdown, and
+  distinct artist/album counts. Non-editable rows and audio-CD tracks are excluded.
+- Visual: window chrome, tab strip, mnemonics and the button row mirror the
+  single-file editor; the save button reads "Update All" (Alt+U). Needs an eyes-on
+  pass for layout parity and the seam/tab rendering across skins.
+
+## 2026-11-04 Mass tag editing: QA fixes (round 1)
+
+Fixes from the first QA pass on feat/mass-tag-edit:
+
+- FLAC writes were silently dropped on "minimal" FLACs (only a STREAMINFO block,
+  marked last), which is the common shape of fresh rips (for example the Green Day
+  rip_testing files). lofty 0.21 returns Ok from the save but writes no
+  VorbisComments block. tags::ensure_flac_writable now splices an empty
+  VorbisComments block in after STREAMINFO before the write, so the tag lands. This
+  also fixes the single-file FLAC editor for the same files. Normal FLACs are
+  untouched. Verified end to end on the real minimal FLAC (minimal_flac_round_trips_tags_after_fix).
+- Edited fields could be missed on write: the mass editor now marks a field as
+  edited if its value differs from the pre-filled mode OR the live change flag fired
+  (effective_mask), so Album/Year and the rest apply reliably. The MP3 write path
+  itself was already correct (verified), so this closes the "fields not applying"
+  report at the UI layer.
+
+Still open from QA (not yet done this round):
+- ID3v1 is still not editable in mass mode. The maintainer prefers exposing it as a
+  separate ID3v1/ID3v2 column pair like the single-file MP3 editor. This is a larger
+  UI change and is the next task on this branch.
+- APE reportedly updated 3 of 4 files once. The APE write path is correct in
+  isolation; the one that did not update most likely already held the target value
+  (a no-op skip) or its edit was missed by the old change tracking, which the
+  effective_mask fix should also address. Worth a re-test after this round.
+
+## 2026-11-04 Mass tag editing: QA fixes (round 2, from the Linux box)
+
+Fixes from the second QA pass on feat/mass-tag-edit (details and the full matrix
+are in [MASS-TAG-EDIT-QA.md](MASS-TAG-EDIT-QA.md)):
+
+- Cross-format field drops squashed. Several fields were silently dropped on save
+  for non-MP3 formats because lofty maps them only for ID3v2: Original Artist and
+  URL (all of FLAC/Ogg/Opus/M4A/MP4/APE), Compilation (M4A/MP4), and Disc and BPM
+  (APE). The writer now also stores these under explicit keys for the formats that
+  need them and the reader falls back to them (apply_v2 / fields_from_tag /
+  fallback_key in src/tags.rs). ID3v2 is untouched and keeps its standard frames.
+  MP4 uses a freeform ----:com.apple.iTunes:<NAME> atom (the only shape lofty
+  round-trips for an unknown MP4 key), and the write uses insert_unchecked because
+  Tag::insert silently drops an ItemKey::Unknown. Guarded by a real-file matrix
+  test, mass_edit_round_trips_every_field_across_formats, which writes every field
+  twice with different values for each editable format and asserts it reads back
+  (skips a format when its qa-music sample is absent; the bundled MP3 always runs).
+  Nothing to verify by hand for the round-trip itself, but the manual checklist in
+  the QA doc is worth a pass.
+- Basic Info Formats row now lists uneditable formats too, in parentheses after the
+  editable ones, so the counts sum to the selection (example:
+  "8 MP3, 1 FLAC (2 MIDI, 1 Tracker module)"). Before, only editable formats showed,
+  so the numbers did not match "N of M selected". MIDI and tracker modules are not
+  tag-editable, so they are reported but not edited.
+- Dead code warning cleared: tags::flac_block_types is test-only and is now
+  cfg(test). Clippy is back at the 48 baseline, 338 tests pass.
+
+Interop note: on non-MP3 formats, Original Artist and URL (and APE disc/bpm, MP4
+compilation) are stored under LinAmp's fallback keys, not a format-native frame,
+because no native lofty mapping exists. Other players may not surface them under
+those labels; MP3 is unaffected. See the QA doc for the rationale.
+
+Still open (unchanged from round 1): ID3v1 is not yet editable in mass mode (the
+maintainer wants a separate v1/v2 column pair like the single-file editor), the
+next task on this branch.
+
+## 2026-11-04 Mass tag editing: wider interop (round 3, from the Linux box)
+
+Follow-up to round 2 to make the written tags as compatible as possible with other
+players, verified with mutagen and ffmpeg (ffprobe). Details in
+[MASS-TAG-EDIT-QA.md](MASS-TAG-EDIT-QA.md).
+
+- FLAC/Ogg/Opus and APE already landed every field under the community-convention
+  keys other taggers use (confirmed: originalartist, url, compilation, bpm,
+  discnumber for Vorbis; the plain APEv2 keys for APE). No change needed there.
+- MP4 was the gap: round 2 stored compilation and BPM in freeform atoms, which the
+  Apple ecosystem does not read as compilation/BPM. They are now written as the
+  native cpil and tmpo atoms (write_mp4_native_atoms sets them on the concrete Ilst
+  after the main write, because lofty's generic writer drops both on a file save;
+  read_mp4_bpm reads tmpo back, which lofty's generic read also drops). Confirmed
+  with mutagen (cpil True, tmpo present) and ffprobe (compilation=1). disc/track are
+  the native disk/trkn pairs. MP4 Original Artist and URL have no native atom
+  anywhere, so they stay as iTunes-namespace freeform atoms, which ffprobe and the
+  common taggers still read. Guarded by mp4_compilation_and_bpm_write_native_atoms.
+- 339 tests pass, clippy at the 48 baseline. MP3 remains untouched (standard ID3v2).
+
+## 2026-11-04 Mass tag editing: ID3v1/ID3v2 column pair (round 4, from the Linux box)
+
+Closes the last open item from round 1: ID3v1 is now editable in mass mode.
+
+- For an MP3-dominant selection the Tags tab shows two columns, ID3v1 and ID3v2,
+  like the single-file editor. Each field tracks its own edits; Update All writes
+  only the edited fields of each column into every selected file, preserving the
+  unedited fields and all other ID3v2 frames. Non-MP3 selections keep the single
+  "Tags" column (unchanged). Copy to/from ID3v1 buttons copy between the columns
+  (capped to ID3v1's limits) and mark the copied fields so they are written.
+- New writer tags::write_mass_id3_dual applies a v1 mask and a v2 mask in one pass.
+  A tag that does not exist is created only when one of its fields is actually
+  edited, so editing only v2 never fabricates an empty ID3v1 (and the reverse).
+- lofty 0.21 quirk found and worked around: write_id3 with v2 set and v1 = None
+  spuriously stamps an empty ID3v1 trailer on a file that had none (its ID3v1
+  removal path writes a blank tag). The dual writer never uses that path: it calls
+  write_id3 only when both tags are written, write_id3v2_only for a v2-only change
+  (leaves v1 untouched), and a new write_id3v1_only for a v1-only change. Guarded by
+  write_mass_id3_dual_edits_v1_and_v2_independently and
+  write_mass_id3_dual_creates_v1_only_when_edited.
+- 341 tests pass, clippy at the 48 baseline.
+
+Needs a hands-on look (the maintainer/Windows box, since the Linux box must not drive
+its own live desktop): the two-column layout at the 660px window width (no clipping),
+the Copy to/from ID3v1 buttons, and that a mixed MP3+FLAC selection writes ID3v1 to
+the MP3s only while the ID3v2 column still applies to the FLACs' native tag.
+
+## 2026-11-04 Mass tag editing: staged-edit outline (round 5, from the Linux box)
+
+- The mass editor now outlines each field that will be pushed on Update All (the user
+  edited it, or its value differs from the pre-filled mode), so it is clear which
+  fields a mass edit touches. mark_staged in mass_tag_ui.rs draws a 1px rounded line
+  2px OUTSIDE the field, so it never overlaps egui's active-field focus outline, in the
+  theme accent (visuals().selection.bg_fill) at 50% alpha so it stays subtle. It tracks
+  the same condition as effective_mask, for the ID3v1 and ID3v2 columns and the
+  single-column view.
+- Needs a visual check (the maintainer/Windows box): that the staged outline reads as
+  subtle, is distinct from the active-field outline, and tracks edits across both
+  columns and the Copy to/from ID3v1 buttons. 341 tests pass, clippy at 48.

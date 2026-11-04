@@ -53,7 +53,7 @@ for the top number row).
 | J | Jump to file |
 | Ctrl+J | Jump to time |
 | Alt+I | Bookmark the current track |
-| Alt+3 | Edit the current file's tags |
+| Alt+3 | Edit the current file's tags (opens the mass editor when more than one playlist row is selected) |
 
 ## Windows
 
