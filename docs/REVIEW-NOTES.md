@@ -1251,3 +1251,56 @@ plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.
 - Pop!_OS QA: confirm the _NET_WM_ICON path recolours the dock/Alt-Tab icon live on an
   X11 session; native Wayland still ignores per-window icons (uses the .desktop entry),
   as noted in the main Icon Dark Mode entry above.
+
+### 2026-11-03 Icon Dark Mode follow-up 2 (GNOME dock/launcher icon, Linux only)
+
+- Linux-box QA on Pop!_OS 22.04 (GNOME Shell 42.9, X11, dash-to-dock + cosmic-dock):
+  System Tray mode recoloured instantly, but Normal mode (the dock/taskbar button) never
+  changed, live or across a restart. The _NET_WM_ICON path from the first follow-up was
+  not the lever here.
+- Root cause: a GNOME-style dock and the app launcher do not read the window's
+  _NET_WM_ICON. They bind the running window to its installed .desktop by WM_CLASS
+  ("linamp") and render that entry's themed `Icon=linamp`, resolved through GtkIconTheme
+  to the per-user hicolor files. fileassoc::register() rewrites those files
+  (256x256/apps/linamp.png and scalable/apps/linamp.svg) from the embedded logo on every
+  launch, and it always wrote the green asset, so each start forced the dock icon back to
+  green regardless of the pref. Measured on the box: the main window's _NET_WM_ICON was
+  empty at startup (eframe/winit 0.29 does not populate it), while GtkIconTheme served the
+  green theme file, which is what the dock drew.
+- The GNOME wall (controlled test on the box, dock pinned visible so it is captured without
+  the Super key): GNOME Shell caches each app's icon, by name, inside its own long-running
+  process, and that cache does not refresh when the app rewrites the theme file, runs
+  gtk-update-icon-cache, restarts itself, or even when the dash-to-dock extension reloads.
+  Sequence proved it: green file + dock reload -> dock green; then grey file + cache refresh +
+  a full LinAmp restart (no dock reload) -> dock still green; then a dock-extension reload ->
+  still green. The file on disk was grey throughout. The cache clears only on a GNOME Shell
+  restart or logout. So the GNOME dock/taskbar/launcher icon is not controllable by the app,
+  live or on restart; there is no GNOME equivalent of Windows' per-window WM_SETICON. (An
+  earlier "restart shows grey" reading was contaminated: toggling the dock-fixed setting
+  reloads the dock, which happened to re-read the file.)
+- Fix / final behaviour (Option A, Linux side only, Windows paths untouched): the
+  file-association install is colour-aware. icon::window_png(dark)/icon::logo_svg(dark) render
+  the PNG and SVG from the one embedded source (the SVG recolour maps each #rgb/#rrggbb colour
+  literal to its Rec. 709 luminance grey, matching the raster desaturate, and leaves url(#id)
+  refs alone). fileassoc::register(icon_dark_mode) writes the matching colour at startup (main
+  passes prefs.icon_dark_mode), so the installed theme file always matches the pref. On Linux
+  this means: the tray recolours live (its own SNI pixmap); KDE/XFCE/tiling-bar taskbars
+  recolour live via _NET_WM_ICON (set_app_window_icon); and the GNOME dock/launcher reflects
+  the pref after a GNOME Shell restart or logout, when the Shell re-reads the (now correct)
+  theme file. set_icon_dark_mode does NOT rewrite the theme file on a live toggle: doing so
+  made GNOME eventually re-read the icon on the next window re-association and detach the
+  window into a fresh dock entry (it jumped to the end of the dock). The Preferences Icon
+  section is a plain "Dark Mode" checkbox; on Linux it shows "Requires a restart of LinAmp and
+  Gnome Panel to take effect." only while the caveat applies (Normal/taskbar mode and the
+  choice differs from the colour installed at startup, tracked by icon_dark_mode_applied).
+- Why not force it: a live GNOME update is only reachable by making the window re-associate
+  (remap, or the tray round trip), which on a docked app produces the far-right jump and lands
+  laggily. Rejected as worse than a clean restart-applied icon.
+- Verified on the Linux box (Pop!_OS, GNOME 42.9, X11): startup installs an all-grey PNG
+  (every pixel R=G=B) and all-grey SVG with the pref on; GtkIconTheme.lookup_icon("linamp")
+  returns grey at 48/64/256 (the call the dock and launcher use); before/after of the 256 icon
+  captured. 324 tests pass, clippy unchanged at 48 (no new warnings).
+- Known remaining gaps: (1) GNOME dock/launcher needs a Shell restart or logout to pick up a
+  change (platform limit, documented in-app). (2) On KDE/XFCE a fresh launch with the pref
+  persisted shows the startup colour from _NET_WM_ICON, which eframe/winit 0.29 leaves empty,
+  so those panels recolour only after a live toggle. Neither addressed further here.

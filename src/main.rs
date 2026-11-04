@@ -154,15 +154,18 @@ fn main() -> eframe::Result<()> {
         Instance::Unavailable => (None, true),
     };
 
+    let prefs = config::Prefs::load();
+
     // Register LinAmp as a candidate handler for its audio types (#166), so it
     // shows in Open with / Default Apps and opens files launched with it. Per-user
     // and idempotent; done each launch so it also tracks a moved executable. Only
-    // on a real GUI launch (the headless flags above have already returned).
-    fileassoc::register();
+    // on a real GUI launch (the headless flags above have already returned). The
+    // icon it installs follows Icon Dark Mode (#223), so the launcher/dock icon
+    // starts in the chosen colour.
+    fileassoc::register(prefs.icon_dark_mode);
 
     // Start borderless at classic skin size (the app sets the real mode on the
     // first frame once it knows whether a skin loaded).
-    let prefs = config::Prefs::load();
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([550.0, 232.0])
         .with_decorations(false)
