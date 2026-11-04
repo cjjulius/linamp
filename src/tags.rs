@@ -267,6 +267,77 @@ pub fn read_single(path: &Path) -> Id3Fields {
         .unwrap_or_default()
 }
 
+/// The metadata block types present in a FLAC byte stream (1 byte each), for the
+/// splice check and its test. Empty when `data` is not a FLAC stream.
+fn flac_block_types(data: &[u8]) -> Vec<u8> {
+    let mut types = Vec::new();
+    if data.len() < 4 || &data[0..4] != b"fLaC" {
+        return types;
+    }
+    let mut pos = 4;
+    while pos + 4 <= data.len() {
+        let header = data[pos];
+        types.push(header & 0x7f);
+        let len = u32::from_be_bytes([0, data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        if header & 0x80 != 0 {
+            break; // last metadata block
+        }
+        pos += 4 + len;
+    }
+    types
+}
+
+/// lofty 0.21 silently fails to add a tag to a "minimal" FLAC whose only metadata
+/// block is STREAMINFO (marked as the last block), which is common in fresh rips:
+/// the save returns `Ok` but writes no VorbisComments block, so the edit is lost.
+/// Work around it by splicing an empty VorbisComments block in after STREAMINFO, so
+/// a following write has a block to update. Only that exact shape is touched; any
+/// other FLAC (which lofty writes correctly) and any non-FLAC file is left as is.
+fn ensure_flac_writable(path: &Path) -> Result<()> {
+    use std::io::Read;
+    let mut head = [0u8; 8];
+    {
+        let mut f =
+            std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+        if f.read_exact(&mut head).is_err() {
+            return Ok(());
+        }
+    }
+    if &head[0..4] != b"fLaC" {
+        return Ok(());
+    }
+    // The first metadata block is always STREAMINFO (type 0). lofty only chokes when
+    // it is also the last block, so there is no other block to carry the tag.
+    let streaminfo_is_last = head[4] & 0x80 != 0;
+    let block_type = head[4] & 0x7f;
+    if !streaminfo_is_last || block_type != 0 {
+        return Ok(());
+    }
+    let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let si_len = u32::from_be_bytes([0, data[5], data[6], data[7]]) as usize;
+    let si_end = 8 + si_len; // 4 ("fLaC") + 1 (header) + 3 (length) + STREAMINFO data
+    if si_end > data.len() {
+        return Ok(()); // malformed; do not touch it
+    }
+    // "fLaC" + STREAMINFO (last-block flag cleared) + empty VorbisComments (new last
+    // block) + the original audio frames.
+    let vendor = b"LinAmp";
+    let mut body = Vec::with_capacity(8 + vendor.len());
+    body.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+    body.extend_from_slice(vendor);
+    body.extend_from_slice(&0u32.to_le_bytes()); // zero user comments
+    let mut out = Vec::with_capacity(data.len() + body.len() + 4);
+    out.extend_from_slice(&data[0..4]);
+    out.push(head[4] & 0x7f); // STREAMINFO header, last-block flag cleared
+    out.extend_from_slice(&data[5..si_end]); // STREAMINFO length + data
+    out.push(0x80 | 4); // VorbisComments, marked as the last metadata block
+    out.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..4]); // 24-bit length
+    out.extend_from_slice(&body);
+    out.extend_from_slice(&data[si_end..]); // original audio frames
+    std::fs::write(path, &out).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
 /// Write the single native tag of a non-ID3 file from the shared field set,
 /// preserving items we don't edit. The file's primary tag type is used (Vorbis
 /// comments for FLAC/Ogg, the MP4 item list for M4A), so the fields land in the
@@ -275,6 +346,11 @@ pub fn write_single(path: &Path, fields: &Id3Fields) -> Result<()> {
     use lofty::config::WriteOptions;
     use lofty::file::TaggedFileExt;
     use lofty::tag::{Tag, TagExt};
+    // A minimal FLAC needs a comments block spliced in first (lofty 0.21 can't add
+    // one), or the write below silently no-ops. No-op for every other file.
+    if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("flac")) {
+        ensure_flac_writable(path)?;
+    }
     let tagged = lofty::read_from_path(path)
         .with_context(|| format!("reading {}", path.display()))?;
     let mut tag = tagged
@@ -1100,6 +1176,55 @@ mod tests {
             false,
             "empty mask is a no-op"
         );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn minimal_flac_gets_a_writable_comments_block() {
+        // A FLAC whose only metadata block is STREAMINFO, marked last. lofty 0.21
+        // cannot add a tag to this shape; ensure_flac_writable splices an empty
+        // VorbisComments block so a later write lands. Built by hand so it runs on CI.
+        let streaminfo = [0u8; 34]; // contents don't matter for the splice logic
+        let mut data = Vec::new();
+        data.extend_from_slice(b"fLaC");
+        data.push(0x80); // last-block flag set, type 0 (STREAMINFO)
+        data.extend_from_slice(&[0, 0, 34]); // 24-bit length
+        data.extend_from_slice(&streaminfo);
+        data.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // stand-in audio frames
+        let tmp = std::env::temp_dir().join("linamp_minimal.flac");
+        std::fs::write(&tmp, &data).unwrap();
+
+        ensure_flac_writable(&tmp).unwrap();
+        let out = std::fs::read(&tmp).unwrap();
+        // STREAMINFO is no longer the last block, a VorbisComments block now exists,
+        // and the audio frames are preserved at the end.
+        assert!(flac_block_types(&out).contains(&4u8), "VorbisComments block present");
+        assert_eq!(out[4] & 0x80, 0, "STREAMINFO last-block flag cleared");
+        assert_eq!(&out[out.len() - 4..], &[0xDE, 0xAD, 0xBE, 0xEF], "frames preserved");
+
+        // A second call is a no-op (a comments block already exists).
+        let before = std::fs::read(&tmp).unwrap();
+        ensure_flac_writable(&tmp).unwrap();
+        assert_eq!(std::fs::read(&tmp).unwrap(), before, "idempotent");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn minimal_flac_round_trips_tags_after_fix() {
+        // End-to-end on a real minimal (rip-style) FLAC: without the fix the write is
+        // silently dropped. Gated on a local sample (skips on CI).
+        let src = Path::new("qa-music/rip_testing/Green Day - Bobby Sox.flac");
+        if !src.exists() {
+            return;
+        }
+        let tmp = std::env::temp_dir().join("linamp_minflac_rt.flac");
+        std::fs::copy(src, &tmp).unwrap();
+        let mask = FieldMask { artist: true, album: true, ..Default::default() };
+        let new = Id3Fields { artist: "Green Day".into(), album: "Saviors".into(), ..Default::default() };
+        assert_eq!(write_mass(&tmp, &new, &mask, true).unwrap(), true);
+        let back = read_single(&tmp);
+        assert_eq!(back.artist, "Green Day");
+        assert_eq!(back.album, "Saviors");
         let _ = std::fs::remove_file(&tmp);
     }
 
