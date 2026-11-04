@@ -1,15 +1,11 @@
 //! MPEG-TS (.ts/.m2ts/.mts) audio extraction via the pure-Rust `mpeg2ts-reader`.
 //!
 //! symphonia can't demux a Transport Stream, so this pulls the first audio
-//! elementary stream out of the container and hands it to the shared decode path
-//! (`crate::decode::open_stream`). AAC (ADTS) and MPEG audio (MP1/MP2) then reuse
-//! symphonia end-to-end, exactly as a raw `.aac`/`.mp2` file would. Only the
-//! compressed audio ES is buffered, not the whole file, and decoding plus seeking
-//! stay lazy on that ES.
-//!
-//! AC-3 in TS is recognised but not yet routed (symphonia has no AC-3 decoder and
-//! `crate::ac3` currently decodes from a path, not bytes); it returns an error so
-//! the skip-unplayable guard takes over rather than playing noise.
+//! elementary stream out of the container and decodes it. AAC (ADTS) and MPEG audio
+//! (MP1/MP2) reuse the shared symphonia path (`crate::decode::open_stream`), exactly
+//! as a raw `.aac`/`.mp2` file would; AC-3 is fed to `crate::ac3` (downmixed to
+//! stereo). Only the compressed audio ES is buffered, not the whole file, and
+//! decoding plus seeking stay lazy on that ES.
 
 use std::cell::RefCell;
 use std::fs::File;
@@ -24,10 +20,12 @@ use mpeg2ts_reader::demultiplex::{
 };
 use mpeg2ts_reader::packet::{Packet, Pid};
 use mpeg2ts_reader::{pes, psi, StreamType};
+use rodio::source::SeekError;
 use rodio::Source;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::io::MediaSourceStream;
 
+use crate::ac3::{open_ac3_bytes, Ac3Source};
 use crate::decode::{open_stream, SymphoniaSource};
 
 /// TS container extensions handled here.
@@ -186,24 +184,76 @@ fn extract_audio_es(path: &Path) -> Result<(StreamType, Vec<u8>)> {
     Ok((st, data))
 }
 
+/// A decoded TS audio track. TS audio is AAC/MP2 (symphonia) or AC-3 (the
+/// `crate::ac3` side-decoder), so we wrap both in one `Source` type and let the
+/// player append it uniformly.
+pub enum TsSource {
+    Symphonia(SymphoniaSource),
+    // Boxed: the AC-3 decoder state dwarfs SymphoniaSource, so box it to keep the
+    // enum small.
+    Ac3(Box<Ac3Source>),
+}
+impl Iterator for TsSource {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        match self {
+            TsSource::Symphonia(s) => s.next(),
+            TsSource::Ac3(s) => s.next(),
+        }
+    }
+}
+impl Source for TsSource {
+    fn current_frame_len(&self) -> Option<usize> {
+        match self {
+            TsSource::Symphonia(s) => s.current_frame_len(),
+            TsSource::Ac3(s) => s.current_frame_len(),
+        }
+    }
+    fn channels(&self) -> u16 {
+        match self {
+            TsSource::Symphonia(s) => s.channels(),
+            TsSource::Ac3(s) => s.channels(),
+        }
+    }
+    fn sample_rate(&self) -> u32 {
+        match self {
+            TsSource::Symphonia(s) => s.sample_rate(),
+            TsSource::Ac3(s) => s.sample_rate(),
+        }
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        match self {
+            TsSource::Symphonia(s) => s.total_duration(),
+            TsSource::Ac3(s) => s.total_duration(),
+        }
+    }
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        match self {
+            TsSource::Symphonia(s) => s.try_seek(pos),
+            TsSource::Ac3(s) => s.try_seek(pos),
+        }
+    }
+}
+
 /// Open a Transport Stream's audio as a seekable source: extract the audio ES and
-/// decode it through the shared path. AAC and MPEG audio work; AC-3 is refused for
-/// now (no bytes-based AC-3 decode path yet).
-pub fn open_ts(path: &Path) -> Result<SymphoniaSource> {
+/// decode it. AAC and MPEG audio go through the shared symphonia path; AC-3 is fed
+/// to the `crate::ac3` decoder (downmixed to stereo).
+pub fn open_ts(path: &Path) -> Result<TsSource> {
     let (st, es) = extract_audio_es(path)?;
+    if st == StreamType::ATSC_DOLBY_DIGITAL_AUDIO {
+        return Ok(TsSource::Ac3(Box::new(open_ac3_bytes(es, "mpeg-ts ac-3")?)));
+    }
     let hint_ext = if st == StreamType::ADTS || st == StreamType::AUDIO_WITHOUT_TRANSPORT_SYNTAX {
         "aac"
     } else if st == StreamType::ISO_11172_AUDIO || st == StreamType::ISO_138183_AUDIO {
         "mp2"
-    } else if st == StreamType::ATSC_DOLBY_DIGITAL_AUDIO {
-        bail!("AC-3 audio in MPEG-TS is not yet supported");
     } else {
         bail!("unsupported MPEG-TS audio stream type {st:?}");
     };
     let mut hint = Hint::new();
     hint.with_extension(hint_ext);
     let mss = MediaSourceStream::new(Box::new(Cursor::new(es)), Default::default());
-    open_stream(mss, hint, "mpeg-ts audio")
+    Ok(TsSource::Symphonia(open_stream(mss, hint, "mpeg-ts audio")?))
 }
 
 /// The length of a TS file's audio, so the playlist can show a time. `None` when it
@@ -246,12 +296,19 @@ mod tests {
         }
     }
 
-    /// AC-3 in TS is recognised but refused (no bytes AC-3 path yet), so it skips
-    /// cleanly instead of mis-playing.
+    /// AC-3 in TS now decodes via crate::ac3 (downmixed to stereo).
     #[test]
-    fn ac3_in_ts_is_refused_for_now() {
+    fn decodes_ac3_from_transport_stream() {
         let Some(p) = sample("video-ac3.ts") else { return };
-        assert!(open_ts(&p).is_err(), "AC-3 in TS should be refused for now");
+        let src = open_ts(&p).unwrap_or_else(|e| panic!("video-ac3.ts: {e}"));
+        let (sr, ch) = (src.sample_rate(), src.channels());
+        assert_eq!(ch, 2, "AC-3 downmixes to stereo");
+        assert!(matches!(sr, 32000 | 44100 | 48000), "AC-3 rate {sr}");
+        let got: Vec<f32> = src.collect();
+        assert!(got.iter().all(|s| s.is_finite() && s.abs() <= 1.0), "AC-3 samples out of range");
+        // ~75s clip; lenient on frame-boundary rounding.
+        let secs = got.len() as f64 / (sr as f64 * ch as f64);
+        assert!((70.0..=80.0).contains(&secs), "AC-3 decoded {secs:.1}s, expected ~75s");
     }
 
     #[test]
