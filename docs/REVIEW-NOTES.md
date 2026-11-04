@@ -1401,3 +1401,23 @@ those labels; MP3 is unaffected. See the QA doc for the rationale.
 Still open (unchanged from round 1): ID3v1 is not yet editable in mass mode (the
 maintainer wants a separate v1/v2 column pair like the single-file editor), the
 next task on this branch.
+
+## 2026-11-04 Mass tag editing: wider interop (round 3, from the Linux box)
+
+Follow-up to round 2 to make the written tags as compatible as possible with other
+players, verified with mutagen and ffmpeg (ffprobe). Details in
+[MASS-TAG-EDIT-QA.md](MASS-TAG-EDIT-QA.md).
+
+- FLAC/Ogg/Opus and APE already landed every field under the community-convention
+  keys other taggers use (confirmed: originalartist, url, compilation, bpm,
+  discnumber for Vorbis; the plain APEv2 keys for APE). No change needed there.
+- MP4 was the gap: round 2 stored compilation and BPM in freeform atoms, which the
+  Apple ecosystem does not read as compilation/BPM. They are now written as the
+  native cpil and tmpo atoms (write_mp4_native_atoms sets them on the concrete Ilst
+  after the main write, because lofty's generic writer drops both on a file save;
+  read_mp4_bpm reads tmpo back, which lofty's generic read also drops). Confirmed
+  with mutagen (cpil True, tmpo present) and ffprobe (compilation=1). disc/track are
+  the native disk/trkn pairs. MP4 Original Artist and URL have no native atom
+  anywhere, so they stay as iTunes-namespace freeform atoms, which ffprobe and the
+  common taggers still read. Guarded by mp4_compilation_and_bpm_write_native_atoms.
+- 339 tests pass, clippy at the 48 baseline. MP3 remains untouched (standard ID3v2).

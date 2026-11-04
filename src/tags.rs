@@ -180,6 +180,17 @@ pub fn uses_id3(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// True for MP4 container audio (M4A/M4B/MP4), which stores tags as iTunes-style
+/// atoms. A few numeric/flag fields (compilation `cpil`, BPM `tmpo`) only persist
+/// as native atoms, which lofty's generic tag writer can't emit, so they get a
+/// dedicated pass (see [`write_mp4_native_atoms`] and [`read_mp4_bpm`]).
+fn is_mp4(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "m4a" | "m4b" | "mp4"))
+        .unwrap_or(false)
+}
+
 /// ID3v1 text-field byte cap (title/artist/album/comment); year is 4.
 pub const V1_MAX_TEXT: usize = 30;
 pub const V1_MAX_YEAR: usize = 4;
@@ -312,10 +323,18 @@ fn fields_from_tag(tag: &lofty::tag::Tag) -> Id3Fields {
 /// format-agnostic `ItemKey`.
 pub fn read_single(path: &Path) -> Id3Fields {
     use lofty::file::TaggedFileExt;
-    lofty::read_from_path(path)
+    let mut f = lofty::read_from_path(path)
         .ok()
         .and_then(|t| t.primary_tag().map(fields_from_tag))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // MP4 BPM lives in the native tmpo atom, which the generic read drops; patch it in.
+    // Compilation (cpil) is surfaced by the generic read, so it needs no patch.
+    if is_mp4(path) {
+        if let Some(bpm) = read_mp4_bpm(path) {
+            f.bpm = bpm;
+        }
+    }
+    f
 }
 
 /// The metadata block types present in a FLAC byte stream (1 byte each), for the
@@ -392,10 +411,79 @@ fn ensure_flac_writable(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Write the MP4 compilation (`cpil`) and BPM (`tmpo`) as native iTunes atoms, which
+/// every MP4-aware player reads. lofty's generic tag writer drops both on a file
+/// save (it keeps them only in memory), so this sets them on the concrete `Ilst`
+/// after the main write, and removes the freeform fallbacks the generic writer
+/// leaves behind, so there is exactly one, native, copy of each. `cpil` uses the
+/// 1-byte iTunes boolean; a blank/absent BPM or a false compilation removes its atom.
+fn write_mp4_native_atoms(path: &Path, f: &Id3Fields) -> Result<()> {
+    use lofty::config::WriteOptions;
+    use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
+    use lofty::tag::TagExt;
+
+    let mut fh = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut ilst: Ilst = {
+        use lofty::config::ParseOptions;
+        use lofty::file::AudioFile;
+        use lofty::mp4::Mp4File;
+        match Mp4File::read_from(&mut fh, ParseOptions::new()) {
+            Ok(mp4) => mp4.ilst().cloned().unwrap_or_default(),
+            Err(_) => return Ok(()), // not a parseable MP4; nothing to do
+        }
+    };
+    let freeform = |name: &str| AtomIdent::Freeform {
+        mean: std::borrow::Cow::Borrowed("com.apple.iTunes"),
+        name: std::borrow::Cow::Owned(name.to_string()),
+    };
+    // Compilation: native cpil, or removed when off.
+    let _ = ilst.remove(&AtomIdent::Fourcc(*b"cpil"));
+    let _ = ilst.remove(&freeform(fallback::COMPILATION));
+    if f.compilation {
+        ilst.insert(Atom::new(
+            AtomIdent::Fourcc(*b"cpil"),
+            AtomData::Unknown { code: 21, data: vec![1] },
+        ));
+    }
+    // BPM: native tmpo integer, or removed when blank/non-numeric.
+    let _ = ilst.remove(&AtomIdent::Fourcc(*b"tmpo"));
+    let _ = ilst.remove(&freeform(fallback::BPM));
+    if let Ok(n) = f.bpm.trim().parse::<i32>() {
+        ilst.insert(Atom::new(AtomIdent::Fourcc(*b"tmpo"), AtomData::SignedInteger(n)));
+    }
+    ilst.save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("writing MP4 atoms to {}", path.display()))?;
+    Ok(())
+}
+
+/// Read the MP4 BPM from the native `tmpo` atom. lofty's generic tag read drops it
+/// (it lands in the preserved remainder, not an `ItemKey`), so read it off the
+/// concrete `Ilst`. `None` when absent; compilation (`cpil`) needs no such helper
+/// because lofty does surface it through the generic tag.
+fn read_mp4_bpm(path: &Path) -> Option<String> {
+    use lofty::config::ParseOptions;
+    use lofty::file::AudioFile;
+    use lofty::mp4::{AtomData, AtomIdent, Mp4File};
+    let mut fh = std::fs::File::open(path).ok()?;
+    let mp4 = Mp4File::read_from(&mut fh, ParseOptions::new()).ok()?;
+    let atom = mp4.ilst()?.get(&AtomIdent::Fourcc(*b"tmpo"))?;
+    let bpm = match atom.data().next()? {
+        AtomData::SignedInteger(i) => i.to_string(),
+        AtomData::UnsignedInteger(u) => u.to_string(),
+        AtomData::Bool(b) => u8::from(*b).to_string(),
+        AtomData::Unknown { data, .. } if !data.is_empty() => {
+            data.iter().fold(0u64, |acc, b| (acc << 8) | u64::from(*b)).to_string()
+        }
+        _ => return None,
+    };
+    Some(bpm)
+}
+
 /// Write the single native tag of a non-ID3 file from the shared field set,
 /// preserving items we don't edit. The file's primary tag type is used (Vorbis
 /// comments for FLAC/Ogg, the MP4 item list for M4A), so the fields land in the
-/// format's own keys via lofty's `ItemKey` mapping.
+/// format's own keys via lofty's `ItemKey` mapping. For MP4, compilation and BPM
+/// are then written as native atoms (see [`write_mp4_native_atoms`]).
 pub fn write_single(path: &Path, fields: &Id3Fields) -> Result<()> {
     use lofty::config::WriteOptions;
     use lofty::file::TaggedFileExt;
@@ -414,6 +502,11 @@ pub fn write_single(path: &Path, fields: &Id3Fields) -> Result<()> {
     apply_v2(&mut tag, fields);
     tag.save_to_path(path, WriteOptions::default())
         .with_context(|| format!("writing tags to {}", path.display()))?;
+    // MP4 compilation/BPM only persist as native atoms, which the generic write above
+    // can't emit, so finish them on the concrete Ilst.
+    if is_mp4(path) {
+        write_mp4_native_atoms(path, fields)?;
+    }
     Ok(())
 }
 
@@ -855,15 +948,13 @@ fn apply_v2(tag: &mut lofty::tag::Tag, f: &Id3Fields) {
         set_fallback(tag, fallback::ORIG_ARTIST, &f.orig_artist);
         set_fallback(tag, fallback::URL, &f.url);
     }
-    if tt == lofty::tag::TagType::Mp4Ilst {
-        // `cpil` written as text "1" does not read back; keep a parallel flag.
-        set_fallback(tag, fallback::COMPILATION, if f.compilation { "1" } else { "" });
-    }
     if tt == lofty::tag::TagType::Ape {
         // APEv2 disc/bpm don't survive lofty's typed writers; store them explicitly.
         set_fallback(tag, fallback::DISC, &f.disc);
         set_fallback(tag, fallback::BPM, &f.bpm);
     }
+    // MP4 compilation/BPM are finished as native atoms in write_mp4_native_atoms, not
+    // here: the generic tag writer can't emit cpil/tmpo to the file.
 }
 
 #[cfg(test)]
@@ -1387,6 +1478,45 @@ mod tests {
             let _ = std::fs::remove_file(&tmp);
         }
         assert!(ran >= 1, "expected at least the bundled MP3 sample to run");
+    }
+
+    #[test]
+    fn mp4_compilation_and_bpm_write_native_atoms() {
+        // Interop guard: MP4 compilation and BPM must land in the native cpil/tmpo
+        // atoms (what iTunes/foobar/Picard read), not a freeform fallback, and LinAmp
+        // must read them back. Gated on the local sample (qa-music is gitignored).
+        let src = Path::new("qa-music/format-samples/hypno-this.m4a");
+        if !src.exists() {
+            return;
+        }
+        let tmp = std::env::temp_dir().join("linamp_mp4_native.m4a");
+        std::fs::copy(src, &tmp).unwrap();
+        let f = Id3Fields { compilation: true, bpm: "140".into(), ..Default::default() };
+        let mask = FieldMask { compilation: true, bpm: true, ..Default::default() };
+        write_mass(&tmp, &f, &mask, true).unwrap();
+        // The native atoms are present.
+        use lofty::config::ParseOptions;
+        use lofty::file::AudioFile;
+        use lofty::mp4::{AtomIdent, Mp4File};
+        let mut fh = std::fs::File::open(&tmp).unwrap();
+        let mp4 = Mp4File::read_from(&mut fh, ParseOptions::new()).unwrap();
+        let ilst = mp4.ilst().expect("ilst present");
+        assert!(ilst.get(&AtomIdent::Fourcc(*b"cpil")).is_some(), "native cpil written");
+        assert!(ilst.get(&AtomIdent::Fourcc(*b"tmpo")).is_some(), "native tmpo written");
+        // And LinAmp reads them back through the normal path.
+        let g = read_primary(&tmp);
+        assert!(g.compilation, "compilation reads back");
+        assert_eq!(g.bpm, "140", "bpm reads back from tmpo");
+        // Turning compilation off and clearing BPM removes the native atoms.
+        let off = Id3Fields { compilation: false, bpm: String::new(), ..Default::default() };
+        write_mass(&tmp, &off, &mask, true).unwrap();
+        let mut fh = std::fs::File::open(&tmp).unwrap();
+        let mp4 = Mp4File::read_from(&mut fh, ParseOptions::new()).unwrap();
+        if let Some(ilst) = mp4.ilst() {
+            assert!(ilst.get(&AtomIdent::Fourcc(*b"cpil")).is_none(), "cpil removed when off");
+            assert!(ilst.get(&AtomIdent::Fourcc(*b"tmpo")).is_none(), "tmpo removed when blank");
+        }
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]

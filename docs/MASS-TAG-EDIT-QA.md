@@ -51,29 +51,45 @@ right on Original Artist, URL and BPM, and the vet caught Disc and Compilation t
 ## The fix
 
 lofty maps Original Artist (TOPE) and URL (WOAS) only for ID3v2, and MP4 `cpil`
-plus APE disc/bpm do not round-trip through its typed writers. For the formats
-that need it, the writer now also stores these under explicit keys and the reader
-falls back to them. See `apply_v2`, `fields_from_tag` and `fallback_key` in
-[src/tags.rs](../src/tags.rs).
+plus APE disc/bpm do not round-trip through its typed writers. The fix writes each
+field where mainstream players actually read it, working around lofty where needed.
+See `apply_v2`, `fields_from_tag`, `fallback_key`, `write_mp4_native_atoms` and
+`read_mp4_bpm` in [src/tags.rs](../src/tags.rs).
 
 - ID3v2 is untouched: it keeps its standard frames (TOPE, WOAS, TCMP, TPOS, TBPM),
   so MP3 tags stay clean and interoperable.
-- Vorbis comments and APEv2 take the bare key name (example: `ORIGINALARTIST`).
-- MP4 takes a freeform atom, `----:com.apple.iTunes:<NAME>`, the only shape lofty
-  round-trips for an unknown MP4 key.
-- The write uses `insert_unchecked`, because `Tag::insert` re-maps the key and
-  silently drops an `ItemKey::Unknown`.
+- Vorbis comments (FLAC/Ogg/Opus) and APEv2 take the community-convention key names
+  (example: `ORIGINALARTIST`, `URL`, `DISCNUMBER`, `BPM`, `COMPILATION`). These are
+  the same keys MusicBrainz Picard, foobar2000, Kid3 and ffmpeg use, so other tools
+  read them. The write uses `insert_unchecked`, because `Tag::insert` re-maps the
+  key and silently drops an `ItemKey::Unknown`.
+- MP4 compilation and BPM are written as the native `cpil` and `tmpo` atoms, the
+  ones iTunes/Apple Music/foobar/ffmpeg read. lofty's generic writer drops both on
+  a file save (it keeps them only in memory), so `write_mp4_native_atoms` sets them
+  on the concrete `Ilst` after the main write (`cpil` as the 1-byte iTunes boolean,
+  `tmpo` as a signed-int atom), and `read_mp4_bpm` reads `tmpo` back (lofty's generic
+  read drops it). MP4 Original Artist and URL have no native atom anywhere, so they
+  use a freeform `----:com.apple.iTunes:<NAME>` atom, the iTunes-namespace form that
+  foobar/Picard/Kid3/ffmpeg still read.
 
-After the fix the matrix is clean: every field round-trips for every format.
+After the fix the matrix is clean: every field round-trips for every format, and
+the values land where other players read them.
 
-### Interop note
+### Interop, verified
 
-On non-MP3 formats, Original Artist and URL (and APE disc/bpm, MP4 compilation)
-are stored under the keys above rather than a format-native frame, because no
-native mapping exists in lofty. Other players may not show them under those
-labels. MP3 is unaffected. This is acceptable for a QA/library tool, where the
-goal is that LinAmp's own round-trip never loses a field; a future pass could
-switch to each format's community-convention key if wider interop is wanted.
+Checked the written files with mutagen and ffmpeg (ffprobe), which read like other
+mainstream taggers:
+
+- FLAC / Ogg / Opus: every field is a standard Vorbis comment (`originalartist`,
+  `url`, `compilation`, `bpm`, `discnumber`, …).
+- APE: every field is a plain APEv2 key (`ORIGINALARTIST`, `URL`, `BPM`,
+  `DISCNUMBER`, `Compilation`, …).
+- MP4: native atoms for all the standard fields (`cpil`, `tmpo`, `disk`, `trkn`,
+  `cprt`, the `©` atoms); Original Artist and URL are iTunes-namespace freeform
+  atoms (ffprobe surfaces them as `ORIGINALARTIST` and `URL`). The only field with
+  no native home anywhere is Original Artist, which is inherently non-standard.
+
+MP3 is unaffected throughout (standard ID3v2 frames).
 
 ## Manual QA checklist (hands-on)
 
