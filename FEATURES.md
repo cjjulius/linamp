@@ -67,7 +67,10 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 - Read ID3v2 / Vorbis / FLAC tags (title/artist/album)
 - Tag editor (Alt+3 / options menu, Edit file tags): view and edit
   title / artist / album / album-artist / year / track / genre / comment, saved
-  back to the file. MP3 (ID3v2) today; modular, so more formats follow (reading
+  back to the file. Select several rows in the playlist or library for the mass
+  editor ("Mass Edit Tags", Update All): it pre-fills each field with the most
+  common value and writes the fields you edit to every selected file, across tag
+  types, leaving untouched fields alone. MP3 (ID3v2) today; modular, so more formats follow (reading
   already works for all)
 - Audio properties (kbps / kHz / channels)
 - SQLite media library (scan folders, search, add to playlist)

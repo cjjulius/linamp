@@ -1304,3 +1304,38 @@ plays it, or (Clear queue) replaces the playlist. Repeat with LinAmp closed.
   change (platform limit, documented in-app). (2) On KDE/XFCE a fresh launch with the pref
   persisted shows the startup colour from _NET_WM_ICON, which eframe/winit 0.29 leaves empty,
   so those panels recolour only after a live toggle. Neither addressed further here.
+
+## 2026-11-03 Mass tag editing (playlist + library)
+
+A new mass tag editor edits the tags of several selected files in one pass. It
+opens from the playlist and the Media Library (classic and modern menus), and from
+Alt+3 when more than one playlist row is selected. Design and rationale are in
+docs/MASS-TAG-EDIT-PLAN.md. Behaviour and judgment calls a human should check:
+
+- Non-destructive write: a field is written to every selected file only if the user
+  edits it in the dialog (tracked per field); untouched fields are left as each
+  file's own value, so unique Titles and Track numbers are not flattened to the
+  mode. Editing a field to any value (including the pre-filled mode) applies it to
+  all. Verify that unedited fields survive and edited ones propagate, including the
+  "normalize to the dominant value" case (re-affirming the mode value).
+- Mode pre-fill: each field shows the most common value across the selection, ties
+  to the first in selection order. Confirm the "Cowboy Man" example (two of three
+  share Artist -> pre-fills that Artist).
+- Mixed file types: changed fields are applied to every file through its own native
+  keys, so a value entered on a selection of MP3s and a FLAC lands in the FLAC's
+  Vorbis comments too. A field a format can't map is dropped silently. When the
+  selection spans more than one file type a single footer line reads "Multiple File
+  Types Selected". Check a 3 MP3 + 1 FLAC selection writes the FLAC and shows the
+  line.
+- ID3v1 on MP3 is left untouched in mass mode (not created, not removed); the
+  edits go to ID3v2. A file's existing ID3v1 could therefore show stale values in
+  players that read v1. Flagged as a possible follow-up (opt-in v1 update).
+- Alt+3 opens the mass editor only when more than one playlist row is selected; a
+  single selection still opens the normal editor. Nothing writes until "Update All",
+  so an accidental multi-select is recoverable with Cancel/Escape.
+- Basic Info tab shows aggregates only: file count (and "N of M selected" when some
+  selected rows were not editable), total size, total length, format breakdown, and
+  distinct artist/album counts. Non-editable rows and audio-CD tracks are excluded.
+- Visual: window chrome, tab strip, mnemonics and the button row mirror the
+  single-file editor; the save button reads "Update All" (Alt+U). Needs an eyes-on
+  pass for layout parity and the seam/tab rendering across skins.

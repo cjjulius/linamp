@@ -32,6 +32,94 @@ pub struct Id3Fields {
     pub compilation: bool,
 }
 
+/// Which fields a mass edit changed, so [`write_mass`] applies only those and
+/// leaves every other field of each file untouched. Mirrors [`Id3Fields`] one bit
+/// per field.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct FieldMask {
+    pub track: bool,
+    pub title: bool,
+    pub artist: bool,
+    pub album: bool,
+    pub year: bool,
+    pub genre: bool,
+    pub comment: bool,
+    pub composer: bool,
+    pub orig_artist: bool,
+    pub copyright: bool,
+    pub url: bool,
+    pub encoded_by: bool,
+    pub disc: bool,
+    pub bpm: bool,
+    pub compilation: bool,
+}
+
+impl FieldMask {
+    /// True when at least one field is marked (so a mass save has work to do).
+    pub fn any(&self) -> bool {
+        let Self {
+            track,
+            title,
+            artist,
+            album,
+            year,
+            genre,
+            comment,
+            composer,
+            orig_artist,
+            copyright,
+            url,
+            encoded_by,
+            disc,
+            bpm,
+            compilation,
+        } = *self;
+        track
+            || title
+            || artist
+            || album
+            || year
+            || genre
+            || comment
+            || composer
+            || orig_artist
+            || copyright
+            || url
+            || encoded_by
+            || disc
+            || bpm
+            || compilation
+    }
+
+    /// Start from `base` and replace each marked field with `new`'s value, so an
+    /// unmarked field keeps the file's own value and a marked one takes the mass
+    /// edit's. This is how a mass save merges the changed fields into one file.
+    pub fn overlay(&self, base: &Id3Fields, new: &Id3Fields) -> Id3Fields {
+        macro_rules! pick {
+            ($f:ident) => {
+                if self.$f { new.$f.clone() } else { base.$f.clone() }
+            };
+        }
+        Id3Fields {
+            track: pick!(track),
+            title: pick!(title),
+            artist: pick!(artist),
+            album: pick!(album),
+            year: pick!(year),
+            genre: pick!(genre),
+            comment: pick!(comment),
+            composer: pick!(composer),
+            orig_artist: pick!(orig_artist),
+            copyright: pick!(copyright),
+            url: pick!(url),
+            encoded_by: pick!(encoded_by),
+            disc: pick!(disc),
+            bpm: pick!(bpm),
+            compilation: if self.compilation { new.compilation } else { base.compilation },
+        }
+    }
+}
+
 /// Read-only format / file info for the Basic Info tab.
 #[derive(Clone, Default)]
 pub struct FileInfo {
@@ -197,6 +285,74 @@ pub fn write_single(path: &Path, fields: &Id3Fields) -> Result<()> {
     tag.save_to_path(path, WriteOptions::default())
         .with_context(|| format!("writing tags to {}", path.display()))?;
     Ok(())
+}
+
+/// Read a file's editable fields as one set, for the mass editor's mode pre-fill.
+/// MP3 prefers its ID3v2 tag and falls back to ID3v1; other formats read their one
+/// native tag. Returns the defaults when the file has no tag yet.
+pub fn read_primary(path: &Path) -> Id3Fields {
+    if uses_id3(path) {
+        let (v1, v2) = read_id3(path);
+        v2.or(v1).unwrap_or_default()
+    } else {
+        read_single(path)
+    }
+}
+
+/// Write the ID3v2 tag only, leaving any ID3v1 tag in place. Used by the mass
+/// editor, which merges changed fields into a file's modern tag without disturbing
+/// the legacy ID3v1 trailer. Starts from the existing ID3v2 tag so other frames
+/// (album art, album artist, and so on) survive.
+pub fn write_id3v2_only(path: &Path, f: &Id3Fields, id3v23: bool) -> Result<()> {
+    use lofty::config::WriteOptions;
+    use lofty::file::TaggedFileExt;
+    use lofty::id3::v2::Id3v2Tag;
+    use lofty::tag::{Tag, TagExt, TagType};
+    let existing = lofty::read_from_path(path)
+        .ok()
+        .and_then(|t| t.tag(TagType::Id3v2).cloned());
+    let mut tag = existing.unwrap_or_else(|| Tag::new(TagType::Id3v2));
+    apply_v2(&mut tag, f);
+    let id3: Id3v2Tag = tag.into();
+    id3.save_to_path(path, WriteOptions::new().use_id3v23(id3v23))
+        .with_context(|| format!("writing ID3v2 to {}", path.display()))?;
+    Ok(())
+}
+
+/// Merge a mass edit into one file: apply only the fields marked in `mask`,
+/// keeping every unedited field and every unmanaged frame. MP3 writes its ID3v2
+/// tag (ID3v1 untouched); other formats write their native tag. Returns
+/// `Ok(false)` when the overlay leaves the tag unchanged (so the file is skipped),
+/// `Ok(true)` when it was written.
+pub fn write_mass(path: &Path, new: &Id3Fields, mask: &FieldMask, id3v23: bool) -> Result<bool> {
+    if !can_edit(path) {
+        anyhow::bail!(
+            "editing tags for this file type isn't supported yet (only {})",
+            EDITABLE_EXTS.join(", ")
+        );
+    }
+    let cur = read_primary(path);
+    let merged = mask.overlay(&cur, new);
+    if merged == cur {
+        return Ok(false);
+    }
+    if uses_id3(path) {
+        write_id3v2_only(path, &merged, id3v23)?;
+    } else {
+        write_single(path, &merged)?;
+    }
+    Ok(true)
+}
+
+/// A friendly format name from a file's extension, for the mass editor's format
+/// breakdown. Thin public wrapper over the Basic Info label.
+pub fn format_name(path: &Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    format_label(&ext)
 }
 
 /// A friendly format name from the file extension, so the Basic Info tab names
@@ -877,5 +1033,80 @@ mod tests {
         assert_eq!(major(&tmp), Some(4), "id3v23=false should write ID3v2.4");
 
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn field_mask_any_and_overlay() {
+        let mut m = FieldMask::default();
+        assert!(!m.any(), "an empty mask has no work");
+        m.artist = true;
+        m.compilation = true;
+        assert!(m.any());
+
+        let base = Id3Fields {
+            title: "Keep Me".into(),
+            artist: "Old".into(),
+            compilation: false,
+            ..Default::default()
+        };
+        let new = Id3Fields {
+            title: "Ignored".into(),
+            artist: "New".into(),
+            compilation: true,
+            ..Default::default()
+        };
+        let merged = m.overlay(&base, &new);
+        // Marked fields take the new value; unmarked keep the base value.
+        assert_eq!(merged.artist, "New");
+        assert!(merged.compilation);
+        assert_eq!(merged.title, "Keep Me", "unmarked field is preserved");
+    }
+
+    #[test]
+    fn write_mass_writes_only_changed_fields_and_skips_noops() {
+        // Full path through the merge writer on the bundled sample; skips in a
+        // checkout without it. Confirms a marked field is applied, an unmarked field
+        // is preserved, and a no-op overlay reports Ok(false).
+        let src = Path::new("music/Aria Nocturne - Crystal Harbor.mp3");
+        if !src.exists() {
+            return;
+        }
+        let tmp = std::env::temp_dir().join("linamp_mass_write.mp3");
+        std::fs::copy(src, &tmp).unwrap();
+        // Seed a known starting point.
+        let seed = Id3Fields {
+            title: "Seed Title".into(),
+            artist: "Seed Artist".into(),
+            album: "Seed Album".into(),
+            ..Default::default()
+        };
+        write_id3v2_only(&tmp, &seed, true).unwrap();
+
+        // Change only the album.
+        let mask = FieldMask { album: true, ..Default::default() };
+        let new = Id3Fields { album: "Mass Album".into(), artist: "Should Not Apply".into(), ..Default::default() };
+        assert_eq!(write_mass(&tmp, &new, &mask, true).unwrap(), true, "a real change writes");
+        let got = read_primary(&tmp);
+        assert_eq!(got.album, "Mass Album", "marked field applied");
+        assert_eq!(got.title, "Seed Title", "unmarked field preserved");
+        assert_eq!(got.artist, "Seed Artist", "unmarked field preserved even when new carries a value");
+
+        // Re-applying the same album is a no-op and is skipped.
+        assert_eq!(write_mass(&tmp, &new, &mask, true).unwrap(), false, "no net change is skipped");
+
+        // An empty mask never writes.
+        assert_eq!(
+            write_mass(&tmp, &new, &FieldMask::default(), true).unwrap(),
+            false,
+            "empty mask is a no-op"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn format_name_labels_by_extension() {
+        assert_eq!(format_name(Path::new("a.mp3")), "MP3");
+        assert_eq!(format_name(Path::new("a.flac")), "FLAC");
+        assert_eq!(format_name(Path::new("a.ogg")), "Ogg Vorbis");
     }
 }
