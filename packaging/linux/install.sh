@@ -21,6 +21,10 @@ mkdir -p "$PREFIX" "$BINDIR" "$APPDIR" \
 install -m 0755 "$SRC/linamp" "$PREFIX/linamp"
 rm -rf "$PREFIX/skins"; cp -r "$SRC/skins" "$PREFIX/skins"
 if [ -d "$SRC/music" ]; then rm -rf "$PREFIX/music"; cp -r "$SRC/music" "$PREFIX/music"; fi
+# The MIDI SoundFont sits next to the binary too (midi::soundfont_path looks for
+# soundfont/ beside the executable); without it, MIDI playback fails on installed
+# builds even though the tarball ships the file.
+if [ -d "$SRC/soundfont" ]; then rm -rf "$PREFIX/soundfont"; cp -r "$SRC/soundfont" "$PREFIX/soundfont"; fi
 for d in README.md FEATURES.md SHORTCUTS.md LINUX.md LICENSE; do
   [ -f "$SRC/$d" ] && cp "$SRC/$d" "$PREFIX/" || true
 done
