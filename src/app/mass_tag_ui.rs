@@ -50,13 +50,20 @@ pub(super) struct MassTagEditor {
     paths: Vec<PathBuf>,
     /// Playlist rows to refresh after a save (a subset of `paths`' origins).
     pl_indices: Vec<usize>,
-    /// The field values shown, pre-filled with the per-field mode.
+    /// The main column's field values, pre-filled with the per-field mode. This is the
+    /// ID3v2 tag for MP3, or the single native tag for other formats.
     fields: Id3Fields,
     /// The pre-filled mode, kept so a field whose value ends up different from it
     /// counts as edited even if the live change flag missed the edit.
     initial: Id3Fields,
-    /// Which fields the user edited; only these are written on Update All.
+    /// Which main-column fields the user edited; only these are written on Update All.
     mask: FieldMask,
+    /// The ID3v1 column (MP3 selections only), pre-filled with the per-field mode of
+    /// the selected files' ID3v1 tags, with its own change mask. Shown beside the
+    /// ID3v2 column when [`Self::dominant_id3`] is set, like the single-file editor.
+    v1: Id3Fields,
+    initial_v1: Id3Fields,
+    v1_mask: FieldMask,
     tab: MassTab,
     /// The most common tag model uses ID3 (MP3/MP2/MP1), so the Tags tab resembles
     /// the ID3 editor and is labeled "ID3"; otherwise it is labeled "Tags".
@@ -202,6 +209,50 @@ const CHROME: f32 = 138.0;
 /// Reserved for the save-error / multiple-types footer line.
 const FOOTER_H: f32 = 24.0;
 
+/// The ID3v1 field grid (the v1 subset, with ID3v1's char limits), recording into
+/// `mask` which fields the user edits. Mirrors the single-file editor's ID3v1 column.
+fn mass_v1_fields_grid(ui: &mut egui::Ui, f: &mut Id3Fields, mask: &mut FieldMask, salt: &str) {
+    use crate::tags::{V1_MAX_TEXT, V1_MAX_YEAR};
+    egui::Grid::new(salt).num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
+        let lim = |ui: &mut egui::Ui, l: &str, v: &mut String, dirty: &mut bool, n: usize| {
+            ui.label(l);
+            let r = ui.add(egui::TextEdit::singleline(v).desired_width(150.0).char_limit(n));
+            *dirty |= r.changed();
+            ui.end_row();
+        };
+        lim(ui, "Track", &mut f.track, &mut mask.track, 3);
+        lim(ui, "Title", &mut f.title, &mut mask.title, V1_MAX_TEXT);
+        lim(ui, "Artist", &mut f.artist, &mut mask.artist, V1_MAX_TEXT);
+        lim(ui, "Album", &mut f.album, &mut mask.album, V1_MAX_TEXT);
+        lim(ui, "Year", &mut f.year, &mut mask.year, V1_MAX_YEAR);
+        ui.label("Genre");
+        let before = f.genre.clone();
+        egui::ComboBox::from_id_salt(format!("{salt}_genre"))
+            .selected_text(f.genre.clone())
+            .width(140.0)
+            .show_ui(ui, |ui| {
+                for g in crate::tags::GENRES {
+                    if ui.selectable_label(&f.genre == g, *g).clicked() {
+                        f.genre = (*g).to_string();
+                    }
+                }
+            });
+        if f.genre != before {
+            mask.genre = true;
+        }
+        ui.end_row();
+        ui.label("Comment");
+        let r = ui.add(
+            egui::TextEdit::multiline(&mut f.comment)
+                .desired_width(150.0)
+                .desired_rows(2)
+                .char_limit(V1_MAX_TEXT),
+        );
+        mask.comment |= r.changed();
+        ui.end_row();
+    });
+}
+
 /// The shared field grid, recording into `mask` which fields the user edits.
 /// Mirrors `tag_ui::tag_fields_grid` so the two editors read the same.
 fn mass_fields_grid(ui: &mut egui::Ui, f: &mut Id3Fields, mask: &mut FieldMask, salt: &str) {
@@ -278,6 +329,14 @@ impl super::LinAmpApp {
         // distinct-artist/album aggregates so Basic Info adds no further reads.
         let read: Vec<Id3Fields> = paths.iter().map(|p| crate::tags::read_primary(p)).collect();
         let fields = compute_modes(&read);
+        // ID3v1 column pre-fill: the mode of each MP3's ID3v1 tag (missing counts as
+        // blank). Non-MP3 files have no ID3v1 and are excluded. Blank when no MP3s.
+        let v1_read: Vec<Id3Fields> = paths
+            .iter()
+            .filter(|p| crate::tags::uses_id3(p))
+            .map(|p| crate::tags::read_id3(p).0.unwrap_or_default())
+            .collect();
+        let v1 = compute_modes(&v1_read);
 
         let total_size = paths
             .iter()
@@ -303,6 +362,9 @@ impl super::LinAmpApp {
             initial: fields.clone(),
             fields,
             mask: FieldMask::default(),
+            initial_v1: v1.clone(),
+            v1,
+            v1_mask: FieldMask::default(),
             tab: MassTab::Tags,
             basic,
             status: String::new(),
@@ -351,18 +413,33 @@ impl super::LinAmpApp {
         // A field counts as edited if the live change flag caught it OR its value now
         // differs from the pre-filled mode, so an edit is never silently dropped.
         let mask = effective_mask(ed.mask, &ed.fields, &ed.initial);
-        if !mask.any() {
+        // The ID3v1 column only exists for an MP3-dominant selection.
+        let dual = ed.dominant_id3;
+        let v1_mask = if dual {
+            effective_mask(ed.v1_mask, &ed.v1, &ed.initial_v1)
+        } else {
+            FieldMask::default()
+        };
+        if !mask.any() && !v1_mask.any() {
             return true; // user changed nothing; just close
         }
         let id3v23 = self.prefs.id3v23;
         let fields = ed.fields.clone();
+        let v1 = ed.v1.clone();
         let paths = ed.paths.clone();
         let pl_indices = ed.pl_indices.clone();
 
         let mut errs = 0usize;
         let mut written: Vec<PathBuf> = Vec::new();
         for p in &paths {
-            match crate::tags::write_mass(p, &fields, &mask, id3v23) {
+            // MP3s in an MP3-dominant selection write both ID3 tags (the v1/v2 pair);
+            // every other case writes the single main tag.
+            let result = if dual && crate::tags::uses_id3(p) {
+                crate::tags::write_mass_id3_dual(p, &v1, &v1_mask, &fields, &mask, id3v23)
+            } else {
+                crate::tags::write_mass(p, &fields, &mask, id3v23)
+            };
+            match result {
                 Ok(true) => written.push(p.clone()),
                 Ok(false) => {}
                 Err(_) => errs += 1,
@@ -529,6 +606,29 @@ impl super::LinAmpApp {
                                     r("Albums", format!("{}", b.albums));
                                 });
                         }
+                        MassTab::Tags if ed.dominant_id3 => {
+                            // MP3-dominant selection: the ID3v1/ID3v2 column pair, like
+                            // the single-file editor. The main column (`fields`) is the
+                            // ID3v2 tag; `v1` is the ID3v1 subset.
+                            ui.columns(2, |cols| {
+                                cols[0].label(RichText::new("ID3v1").strong());
+                                cols[0].add_space(2.0);
+                                mass_v1_fields_grid(
+                                    &mut cols[0],
+                                    &mut ed.v1,
+                                    &mut ed.v1_mask,
+                                    "mass_v1_grid",
+                                );
+                                cols[1].label(RichText::new("ID3v2").strong());
+                                cols[1].add_space(2.0);
+                                mass_fields_grid(
+                                    &mut cols[1],
+                                    &mut ed.fields,
+                                    &mut ed.mask,
+                                    "mass_v2_grid",
+                                );
+                            });
+                        }
                         MassTab::Tags => {
                             ui.label(RichText::new("Tags").strong());
                             ui.add_space(2.0);
@@ -588,6 +688,8 @@ impl super::LinAmpApp {
                     do_save = true;
                 }
 
+                let mut copy_to_v1 = false;
+                let mut copy_from_v1 = false;
                 ui.horizontal(|ui| {
                     if on_tags && ui.button(mnem("Update All", 0)).clicked() {
                         do_save = true;
@@ -595,9 +697,52 @@ impl super::LinAmpApp {
                     if ui.button(mnem("Cancel", 0)).clicked() {
                         close = true;
                     }
+                    // Copy between the columns, like the single-file editor (MP3 only).
+                    if on_tags && ed.dominant_id3 {
+                        if ui.button(mnem("Copy to ID3v1", 5)).clicked() {
+                            copy_to_v1 = true;
+                        }
+                        if ui.button(mnem("Copy from ID3v1", 5)).clicked() {
+                            copy_from_v1 = true;
+                        }
+                    }
                 });
                 if k_cancel {
                     close = true;
+                }
+                // Copy only non-blank source fields (never wipe a value), capping to
+                // ID3v1's limits when copying into it, and mark the copied fields edited
+                // so Update All writes them.
+                if copy_to_v1 {
+                    let cp = |dst: &mut String, src: &str, dirty: &mut bool, n: usize| {
+                        if !src.trim().is_empty() {
+                            *dst = src.chars().take(n).collect();
+                            *dirty = true;
+                        }
+                    };
+                    let max = usize::MAX;
+                    cp(&mut ed.v1.track, &ed.fields.track, &mut ed.v1_mask.track, max);
+                    cp(&mut ed.v1.title, &ed.fields.title, &mut ed.v1_mask.title, crate::tags::V1_MAX_TEXT);
+                    cp(&mut ed.v1.artist, &ed.fields.artist, &mut ed.v1_mask.artist, crate::tags::V1_MAX_TEXT);
+                    cp(&mut ed.v1.album, &ed.fields.album, &mut ed.v1_mask.album, crate::tags::V1_MAX_TEXT);
+                    cp(&mut ed.v1.year, &ed.fields.year, &mut ed.v1_mask.year, crate::tags::V1_MAX_YEAR);
+                    cp(&mut ed.v1.genre, &ed.fields.genre, &mut ed.v1_mask.genre, max);
+                    cp(&mut ed.v1.comment, &ed.fields.comment, &mut ed.v1_mask.comment, crate::tags::V1_MAX_TEXT);
+                }
+                if copy_from_v1 {
+                    let cp = |dst: &mut String, src: &str, dirty: &mut bool| {
+                        if !src.trim().is_empty() {
+                            *dst = src.to_string();
+                            *dirty = true;
+                        }
+                    };
+                    cp(&mut ed.fields.track, &ed.v1.track, &mut ed.mask.track);
+                    cp(&mut ed.fields.title, &ed.v1.title, &mut ed.mask.title);
+                    cp(&mut ed.fields.artist, &ed.v1.artist, &mut ed.mask.artist);
+                    cp(&mut ed.fields.album, &ed.v1.album, &mut ed.mask.album);
+                    cp(&mut ed.fields.year, &ed.v1.year, &mut ed.mask.year);
+                    cp(&mut ed.fields.genre, &ed.v1.genre, &mut ed.mask.genre);
+                    cp(&mut ed.fields.comment, &ed.v1.comment, &mut ed.mask.comment);
                 }
             });
             self.apply_base_cursor(ctx, "LinAmp, Mass Edit Tags");

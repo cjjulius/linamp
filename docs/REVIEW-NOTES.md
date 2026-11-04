@@ -1421,3 +1421,30 @@ players, verified with mutagen and ffmpeg (ffprobe). Details in
   anywhere, so they stay as iTunes-namespace freeform atoms, which ffprobe and the
   common taggers still read. Guarded by mp4_compilation_and_bpm_write_native_atoms.
 - 339 tests pass, clippy at the 48 baseline. MP3 remains untouched (standard ID3v2).
+
+## 2026-11-04 Mass tag editing: ID3v1/ID3v2 column pair (round 4, from the Linux box)
+
+Closes the last open item from round 1: ID3v1 is now editable in mass mode.
+
+- For an MP3-dominant selection the Tags tab shows two columns, ID3v1 and ID3v2,
+  like the single-file editor. Each field tracks its own edits; Update All writes
+  only the edited fields of each column into every selected file, preserving the
+  unedited fields and all other ID3v2 frames. Non-MP3 selections keep the single
+  "Tags" column (unchanged). Copy to/from ID3v1 buttons copy between the columns
+  (capped to ID3v1's limits) and mark the copied fields so they are written.
+- New writer tags::write_mass_id3_dual applies a v1 mask and a v2 mask in one pass.
+  A tag that does not exist is created only when one of its fields is actually
+  edited, so editing only v2 never fabricates an empty ID3v1 (and the reverse).
+- lofty 0.21 quirk found and worked around: write_id3 with v2 set and v1 = None
+  spuriously stamps an empty ID3v1 trailer on a file that had none (its ID3v1
+  removal path writes a blank tag). The dual writer never uses that path: it calls
+  write_id3 only when both tags are written, write_id3v2_only for a v2-only change
+  (leaves v1 untouched), and a new write_id3v1_only for a v1-only change. Guarded by
+  write_mass_id3_dual_edits_v1_and_v2_independently and
+  write_mass_id3_dual_creates_v1_only_when_edited.
+- 341 tests pass, clippy at the 48 baseline.
+
+Needs a hands-on look (the maintainer/Windows box, since the Linux box must not drive
+its own live desktop): the two-column layout at the 660px window width (no clipping),
+the Copy to/from ID3v1 buttons, and that a mixed MP3+FLAC selection writes ID3v1 to
+the MP3s only while the ID3v2 column still applies to the FLACs' native tag.
