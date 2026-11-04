@@ -1448,3 +1448,16 @@ Needs a hands-on look (the maintainer/Windows box, since the Linux box must not 
 its own live desktop): the two-column layout at the 660px window width (no clipping),
 the Copy to/from ID3v1 buttons, and that a mixed MP3+FLAC selection writes ID3v1 to
 the MP3s only while the ID3v2 column still applies to the FLACs' native tag.
+
+## 2026-11-04 Mass tag editing: staged-edit outline (round 5, from the Linux box)
+
+- The mass editor now outlines each field that will be pushed on Update All (the user
+  edited it, or its value differs from the pre-filled mode), so it is clear which
+  fields a mass edit touches. mark_staged in mass_tag_ui.rs draws a 1px rounded line
+  2px OUTSIDE the field, so it never overlaps egui's active-field focus outline, in the
+  theme accent (visuals().selection.bg_fill) at 50% alpha so it stays subtle. It tracks
+  the same condition as effective_mask, for the ID3v1 and ID3v2 columns and the
+  single-column view.
+- Needs a visual check (the maintainer/Windows box): that the staged outline reads as
+  subtle, is distinct from the active-field outline, and tracks edits across both
+  columns and the Copy to/from ID3v1 buttons. 341 tests pass, clippy at 48.

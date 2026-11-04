@@ -209,25 +209,51 @@ const CHROME: f32 = 138.0;
 /// Reserved for the save-error / multiple-types footer line.
 const FOOTER_H: f32 = 24.0;
 
+/// Outline a field that is staged for the mass write (the user edited it, or its
+/// value differs from the pre-filled mode, so Update All will push it). Drawn a
+/// couple of pixels outside the widget so it never overlaps egui's active-field
+/// focus outline, in a faded theme accent so it stays subtle. No-op when not staged.
+fn mark_staged(ui: &egui::Ui, rect: egui::Rect, staged: bool) {
+    if !staged {
+        return;
+    }
+    let a = ui.visuals().selection.bg_fill;
+    let col = egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 128);
+    ui.painter().rect_stroke(
+        rect.expand(2.0_f32),
+        egui::Rounding::same(3.0_f32),
+        egui::Stroke::new(1.0_f32, col),
+    );
+}
+
 /// The ID3v1 field grid (the v1 subset, with ID3v1's char limits), recording into
 /// `mask` which fields the user edits. Mirrors the single-file editor's ID3v1 column.
-fn mass_v1_fields_grid(ui: &mut egui::Ui, f: &mut Id3Fields, mask: &mut FieldMask, salt: &str) {
+/// `init` is the pre-filled mode, used to outline the fields staged for the write.
+fn mass_v1_fields_grid(
+    ui: &mut egui::Ui,
+    f: &mut Id3Fields,
+    mask: &mut FieldMask,
+    init: &Id3Fields,
+    salt: &str,
+) {
     use crate::tags::{V1_MAX_TEXT, V1_MAX_YEAR};
     egui::Grid::new(salt).num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
-        let lim = |ui: &mut egui::Ui, l: &str, v: &mut String, dirty: &mut bool, n: usize| {
-            ui.label(l);
-            let r = ui.add(egui::TextEdit::singleline(v).desired_width(150.0).char_limit(n));
-            *dirty |= r.changed();
-            ui.end_row();
-        };
-        lim(ui, "Track", &mut f.track, &mut mask.track, 3);
-        lim(ui, "Title", &mut f.title, &mut mask.title, V1_MAX_TEXT);
-        lim(ui, "Artist", &mut f.artist, &mut mask.artist, V1_MAX_TEXT);
-        lim(ui, "Album", &mut f.album, &mut mask.album, V1_MAX_TEXT);
-        lim(ui, "Year", &mut f.year, &mut mask.year, V1_MAX_YEAR);
+        let lim =
+            |ui: &mut egui::Ui, l: &str, v: &mut String, dirty: &mut bool, iv: &str, n: usize| {
+                ui.label(l);
+                let r = ui.add(egui::TextEdit::singleline(v).desired_width(150.0).char_limit(n));
+                *dirty |= r.changed();
+                mark_staged(ui, r.rect, *dirty || v.as_str() != iv);
+                ui.end_row();
+            };
+        lim(ui, "Track", &mut f.track, &mut mask.track, &init.track, 3);
+        lim(ui, "Title", &mut f.title, &mut mask.title, &init.title, V1_MAX_TEXT);
+        lim(ui, "Artist", &mut f.artist, &mut mask.artist, &init.artist, V1_MAX_TEXT);
+        lim(ui, "Album", &mut f.album, &mut mask.album, &init.album, V1_MAX_TEXT);
+        lim(ui, "Year", &mut f.year, &mut mask.year, &init.year, V1_MAX_YEAR);
         ui.label("Genre");
         let before = f.genre.clone();
-        egui::ComboBox::from_id_salt(format!("{salt}_genre"))
+        let combo = egui::ComboBox::from_id_salt(format!("{salt}_genre"))
             .selected_text(f.genre.clone())
             .width(140.0)
             .show_ui(ui, |ui| {
@@ -240,6 +266,7 @@ fn mass_v1_fields_grid(ui: &mut egui::Ui, f: &mut Id3Fields, mask: &mut FieldMas
         if f.genre != before {
             mask.genre = true;
         }
+        mark_staged(ui, combo.response.rect, mask.genre || f.genre != init.genre);
         ui.end_row();
         ui.label("Comment");
         let r = ui.add(
@@ -249,29 +276,38 @@ fn mass_v1_fields_grid(ui: &mut egui::Ui, f: &mut Id3Fields, mask: &mut FieldMas
                 .char_limit(V1_MAX_TEXT),
         );
         mask.comment |= r.changed();
+        mark_staged(ui, r.rect, mask.comment || f.comment != init.comment);
         ui.end_row();
     });
 }
 
 /// The shared field grid, recording into `mask` which fields the user edits.
-/// Mirrors `tag_ui::tag_fields_grid` so the two editors read the same.
-fn mass_fields_grid(ui: &mut egui::Ui, f: &mut Id3Fields, mask: &mut FieldMask, salt: &str) {
+/// Mirrors `tag_ui::tag_fields_grid` so the two editors read the same. `init` is the
+/// pre-filled mode, used to outline the fields staged for the write.
+fn mass_fields_grid(
+    ui: &mut egui::Ui,
+    f: &mut Id3Fields,
+    mask: &mut FieldMask,
+    init: &Id3Fields,
+    salt: &str,
+) {
     egui::Grid::new(salt).num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
-        let row = |ui: &mut egui::Ui, l: &str, v: &mut String, dirty: &mut bool| {
+        let row = |ui: &mut egui::Ui, l: &str, v: &mut String, dirty: &mut bool, iv: &str| {
             ui.label(l);
             let r = ui.add(egui::TextEdit::singleline(v).desired_width(170.0));
             *dirty |= r.changed();
+            mark_staged(ui, r.rect, *dirty || v.as_str() != iv);
             ui.end_row();
         };
-        row(ui, "Track", &mut f.track, &mut mask.track);
-        row(ui, "Disc", &mut f.disc, &mut mask.disc);
-        row(ui, "Title", &mut f.title, &mut mask.title);
-        row(ui, "Artist", &mut f.artist, &mut mask.artist);
-        row(ui, "Album", &mut f.album, &mut mask.album);
-        row(ui, "Year", &mut f.year, &mut mask.year);
+        row(ui, "Track", &mut f.track, &mut mask.track, &init.track);
+        row(ui, "Disc", &mut f.disc, &mut mask.disc, &init.disc);
+        row(ui, "Title", &mut f.title, &mut mask.title, &init.title);
+        row(ui, "Artist", &mut f.artist, &mut mask.artist, &init.artist);
+        row(ui, "Album", &mut f.album, &mut mask.album, &init.album);
+        row(ui, "Year", &mut f.year, &mut mask.year, &init.year);
         ui.label("Genre");
         let before = f.genre.clone();
-        egui::ComboBox::from_id_salt(format!("{salt}_genre"))
+        let combo = egui::ComboBox::from_id_salt(format!("{salt}_genre"))
             .selected_text(f.genre.clone())
             .width(140.0)
             .show_ui(ui, |ui| {
@@ -284,21 +320,24 @@ fn mass_fields_grid(ui: &mut egui::Ui, f: &mut Id3Fields, mask: &mut FieldMask, 
         if f.genre != before {
             mask.genre = true;
         }
+        mark_staged(ui, combo.response.rect, mask.genre || f.genre != init.genre);
         ui.end_row();
         ui.label("Comment");
         let r =
             ui.add(egui::TextEdit::multiline(&mut f.comment).desired_width(170.0).desired_rows(2));
         mask.comment |= r.changed();
+        mark_staged(ui, r.rect, mask.comment || f.comment != init.comment);
         ui.end_row();
-        row(ui, "Composer", &mut f.composer, &mut mask.composer);
-        row(ui, "Orig. Artist", &mut f.orig_artist, &mut mask.orig_artist);
-        row(ui, "Copyright", &mut f.copyright, &mut mask.copyright);
-        row(ui, "URL", &mut f.url, &mut mask.url);
-        row(ui, "Encoded by", &mut f.encoded_by, &mut mask.encoded_by);
-        row(ui, "BPM", &mut f.bpm, &mut mask.bpm);
+        row(ui, "Composer", &mut f.composer, &mut mask.composer, &init.composer);
+        row(ui, "Orig. Artist", &mut f.orig_artist, &mut mask.orig_artist, &init.orig_artist);
+        row(ui, "Copyright", &mut f.copyright, &mut mask.copyright, &init.copyright);
+        row(ui, "URL", &mut f.url, &mut mask.url, &init.url);
+        row(ui, "Encoded by", &mut f.encoded_by, &mut mask.encoded_by, &init.encoded_by);
+        row(ui, "BPM", &mut f.bpm, &mut mask.bpm, &init.bpm);
         ui.label("Compilation");
         let r = ui.checkbox(&mut f.compilation, "");
         mask.compilation |= r.changed();
+        mark_staged(ui, r.rect, mask.compilation || f.compilation != init.compilation);
         ui.end_row();
     });
 }
@@ -617,6 +656,7 @@ impl super::LinAmpApp {
                                     &mut cols[0],
                                     &mut ed.v1,
                                     &mut ed.v1_mask,
+                                    &ed.initial_v1,
                                     "mass_v1_grid",
                                 );
                                 cols[1].label(RichText::new("ID3v2").strong());
@@ -625,6 +665,7 @@ impl super::LinAmpApp {
                                     &mut cols[1],
                                     &mut ed.fields,
                                     &mut ed.mask,
+                                    &ed.initial,
                                     "mass_v2_grid",
                                 );
                             });
@@ -632,7 +673,13 @@ impl super::LinAmpApp {
                         MassTab::Tags => {
                             ui.label(RichText::new("Tags").strong());
                             ui.add_space(2.0);
-                            mass_fields_grid(ui, &mut ed.fields, &mut ed.mask, "mass_grid");
+                            mass_fields_grid(
+                                ui,
+                                &mut ed.fields,
+                                &mut ed.mask,
+                                &ed.initial,
+                                "mass_grid",
+                            );
                         }
                     }
                 });
