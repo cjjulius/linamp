@@ -1339,3 +1339,29 @@ docs/MASS-TAG-EDIT-PLAN.md. Behaviour and judgment calls a human should check:
 - Visual: window chrome, tab strip, mnemonics and the button row mirror the
   single-file editor; the save button reads "Update All" (Alt+U). Needs an eyes-on
   pass for layout parity and the seam/tab rendering across skins.
+
+## 2026-11-04 Mass tag editing: QA fixes (round 1)
+
+Fixes from the first QA pass on feat/mass-tag-edit:
+
+- FLAC writes were silently dropped on "minimal" FLACs (only a STREAMINFO block,
+  marked last), which is the common shape of fresh rips (for example the Green Day
+  rip_testing files). lofty 0.21 returns Ok from the save but writes no
+  VorbisComments block. tags::ensure_flac_writable now splices an empty
+  VorbisComments block in after STREAMINFO before the write, so the tag lands. This
+  also fixes the single-file FLAC editor for the same files. Normal FLACs are
+  untouched. Verified end to end on the real minimal FLAC (minimal_flac_round_trips_tags_after_fix).
+- Edited fields could be missed on write: the mass editor now marks a field as
+  edited if its value differs from the pre-filled mode OR the live change flag fired
+  (effective_mask), so Album/Year and the rest apply reliably. The MP3 write path
+  itself was already correct (verified), so this closes the "fields not applying"
+  report at the UI layer.
+
+Still open from QA (not yet done this round):
+- ID3v1 is still not editable in mass mode. The maintainer prefers exposing it as a
+  separate ID3v1/ID3v2 column pair like the single-file MP3 editor. This is a larger
+  UI change and is the next task on this branch.
+- APE reportedly updated 3 of 4 files once. The APE write path is correct in
+  isolation; the one that did not update most likely already held the target value
+  (a no-op skip) or its edit was missed by the old change tracking, which the
+  effective_mask fix should also address. Worth a re-test after this round.

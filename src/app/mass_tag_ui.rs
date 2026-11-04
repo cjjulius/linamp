@@ -48,6 +48,9 @@ pub(super) struct MassTagEditor {
     pl_indices: Vec<usize>,
     /// The field values shown, pre-filled with the per-field mode.
     fields: Id3Fields,
+    /// The pre-filled mode, kept so a field whose value ends up different from it
+    /// counts as edited even if the live change flag missed the edit.
+    initial: Id3Fields,
     /// Which fields the user edited; only these are written on Update All.
     mask: FieldMask,
     tab: MassTab,
@@ -112,6 +115,29 @@ fn compute_modes(items: &[Id3Fields]) -> Id3Fields {
         disc: col(|i| &i.disc),
         bpm: col(|i| &i.bpm),
         compilation,
+    }
+}
+
+/// Combine the live change flags with a value-vs-mode diff, so a field the user
+/// edited is written even if the per-frame change flag missed it. A field left at
+/// the mode value with no interaction stays unmarked (its per-file value is kept).
+fn effective_mask(base: FieldMask, cur: &Id3Fields, init: &Id3Fields) -> FieldMask {
+    FieldMask {
+        track: base.track || cur.track != init.track,
+        title: base.title || cur.title != init.title,
+        artist: base.artist || cur.artist != init.artist,
+        album: base.album || cur.album != init.album,
+        year: base.year || cur.year != init.year,
+        genre: base.genre || cur.genre != init.genre,
+        comment: base.comment || cur.comment != init.comment,
+        composer: base.composer || cur.composer != init.composer,
+        orig_artist: base.orig_artist || cur.orig_artist != init.orig_artist,
+        copyright: base.copyright || cur.copyright != init.copyright,
+        url: base.url || cur.url != init.url,
+        encoded_by: base.encoded_by || cur.encoded_by != init.encoded_by,
+        disc: base.disc || cur.disc != init.disc,
+        bpm: base.bpm || cur.bpm != init.bpm,
+        compilation: base.compilation || cur.compilation != init.compilation,
     }
 }
 
@@ -267,6 +293,7 @@ impl super::LinAmpApp {
             multi_type: multi_type(&paths),
             paths,
             pl_indices,
+            initial: fields.clone(),
             fields,
             mask: FieldMask::default(),
             tab: MassTab::Tags,
@@ -314,12 +341,14 @@ impl super::LinAmpApp {
         let Some(ed) = self.mass_tag_editor.as_ref() else {
             return false;
         };
-        if !ed.mask.any() {
+        // A field counts as edited if the live change flag caught it OR its value now
+        // differs from the pre-filled mode, so an edit is never silently dropped.
+        let mask = effective_mask(ed.mask, &ed.fields, &ed.initial);
+        if !mask.any() {
             return true; // user changed nothing; just close
         }
         let id3v23 = self.prefs.id3v23;
         let fields = ed.fields.clone();
-        let mask = ed.mask;
         let paths = ed.paths.clone();
         let pl_indices = ed.pl_indices.clone();
 
@@ -626,6 +655,22 @@ mod tests {
         let items = [f("A", "X"), f("A", "Y"), f("", "X")];
         assert_eq!(distinct_nonempty(&items, |i| &i.artist), 1);
         assert_eq!(distinct_nonempty(&items, |i| &i.album), 2);
+    }
+
+    #[test]
+    fn effective_mask_catches_value_edits_and_live_flags() {
+        let init = Id3Fields { artist: "Old".into(), album: "A".into(), ..Default::default() };
+        // No live flags, but artist differs from the mode: it is marked.
+        let cur = Id3Fields { artist: "New".into(), album: "A".into(), ..Default::default() };
+        let m = effective_mask(FieldMask::default(), &cur, &init);
+        assert!(m.artist, "edited-away-from-mode artist is written");
+        assert!(!m.album, "untouched album stays unmarked");
+        // A live flag with no value change (re-affirm the mode) still marks the field.
+        let same = init.clone();
+        let base = FieldMask { year: true, ..Default::default() };
+        assert!(effective_mask(base, &same, &init).year, "live-flagged field is written");
+        // Nothing touched, nothing marked.
+        assert!(!effective_mask(FieldMask::default(), &same, &init).any());
     }
 
     #[test]
