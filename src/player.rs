@@ -364,6 +364,10 @@ impl Player {
             // feature is a non-functional stub.
             let source = crate::wavpack::open_wavpack(path)?;
             self.append_source(source, None, true)?;
+        } else if crate::tta::is_tta(path) {
+            // True Audio (.tta) is decoded by oxideav-tta (pure Rust).
+            let source = crate::tta::open_tta(path)?;
+            self.append_source(source, None, true)?;
         } else if crate::ts::is_ts(path) {
             // MPEG-TS (.ts/.m2ts): symphonia can't demux it, so crate::ts pulls the
             // audio elementary stream out and decodes it through the shared path.

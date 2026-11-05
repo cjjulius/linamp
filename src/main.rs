@@ -33,6 +33,7 @@ mod stream;
 mod tags;
 mod text;
 mod tracker;
+mod tta;
 mod tray;
 mod ts;
 mod viz;

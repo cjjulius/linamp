@@ -12,7 +12,7 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 ## Core playback
 - Decode MP3, MPEG Layer I/II (`.mp1`/`.mp2`/`.mpa`), FLAC, OGG/Vorbis, Opus, WAV,
   AIFF, CAF, AAC/M4A (`.m4a`/`.mp4`/`.m4b`/`.aac`), Monkey's Audio (`.ape`), WavPack
-  (`.wv`), AC-3 (`.ac3`/`.eac3`, stereo and 5.1 downmix), the audio track of video
+  (`.wv`), True Audio (`.tta`), AC-3 (`.ac3`/`.eac3`, stereo and 5.1 downmix), the audio track of video
   containers (`.mp4`/`.m4v`/`.3gp`/`.mov`/`.mkv`/`.webm`/`.ogv`; MPEG-TS
   `.ts`/`.m2ts`/`.mts` via `mpeg2ts-reader`; AVI `.avi` via `filmcraft-avi` for
   MP3/MP2/PCM/AC-3; FLV `.flv` via `scuffle-flv` for MP3/AAC; MPEG program stream
