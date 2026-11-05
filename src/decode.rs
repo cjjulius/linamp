@@ -155,7 +155,7 @@ impl Source for SymphoniaSource {
             time,
             track_id: Some(self.track_id),
         };
-        self.format.seek(SeekMode::Accurate, to).map_err(|e| {
+        let seeked = self.format.seek(SeekMode::Accurate, to).map_err(|e| {
             SeekError::Other(Box::new(std::io::Error::other(e.to_string())))
         })?;
         // Drop decoder state built up before the seek, and the buffered packet.
@@ -167,6 +167,14 @@ impl Source for SymphoniaSource {
         }
         self.samples.clear();
         self.pos = 0;
+        // symphonia's "accurate" seek lands at or before the target, on a packet
+        // boundary; for formats whose seek is coarse (ALAC in CAF undershoots ~150ms)
+        // discard the gap so playback resumes exactly at the requested sample. rodio
+        // sets the sink's position to the requested time and then counts samples, so
+        // an under-seek otherwise plays past the displayed end after a scrub. Reuses
+        // the pre-skip drop (the start-of-stream Opus delay is already consumed here).
+        let gap = seeked.required_ts.get().saturating_sub(seeked.actual_ts.get());
+        self.preskip = (gap.max(0) as usize).saturating_mul(self.channels as usize);
         Ok(())
     }
 }
@@ -669,3 +677,35 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod seek_accuracy {
+    use super::*;
+    use rodio::Source;
+
+    /// A seek must resume at the exact requested sample, whatever the container's
+    /// seek granularity. ALAC in CAF undershoots symphonia's "accurate" seek by
+    /// ~150ms, which played past the displayed end after a scrub (rodio sets the
+    /// position to the requested time, then counts samples); the seek now discards
+    /// the under-seek gap. Checked against every local format sample (qa-music is
+    /// gitignored, so this skips on CI).
+    #[test]
+    fn seek_resumes_at_the_requested_sample() {
+        let dir = std::path::Path::new("qa-music/format-samples");
+        for name in ["hypno-this.caf", "hypno-this.flac", "hypno-this.m4a", "hypno-this.wav", "hypno-this.aiff"] {
+            let p = dir.join(name);
+            if !p.exists() { continue; }
+            let full = open_file(&p).unwrap();
+            let (sr, ch) = (full.sample_rate(), full.channels());
+            let total = full.count();
+            let seek_s = 40.0_f64;
+            let mut src = open_file(&p).unwrap();
+            src.try_seek(Duration::from_secs_f64(seek_s)).unwrap();
+            let remaining = src.count();
+            let expected = total as f64 - seek_s * sr as f64 * ch as f64;
+            let err_frames = ((remaining as f64 - expected) / ch as f64).abs();
+            // Within one packet (4096 frames) of exact; the old CAF bug was ~6800.
+            assert!(err_frames < 4096.0, "{name}: seek off by {err_frames:.0} frames");
+        }
+    }
+}
