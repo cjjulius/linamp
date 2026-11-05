@@ -24,6 +24,7 @@ mod mediakeys;
 mod midi;
 mod openq;
 mod player;
+mod ps;
 mod playlist;
 mod region;
 mod selection;

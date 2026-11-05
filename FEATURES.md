@@ -15,7 +15,8 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   (`.wv`), AC-3 (`.ac3`/`.eac3`, stereo and 5.1 downmix), the audio track of video
   containers (`.mp4`/`.m4v`/`.3gp`/`.mov`/`.mkv`/`.webm`/`.ogv`; MPEG-TS
   `.ts`/`.m2ts`/`.mts` via `mpeg2ts-reader`; AVI `.avi` via `filmcraft-avi` for
-  MP3/MP2/PCM/AC-3; FLV `.flv` via `scuffle-flv` for MP3/AAC audio), tracker modules
+  MP3/MP2/PCM/AC-3; FLV `.flv` via `scuffle-flv` for MP3/AAC; MPEG program stream
+  `.mpg`/`.mpeg`/`.vob` via `mpeg-ps` for MPEG-audio/AC-3), tracker modules
   (`.mod`/`.xm`/`.s3m`/`.it`) and MIDI (`.mid`/`.midi`, via a bundled SoundFont)
 - WavPack is decoded by the pure-Rust `wavicle` crate (symphonia 0.6's wavpack
   feature is a non-functional stub); lossless 16- and 24-bit integer, mono/stereo,
