@@ -12,6 +12,9 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // WavPack: symphonia 0.6's wavpack feature is a non-functional stub, so
     // crate::wavpack decodes it with the pure-Rust wavicle crate instead.
     "wv",
+    // True Audio: symphonia has no decoder, so crate::tta decodes it with the
+    // pure-Rust oxideav-tta crate.
+    "tta",
     // MPEG Layer I/II and the rest of the ISO-MP4 family, decoded via a symphonia
     // hint in crate::decode (rodio 0.20 can't open these directly) (#157/#164).
     "mp1", "mp2", "mpa", "mp4", "m4b",
@@ -167,6 +170,7 @@ impl Track {
             self.duration = crate::midi::duration(&self.path)
                 .or_else(|| crate::tracker::duration(&self.path))
                 .or_else(|| crate::ape::duration(&self.path))
+                .or_else(|| crate::tta::duration(&self.path))
                 .or_else(|| crate::ac3::duration(&self.path))
                 .or_else(|| crate::wavpack::duration(&self.path))
                 .or_else(|| crate::ts::duration(&self.path))

@@ -2408,6 +2408,7 @@ dependencies = [
  "ogg",
  "open",
  "opus",
+ "oxideav-tta",
  "rfd",
  "rodio",
  "rubato",
@@ -3249,6 +3250,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36820e9051aca1014ddc75770aab4d68bc1e9e632f0f5627c4086bc216fb583b"
 dependencies = [
  "ttf-parser",
+]
+
+[[package]]
+name = "oxideav-core"
+version = "0.1.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16003ef2cd554e10f0c451d7a74b4c56b32473d50c174aefb3bdbe4139b9c14d"
+dependencies = [
+ "bytemuck",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "oxideav-tta"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8319d48ca2eb5529ed2187b04ebfe09fabbd1850dbc9547c634225398cf43b5"
+dependencies = [
+ "oxideav-core",
 ]
 
 [[package]]

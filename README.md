@@ -22,7 +22,8 @@ coordinates, on a modern cross-platform stack (`eframe`/`egui` UI,
 - Classic skin UI, loads real Winamp `.wsz` skins; main + EQ + playlist as
   separate windows that dock and snap together, with window-shade mode.
 - Plays MP3, MP1/MP2 (MPEG audio), FLAC, Ogg Vorbis, Opus, AAC/M4A, Monkey's Audio
-  (APE), WavPack (WV), AC-3, WAV, AIFF and CAF, the audio track of MP4/M4V/3GP/MOV/MKV/WebM/OGV/TS/AVI/FLV/MPG/VOB
+  (APE), WavPack (WV), True Audio (TTA), AC-3, WAV, AIFF and CAF, the audio track of
+  MP4/M4V/3GP/MOV/MKV/WebM/OGV/TS/AVI/FLV/MPG/VOB
   video, MIDI (via a bundled SoundFont) and tracker modules (MOD/XM/S3M/IT); seek,
   volume, stereo balance, repeat/shuffle, stop-after/stop-with-fade.
 - Audio CD, play and rip (TOC and titles looked up online); rip or convert any

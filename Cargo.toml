@@ -93,6 +93,10 @@ bytes = "1.12.1"
 # stream, so crate::ps pulls the audio ES out and reuses the decoders (MPEG audio via
 # symphonia, AC-3 via crate::ac3). Pure Rust, MIT/Apache-2.0.
 mpeg-ps = "0.6.0"
+# True Audio (.tta) decoding. symphonia has no TTA decoder, so crate::tta wraps
+# oxideav-tta (pure Rust, MIT) as a seekable source like ape/wavpack. Vetted
+# bit-exact against the source PCM and ~640x real-time before adding.
+oxideav-tta = "0.0.4"
 
 # Linux/X11 only: query the global cursor position (XQueryPointer) so classic
 # windows can be dragged and docked as a group, matching the Windows behaviour.
