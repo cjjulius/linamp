@@ -34,6 +34,9 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // AVI: crate::avi (filmcraft-avi) extracts the audio stream (MP3/MP2/PCM via
     // symphonia, AC-3 via crate::ac3).
     "avi",
+    // FLV: crate::flv (scuffle-flv) extracts the audio tags (MP3, or AAC wrapped in
+    // ADTS) and decodes them via symphonia.
+    "flv",
 ];
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
@@ -165,6 +168,7 @@ impl Track {
                 .or_else(|| crate::wavpack::duration(&self.path))
                 .or_else(|| crate::ts::duration(&self.path))
                 .or_else(|| crate::avi::duration(&self.path))
+                .or_else(|| crate::flv::duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
     }

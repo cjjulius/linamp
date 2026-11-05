@@ -81,6 +81,14 @@ mpeg2ts-reader = "0.18.2"
 # stream out and reuses the decoders (MP3/MP2/PCM via symphonia, AC-3 via crate::ac3).
 # Pure Rust, MIT/Apache-2.0, same author as the trusted filmcraft-ac3 we already ship.
 filmcraft-avi = "0.9.0"
+# FLV (.flv) demuxing. symphonia can't demux Flash Video, so crate::flv pulls the
+# audio tags out and reuses the decoders: MP3 directly, AAC wrapped in ADTS from its
+# AudioSpecificConfig. Pure Rust, MIT/Apache-2.0. Trade-off: it also pulls the pure-Rust
+# scuffle-h264/h265 video parsers that we don't use (FLV is minor, so accepted). Leaner
+# FLV crates exist (flv-core, oxideav-flv) but are less mature.
+scuffle-flv = "0.2.2"
+# Bytes buffer type that scuffle-flv's demux API takes.
+bytes = "1.12.1"
 
 # Linux/X11 only: query the global cursor position (XQueryPointer) so classic
 # windows can be dragged and docked as a group, matching the Windows behaviour.

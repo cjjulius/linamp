@@ -374,6 +374,11 @@ impl Player {
             // decodes it the same way (MP3/MP2/PCM via symphonia, AC-3 via crate::ac3).
             let source = crate::avi::open_avi(path)?;
             self.append_source(source, None, true)?;
+        } else if crate::flv::is_flv(path) {
+            // FLV (.flv): crate::flv (scuffle-flv) pulls the audio tags out; MP3 and
+            // ADTS-wrapped AAC decode through the shared path.
+            let source = crate::flv::open_flv(path)?;
+            self.append_source(source, None, true)?;
         } else {
             let source = crate::decode::open_file(path)?;
             self.append_source(source, None, true)?;
