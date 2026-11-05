@@ -17,6 +17,7 @@ mod encode;
 mod eq;
 mod eqf;
 mod fileassoc;
+mod flv;
 mod icon;
 mod library;
 mod mediakeys;
