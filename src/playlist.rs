@@ -37,6 +37,9 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // FLV: crate::flv (scuffle-flv) extracts the audio tags (MP3, or AAC wrapped in
     // ADTS) and decodes them via symphonia.
     "flv",
+    // MPEG Program Stream (DVD/VCD): crate::ps (mpeg-ps) extracts the audio ES
+    // (MPEG audio via symphonia, AC-3 via crate::ac3).
+    "mpg", "mpeg", "vob", "m2p",
 ];
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
@@ -169,6 +172,7 @@ impl Track {
                 .or_else(|| crate::ts::duration(&self.path))
                 .or_else(|| crate::avi::duration(&self.path))
                 .or_else(|| crate::flv::duration(&self.path))
+                .or_else(|| crate::ps::duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
     }

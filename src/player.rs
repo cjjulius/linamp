@@ -379,6 +379,11 @@ impl Player {
             // ADTS-wrapped AAC decode through the shared path.
             let source = crate::flv::open_flv(path)?;
             self.append_source(source, None, true)?;
+        } else if crate::ps::is_ps(path) {
+            // MPEG Program Stream (.mpg/.vob): crate::ps pulls the audio ES out;
+            // MPEG audio via symphonia, AC-3 (private_stream_1) via crate::ac3.
+            let source = crate::ps::open_ps(path)?;
+            self.append_source(source, None, true)?;
         } else {
             let source = crate::decode::open_file(path)?;
             self.append_source(source, None, true)?;
