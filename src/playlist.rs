@@ -306,6 +306,17 @@ impl Playlist {
         self.current.and_then(|i| self.tracks.get(i))
     }
 
+    /// Fill in the current track's duration if it wasn't known from the metadata
+    /// scan. Used once playback starts so raw streams (TrueHD/MLP), whose length is
+    /// only known after a full decode, still show a time and allow scrubbing.
+    pub fn set_current_duration_if_missing(&mut self, d: Duration) {
+        if let Some(t) = self.current.and_then(|i| self.tracks.get_mut(i)) {
+            if t.duration.is_none() {
+                t.duration = Some(d);
+            }
+        }
+    }
+
     /// Add a single file if it has a supported extension (tags read lazily). An
     /// audio CD the desktop mounted as slow FUSE WAV files (GVfs) is transparently
     /// stored as a native `cdda://` entry instead, so it plays off the drive
