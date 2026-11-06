@@ -125,15 +125,16 @@ jobs:
       # The shipped build is the WMA-enabled (ffmpeg) build, so one installer per
       # platform carries everything, FFmpeg libraries included (Option A). The
       # default/test matrix stays pure Rust; only the release packages link FFmpeg.
-      - name: Install Linux build + FFmpeg + clang libraries
+      - name: Install Linux build + clang libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
+          # No system FFmpeg dev libs: build-tarball.sh builds a self-contained FFmpeg
+          # from source (build-ffmpeg-min.sh) and links against that, so we only need a
+          # C toolchain + curl to build it, plus llvm-14 for the ffmpeg-sys-next bindgen
+          # (its pinned bindgen 0.59.2 panics against the runner's newer libclang).
           sudo apt-get install -y libasound2-dev libgtk-3-dev pkg-config \
-            libavcodec-dev libavformat-dev libavutil-dev libswresample-dev \
-            llvm-14 libclang-14-dev clang-14
-          # ffmpeg-sys-next 5.1.1 pins bindgen 0.59.2, which panics (LexError)
-          # against the runner's newer libclang; pin LLVM 14, which it handles.
+            build-essential curl llvm-14 libclang-14-dev clang-14
           echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
 
       # Same bindgen/libclang pin on Windows (see the ffmpeg-build job).
