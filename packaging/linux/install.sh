@@ -25,6 +25,10 @@ if [ -d "$SRC/music" ]; then rm -rf "$PREFIX/music"; cp -r "$SRC/music" "$PREFIX
 # soundfont/ beside the executable); without it, MIDI playback fails on installed
 # builds even though the tarball ships the file.
 if [ -d "$SRC/soundfont" ]; then rm -rf "$PREFIX/soundfont"; cp -r "$SRC/soundfont" "$PREFIX/soundfont"; fi
+# A WMA-enabled (ffmpeg) build bundles the FFmpeg shared libraries under lib/; the
+# binary has an $ORIGIN/lib rpath, so copy them next to it. Absent in the pure-Rust
+# build, which needs no such libraries.
+if [ -d "$SRC/lib" ]; then rm -rf "$PREFIX/lib"; cp -r "$SRC/lib" "$PREFIX/lib"; fi
 for d in README.md FEATURES.md SHORTCUTS.md LINUX.md LICENSE; do
   [ -f "$SRC/$d" ] && cp "$SRC/$d" "$PREFIX/" || true
 done
