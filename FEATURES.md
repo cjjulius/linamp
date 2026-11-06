@@ -21,12 +21,15 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   MP3/MP2/PCM/AC-3; FLV `.flv` via `scuffle-flv` for MP3/AAC; MPEG program stream
   `.mpg`/`.mpeg`/`.vob` via `mpeg-ps` for MPEG-audio/AC-3), tracker modules
   (`.mod`/`.xm`/`.s3m`/`.it`) and MIDI (`.mid`/`.midi`, via a bundled SoundFont)
-- Windows Media Audio (`.wma`) and DTS (`.dts`) in the optional FFmpeg build
-  (`--features ffmpeg`), decoded via `crate::ffdec` over FFmpeg (LGPL). Neither has a
-  permissive pure-Rust decoder (the pure-Rust DTS crates are Core-profile only and
-  unproven), so the default build stays pure Rust and omits them; the opt-in build
-  links libav* and plays WMA v1/v2/Pro/Lossless and DTS (DCA, incl. HD) downmixed to
-  stereo. This build is the standard release, so shipped installers include both
+- Windows Media Audio (`.wma`), DTS (`.dts`) and Dolby TrueHD / MLP (`.thd`/`.mlp`) in the
+  optional FFmpeg build (`--features ffmpeg`), decoded via `crate::ffdec` over FFmpeg (LGPL).
+  None has a permissive pure-Rust decoder mature enough for real-time playback (the pure-Rust
+  DTS crates are Core-profile only; the pure-Rust `truehd` crate is Apache-2.0 but self-described
+  as research-only with unoptimized DSP), so the default build stays pure Rust and omits them;
+  the opt-in build links libav* and plays WMA v1/v2/Pro/Lossless, DTS (DCA, incl. HD) and
+  TrueHD/MLP (lossless, incl. the Atmos core) downmixed to stereo. The TrueHD decoder is already
+  present in the bundled minimal FFmpeg, so it adds no dependency or binary size. This build is
+  the standard release, so shipped installers include all three
 - WavPack is decoded by the pure-Rust `wavicle` crate (symphonia 0.6's wavpack
   feature is a non-functional stub); lossless 16- and 24-bit integer, mono/stereo,
   any sample rate. Float, 8-bit, hybrid/lossy and multichannel `.wv` are refused

@@ -23,8 +23,8 @@ Core (`src/`):
   plus an original two-stage decimating FIR to PCM), `speex.rs` (Speex, Ogg-demuxed
   with the `ogg` crate and decoded by libspeex, the pure-Rust option being incorrect)
   and `amr.rs` (AMR .amr/.awb via the pure-Rust rvoip-codec-core).
-  `ffdec.rs` is the optional FFmpeg path (WMA and DTS), behind the `ffmpeg` Cargo feature and
-  off by default.
+  `ffdec.rs` is the optional FFmpeg path (WMA, DTS and Dolby TrueHD/MLP), behind the `ffmpeg`
+  Cargo feature and off by default.
 - Container-audio extractors that pull the audio stream out of a video/transport
   container and feed it back through the shared decode path (`decode::open_stream`):
   `ts.rs` (MPEG-TS), `avi.rs` (AVI), `flv.rs` (FLV) and `ps.rs` (MPEG program
@@ -121,7 +121,7 @@ code, which makes skins straightforward to vet without launching the UI.
 
 Playback routes a track by kind: MIDI through `midi.rs`, tracker modules through
 `tracker.rs`, the side-decoders (`ape`/`wavpack`/`tta`/`mpc`/`ac3`/`dsd`/`speex`/`amr`, and `ffdec` for
-WMA when built with `--features ffmpeg`) for codecs symphonia lacks, the
+WMA/DTS/TrueHD when built with `--features ffmpeg`) for codecs symphonia lacks, the
 container-audio extractors (`ts`/`avi`/`flv`/`ps`) for video/transport containers,
 and everything else through `decode.rs` (symphonia, plus libopus for Opus), with
 `stream.rs` for HTTP(S) sources. The decoded `rodio::Source` runs
