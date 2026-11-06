@@ -13,6 +13,7 @@ mod convert_queue;
 mod cursor;
 mod decode;
 mod dock;
+mod dsd;
 mod encode;
 mod eq;
 mod eqf;

@@ -373,6 +373,11 @@ impl Player {
             // symphonia has no Musepack decoder.
             let source = crate::mpc::open_mpc(path)?;
             self.append_source(source, None, true)?;
+        } else if crate::dsd::is_dsd(path) {
+            // DSD (.dsf/.dff): crate::dsd pulls the 1-bit stream via dsd-reader and
+            // decimates it to PCM; symphonia has no DSD support.
+            let source = crate::dsd::open_dsd(path)?;
+            self.append_source(source, None, true)?;
         } else if crate::ts::is_ts(path) {
             // MPEG-TS (.ts/.m2ts): symphonia can't demux it, so crate::ts pulls the
             // audio elementary stream out and decodes it through the shared path.

@@ -13,6 +13,7 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 - Decode MP3, MPEG Layer I/II (`.mp1`/`.mp2`/`.mpa`), FLAC, OGG/Vorbis, Opus, WAV,
   AIFF, CAF, AAC/M4A (`.m4a`/`.mp4`/`.m4b`/`.aac`), Monkey's Audio (`.ape`), WavPack
   (`.wv`), True Audio (`.tta`), Musepack (`.mpc`/`.mp+`/`.mpp`, SV7 and SV8),
+  DSD (`.dsf`/`.dff`, DSD64/128/256 decimated to PCM),
   AC-3 (`.ac3`/`.eac3`, stereo and 5.1 downmix), the audio track of video
   containers (`.mp4`/`.m4v`/`.3gp`/`.mov`/`.mkv`/`.webm`/`.ogv`; MPEG-TS
   `.ts`/`.m2ts`/`.mts` via `mpeg2ts-reader`; AVI `.avi` via `filmcraft-avi` for
@@ -31,6 +32,11 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   Musepack decoder); both stream generations, SV7 (`MP+`) and SV8 (`MPCK`), mono and
   stereo. Vetted within 1 LSB of the ffmpeg `mpc8` oracle on real music before adding.
   The rare more-than-two-channel streams are refused cleanly
+- DSD (`.dsf`/`.dff`) is parsed by the pure-Rust `dsd-reader` crate; `crate::dsd` then
+  converts the 1-bit stream to PCM with its own two-stage decimating FIR (down to
+  44.1 kHz) and plays it as a normal source. DSD64/128/256, mono and stereo.
+  Uncompressed DSD only: DST-compressed DFF and more-than-two-channel streams are
+  refused cleanly (the only DST decoder is GPL, outside the permissive bar)
 - Audio CD playback (#160), verified on Windows and Linux hardware
 - WMA (#162): no permissive pure-Rust decoder exists, so it is supported only in the
   optional FFmpeg build (see above); the default pure-Rust build does not play it.
