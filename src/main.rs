@@ -4,6 +4,7 @@
 mod ac3;
 mod ape;
 mod app;
+mod avi;
 mod balance;
 mod cdda;
 mod classic;
@@ -16,12 +17,17 @@ mod encode;
 mod eq;
 mod eqf;
 mod fileassoc;
+#[cfg(feature = "ffmpeg")]
+mod ffdec;
+mod flv;
 mod icon;
 mod library;
 mod mediakeys;
 mod midi;
+mod mpc;
 mod openq;
 mod player;
+mod ps;
 mod playlist;
 mod region;
 mod selection;
@@ -30,8 +36,11 @@ mod stream;
 mod tags;
 mod text;
 mod tracker;
+mod tta;
 mod tray;
+mod ts;
 mod viz;
+mod wavpack;
 #[cfg(windows)]
 mod wincursor;
 

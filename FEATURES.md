@@ -11,14 +11,30 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 
 ## Core playback
 - Decode MP3, MPEG Layer I/II (`.mp1`/`.mp2`/`.mpa`), FLAC, OGG/Vorbis, Opus, WAV,
-  AIFF, CAF, AAC/M4A (`.m4a`/`.mp4`/`.m4b`/`.aac`), Monkey's Audio (`.ape`), AC-3
-  (`.ac3`/`.eac3`, stereo and 5.1 downmix), the audio track of video containers
-  (`.mp4`/`.m4v`/`.3gp`/`.mov`/`.mkv`/`.webm`/`.ogv`), tracker modules
+  AIFF, CAF, AAC/M4A (`.m4a`/`.mp4`/`.m4b`/`.aac`), Monkey's Audio (`.ape`), WavPack
+  (`.wv`), True Audio (`.tta`), Musepack (`.mpc`/`.mp+`/`.mpp`, SV7 and SV8),
+  AC-3 (`.ac3`/`.eac3`, stereo and 5.1 downmix), the audio track of video
+  containers (`.mp4`/`.m4v`/`.3gp`/`.mov`/`.mkv`/`.webm`/`.ogv`; MPEG-TS
+  `.ts`/`.m2ts`/`.mts` via `mpeg2ts-reader`; AVI `.avi` via `filmcraft-avi` for
+  MP3/MP2/PCM/AC-3; FLV `.flv` via `scuffle-flv` for MP3/AAC; MPEG program stream
+  `.mpg`/`.mpeg`/`.vob` via `mpeg-ps` for MPEG-audio/AC-3), tracker modules
   (`.mod`/`.xm`/`.s3m`/`.it`) and MIDI (`.mid`/`.midi`, via a bundled SoundFont)
+- Windows Media Audio (`.wma`) in the optional FFmpeg build (`--features ffmpeg`),
+  decoded via `crate::ffdec` over the system FFmpeg libraries (LGPL). No permissive
+  pure-Rust WMA decoder exists, so the default build stays pure Rust and omits it;
+  the opt-in build links libav* and plays WMA v1/v2/Pro/Lossless downmixed to stereo
+- WavPack is decoded by the pure-Rust `wavicle` crate (symphonia 0.6's wavpack
+  feature is a non-functional stub); lossless 16- and 24-bit integer, mono/stereo,
+  any sample rate. Float, 8-bit, hybrid/lossy and multichannel `.wv` are refused
+  cleanly (skipped, never played as noise)
+- Musepack is decoded by the pure-Rust `oxideav-musepack` crate (symphonia has no
+  Musepack decoder); both stream generations, SV7 (`MP+`) and SV8 (`MPCK`), mono and
+  stereo. Vetted within 1 LSB of the ffmpeg `mpc8` oracle on real music before adding.
+  The rare more-than-two-channel streams are refused cleanly
 - Audio CD playback (#160), verified on Windows and Linux hardware
-- Won't-fix / not decodable: WMA (#162) is won't-fix (proprietary licensing); WavPack
-  has no viable symphonia decoder, so it isn't offered. AC-3 is raw `.ac3`/`.eac3`
-  only (not yet inside mkv/mp4 containers)
+- WMA (#162): no permissive pure-Rust decoder exists, so it is supported only in the
+  optional FFmpeg build (see above); the default pure-Rust build does not play it.
+  AC-3 is raw `.ac3`/`.eac3` only (not yet inside mkv/mp4 containers)
 - Play / Pause / Stop / Next / Previous
 - Seek bar (scrub) with position + total time
 - Time display toggles elapsed / remaining (−mm:ss), Ctrl+T or click the time

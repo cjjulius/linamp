@@ -155,7 +155,7 @@ impl Source for SymphoniaSource {
             time,
             track_id: Some(self.track_id),
         };
-        self.format.seek(SeekMode::Accurate, to).map_err(|e| {
+        let seeked = self.format.seek(SeekMode::Accurate, to).map_err(|e| {
             SeekError::Other(Box::new(std::io::Error::other(e.to_string())))
         })?;
         // Drop decoder state built up before the seek, and the buffered packet.
@@ -167,7 +167,65 @@ impl Source for SymphoniaSource {
         }
         self.samples.clear();
         self.pos = 0;
+        // symphonia's "accurate" seek lands at or before the target, on a packet
+        // boundary; for formats whose seek is coarse (ALAC in CAF undershoots ~150ms)
+        // discard the gap so playback resumes exactly at the requested sample. rodio
+        // sets the sink's position to the requested time and then counts samples, so
+        // an under-seek otherwise plays past the displayed end after a scrub. Reuses
+        // the pre-skip drop (the start-of-stream Opus delay is already consumed here).
+        let gap = seeked.required_ts.get().saturating_sub(seeked.actual_ts.get());
+        self.preskip = (gap.max(0) as usize).saturating_mul(self.channels as usize);
         Ok(())
+    }
+}
+
+/// Audio decoded from a container LinAmp demuxes itself (MPEG-TS, AVI): the extracted
+/// elementary stream is either the shared symphonia path (AAC / MP2 / MP3 / wrapped
+/// PCM) or the AC-3 side-decoder. Wrapped in one `Source` so the player appends either
+/// uniformly. (AC-3's state dwarfs the symphonia source, so it is boxed.)
+pub enum ContainerAudio {
+    Symphonia(SymphoniaSource),
+    Ac3(Box<crate::ac3::Ac3Source>),
+}
+impl Iterator for ContainerAudio {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        match self {
+            ContainerAudio::Symphonia(s) => s.next(),
+            ContainerAudio::Ac3(s) => s.next(),
+        }
+    }
+}
+impl Source for ContainerAudio {
+    fn current_frame_len(&self) -> Option<usize> {
+        match self {
+            ContainerAudio::Symphonia(s) => s.current_frame_len(),
+            ContainerAudio::Ac3(s) => s.current_frame_len(),
+        }
+    }
+    fn channels(&self) -> u16 {
+        match self {
+            ContainerAudio::Symphonia(s) => s.channels(),
+            ContainerAudio::Ac3(s) => s.channels(),
+        }
+    }
+    fn sample_rate(&self) -> u32 {
+        match self {
+            ContainerAudio::Symphonia(s) => s.sample_rate(),
+            ContainerAudio::Ac3(s) => s.sample_rate(),
+        }
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        match self {
+            ContainerAudio::Symphonia(s) => s.total_duration(),
+            ContainerAudio::Ac3(s) => s.total_duration(),
+        }
+    }
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        match self {
+            ContainerAudio::Symphonia(s) => s.try_seek(pos),
+            ContainerAudio::Ac3(s) => s.try_seek(pos),
+        }
     }
 }
 
@@ -179,12 +237,23 @@ impl Source for SymphoniaSource {
 pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
     let file = File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
     }
+    open_stream(mss, hint, &path.display().to_string())
+}
 
+/// Decode audio from any [`MediaSourceStream`] with a format `hint`: a file (via
+/// `open_file`), or an in-memory elementary stream extracted from a container that
+/// symphonia can't demux itself (crate::ts feeds the audio ES of an MPEG-TS here).
+/// `name` only labels it in error messages. This is the shared decode path for every
+/// symphonia format plus libopus Opus.
+pub fn open_stream(
+    mss: MediaSourceStream<'static>,
+    hint: Hint,
+    name: &str,
+) -> Result<SymphoniaSource> {
     let mut format = symphonia::default::get_probe().probe(
         &hint,
         mss,
@@ -198,7 +267,7 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
     let track_id = track.id;
     let audio_params = match track.codec_params {
         Some(CodecParameters::Audio(p)) => p,
-        _ => bail!("no audio codec parameters in {}", path.display()),
+        _ => bail!("no audio codec parameters in {}", name),
     };
     // Opus: symphonia 0.6 demuxes the container but ships no Opus decoder, so decode
     // its packets with libopus; every other codec goes through symphonia (#181).
@@ -213,11 +282,11 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
         .unwrap_or(2);
     let mut decoder = if is_opus {
         if opus_channels == 0 || opus_channels > 2 {
-            bail!("unsupported Opus channel count ({opus_channels}) in {}", path.display());
+            bail!("unsupported Opus channel count ({opus_channels}) in {}", name);
         }
         let ch = if opus_channels == 1 { OpusChannels::Mono } else { OpusChannels::Stereo };
         let dec = OpusDecoder::new(48_000, ch)
-            .map_err(|e| anyhow!("opus decoder init failed for {}: {e}", path.display()))?;
+            .map_err(|e| anyhow!("opus decoder init failed for {}: {e}", name))?;
         PacketDecoder::Opus {
             dec,
             channels: opus_channels,
@@ -244,8 +313,8 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
     let (sample_rate, channels, mut samples) = loop {
         let packet = match format.next_packet() {
             Ok(Some(p)) => p,
-            Ok(None) => bail!("no audio in {}", path.display()),
-            Err(e) => return Err(anyhow!("no audio in {}: {e}", path.display())),
+            Ok(None) => bail!("no audio in {}", name),
+            Err(e) => return Err(anyhow!("no audio in {}: {e}", name)),
         };
         if packet.track_id != track_id {
             continue;
@@ -261,7 +330,7 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
                     break (rate, ch, v);
                 }
                 Err(SymError::DecodeError(_)) => continue,
-                Err(e) => bail!("decode error in {}: {e}", path.display()),
+                Err(e) => bail!("decode error in {}: {e}", name),
             },
             PacketDecoder::Opus { dec, channels, scratch } => {
                 match dec.decode_float(&packet.data, scratch, false) {
@@ -274,7 +343,7 @@ pub fn open_file(path: &Path) -> Result<SymphoniaSource> {
         }
     };
     if sample_rate == 0 || channels == 0 {
-        bail!("no audio decoded from {}", path.display());
+        bail!("no audio decoded from {}", name);
     }
     // Drop pre-skip from the primed samples; any remainder is dropped as fill() runs.
     if preskip > 0 {
@@ -462,8 +531,8 @@ mod tests {
         // Guard the SUPPORTED_EXTS list against advertising formats we can't decode.
         // The symphonia-registry decoders we rely on must be registered. Opus and
         // WavPack have no decoder in symphonia 0.6 (their features are non-functional
-        // stubs), but Opus IS supported because crate::decode decodes it with libopus
-        // instead (#181); WavPack has no viable decoder, so it stays off the list.
+        // stubs), but both ARE supported out-of-band: Opus via libopus (#181) and
+        // WavPack via the pure-Rust wavicle crate (crate::wavpack).
         use symphonia::core::codecs::audio::well_known::{
             CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP3, CODEC_ID_OPUS,
             CODEC_ID_VORBIS, CODEC_ID_WAVPACK,
@@ -474,7 +543,8 @@ mod tests {
         ] {
             assert!(codecs.get_audio_decoder(c).is_some(), "expected a decoder for {c:?}");
         }
-        // symphonia itself still has no Opus/WavPack decoder; Opus is handled by libopus.
+        // symphonia itself still has no Opus/WavPack decoder; they are handled by
+        // libopus and wavicle respectively.
         for c in [CODEC_ID_OPUS, CODEC_ID_WAVPACK] {
             assert!(codecs.get_audio_decoder(c).is_none(), "unexpected decoder for {c:?}");
         }
@@ -483,8 +553,8 @@ mod tests {
             "opus is decoded via libopus, so it must be advertised as supported"
         );
         assert!(
-            !crate::playlist::SUPPORTED_EXTS.contains(&"wv"),
-            "wavpack can't be decoded, so it must not be advertised as supported"
+            crate::playlist::SUPPORTED_EXTS.contains(&"wv"),
+            "wavpack is decoded via wavicle, so it must be advertised as supported"
         );
     }
 
@@ -606,3 +676,37 @@ mod tests {
         }
     }
 }
+
+
+#[cfg(test)]
+mod seek_accuracy {
+    use super::*;
+    use rodio::Source;
+
+    /// A seek must resume at the exact requested sample, whatever the container's
+    /// seek granularity. ALAC in CAF undershoots symphonia's "accurate" seek by
+    /// ~150ms, which played past the displayed end after a scrub (rodio sets the
+    /// position to the requested time, then counts samples); the seek now discards
+    /// the under-seek gap. Checked against every local format sample (qa-music is
+    /// gitignored, so this skips on CI).
+    #[test]
+    fn seek_resumes_at_the_requested_sample() {
+        let dir = std::path::Path::new("qa-music/format-samples");
+        for name in ["hypno-this.caf", "hypno-this.flac", "hypno-this.m4a", "hypno-this.wav", "hypno-this.aiff"] {
+            let p = dir.join(name);
+            if !p.exists() { continue; }
+            let full = open_file(&p).unwrap();
+            let (sr, ch) = (full.sample_rate(), full.channels());
+            let total = full.count();
+            let seek_s = 40.0_f64;
+            let mut src = open_file(&p).unwrap();
+            src.try_seek(Duration::from_secs_f64(seek_s)).unwrap();
+            let remaining = src.count();
+            let expected = total as f64 - seek_s * sr as f64 * ch as f64;
+            let err_frames = ((remaining as f64 - expected) / ch as f64).abs();
+            // Within one packet (4096 frames) of exact; the old CAF bug was ~6800.
+            assert!(err_frames < 4096.0, "{name}: seek off by {err_frames:.0} frames");
+        }
+    }
+}
+
