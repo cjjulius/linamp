@@ -1,6 +1,6 @@
 [package]
 name = "linamp"
-version = "1.0.8"
+version = "1.1.0"
 edition = "2021"
 description = "LinAmp - a Winamp-inspired audio player for Linux and Windows, built in Rust"
 authors = ["LinAmp contributors"]
@@ -107,6 +107,25 @@ oxideav-tta = "0.0.4"
 # within 1 LSB. Pinned exact: it is a "clean-room rebuild in progress", so an
 # auto-upgrade could regress; bump deliberately after re-vetting.
 oxideav-musepack = "=0.0.4"
+# DSD (.dsf/.dff) container parsing. symphonia has no DSD support, so crate::dsd uses
+# dsd-reader (pure Rust, MIT/Apache) to pull the planar 1-bit DSD stream, then does its
+# own DSD->PCM decimation (a windowed-sinc FIR, then rubato to 44.1k). Uncompressed DSD
+# only: DST-compressed DFF is refused (its only decoder, cladst, is GPL). Mono/stereo.
+dsd-reader = "0.4.0"
+# Speex (.spx) decoding. symphonia has no Speex decoder, and the pure-Rust option
+# (oxideav-speex) decodes incorrectly (vetted: NB ~0.66, WB ~0.27 correlation vs the
+# reference), so crate::speex uses libspeex through speex-safe (vendored C, built from
+# source like our libopus; MPL-2.0/BSD-3). The `ogg` crate (already a dep) demuxes the
+# Ogg container and the packets are fed to libspeex, mirroring the Opus path. NB/WB/UWB,
+# mono and stereo (stereo is decoded as dual-mono for now).
+speex-safe = "0.6.0"
+# AMR (.amr/.awb) decoding. symphonia has no AMR decoder; crate::amr uses
+# rvoip-codec-core's pure-Rust AMR-NB/WB decoder (MIT), which unlike the Speex case
+# is correct (vetted 0.9999 correlation vs the ffmpeg oracle; it is tested against the
+# 3GPP conformance sequences). Only the amr-nb/amr-wb features are enabled, so its
+# optional Opus (C) dependency is not pulled. The .amr storage container is parsed here
+# directly (trivial: magic + mode-tagged frames).
+rvoip-codec-core = { version = "0.4.0", default-features = false, features = ["amr-nb", "amr-wb"] }
 # Optional FFmpeg bindings for the `ffmpeg` feature (WMA and other proprietary
 # codecs with no permissive pure-Rust decoder). default-features off so it links
 # only the libav* we actually use (avcodec + avformat + avutil + swresample) and

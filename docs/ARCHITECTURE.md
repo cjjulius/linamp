@@ -16,6 +16,19 @@ Core (`src/`):
   bundled libopus for Opus); also feeds streaming.
 - `midi.rs`, MIDI synthesis (rustysynth + a bundled SoundFont); `tracker.rs`,
   tracker-module rendering (xmrs/xmrsplayer). Both expose the same player source API.
+- Side-decoders for codecs symphonia lacks, each wrapping a crate (pure Rust unless
+  noted) as a seekable player source like `midi.rs`/`tracker.rs`: `ape.rs` (Monkey's
+  Audio), `wavpack.rs` (WavPack via wavicle), `tta.rs` (True Audio), `mpc.rs`
+  (Musepack SV7/SV8), `ac3.rs` (AC-3/E-AC-3), `dsd.rs` (DSD .dsf/.dff via dsd-reader
+  plus an original two-stage decimating FIR to PCM), `speex.rs` (Speex, Ogg-demuxed
+  with the `ogg` crate and decoded by libspeex, the pure-Rust option being incorrect)
+  and `amr.rs` (AMR .amr/.awb via the pure-Rust rvoip-codec-core).
+  `ffdec.rs` is the optional FFmpeg path (WMA, DTS and Dolby TrueHD/MLP), behind the `ffmpeg`
+  Cargo feature and off by default.
+- Container-audio extractors that pull the audio stream out of a video/transport
+  container and feed it back through the shared decode path (`decode::open_stream`):
+  `ts.rs` (MPEG-TS), `avi.rs` (AVI), `flv.rs` (FLV) and `ps.rs` (MPEG program
+  stream, with an MPEG-1 fallback scanner). They share one `ContainerAudio` source.
 - `stream.rs`, HTTP(S)/ICY internet-radio streaming on a background thread.
 - `cdda.rs`, audio-CD support: the TOC, the `cdda://` model, per-OS raw sector reads
   (the `CdDrive` trait), the background `CdWatcher`, online metadata
@@ -107,8 +120,11 @@ code, which makes skins straightforward to vet without launching the UI.
 ## Audio pipeline, CD and conversion
 
 Playback routes a track by kind: MIDI through `midi.rs`, tracker modules through
-`tracker.rs`, and everything else through `decode.rs` (symphonia, plus libopus for
-Opus), with `stream.rs` for HTTP(S) sources. The decoded `rodio::Source` runs
+`tracker.rs`, the side-decoders (`ape`/`wavpack`/`tta`/`mpc`/`ac3`/`dsd`/`speex`/`amr`, and `ffdec` for
+WMA/DTS/TrueHD when built with `--features ffmpeg`) for codecs symphonia lacks, the
+container-audio extractors (`ts`/`avi`/`flv`/`ps`) for video/transport containers,
+and everything else through `decode.rs` (symphonia, plus libopus for Opus), with
+`stream.rs` for HTTP(S) sources. The decoded `rodio::Source` runs
 through the EQ and balance stages before the output device, with the analyzer
 tapping the same stream.
 

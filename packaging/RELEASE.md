@@ -20,6 +20,29 @@ User data (library DB, config, session) always lives under
 `%LOCALAPPDATA%\LinAmp` (Windows) / `~/.local/share/LinAmp` (Linux) and is left
 intact by uninstalls.
 
+## Building the FFmpeg build locally (Windows)
+
+FFmpeg is the shipping configuration, so a local candidate must be built with
+`--features ffmpeg`. That needs three things, mostly because `ffmpeg-sys-next`
+5.1.1 uses an old bindgen (0.59.2):
+
+- FFmpeg 5.1.x "shared" dev build (matching `ffmpeg-next` 5.1.1), for example
+  gyan's `ffmpeg-5.1.2-full_build-shared`. Set `FFMPEG_DIR` to its root (it holds
+  `include/`, `lib/`, `bin/`). Its `bin` DLLs are what the installer bundles next
+  to the exe, and what a dev build needs on `PATH` (or copied beside `linamp.exe`)
+  at runtime.
+- LLVM 14 for libclang. A newer libclang makes bindgen 0.59.2 panic (a `LexError`);
+  14 works. The `libclang==14.0.1` pip wheel is a portable source: unzip it and
+  point `LIBCLANG_PATH` at the folder holding `libclang.dll`.
+- The MSVC C++ toolset (VC Tools), from an install that actually has it (Build
+  Tools, or a VS install with "Desktop development with C++"; a bare Community
+  install may not). bindgen 0.59.2 does not auto-find the MSVC headers, so after
+  entering the dev shell, feed every `INCLUDE` dir to it:
+  `BINDGEN_EXTRA_CLANG_ARGS` = each `INCLUDE` entry as `-I"..."`.
+
+CI does all of this (`.github/workflows/ci.yml`); this section is only for
+reproducing the release build on a dev box.
+
 ## Gated release flow
 
 1. Branch & version. Work on `release/vX.Y.Z`. Set `version` in `Cargo.toml`.

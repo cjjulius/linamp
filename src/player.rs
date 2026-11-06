@@ -34,6 +34,11 @@ pub struct Player {
     /// Extra output gain multiplier for fades (1.0 = normal).
     fade: f32,
     current_path: Option<PathBuf>,
+    /// Total length of the source now playing, captured when it was appended. Lets
+    /// the UI show a time and a working scrub bar for formats whose length isn't
+    /// known from a cheap metadata scan (raw TrueHD/MLP streams decode fully, so the
+    /// source knows its length even though `ffdec::duration` can't read it upfront).
+    current_total: Option<Duration>,
     /// The streaming URL currently playing (classic "Open location"), if any.
     current_url: Option<String>,
     /// Live ICY stream title for the current stream (updated by its decode thread).
@@ -76,6 +81,7 @@ impl Player {
             volume: 0.8,
             fade: 1.0,
             current_path: None,
+            current_total: None,
             current_url: None,
             stream_title: None,
             viz: VizShared::new(),
@@ -258,6 +264,10 @@ impl Player {
     {
         self.viz.clear();
         self.viz.set_rate(source.sample_rate());
+        // Capture the source's own length before it's consumed into the sink. For
+        // raw streams (TrueHD/MLP) this is the only reliable duration, since the
+        // cheap metadata scan can't read one; the UI backfills the track from it.
+        self.current_total = source.total_duration();
         // Shape with the EQ, then tap for visualization so the analyzer reflects
         // what you hear, and apply stereo balance last.
         let equalized = eq::eq(source, self.eq.clone());
@@ -336,12 +346,7 @@ impl Player {
         // MIDI is synthesized (rustysynth + a bundled SoundFont), not decoded (#159);
         // everything else goes through the single symphonia decode path (#163). Both
         // produce a rodio `Source` fed into the shared EQ / analyzer / balance chain.
-        let is_midi = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| matches!(e.to_ascii_lowercase().as_str(), "mid" | "midi"))
-            .unwrap_or(false);
-        if is_midi {
+        if crate::midi::is_midi(path) {
             let sf = crate::midi::soundfont_path().ok_or_else(|| {
                 anyhow::anyhow!("MIDI playback needs a SoundFont (.sf2) in the soundfont/ folder")
             })?;
@@ -372,6 +377,21 @@ impl Player {
             // Musepack (.mpc/.mp+/.mpp) is decoded by oxideav-musepack (pure Rust);
             // symphonia has no Musepack decoder.
             let source = crate::mpc::open_mpc(path)?;
+            self.append_source(source, None, true)?;
+        } else if crate::dsd::is_dsd(path) {
+            // DSD (.dsf/.dff): crate::dsd pulls the 1-bit stream via dsd-reader and
+            // decimates it to PCM; symphonia has no DSD support.
+            let source = crate::dsd::open_dsd(path)?;
+            self.append_source(source, None, true)?;
+        } else if crate::speex::is_speex(path) {
+            // Speex (.spx): crate::speex demuxes the Ogg with the `ogg` crate and decodes
+            // the packets with libspeex; symphonia has no Speex decoder.
+            let source = crate::speex::open_speex(path)?;
+            self.append_source(source, None, true)?;
+        } else if crate::amr::is_amr(path) {
+            // AMR (.amr/.awb): crate::amr parses the storage container and decodes with
+            // the pure-Rust rvoip-codec-core; symphonia has no AMR decoder.
+            let source = crate::amr::open_amr(path)?;
             self.append_source(source, None, true)?;
         } else if crate::ts::is_ts(path) {
             // MPEG-TS (.ts/.m2ts): symphonia can't demux it, so crate::ts pulls the
@@ -499,6 +519,13 @@ impl Player {
             .as_ref()
             .map(|s| s.get_pos())
             .unwrap_or_default()
+    }
+
+    /// Length of the source currently playing, if it reported one. Used to backfill
+    /// a track's duration when the cheap metadata scan couldn't read it (raw
+    /// TrueHD/MLP), so the time display and scrub bar work.
+    pub fn total_duration(&self) -> Option<Duration> {
+        self.current_total
     }
 
     /// Seek to an absolute position. Not all formats support seeking.
