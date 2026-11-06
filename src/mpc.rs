@@ -152,7 +152,7 @@ mod tests {
     #[test]
     fn decodes_within_1_lsb_of_the_ffmpeg_oracle() {
         let Some(mpc) = sample() else { return };
-        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/hypno-mpc-oracle.s16");
+        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/oracles/hypno-mpc-oracle.s16");
         if !oracle_path.exists() {
             return;
         }
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn seek_lands_on_the_right_samples() {
         let Some(mpc) = sample() else { return };
-        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/hypno-mpc-oracle.s16");
+        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/oracles/hypno-mpc-oracle.s16");
         if !oracle_path.exists() {
             return;
         }

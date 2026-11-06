@@ -239,8 +239,8 @@ mod tests {
     #[test]
     fn decodes_nb_wb_against_the_libspeex_oracle() {
         for (spx, oracle) in [
-            ("qa-music/format-samples/speex-nb.spx", "qa-music/format-samples/speex-nb-oracle.s16"),
-            ("qa-music/format-samples/speex-wb.spx", "qa-music/format-samples/speex-wb-oracle.s16"),
+            ("qa-music/format-samples/speex-nb.spx", "qa-music/format-samples/oracles/speex-nb-oracle.s16"),
+            ("qa-music/format-samples/speex-wb.spx", "qa-music/format-samples/oracles/speex-wb-oracle.s16"),
         ] {
             if !std::path::Path::new(spx).exists() || !std::path::Path::new(oracle).exists() {
                 continue;
@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn decodes_stereo_uwb_content() {
         let spx = "qa-music/format-samples/hypno-this.spx";
-        let oracle = "qa-music/format-samples/speex-uwb-oracle.s16";
+        let oracle = "qa-music/format-samples/oracles/speex-uwb-oracle.s16";
         if !std::path::Path::new(spx).exists() || !std::path::Path::new(oracle).exists() {
             return;
         }
