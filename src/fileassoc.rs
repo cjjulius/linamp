@@ -82,6 +82,9 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         "wma" => "audio/x-ms-wma",
         #[cfg(feature = "ffmpeg")]
         "dts" => "audio/vnd.dts",
+        // Dolby TrueHD / MLP (raw streams), also ffmpeg-only.
+        #[cfg(feature = "ffmpeg")]
+        "thd" | "mlp" => "audio/vnd.dolby.mlp",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",

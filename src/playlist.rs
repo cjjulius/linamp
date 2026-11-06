@@ -55,13 +55,19 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // MPEG Program Stream (DVD/VCD): crate::ps (mpeg-ps) extracts the audio ES
     // (MPEG audio via symphonia, AC-3 via crate::ac3).
     "mpg", "mpeg", "vob", "m2p",
-    // Windows Media Audio and DTS: only when built with `--features ffmpeg`
-    // (crate::ffdec over FFmpeg/LGPL). Neither has a permissive pure-Rust decoder, so
-    // the default build omits them rather than advertise a format it can't play.
+    // Windows Media Audio, DTS, and Dolby TrueHD/MLP: only when built with
+    // `--features ffmpeg` (crate::ffdec over FFmpeg/LGPL). None has a permissive pure-Rust
+    // decoder mature enough for real-time playback, so the default build omits them rather
+    // than advertise a format it can't play. TrueHD's decoder is already in the bundled
+    // minimal FFmpeg, so these cost nothing extra in the ffmpeg build.
     #[cfg(feature = "ffmpeg")]
     "wma",
     #[cfg(feature = "ffmpeg")]
     "dts",
+    #[cfg(feature = "ffmpeg")]
+    "thd",
+    #[cfg(feature = "ffmpeg")]
+    "mlp",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -730,7 +736,7 @@ mod tests {
             ("flv", crate::flv::is_flv, vec!["flv"]),
         ];
         #[cfg(feature = "ffmpeg")]
-        decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts"]));
+        decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts", "thd", "mlp"]));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.
