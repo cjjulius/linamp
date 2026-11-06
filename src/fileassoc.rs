@@ -63,6 +63,7 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         "ape" => "audio/x-ape",
         "wv" => "audio/x-wavpack",
         "tta" => "audio/x-tta",
+        "mpc" | "mp+" | "mpp" => "audio/x-musepack",
         "ts" | "m2ts" | "mts" => "video/mp2t",
         "avi" => "video/x-msvideo",
         "flv" => "video/x-flv",

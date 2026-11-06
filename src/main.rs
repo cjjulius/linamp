@@ -24,6 +24,7 @@ mod icon;
 mod library;
 mod mediakeys;
 mod midi;
+mod mpc;
 mod openq;
 mod player;
 mod ps;

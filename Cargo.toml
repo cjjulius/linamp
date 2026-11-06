@@ -97,6 +97,16 @@ mpeg-ps = "0.6.0"
 # oxideav-tta (pure Rust, MIT) as a seekable source like ape/wavpack. Vetted
 # bit-exact against the source PCM and ~640x real-time before adding.
 oxideav-tta = "0.0.4"
+# Musepack (.mpc) decoding, SV7 and SV8. symphonia has no Musepack decoder, so
+# crate::mpc wraps oxideav-musepack (pure Rust, MIT) as a whole-file seekable
+# source like ape/tta/wavpack. It is the only permissive option (the one other
+# crate is GPL). decode_mpc_stream_tagged() is a clean bytes-in / PCM-out entry;
+# its oxideav-core dependency is only used by an optional registry adapter we don't
+# touch. Vetted before adding: real-music SV8 decode within 1 LSB of the ffmpeg
+# mpc8 oracle at ~31x real-time, and the crate's own real mppenc SV7/SV8 fixtures
+# within 1 LSB. Pinned exact: it is a "clean-room rebuild in progress", so an
+# auto-upgrade could regress; bump deliberately after re-vetting.
+oxideav-musepack = "=0.0.4"
 # Optional FFmpeg bindings for the `ffmpeg` feature (WMA and other proprietary
 # codecs with no permissive pure-Rust decoder). default-features off so it links
 # only the libav* we actually use (avcodec + avformat + avutil + swresample) and
