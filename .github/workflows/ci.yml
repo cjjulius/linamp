@@ -11,51 +11,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The shipping configuration is the FFmpeg build - one installer per platform
+  # carries everything (WMA, DTS, Dolby TrueHD) - so CI builds and tests exactly
+  # that: a single everything-included build per OS, no separate pure-Rust or
+  # "optional" variant. ubuntu-22.04 for Linux (ships FFmpeg 4.4 + llvm-14 to match
+  # ffmpeg-next 5.1.1; 6.x removed symbols it still uses, and 24.04 lacks llvm-14).
   test:
     name: Build & test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Linux audio dev libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Build
-        run: cargo build --verbose
-
-      - name: Test
-        run: cargo test --verbose
-
-  # Optional WMA build via the `ffmpeg` Cargo feature (LGPL, opt-in, off by
-  # default). Non-blocking (continue-on-error) so it never gates a normal merge,
-  # per the plan to keep the pure-Rust matrix as the only required job. It has
-  # something to build once the `ffmpeg` feature exists on the branch.
-  ffmpeg-build:
-    name: WMA/FFmpeg build (${{ matrix.os }}, optional)
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        # ffmpeg-next 5.1.1 tracks the FFmpeg 5.1 API, so the --features ffmpeg
-        # build needs FFmpeg 5.1/4.x headers (6.x removed symbols it still uses).
-        # 22.04 ships FFmpeg 4.4 and has llvm-14 (24.04 has neither).
         os: [ubuntu-22.04, windows-latest]
-    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install FFmpeg + clang dev libraries (Linux)
+      - name: Install audio + FFmpeg + clang dev libraries (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -98,12 +69,13 @@ jobs:
           "$root\bin"                          | Out-File $env:GITHUB_PATH -Append
 
       - uses: dtolnay/rust-toolchain@stable
+
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build (--features ffmpeg)
+      - name: Build (everything, --features ffmpeg)
         run: cargo build --features ffmpeg --verbose
 
-      - name: Test (--features ffmpeg)
+      - name: Test (everything, --features ffmpeg)
         run: cargo test --features ffmpeg --verbose
 
   # Build the per-user installers. Runs on a v* tag (official release) or a
