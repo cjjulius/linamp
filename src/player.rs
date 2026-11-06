@@ -359,15 +359,70 @@ impl Player {
             // Dolby Digital (.ac3/.eac3) is decoded by filmcraft-ac3 (#161).
             let source = crate::ac3::open_ac3(path)?;
             self.append_source(source, None, true)?;
-        } else {
-            let source = crate::decode::open_file(path)?;
+        } else if crate::wavpack::is_wavpack(path) {
+            // WavPack (.wv) is decoded by wavicle (pure Rust); symphonia's wavpack
+            // feature is a non-functional stub.
+            let source = crate::wavpack::open_wavpack(path)?;
             self.append_source(source, None, true)?;
+        } else if crate::tta::is_tta(path) {
+            // True Audio (.tta) is decoded by oxideav-tta (pure Rust).
+            let source = crate::tta::open_tta(path)?;
+            self.append_source(source, None, true)?;
+        } else if crate::mpc::is_mpc(path) {
+            // Musepack (.mpc/.mp+/.mpp) is decoded by oxideav-musepack (pure Rust);
+            // symphonia has no Musepack decoder.
+            let source = crate::mpc::open_mpc(path)?;
+            self.append_source(source, None, true)?;
+        } else if crate::ts::is_ts(path) {
+            // MPEG-TS (.ts/.m2ts): symphonia can't demux it, so crate::ts pulls the
+            // audio elementary stream out and decodes it through the shared path.
+            let source = crate::ts::open_ts(path)?;
+            self.append_source(source, None, true)?;
+        } else if crate::avi::is_avi(path) {
+            // AVI (.avi): crate::avi (filmcraft-avi) pulls the audio stream out and
+            // decodes it the same way (MP3/MP2/PCM via symphonia, AC-3 via crate::ac3).
+            let source = crate::avi::open_avi(path)?;
+            self.append_source(source, None, true)?;
+        } else if crate::flv::is_flv(path) {
+            // FLV (.flv): crate::flv (scuffle-flv) pulls the audio tags out; MP3 and
+            // ADTS-wrapped AAC decode through the shared path.
+            let source = crate::flv::open_flv(path)?;
+            self.append_source(source, None, true)?;
+        } else if crate::ps::is_ps(path) {
+            // MPEG Program Stream (.mpg/.vob): crate::ps pulls the audio ES out;
+            // MPEG audio via symphonia, AC-3 (private_stream_1) via crate::ac3.
+            let source = crate::ps::open_ps(path)?;
+            self.append_source(source, None, true)?;
+        } else {
+            // Default path: symphonia, or, when built with `--features ffmpeg`,
+            // FFmpeg first for the codecs it owns (WMA). See open_fallback.
+            self.open_fallback(path)?;
         }
         self.current_path = Some(path.to_path_buf());
         self.current_url = None;
         self.stream_title = None;
         self.state = PlayState::Playing;
         Ok(())
+    }
+
+    /// The default open path, taken when no container/side-decoder module claims
+    /// the file. With the `ffmpeg` feature, FFmpeg handles the codecs it owns (WMA)
+    /// and everything else goes to symphonia; without it, straight to symphonia.
+    #[cfg(feature = "ffmpeg")]
+    fn open_fallback(&mut self, path: &std::path::Path) -> Result<()> {
+        if crate::ffdec::is_ffmpeg_audio(path) {
+            let source = crate::ffdec::open(path)?;
+            self.append_source(source, None, true)
+        } else {
+            let source = crate::decode::open_file(path)?;
+            self.append_source(source, None, true)
+        }
+    }
+
+    #[cfg(not(feature = "ffmpeg"))]
+    fn open_fallback(&mut self, path: &std::path::Path) -> Result<()> {
+        let source = crate::decode::open_file(path)?;
+        self.append_source(source, None, true)
     }
 
     /// Start playing an already-opened stream source (see [`crate::stream`]). The

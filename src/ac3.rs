@@ -193,6 +193,13 @@ fn roles(acmod: u8, lfeon: bool, nch: usize) -> (Option<usize>, Option<usize>, O
 /// corrupt stream errors cleanly (caught by the skip-unplayable guard).
 pub fn open_ac3(path: &Path) -> Result<Ac3Source> {
     let data = std::fs::read(path)?;
+    open_ac3_bytes(data, &path.display().to_string())
+}
+
+/// Decode a raw AC-3/E-AC-3 byte stream (a file's contents, or an elementary stream
+/// pulled from a container like MPEG-TS) as a lazy, seekable stereo source. `name`
+/// only labels it in error messages.
+pub fn open_ac3_bytes(data: Vec<u8>, name: &str) -> Result<Ac3Source> {
     // Scan syncframes: record each frame's byte offset and cumulative sample start.
     let mut frames = Vec::new();
     let mut pos = 0usize;
@@ -217,7 +224,7 @@ pub fn open_ac3(path: &Path) -> Result<Ac3Source> {
         pos += hdr.frame_bytes;
     }
     if frames.is_empty() || sample_rate == 0 {
-        return Err(anyhow!("no AC-3 syncframes in {}", path.display()));
+        return Err(anyhow!("no AC-3 syncframes in {name}"));
     }
     // Validate the first frame actually decodes (catches unsupported E-AC-3 features).
     let mut dec = Decoder::new();

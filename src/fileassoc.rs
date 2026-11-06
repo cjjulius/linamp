@@ -61,8 +61,20 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         "aac" => "audio/aac",
         "aiff" | "aif" => "audio/x-aiff",
         "ape" => "audio/x-ape",
+        "wv" => "audio/x-wavpack",
+        "tta" => "audio/x-tta",
+        "mpc" | "mp+" | "mpp" => "audio/x-musepack",
+        "ts" | "m2ts" | "mts" => "video/mp2t",
+        "avi" => "video/x-msvideo",
+        "flv" => "video/x-flv",
+        "mpg" | "mpeg" | "m2p" => "video/mpeg",
+        "vob" => "video/dvd",
         "ac3" => "audio/ac3",
         "eac3" | "ec3" => "audio/eac3",
+        // Windows Media Audio, only in the `--features ffmpeg` build (so this arm
+        // matches exactly when "wma" is in SUPPORTED_EXTS).
+        #[cfg(feature = "ffmpeg")]
+        "wma" => "audio/x-ms-wma",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",

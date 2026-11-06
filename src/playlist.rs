@@ -7,10 +7,17 @@ use walkdir::WalkDir;
 pub const SUPPORTED_EXTS: &[&str] = &[
     "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "aiff", "aif",
     // Opus (in Ogg): symphonia demuxes it but has no decoder, so crate::decode
-    // decodes the packets with libopus (#181). Not WavPack: symphonia 0.6 ships no
-    // decoder and there is no viable one, so listing it would accept the file then
-    // fail at play time (decode::tests guards this).
+    // decodes the packets with libopus (#181).
     "opus",
+    // WavPack: symphonia 0.6's wavpack feature is a non-functional stub, so
+    // crate::wavpack decodes it with the pure-Rust wavicle crate instead.
+    "wv",
+    // True Audio: symphonia has no decoder, so crate::tta decodes it with the
+    // pure-Rust oxideav-tta crate.
+    "tta",
+    // Musepack: symphonia has no decoder, so crate::mpc decodes it with the pure-Rust
+    // oxideav-musepack crate (SV7 and SV8). Legacy SV7 extensions .mp+/.mpp too.
+    "mpc", "mp+", "mpp",
     // MPEG Layer I/II and the rest of the ISO-MP4 family, decoded via a symphonia
     // hint in crate::decode (rodio 0.20 can't open these directly) (#157/#164).
     "mp1", "mp2", "mpa", "mp4", "m4b",
@@ -27,7 +34,36 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "ape",
     // Dolby Digital, decoded via crate::ac3 (filmcraft-ac3, pure Rust) (#161).
     "ac3", "eac3", "ec3",
+    // MPEG-TS video/broadcast containers: crate::ts extracts the audio elementary
+    // stream and decodes it (AAC/MP2 via symphonia, AC-3 via crate::ac3).
+    "ts", "m2ts", "mts",
+    // AVI: crate::avi (filmcraft-avi) extracts the audio stream (MP3/MP2/PCM via
+    // symphonia, AC-3 via crate::ac3).
+    "avi",
+    // FLV: crate::flv (scuffle-flv) extracts the audio tags (MP3, or AAC wrapped in
+    // ADTS) and decodes them via symphonia.
+    "flv",
+    // MPEG Program Stream (DVD/VCD): crate::ps (mpeg-ps) extracts the audio ES
+    // (MPEG audio via symphonia, AC-3 via crate::ac3).
+    "mpg", "mpeg", "vob", "m2p",
+    // Windows Media Audio: only when built with `--features ffmpeg` (crate::ffdec,
+    // system FFmpeg/LGPL). No permissive pure-Rust WMA decoder exists, so the
+    // default build omits it rather than advertise a format it can't play.
+    #[cfg(feature = "ffmpeg")]
+    "wma",
 ];
+
+/// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
+/// default pure-Rust build. Kept as a cfg shim so the duration chain reads the
+/// same in both builds.
+#[cfg(feature = "ffmpeg")]
+fn ffmpeg_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::ffdec::duration(path)
+}
+#[cfg(not(feature = "ffmpeg"))]
+fn ffmpeg_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
 /// happens with ID3v2 frames whose encoding byte says ISO-8859-1 while the bytes
@@ -154,7 +190,15 @@ impl Track {
             self.duration = crate::midi::duration(&self.path)
                 .or_else(|| crate::tracker::duration(&self.path))
                 .or_else(|| crate::ape::duration(&self.path))
+                .or_else(|| crate::tta::duration(&self.path))
+                .or_else(|| crate::mpc::duration(&self.path))
                 .or_else(|| crate::ac3::duration(&self.path))
+                .or_else(|| crate::wavpack::duration(&self.path))
+                .or_else(|| crate::ts::duration(&self.path))
+                .or_else(|| crate::avi::duration(&self.path))
+                .or_else(|| crate::flv::duration(&self.path))
+                .or_else(|| crate::ps::duration(&self.path))
+                .or_else(|| ffmpeg_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
     }
