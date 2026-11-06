@@ -58,7 +58,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev pkg-config \
             libavcodec-dev libavformat-dev libavutil-dev libswresample-dev \
-            clang libclang-dev
+            llvm-14 libclang-14-dev clang-14
+          # ffmpeg-sys-next 5.1.1 pins bindgen 0.59.2, which panics (LexError)
+          # against the runner's newer libclang; pin LLVM 14, which it handles.
+          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
+
+      # Same bindgen/libclang pin on Windows: the runner ships a newer LLVM, so
+      # install LLVM 14 and point bindgen at it (LIBCLANG_PATH set in the step below).
+      - name: Install LLVM 14 for bindgen (Windows)
+        if: runner.os == 'Windows'
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "14.0"
 
       # bindgen (ffmpeg-sys-next) needs the MSVC system headers (stdint.h, ...) on
       # INCLUDE; this sets up the developer environment for the whole job.
@@ -80,7 +91,7 @@ jobs:
           "FFMPEG_DIR=$root"                   | Out-File $env:GITHUB_ENV -Append
           "INCLUDE=$root\include;$env:INCLUDE" | Out-File $env:GITHUB_ENV -Append
           "LIB=$root\lib;$env:LIB"             | Out-File $env:GITHUB_ENV -Append
-          "LIBCLANG_PATH=$env:ProgramFiles\LLVM\bin" | Out-File $env:GITHUB_ENV -Append
+          "LIBCLANG_PATH=$env:LLVM_PATH\bin" | Out-File $env:GITHUB_ENV -Append
           "$root\bin"                          | Out-File $env:GITHUB_PATH -Append
 
       - uses: dtolnay/rust-toolchain@stable
@@ -115,7 +126,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libgtk-3-dev pkg-config \
             libavcodec-dev libavformat-dev libavutil-dev libswresample-dev \
-            clang libclang-dev
+            llvm-14 libclang-14-dev clang-14
+          # ffmpeg-sys-next 5.1.1 pins bindgen 0.59.2, which panics (LexError)
+          # against the runner's newer libclang; pin LLVM 14, which it handles.
+          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
+
+      # Same bindgen/libclang pin on Windows (see the ffmpeg-build job).
+      - name: Install LLVM 14 for bindgen (Windows)
+        if: runner.os == 'Windows'
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "14.0"
 
       # bindgen (ffmpeg-sys-next) needs the MSVC system headers on INCLUDE.
       - name: Set up MSVC developer environment (Windows)
@@ -136,7 +157,7 @@ jobs:
           "FFMPEG_DIR=$root"                   | Out-File $env:GITHUB_ENV -Append
           "INCLUDE=$root\include;$env:INCLUDE" | Out-File $env:GITHUB_ENV -Append
           "LIB=$root\lib;$env:LIB"             | Out-File $env:GITHUB_ENV -Append
-          "LIBCLANG_PATH=$env:ProgramFiles\LLVM\bin" | Out-File $env:GITHUB_ENV -Append
+          "LIBCLANG_PATH=$env:LLVM_PATH\bin" | Out-File $env:GITHUB_ENV -Append
           "$root\bin"                          | Out-File $env:GITHUB_PATH -Append
 
       - uses: dtolnay/rust-toolchain@stable
