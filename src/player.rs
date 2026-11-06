@@ -378,6 +378,11 @@ impl Player {
             // decimates it to PCM; symphonia has no DSD support.
             let source = crate::dsd::open_dsd(path)?;
             self.append_source(source, None, true)?;
+        } else if crate::speex::is_speex(path) {
+            // Speex (.spx): crate::speex demuxes the Ogg with the `ogg` crate and decodes
+            // the packets with libspeex; symphonia has no Speex decoder.
+            let source = crate::speex::open_speex(path)?;
+            self.append_source(source, None, true)?;
         } else if crate::ts::is_ts(path) {
             // MPEG-TS (.ts/.m2ts): symphonia can't demux it, so crate::ts pulls the
             // audio elementary stream out and decodes it through the shared path.

@@ -112,6 +112,13 @@ oxideav-musepack = "=0.0.4"
 # own DSD->PCM decimation (a windowed-sinc FIR, then rubato to 44.1k). Uncompressed DSD
 # only: DST-compressed DFF is refused (its only decoder, cladst, is GPL). Mono/stereo.
 dsd-reader = "0.4.0"
+# Speex (.spx) decoding. symphonia has no Speex decoder, and the pure-Rust option
+# (oxideav-speex) decodes incorrectly (vetted: NB ~0.66, WB ~0.27 correlation vs the
+# reference), so crate::speex uses libspeex through speex-safe (vendored C, built from
+# source like our libopus; MPL-2.0/BSD-3). The `ogg` crate (already a dep) demuxes the
+# Ogg container and the packets are fed to libspeex, mirroring the Opus path. NB/WB/UWB,
+# mono and stereo (stereo is decoded as dual-mono for now).
+speex-safe = "0.6.0"
 # Optional FFmpeg bindings for the `ffmpeg` feature (WMA and other proprietary
 # codecs with no permissive pure-Rust decoder). default-features off so it links
 # only the libav* we actually use (avcodec + avformat + avutil + swresample) and
