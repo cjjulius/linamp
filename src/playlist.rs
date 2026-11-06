@@ -698,6 +698,77 @@ mod tests {
         assert!(!is_supported(Path::new("noext")));
     }
 
+    /// Every extension LinAmp advertises as supported must route to exactly one
+    /// decoder, and every decoder's extensions must be advertised. `SUPPORTED_EXTS`
+    /// is the single list that drag/drop, Add file/folder, the library scan and file
+    /// associations all gate on, so this ties it to the actual `player.rs` router: a
+    /// format can never be accepted in one place but silently dropped in another.
+    /// This is the guard that would have caught `.dts` being playable but missing
+    /// from the list. Feature-aware: the FFmpeg-only formats are checked only when
+    /// built with `--features ffmpeg` (which is how releases ship).
+    #[test]
+    fn supported_exts_match_the_router() {
+        type Pred = fn(&Path) -> bool;
+        let p = |e: &str| PathBuf::from(format!("x.{e}"));
+
+        // Specialised decoders: (name, predicate, the exts it owns). The const-backed
+        // ones reference the module's own list, so they can't drift from the router.
+        let mut decoders: Vec<(&str, Pred, Vec<&str>)> = vec![
+            ("midi", crate::midi::is_midi as Pred, crate::midi::MIDI_EXTS.to_vec()),
+            ("tracker", crate::tracker::is_tracker, crate::tracker::TRACKER_EXTS.to_vec()),
+            ("ac3", crate::ac3::is_ac3, crate::ac3::AC3_EXTS.to_vec()),
+            ("ts", crate::ts::is_ts, crate::ts::TS_EXTS.to_vec()),
+            ("ps", crate::ps::is_ps, crate::ps::PS_EXTS.to_vec()),
+            ("ape", crate::ape::is_ape, vec!["ape"]),
+            ("wavpack", crate::wavpack::is_wavpack, vec!["wv"]),
+            ("tta", crate::tta::is_tta, vec!["tta"]),
+            ("mpc", crate::mpc::is_mpc, vec!["mpc", "mp+", "mpp"]),
+            ("dsd", crate::dsd::is_dsd, vec!["dsf", "dff"]),
+            ("speex", crate::speex::is_speex, vec!["spx"]),
+            ("amr", crate::amr::is_amr, vec!["amr", "awb"]),
+            ("avi", crate::avi::is_avi, vec!["avi"]),
+            ("flv", crate::flv::is_flv, vec!["flv"]),
+        ];
+        #[cfg(feature = "ffmpeg")]
+        decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts"]));
+
+        // The default path: symphonia (plus libopus for Opus), which claims every
+        // extension no specialised decoder above does.
+        let fallback: &[&str] = &[
+            "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "aiff", "aif", "opus",
+            "mp1", "mp2", "mpa", "mp4", "m4b", "mov", "m4v", "3gp", "mkv", "webm",
+            "ogv", "caf",
+        ];
+
+        // 1. Each decoder's predicate really claims each extension it declares.
+        for (name, pred, exts) in &decoders {
+            for e in exts {
+                assert!(pred(&p(e)), "{name} predicate must claim .{e}");
+            }
+        }
+        // 2. No extension is claimed by more than one specialised decoder.
+        for e in SUPPORTED_EXTS {
+            let hits: Vec<&str> =
+                decoders.iter().filter(|(_, f, _)| f(&p(e))).map(|(n, _, _)| *n).collect();
+            assert!(hits.len() <= 1, ".{e} is claimed by multiple decoders: {hits:?}");
+        }
+        // 3. Router coverage (all decoders + fallback) equals SUPPORTED_EXTS exactly:
+        //    nothing advertised that nothing decodes, nothing decodable left unadvertised.
+        let mut covered: Vec<&str> = fallback.to_vec();
+        for (_, _, exts) in &decoders {
+            covered.extend(exts.iter().copied());
+        }
+        covered.sort_unstable();
+        covered.dedup();
+        let mut advertised: Vec<&str> = SUPPORTED_EXTS.to_vec();
+        advertised.sort_unstable();
+        advertised.dedup();
+        assert_eq!(
+            covered, advertised,
+            "router coverage and SUPPORTED_EXTS disagree: add the format to both"
+        );
+    }
+
     #[test]
     fn track_load_fills_midi_length_via_the_fallback() {
         // lofty can't read MIDI, so Track::load must fall back to midi::duration

@@ -336,12 +336,7 @@ impl Player {
         // MIDI is synthesized (rustysynth + a bundled SoundFont), not decoded (#159);
         // everything else goes through the single symphonia decode path (#163). Both
         // produce a rodio `Source` fed into the shared EQ / analyzer / balance chain.
-        let is_midi = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| matches!(e.to_ascii_lowercase().as_str(), "mid" | "midi"))
-            .unwrap_or(false);
-        if is_midi {
+        if crate::midi::is_midi(path) {
             let sf = crate::midi::soundfont_path().ok_or_else(|| {
                 anyhow::anyhow!("MIDI playback needs a SoundFont (.sf2) in the soundfont/ folder")
             })?;
