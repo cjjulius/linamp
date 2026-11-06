@@ -25,7 +25,7 @@ coordinates, on a modern cross-platform stack (`eframe`/`egui` UI,
   (APE), WavPack (WV), True Audio (TTA), Musepack (MPC), DSD (DSF/DFF), Speex (SPX), AMR (AMR/AWB), AC-3, WAV, AIFF and CAF, the audio track of
   MP4/M4V/3GP/MOV/MKV/WebM/OGV/TS/AVI/FLV/MPG/VOB
   video, MIDI (via a bundled SoundFont) and tracker modules (MOD/XM/S3M/IT), plus
-  Windows Media Audio (WMA) in the optional FFmpeg build; seek,
+  Windows Media Audio (WMA) and DTS in the optional FFmpeg build; seek,
   volume, stereo balance, repeat/shuffle, stop-after/stop-with-fade.
 - Audio CD, play and rip (TOC and titles looked up online); rip or convert any
   track to MP3, Ogg Vorbis, Opus, FLAC, WAV or AIFF through a background queue.

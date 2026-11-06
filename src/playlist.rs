@@ -55,11 +55,13 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // MPEG Program Stream (DVD/VCD): crate::ps (mpeg-ps) extracts the audio ES
     // (MPEG audio via symphonia, AC-3 via crate::ac3).
     "mpg", "mpeg", "vob", "m2p",
-    // Windows Media Audio: only when built with `--features ffmpeg` (crate::ffdec,
-    // system FFmpeg/LGPL). No permissive pure-Rust WMA decoder exists, so the
-    // default build omits it rather than advertise a format it can't play.
+    // Windows Media Audio and DTS: only when built with `--features ffmpeg`
+    // (crate::ffdec over FFmpeg/LGPL). Neither has a permissive pure-Rust decoder, so
+    // the default build omits them rather than advertise a format it can't play.
     #[cfg(feature = "ffmpeg")]
     "wma",
+    #[cfg(feature = "ffmpeg")]
+    "dts",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
