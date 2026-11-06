@@ -47,7 +47,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # ffmpeg-next 5.1.1 tracks the FFmpeg 5.1 API, so the --features ffmpeg
+        # build needs FFmpeg 5.1/4.x headers (6.x removed symbols it still uses).
+        # 22.04 ships FFmpeg 4.4 and has llvm-14 (24.04 has neither).
+        os: [ubuntu-22.04, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -81,7 +84,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $url = "https://github.com/GyanD/codexffmpeg/releases/download/6.1.1/ffmpeg-6.1.1-full_build-shared.zip"
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/5.1.2/ffmpeg-5.1.2-full_build-shared.zip"
           Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dev
           $root = (Get-ChildItem ffmpeg-dev -Directory)[0].FullName
@@ -113,7 +116,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # 22.04 for the Linux release: FFmpeg 4.4 matches ffmpeg-next 5.1.1, it
+        # has llvm-14 for bindgen, and its older glibc widens binary compatibility.
+        os: [ubuntu-22.04, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -147,7 +152,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $url = "https://github.com/GyanD/codexffmpeg/releases/download/6.1.1/ffmpeg-6.1.1-full_build-shared.zip"
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/5.1.2/ffmpeg-5.1.2-full_build-shared.zip"
           Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dev
           $root = (Get-ChildItem ffmpeg-dev -Directory)[0].FullName
