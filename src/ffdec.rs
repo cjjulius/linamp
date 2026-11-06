@@ -209,21 +209,45 @@ pub fn open(path: &Path) -> Result<FfmpegSource> {
     })
 }
 
-/// The length of a file FFmpeg can read, for the playlist, from the container
-/// metadata (no full decode). `None` when FFmpeg can't open it or reports no
-/// duration.
+/// The length of a file FFmpeg can read, for the playlist, without a full audio
+/// decode. `None` when FFmpeg can't open it or can't determine a length.
 pub fn duration(path: &Path) -> Option<Duration> {
     if !is_ffmpeg_audio(path) {
         return None;
     }
     ffmpeg::init().ok()?;
-    let ictx = ffmpeg::format::input(&path).ok()?;
+    let mut ictx = ffmpeg::format::input(&path).ok()?;
+    // Containered / bitrate-estimable inputs (WMA, DTS) report it directly:
     // ictx.duration() is in AV_TIME_BASE units (microseconds).
     let micros = ictx.duration();
-    if micros <= 0 {
+    if micros > 0 {
+        return Some(Duration::from_micros(micros as u64));
+    }
+    // Raw elementary streams (Dolby TrueHD / MLP, .thd/.mlp) carry no container
+    // duration, and FFmpeg can't estimate one from a lossless VBR bitrate. Sum the
+    // audio packets' own durations instead: this only demuxes (no decode), and each
+    // packet declares its sample count in the stream time base, so the total is
+    // exact and still cheap enough for the playlist scan. Without this the length
+    // only appears once playback starts (it is then backfilled from the source).
+    let (index, time_base) = {
+        let stream = ictx.streams().best(ffmpeg::media::Type::Audio)?;
+        (stream.index(), stream.time_base())
+    };
+    let mut units: i64 = 0;
+    for (stream, packet) in ictx.packets() {
+        if stream.index() == index {
+            let d = packet.duration();
+            if d > 0 {
+                units += d;
+            }
+        }
+    }
+    if units <= 0 {
         return None;
     }
-    Some(Duration::from_micros(micros as u64))
+    // units are in `time_base` ticks; seconds = units * (num / den).
+    let secs = units as f64 * time_base.numerator() as f64 / time_base.denominator() as f64;
+    (secs > 0.0).then(|| Duration::from_secs_f64(secs))
 }
 
 #[cfg(test)]
@@ -434,5 +458,20 @@ mod tests {
         let Some(wma) = sample() else { return };
         let d = duration(&wma).expect("wma duration");
         assert!(d.as_secs() > 1 && d.as_secs() < 600, "duration {d:?}");
+    }
+
+    /// Raw TrueHD/MLP streams carry no container duration, so duration() must sum
+    /// the packets' own durations to report a length before playback (otherwise the
+    /// playlist shows no time until the track is played). Local sample only.
+    #[test]
+    fn duration_of_raw_truehd_without_container() {
+        for name in ["hypno-this.thd", "hypno-this.mlp"] {
+            let p = std::path::PathBuf::from(format!("qa-music/format-samples/{name}"));
+            if !p.exists() {
+                continue;
+            }
+            let d = duration(&p).unwrap_or_else(|| panic!("{name} duration should be Some"));
+            assert!(d.as_secs() > 1 && d.as_secs() < 600, "{name} duration {d:?}");
+        }
     }
 }
