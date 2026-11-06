@@ -61,6 +61,16 @@ Source: "{#RepoRoot}\skins\*"; DestDir: "{app}\skins"; Excludes: "backup\*"; Fla
 Source: "{#RepoRoot}\soundfont\*"; DestDir: "{app}\soundfont"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Optional bundled demo music.
 Source: "{#RepoRoot}\music\*"; DestDir: "{app}\music"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+; WMA/FFmpeg build only: bundle the FFmpeg runtime DLLs next to the exe so the
+; ffmpeg-linked binary loads them at runtime. This is inert for a normal build;
+; pass both of these to ISCC for a WMA-enabled installer:
+;   ISCC /DWithFfmpeg /DFfmpegBin="<ffmpeg shared build>\bin" ...
+#ifdef WithFfmpeg
+  #ifndef FfmpegBin
+    #error With /DWithFfmpeg you must also pass /DFfmpegBin=<the FFmpeg shared build's bin dir>
+  #endif
+Source: "{#FfmpegBin}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#RepoRoot}\FEATURES.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
