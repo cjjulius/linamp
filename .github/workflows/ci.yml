@@ -37,6 +37,61 @@ jobs:
       - name: Test
         run: cargo test --verbose
 
+  # Optional WMA build via the `ffmpeg` Cargo feature (LGPL, opt-in, off by
+  # default). Non-blocking (continue-on-error) so it never gates a normal merge,
+  # per the plan to keep the pure-Rust matrix as the only required job. It has
+  # something to build once the `ffmpeg` feature exists on the branch.
+  ffmpeg-build:
+    name: WMA/FFmpeg build (${{ matrix.os }}, optional)
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FFmpeg + clang dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config \
+            libavcodec-dev libavformat-dev libavutil-dev libswresample-dev \
+            clang libclang-dev
+
+      # bindgen (ffmpeg-sys-next) needs the MSVC system headers (stdint.h, ...) on
+      # INCLUDE; this sets up the developer environment for the whole job.
+      - name: Set up MSVC developer environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install FFmpeg shared dev build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/6.1.1/ffmpeg-6.1.1-full_build-shared.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dev
+          $root = (Get-ChildItem ffmpeg-dev -Directory)[0].FullName
+          # ffmpeg-sys-next locates the libs/headers via FFMPEG_DIR; also put the
+          # FFmpeg include/lib on INCLUDE/LIB (the check.c probe + the linker) and
+          # bin on PATH (runtime DLLs). windows-latest ships LLVM for libclang.
+          "FFMPEG_DIR=$root"                   | Out-File $env:GITHUB_ENV -Append
+          "INCLUDE=$root\include;$env:INCLUDE" | Out-File $env:GITHUB_ENV -Append
+          "LIB=$root\lib;$env:LIB"             | Out-File $env:GITHUB_ENV -Append
+          "LIBCLANG_PATH=$env:ProgramFiles\LLVM\bin" | Out-File $env:GITHUB_ENV -Append
+          "$root\bin"                          | Out-File $env:GITHUB_PATH -Append
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (--features ffmpeg)
+        run: cargo build --features ffmpeg --verbose
+
+      - name: Test (--features ffmpeg)
+        run: cargo test --features ffmpeg --verbose
+
   # Build the per-user installers. Runs on a v* tag (official release) or a
   # manual dispatch (dry run — artifacts only, no GitHub Release).
   package:
