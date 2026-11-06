@@ -21,6 +21,9 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // DSD: symphonia has no decoder, so crate::dsd parses .dsf/.dff with dsd-reader and
     // decimates the 1-bit stream to PCM.
     "dsf", "dff",
+    // Speex: symphonia has no decoder, so crate::speex demuxes the Ogg and decodes with
+    // libspeex (the pure-Rust option decodes incorrectly).
+    "spx",
     // MPEG Layer I/II and the rest of the ISO-MP4 family, decoded via a symphonia
     // hint in crate::decode (rodio 0.20 can't open these directly) (#157/#164).
     "mp1", "mp2", "mpa", "mp4", "m4b",
@@ -196,6 +199,7 @@ impl Track {
                 .or_else(|| crate::tta::duration(&self.path))
                 .or_else(|| crate::mpc::duration(&self.path))
                 .or_else(|| crate::dsd::duration(&self.path))
+                .or_else(|| crate::speex::duration(&self.path))
                 .or_else(|| crate::ac3::duration(&self.path))
                 .or_else(|| crate::wavpack::duration(&self.path))
                 .or_else(|| crate::ts::duration(&self.path))
