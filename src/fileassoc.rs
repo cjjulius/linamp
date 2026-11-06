@@ -118,6 +118,53 @@ fn supported_mime_types() -> Vec<&'static str> {
     out
 }
 
+/// A small shared-mime-info package (installed under `~/.local/share/mime`) that
+/// teaches the file manager the audio types standard shared-mime-info commonly
+/// omits or types differently, so a `.mod`/`.dsf`/`.spx`/`.thd`/... file gets the
+/// exact type the `.desktop` entry lists instead of a generic one, and LinAmp is
+/// offered for it. Declared with LinAmp's own MIME strings so the typing and the
+/// handler claim always agree. Common, well-known types (MP3, FLAC, Ogg, WAV, WMA,
+/// the video containers) are deliberately left to shared-mime-info so this never
+/// overrides the user's existing mappings for everyday formats. The FFmpeg-only
+/// types are gated, so a pure-Rust build does not teach a type it cannot play.
+#[cfg(any(target_os = "linux", test))]
+fn mime_package_xml() -> String {
+    let mut types: Vec<(&str, &str, &[&str])> = vec![
+        ("audio/x-mod", "Amiga SoundTracker module", &["*.mod"]),
+        ("audio/x-xm", "FastTracker 2 module", &["*.xm"]),
+        ("audio/x-s3m", "ScreamTracker 3 module", &["*.s3m"]),
+        ("audio/x-it", "Impulse Tracker module", &["*.it"]),
+        ("audio/x-dsf", "DSD Stream File", &["*.dsf"]),
+        ("audio/x-dff", "DSDIFF audio", &["*.dff"]),
+        ("audio/speex", "Speex audio", &["*.spx"]),
+        ("audio/amr", "AMR narrowband audio", &["*.amr"]),
+        ("audio/amr-wb", "AMR wideband audio", &["*.awb"]),
+    ];
+    #[cfg(feature = "ffmpeg")]
+    {
+        types.push(("audio/vnd.dts", "DTS audio", &["*.dts"]));
+        types.push((
+            "audio/vnd.dolby.mlp",
+            "Dolby TrueHD / MLP audio",
+            &["*.thd", "*.mlp"],
+        ));
+    }
+    let mut body = String::new();
+    for (ty, comment, globs) in &types {
+        body.push_str(&format!("  <mime-type type=\"{ty}\">\n"));
+        body.push_str(&format!("    <comment>{comment}</comment>\n"));
+        for g in *globs {
+            body.push_str(&format!("    <glob pattern=\"{g}\"/>\n"));
+        }
+        body.push_str("  </mime-type>\n");
+    }
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <mime-info xmlns=\"http://www.freedesktop.org/standards/shared-mime-info\">\n\
+         {body}</mime-info>\n"
+    )
+}
+
 #[cfg(windows)]
 mod windows_impl {
     use crate::playlist::SUPPORTED_EXTS;
@@ -364,31 +411,6 @@ mod linux_impl {
     const DESKTOP_FILE: &str = "linamp.desktop";
     const MIME_PACKAGE: &str = "linamp.xml";
 
-    // A small shared-mime-info package for the tracker formats. Standard
-    // shared-mime-info often does not define these, so without it the file manager
-    // gives a .mod/.xm/.s3m/.it file a generic type and never offers LinAmp.
-    // Installing this under ~/.local/share/mime teaches the types per-user.
-    const MIME_PACKAGE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
-  <mime-type type="audio/x-mod">
-    <comment>Amiga SoundTracker module</comment>
-    <glob pattern="*.mod"/>
-  </mime-type>
-  <mime-type type="audio/x-xm">
-    <comment>FastTracker 2 module</comment>
-    <glob pattern="*.xm"/>
-  </mime-type>
-  <mime-type type="audio/x-s3m">
-    <comment>ScreamTracker 3 module</comment>
-    <glob pattern="*.s3m"/>
-  </mime-type>
-  <mime-type type="audio/x-it">
-    <comment>Impulse Tracker module</comment>
-    <glob pattern="*.it"/>
-  </mime-type>
-</mime-info>
-"#;
-
     /// Write `contents` to `path` only when it differs from what is there,
     /// creating parent directories. Returns whether the file was (re)written, so
     /// the caller refreshes the system cache only on a real change.
@@ -497,8 +519,10 @@ mod linux_impl {
         // Teach the per-user MIME database the tracker types that standard
         // shared-mime-info omits.
         let mime_dir = data.join("mime");
-        let mime_changed =
-            write_if_changed(&mime_dir.join("packages").join(MIME_PACKAGE), MIME_PACKAGE_XML);
+        let mime_changed = write_if_changed(
+            &mime_dir.join("packages").join(MIME_PACKAGE),
+            &super::mime_package_xml(),
+        );
 
         // Run the cache refreshes off the main thread. update-mime-database
         // rebuilds the whole per-user MIME cache (1-3s on a first launch), and
@@ -543,7 +567,39 @@ mod linux_impl {
 
 #[cfg(test)]
 mod tests {
-    use super::{mime_for_ext, supported_mime_types};
+    use super::{mime_for_ext, mime_package_xml, supported_mime_types};
+
+    /// The MIME package must teach the file manager every non-standard audio type
+    /// LinAmp added (DSD, Speex, AMR, and under ffmpeg DTS/TrueHD/MLP), each with
+    /// LinAmp's own MIME string, or the Linux "Open with" never offers LinAmp for
+    /// those files even though the .desktop lists the type.
+    #[test]
+    fn mime_package_declares_the_non_standard_types() {
+        let xml = mime_package_xml();
+        for (ty, glob) in [
+            ("audio/x-dsf", "*.dsf"),
+            ("audio/x-dff", "*.dff"),
+            ("audio/speex", "*.spx"),
+            ("audio/amr", "*.amr"),
+            ("audio/amr-wb", "*.awb"),
+            ("audio/x-mod", "*.mod"),
+        ] {
+            assert!(xml.contains(ty), "MIME package missing type {ty}");
+            assert!(xml.contains(glob), "MIME package missing glob {glob}");
+        }
+        #[cfg(feature = "ffmpeg")]
+        for (ty, glob) in [
+            ("audio/vnd.dts", "*.dts"),
+            ("audio/vnd.dolby.mlp", "*.thd"),
+            ("audio/vnd.dolby.mlp", "*.mlp"),
+        ] {
+            assert!(xml.contains(ty), "MIME package missing type {ty}");
+            assert!(xml.contains(glob), "MIME package missing glob {glob}");
+        }
+        // Every glob the package declares must name an extension LinAmp supports, and
+        // its type must match mime_for_ext, so the package can't drift from the list.
+        assert!(xml.contains("<mime-info"), "not a MIME package: {xml}");
+    }
 
     #[test]
     fn every_supported_ext_has_a_mime_type() {
