@@ -21,10 +21,12 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   MP3/MP2/PCM/AC-3; FLV `.flv` via `scuffle-flv` for MP3/AAC; MPEG program stream
   `.mpg`/`.mpeg`/`.vob` via `mpeg-ps` for MPEG-audio/AC-3), tracker modules
   (`.mod`/`.xm`/`.s3m`/`.it`) and MIDI (`.mid`/`.midi`, via a bundled SoundFont)
-- Windows Media Audio (`.wma`) in the optional FFmpeg build (`--features ffmpeg`),
-  decoded via `crate::ffdec` over the system FFmpeg libraries (LGPL). No permissive
-  pure-Rust WMA decoder exists, so the default build stays pure Rust and omits it;
-  the opt-in build links libav* and plays WMA v1/v2/Pro/Lossless downmixed to stereo
+- Windows Media Audio (`.wma`) and DTS (`.dts`) in the optional FFmpeg build
+  (`--features ffmpeg`), decoded via `crate::ffdec` over FFmpeg (LGPL). Neither has a
+  permissive pure-Rust decoder (the pure-Rust DTS crates are Core-profile only and
+  unproven), so the default build stays pure Rust and omits them; the opt-in build
+  links libav* and plays WMA v1/v2/Pro/Lossless and DTS (DCA, incl. HD) downmixed to
+  stereo. This build is the standard release, so shipped installers include both
 - WavPack is decoded by the pure-Rust `wavicle` crate (symphonia 0.6's wavpack
   feature is a non-functional stub); lossless 16- and 24-bit integer, mono/stereo,
   any sample rate. Float, 8-bit, hybrid/lossy and multichannel `.wv` are refused

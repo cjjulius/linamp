@@ -23,7 +23,7 @@ Core (`src/`):
   plus an original two-stage decimating FIR to PCM), `speex.rs` (Speex, Ogg-demuxed
   with the `ogg` crate and decoded by libspeex, the pure-Rust option being incorrect)
   and `amr.rs` (AMR .amr/.awb via the pure-Rust rvoip-codec-core).
-  `ffdec.rs` is the optional FFmpeg path (WMA), behind the `ffmpeg` Cargo feature and
+  `ffdec.rs` is the optional FFmpeg path (WMA and DTS), behind the `ffmpeg` Cargo feature and
   off by default.
 - Container-audio extractors that pull the audio stream out of a video/transport
   container and feed it back through the shared decode path (`decode::open_stream`):

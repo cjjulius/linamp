@@ -80,6 +80,8 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         // matches exactly when "wma" is in SUPPORTED_EXTS).
         #[cfg(feature = "ffmpeg")]
         "wma" => "audio/x-ms-wma",
+        #[cfg(feature = "ffmpeg")]
+        "dts" => "audio/vnd.dts",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",

@@ -24,13 +24,14 @@ use ffmpeg::util::frame::audio::Audio as AudioFrame;
 use rodio::source::SeekError;
 use rodio::Source;
 
-/// Extensions routed through FFmpeg when the feature is on. WMA is the headline
-/// case (ASF container, wmav1/wmav2/WMA Pro/WMA Lossless), but FFmpeg demuxes and
-/// decodes them all behind one path.
+/// Extensions routed through FFmpeg when the feature is on: WMA (ASF container,
+/// wmav1/wmav2/WMA Pro/WMA Lossless) and DTS (DCA Coherent Acoustics, incl. the HD
+/// extensions). Both have no permissive pure-Rust decoder, and FFmpeg demuxes and
+/// decodes them through the one generic path here (multichannel is downmixed to stereo).
 pub fn is_ffmpeg_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("wma"))
+        .map(|e| e.eq_ignore_ascii_case("wma") || e.eq_ignore_ascii_case("dts"))
         .unwrap_or(false)
 }
 
@@ -262,6 +263,61 @@ mod tests {
         }
         let rms = (sq / n as f64).sqrt();
         assert!(rms < 1e-4, "RMS vs ffmpeg oracle too high: {rms}");
+    }
+
+    /// Decode hypno-this.dts (DTS/DCA) and check it against an ffmpeg-CLI decode of the
+    /// same file (`ffmpeg -i hypno-this.dts -f f32le -ac 2 -ar 48000`... stored at the
+    /// file's native 44.1k). Both use ffmpeg's dca decoder, so the match is near-exact;
+    /// a small lag search absorbs any frame-alignment offset. (qa-music gitignored.)
+    #[test]
+    fn decodes_dts_close_to_the_ffmpeg_oracle() {
+        let dts = std::path::PathBuf::from("qa-music/format-samples/hypno-this.dts");
+        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/hypno-dts-oracle.f32");
+        if !dts.exists() || !oracle_path.exists() {
+            return;
+        }
+        let raw = std::fs::read(&oracle_path).unwrap();
+        let oracle: Vec<f32> = raw
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        let src = open(&dts).unwrap();
+        assert_eq!(src.channels(), 2, "stereo output");
+        let got: Vec<f32> = src.collect();
+        assert!(got.len() > 44_100 * 2, "too little audio");
+        // Left channels (step by 2).
+        let gl: Vec<f32> = got.iter().step_by(2).copied().collect();
+        let ol: Vec<f32> = oracle.iter().step_by(2).copied().collect();
+        let corr = |a: &[f32], b: &[f32]| -> f64 {
+            let n = a.len().min(b.len());
+            if n < 2000 {
+                return 0.0;
+            }
+            let (a, b) = (&a[..n], &b[..n]);
+            let (ma, mb) = (
+                a.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+                b.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+            );
+            let (mut num, mut da, mut db) = (0.0, 0.0, 0.0);
+            for i in 0..n {
+                let (xa, xb) = (a[i] as f64 - ma, b[i] as f64 - mb);
+                num += xa * xb;
+                da += xa * xa;
+                db += xb * xb;
+            }
+            if da <= 0.0 || db <= 0.0 { 0.0 } else { num / (da.sqrt() * db.sqrt()) }
+        };
+        let mut best = 0.0;
+        for lag in 0..600usize {
+            if lag >= gl.len() {
+                break;
+            }
+            let c = corr(&gl[lag..], &ol);
+            if c > best {
+                best = c;
+            }
+        }
+        assert!(best > 0.999, "DTS decode correlation vs oracle too low: {best:.4}");
     }
 
     /// Seeking must land on the right samples: decode, seek to 40%, and confirm the
