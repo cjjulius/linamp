@@ -351,14 +351,15 @@ mod tests {
         assert!(best > 0.999, "DTS decode correlation vs oracle too low: {best:.4}");
     }
 
-    /// Decode truehd-test.thd (Dolby TrueHD, MLP-based lossless) and check it against an
-    /// ffmpeg-CLI decode of the same file (the oracle: `ffmpeg -i truehd-test.thd -f f32le
+    /// Decode hypno-this.thd (Dolby TrueHD, MLP-based lossless) and check it against an
+    /// ffmpeg-CLI decode of the same file (the oracle: `ffmpeg -i hypno-this.thd -f f32le
     /// -ac 2 -ar 44100`). Both use ffmpeg's truehd decoder, so the match is near-exact; a
     /// small lag search absorbs any frame-alignment offset. (qa-music gitignored.)
     #[test]
     fn decodes_truehd_close_to_the_ffmpeg_oracle() {
-        let thd = std::path::PathBuf::from("qa-music/format-samples/truehd-test.thd");
-        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/oracles/truehd-oracle.f32");
+        let thd = std::path::PathBuf::from("qa-music/format-samples/hypno-this.thd");
+        let oracle_path =
+            std::path::PathBuf::from("qa-music/format-samples/oracles/hypno-truehd-oracle.f32");
         if !thd.exists() || !oracle_path.exists() {
             return;
         }
