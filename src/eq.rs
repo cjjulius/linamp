@@ -129,6 +129,16 @@ impl Biquad {
 /// RBJ-cookbook peaking EQ coefficients. `gain_db == 0` yields a transparent
 /// (identity) filter, so untouched bands cost almost nothing audibly.
 pub fn peaking(f0: f32, q: f32, gain_db: f32, fs: f32) -> Biquad {
+    // A band at or above Nyquist (fs/2) can't be represented. There w0 reaches or
+    // passes PI, sin(w0) -> 0 so alpha vanishes, and the biquad degenerates to a
+    // double pole on the unit circle: an integrator whose direct-form recursion
+    // accumulates to Inf/NaN (even at 0 dB, where the pole/zero don't cancel
+    // numerically) and silences the stream. Low-rate sources hit this — an 8 kHz
+    // AMR file (Nyquist 4 kHz) or 16 kHz Speex (Nyquist 8 kHz) has several bands
+    // above Nyquist. Treat those as a transparent pass-through so the audio plays.
+    if f0 * 2.0 >= fs {
+        return Biquad { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0 };
+    }
     let a = 10f32.powf(gain_db / 40.0);
     let w0 = 2.0 * PI * (f0 / fs);
     let cos_w0 = w0.cos();
@@ -358,6 +368,7 @@ mod tests {
         data: Vec<f32>,
         idx: usize,
         ch: u16,
+        sr: u32,
     }
     impl Iterator for Buf {
         type Item = f32;
@@ -377,7 +388,7 @@ mod tests {
             self.ch
         }
         fn sample_rate(&self) -> u32 {
-            44_100
+            self.sr
         }
         fn total_duration(&self) -> Option<Duration> {
             None
@@ -388,7 +399,10 @@ mod tests {
         }
     }
     fn buf(data: Vec<f32>, ch: u16) -> Buf {
-        Buf { data, idx: 0, ch }
+        Buf { data, idx: 0, ch, sr: 44_100 }
+    }
+    fn buf_sr(data: Vec<f32>, ch: u16, sr: u32) -> Buf {
+        Buf { data, idx: 0, ch, sr }
     }
 
     #[test]
@@ -434,6 +448,48 @@ mod tests {
         let b: Vec<f32> = (0..xs.len()).map(|_| e.next().unwrap()).collect();
         // Memory cleared, so the replayed impulse yields an identical response.
         assert_eq!(a, b);
+    }
+
+    /// A band at or above Nyquist must be a transparent pass-through, not a
+    /// degenerate (unstable) biquad. Regression for low-rate audio going silent.
+    #[test]
+    fn bands_at_or_above_nyquist_are_pass_through() {
+        // 8 kHz source: Nyquist 4 kHz, so the 6/12/14/16 kHz bands are out of range.
+        for &f0 in &[4000.0, 6000.0, 12000.0, 16000.0] {
+            let bq = peaking(f0, 1.41, 12.0, 8000.0);
+            assert_eq!(
+                (bq.b0, bq.b1, bq.b2, bq.a1, bq.a2),
+                (1.0, 0.0, 0.0, 0.0, 0.0),
+                "band {f0} Hz at fs=8000 must be identity"
+            );
+        }
+        // In-range bands are still real filters (not identity).
+        let in_range = peaking(1000.0, 1.41, 12.0, 8000.0);
+        assert!(in_range.b0 != 1.0 || in_range.b1 != 0.0);
+    }
+
+    /// The real-world failure: an 8 kHz source (AMR) or 16 kHz source (Speex) run
+    /// through a boosted EQ must stay finite and audible, not blow up to NaN/Inf
+    /// on the above-Nyquist bands and silence the stream.
+    #[test]
+    fn low_rate_audio_survives_the_eq() {
+        for &sr in &[8_000u32, 16_000] {
+            let sh = EqShared::new();
+            // All bands boosted +12 dB: exercises every filter, including the
+            // out-of-range ones that used to detonate.
+            sh.set(true, 0.0, [12.0; 10]);
+            // A 300 Hz tone, well within Nyquist for both rates, so it must survive.
+            let n = sr as usize; // 1 second
+            let tone: Vec<f32> = (0..n)
+                .map(|i| (2.0 * PI * 300.0 * i as f32 / sr as f32).sin() * 0.5)
+                .collect();
+            let e = eq(buf_sr(tone, 1, sr), sh);
+            let out: Vec<f32> = e.collect();
+            assert_eq!(out.len(), n);
+            assert!(out.iter().all(|y| y.is_finite()), "fs={sr}: non-finite output");
+            let rms = (out.iter().map(|y| (*y as f64).powi(2)).sum::<f64>() / n as f64).sqrt();
+            assert!(rms > 0.05, "fs={sr}: EQ silenced the audio (rms {rms:.5})");
+        }
     }
 
     #[test]
