@@ -8,11 +8,26 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
-NAME="linamp-${VERSION}-linux-x86_64"
+
+# Optional Cargo features. Set FEATURES to build a variant, example:
+#   FEATURES=ffmpeg ./packaging/linux/build-tarball.sh   # adds WMA (links libav*)
+# The default (no FEATURES) is the pure-Rust build. A featured build gets a name
+# suffix so it never overwrites the default tarball, and needs the matching system
+# libraries present (for ffmpeg: libavcodec/libavformat/libavutil/libswresample).
+FEATURES="${FEATURES:-}"
+if [ -n "$FEATURES" ]; then
+  SUFFIX="-$(echo "$FEATURES" | tr ', ' '--')"
+  FEATURE_ARGS="--features $FEATURES"
+else
+  SUFFIX=""
+  FEATURE_ARGS=""
+fi
+NAME="linamp-${VERSION}-linux-x86_64${SUFFIX}"
 STAGE="dist/$NAME"
 
-echo "==> cargo build --release"
-cargo build --release
+echo "==> cargo build --release $FEATURE_ARGS"
+# shellcheck disable=SC2086
+cargo build --release $FEATURE_ARGS
 
 echo "==> Staging $STAGE"
 rm -rf "$STAGE"; mkdir -p "$STAGE"

@@ -17,6 +17,8 @@ mod encode;
 mod eq;
 mod eqf;
 mod fileassoc;
+#[cfg(feature = "ffmpeg")]
+mod ffdec;
 mod flv;
 mod icon;
 mod library;

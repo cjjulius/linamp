@@ -97,6 +97,12 @@ mpeg-ps = "0.6.0"
 # oxideav-tta (pure Rust, MIT) as a seekable source like ape/wavpack. Vetted
 # bit-exact against the source PCM and ~640x real-time before adding.
 oxideav-tta = "0.0.4"
+# Optional FFmpeg bindings for the `ffmpeg` feature (WMA and other proprietary
+# codecs with no permissive pure-Rust decoder). default-features off so it links
+# only the libav* we actually use (avcodec + avformat + avutil + swresample) and
+# not avfilter/avdevice/swscale, which aren't installed and aren't needed. See the
+# [features] section at the bottom of the file.
+ffmpeg-next = { version = "5.1.1", optional = true, default-features = false, features = ["codec", "format", "software-resampling"] }
 
 # Linux/X11 only: query the global cursor position (XQueryPointer) so classic
 # windows can be dragged and docked as a group, matching the Windows behaviour.
@@ -134,3 +140,9 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Optional FFmpeg (LGPL, links libav*) for proprietary codecs with no permissive
+# pure-Rust decoder, chiefly WMA. Off by default so the normal build stays pure
+# Rust; enable with `--features ffmpeg` (needs the system FFmpeg dev libraries).
+[features]
+ffmpeg = ["dep:ffmpeg-next"]
