@@ -125,7 +125,13 @@ impl FirDecimator {
     #[inline]
     fn push(&mut self, x: f32) -> Option<f32> {
         let n = self.hist.len();
-        self.head = (self.head + 1) % n;
+        // Advance the ring head with a branch, not `% n`: this runs once per input
+        // sample (millions of times for a DSD file), and an integer modulo by a
+        // non-power-of-two tap count is far costlier than a predictable compare.
+        self.head += 1;
+        if self.head == n {
+            self.head = 0;
+        }
         self.hist[self.head] = x;
         self.since += 1;
         if self.since < self.factor {
@@ -178,14 +184,12 @@ pub fn open_dsd(path: &Path) -> Result<DsdSource> {
     let factor_a = (total_ratio / factor_b).max(1);
     let inter_rate = dsd_rate / factor_a as f64;
     let taps_a = (16 * factor_a).clamp(64, 512);
-    let mut stage_a: Vec<FirDecimator> = (0..channels)
-        .map(|_| FirDecimator::new(factor_a, 0.45 * inter_rate, dsd_rate, taps_a))
-        .collect();
-    let mut stage_b: Vec<FirDecimator> = (0..channels)
-        .map(|_| FirDecimator::new(factor_b, 20_000.0, inter_rate, 1024))
-        .collect();
-    let mut pcm_planar: Vec<Vec<f32>> = vec![Vec::new(); channels];
 
+    // Collect each channel's raw DSD bytes first, then decimate the channels in
+    // parallel: they're independent, and the two-stage FIR is the expensive part of
+    // the up-front decode that delays playback. One thread per channel (at most two)
+    // roughly halves the wait; the FIR math is unchanged, so the output is identical.
+    let mut raw: Vec<Vec<u8>> = vec![Vec::new(); channels];
     let iter = reader
         .dsd_iter()
         .map_err(|e| anyhow!("DSD iter {}: {e}", path.display()))?;
@@ -196,21 +200,38 @@ pub fn open_dsd(path: &Path) -> Result<DsdSource> {
         for ch in 0..channels {
             let bytes = &chan_bufs[ch];
             let valid = read_size.min(bytes.len());
-            let (a, b) = (&mut stage_a[ch], &mut stage_b[ch]);
-            let out = &mut pcm_planar[ch];
-            for &byte in &bytes[..valid] {
-                // dsd_iter yields LSB-first bytes: bit 0 is the earliest sample.
-                for bit in 0..8 {
-                    let s = if (byte >> bit) & 1 == 1 { 1.0f32 } else { -1.0f32 };
-                    if let Some(y) = a.push(s) {
-                        if let Some(z) = b.push(y) {
-                            out.push(z);
-                        }
+            raw[ch].extend_from_slice(&bytes[..valid]);
+        }
+    }
+
+    let decimate = |bytes: &[u8]| -> Vec<f32> {
+        let mut a = FirDecimator::new(factor_a, 0.45 * inter_rate, dsd_rate, taps_a);
+        let mut b = FirDecimator::new(factor_b, 20_000.0, inter_rate, 1024);
+        let mut out = Vec::new();
+        for &byte in bytes {
+            // dsd_iter yields LSB-first bytes: bit 0 is the earliest sample.
+            for bit in 0..8 {
+                let s = if (byte >> bit) & 1 == 1 { 1.0f32 } else { -1.0f32 };
+                if let Some(y) = a.push(s) {
+                    if let Some(z) = b.push(y) {
+                        out.push(z);
                     }
                 }
             }
         }
-    }
+        out
+    };
+
+    let mut pcm_planar: Vec<Vec<f32>> = vec![Vec::new(); channels];
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = raw
+            .iter()
+            .map(|bytes| scope.spawn(|| decimate(bytes)))
+            .collect();
+        for (ch, h) in handles.into_iter().enumerate() {
+            pcm_planar[ch] = h.join().expect("DSD decimation thread panicked");
+        }
+    });
     if pcm_planar.iter().all(|c| c.is_empty()) {
         return Err(anyhow!("decoded no audio from {}", path.display()));
     }
