@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn decodes_close_to_the_ffmpeg_oracle() {
         let Some(wma) = sample() else { return };
-        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/hypno-wma-oracle.f32");
+        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/oracles/hypno-wma-oracle.f32");
         if !oracle_path.exists() {
             return;
         }
@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn decodes_dts_close_to_the_ffmpeg_oracle() {
         let dts = std::path::PathBuf::from("qa-music/format-samples/hypno-this.dts");
-        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/hypno-dts-oracle.f32");
+        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/oracles/hypno-dts-oracle.f32");
         if !dts.exists() || !oracle_path.exists() {
             return;
         }
@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn decodes_truehd_close_to_the_ffmpeg_oracle() {
         let thd = std::path::PathBuf::from("qa-music/format-samples/truehd-test.thd");
-        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/truehd-oracle.f32");
+        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/oracles/truehd-oracle.f32");
         if !thd.exists() || !oracle_path.exists() {
             return;
         }
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn seek_lands_on_the_right_samples() {
         let Some(wma) = sample() else { return };
-        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/hypno-wma-oracle.f32");
+        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/oracles/hypno-wma-oracle.f32");
         if !oracle_path.exists() {
             return;
         }

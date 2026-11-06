@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn decodes_amr_nb_against_the_ffmpeg_oracle() {
         let amr = std::path::Path::new("qa-music/format-samples/sample.amr");
-        let oracle = std::path::Path::new("qa-music/format-samples/amr-nb-oracle.s16");
+        let oracle = std::path::Path::new("qa-music/format-samples/oracles/amr-nb-oracle.s16");
         if !amr.exists() || !oracle.exists() {
             return;
         }
