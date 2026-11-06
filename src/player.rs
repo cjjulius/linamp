@@ -383,6 +383,11 @@ impl Player {
             // the packets with libspeex; symphonia has no Speex decoder.
             let source = crate::speex::open_speex(path)?;
             self.append_source(source, None, true)?;
+        } else if crate::amr::is_amr(path) {
+            // AMR (.amr/.awb): crate::amr parses the storage container and decodes with
+            // the pure-Rust rvoip-codec-core; symphonia has no AMR decoder.
+            let source = crate::amr::open_amr(path)?;
+            self.append_source(source, None, true)?;
         } else if crate::ts::is_ts(path) {
             // MPEG-TS (.ts/.m2ts): symphonia can't demux it, so crate::ts pulls the
             // audio elementary stream out and decodes it through the shared path.

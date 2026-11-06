@@ -67,6 +67,8 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         "dsf" => "audio/x-dsf",
         "dff" => "audio/x-dff",
         "spx" => "audio/speex",
+        "amr" => "audio/amr",
+        "awb" => "audio/amr-wb",
         "ts" | "m2ts" | "mts" => "video/mp2t",
         "avi" => "video/x-msvideo",
         "flv" => "video/x-flv",

@@ -20,8 +20,9 @@ Core (`src/`):
   noted) as a seekable player source like `midi.rs`/`tracker.rs`: `ape.rs` (Monkey's
   Audio), `wavpack.rs` (WavPack via wavicle), `tta.rs` (True Audio), `mpc.rs`
   (Musepack SV7/SV8), `ac3.rs` (AC-3/E-AC-3), `dsd.rs` (DSD .dsf/.dff via dsd-reader
-  plus an original two-stage decimating FIR to PCM) and `speex.rs` (Speex, Ogg-demuxed
-  with the `ogg` crate and decoded by libspeex, the pure-Rust option being incorrect).
+  plus an original two-stage decimating FIR to PCM), `speex.rs` (Speex, Ogg-demuxed
+  with the `ogg` crate and decoded by libspeex, the pure-Rust option being incorrect)
+  and `amr.rs` (AMR .amr/.awb via the pure-Rust rvoip-codec-core).
   `ffdec.rs` is the optional FFmpeg path (WMA), behind the `ffmpeg` Cargo feature and
   off by default.
 - Container-audio extractors that pull the audio stream out of a video/transport
@@ -119,7 +120,7 @@ code, which makes skins straightforward to vet without launching the UI.
 ## Audio pipeline, CD and conversion
 
 Playback routes a track by kind: MIDI through `midi.rs`, tracker modules through
-`tracker.rs`, the side-decoders (`ape`/`wavpack`/`tta`/`mpc`/`ac3`/`dsd`/`speex`, and `ffdec` for
+`tracker.rs`, the side-decoders (`ape`/`wavpack`/`tta`/`mpc`/`ac3`/`dsd`/`speex`/`amr`, and `ffdec` for
 WMA when built with `--features ffmpeg`) for codecs symphonia lacks, the
 container-audio extractors (`ts`/`avi`/`flv`/`ps`) for video/transport containers,
 and everything else through `decode.rs` (symphonia, plus libopus for Opus), with

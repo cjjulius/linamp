@@ -14,6 +14,7 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   AIFF, CAF, AAC/M4A (`.m4a`/`.mp4`/`.m4b`/`.aac`), Monkey's Audio (`.ape`), WavPack
   (`.wv`), True Audio (`.tta`), Musepack (`.mpc`/`.mp+`/`.mpp`, SV7 and SV8),
   DSD (`.dsf`/`.dff`, DSD64/128/256 decimated to PCM), Speex (`.spx`),
+  AMR (`.amr`/`.awb`, AMR-NB and AMR-WB),
   AC-3 (`.ac3`/`.eac3`, stereo and 5.1 downmix), the audio track of video
   containers (`.mp4`/`.m4v`/`.3gp`/`.mov`/`.mkv`/`.webm`/`.ogv`; MPEG-TS
   `.ts`/`.m2ts`/`.mts` via `mpeg2ts-reader`; AVI `.avi` via `filmcraft-avi` for
@@ -37,6 +38,11 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   44.1 kHz) and plays it as a normal source. DSD64/128/256, mono and stereo.
   Uncompressed DSD only: DST-compressed DFF and more-than-two-channel streams are
   refused cleanly (the only DST decoder is GPL, outside the permissive bar)
+- AMR (`.amr`/`.awb`) is decoded by the pure-Rust `rvoip-codec-core` crate (AMR-NB and
+  AMR-WB); unlike the Speex case the pure-Rust decoder is correct (it is tested against
+  the 3GPP conformance sequences and vetted at 0.9999 correlation vs the ffmpeg oracle,
+  so no C library is needed). The `.amr` storage container is parsed in `crate::amr`.
+  Single-channel; mono output at the stream's native rate
 - Speex (`.spx`) is demuxed from Ogg with the `ogg` crate and decoded by libspeex
   (vendored C, built from source like libopus); the pure-Rust option decodes
   incorrectly, so the reference decoder is used. Narrowband/wideband/ultra-wideband,
