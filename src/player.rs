@@ -389,14 +389,35 @@ impl Player {
             let source = crate::ps::open_ps(path)?;
             self.append_source(source, None, true)?;
         } else {
-            let source = crate::decode::open_file(path)?;
-            self.append_source(source, None, true)?;
+            // Default path: symphonia, or, when built with `--features ffmpeg`,
+            // FFmpeg first for the codecs it owns (WMA). See open_fallback.
+            self.open_fallback(path)?;
         }
         self.current_path = Some(path.to_path_buf());
         self.current_url = None;
         self.stream_title = None;
         self.state = PlayState::Playing;
         Ok(())
+    }
+
+    /// The default open path, taken when no container/side-decoder module claims
+    /// the file. With the `ffmpeg` feature, FFmpeg handles the codecs it owns (WMA)
+    /// and everything else goes to symphonia; without it, straight to symphonia.
+    #[cfg(feature = "ffmpeg")]
+    fn open_fallback(&mut self, path: &std::path::Path) -> Result<()> {
+        if crate::ffdec::is_ffmpeg_audio(path) {
+            let source = crate::ffdec::open(path)?;
+            self.append_source(source, None, true)
+        } else {
+            let source = crate::decode::open_file(path)?;
+            self.append_source(source, None, true)
+        }
+    }
+
+    #[cfg(not(feature = "ffmpeg"))]
+    fn open_fallback(&mut self, path: &std::path::Path) -> Result<()> {
+        let source = crate::decode::open_file(path)?;
+        self.append_source(source, None, true)
     }
 
     /// Start playing an already-opened stream source (see [`crate::stream`]). The

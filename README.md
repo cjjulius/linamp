@@ -24,7 +24,8 @@ coordinates, on a modern cross-platform stack (`eframe`/`egui` UI,
 - Plays MP3, MP1/MP2 (MPEG audio), FLAC, Ogg Vorbis, Opus, AAC/M4A, Monkey's Audio
   (APE), WavPack (WV), True Audio (TTA), AC-3, WAV, AIFF and CAF, the audio track of
   MP4/M4V/3GP/MOV/MKV/WebM/OGV/TS/AVI/FLV/MPG/VOB
-  video, MIDI (via a bundled SoundFont) and tracker modules (MOD/XM/S3M/IT); seek,
+  video, MIDI (via a bundled SoundFont) and tracker modules (MOD/XM/S3M/IT), plus
+  Windows Media Audio (WMA) in the optional FFmpeg build; seek,
   volume, stereo balance, repeat/shuffle, stop-after/stop-with-fade.
 - Audio CD, play and rip (TOC and titles looked up online); rip or convert any
   track to MP3, Ogg Vorbis, Opus, FLAC, WAV or AIFF through a background queue.
@@ -109,6 +110,21 @@ Pass files or folders to open them: `linamp song.flac album/`.
   other setup.
 - Linux needs CMake plus a few system libraries (ALSA, GTK, X11/Wayland), see
   [LINUX.md](LINUX.md). Audio targets PipeWire via ALSA.
+
+### Optional WMA support (FFmpeg)
+
+Windows Media Audio has no permissive pure-Rust decoder, so WMA playback is an
+opt-in build that links the system FFmpeg libraries (LGPL). The default build is
+pure Rust and omits WMA. To enable it, install the FFmpeg development libraries
+(`libavcodec`, `libavformat`, `libavutil`, `libswresample`) and build with:
+
+```bash
+cargo build --release --features ffmpeg
+```
+
+On Debian/Ubuntu the libraries are `libavcodec-dev libavformat-dev libavutil-dev
+libswresample-dev`. The resulting binary links those libraries at runtime, so a
+machine running it needs the matching FFmpeg runtime libraries present.
 
 Packaging the installers (Inno Setup / tarball) is documented in
 [packaging/RELEASE.md](packaging/RELEASE.md).
