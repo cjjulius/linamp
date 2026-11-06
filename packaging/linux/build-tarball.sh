@@ -30,11 +30,19 @@ esac
 NAME="linamp-${VERSION}-linux-x86_64${SUFFIX}"
 STAGE="dist/$NAME"
 
-# A bundled-FFmpeg build links with an $ORIGIN/lib rpath so the binary loads the
-# bundled libav* from next to itself under lib/; --disable-new-dtags makes it a
-# DT_RPATH, so the search also covers the bundled libraries' own dependencies (the
-# codec libs libavcodec pulls), not just the binary's direct NEEDEDs.
+# A bundled-FFmpeg build links WMA/DTS against a self-contained FFmpeg built from
+# source (packaging/linux/build-ffmpeg-min.sh), not the distro's libavcodec: the
+# distro build drags ~120 MB of external codec/network/crypto libraries, whereas the
+# from-source one keeps the native codecs but links no external libraries, so its
+# libav* depend only on libc/libm and the bundle is ~15 MB. FFMPEG_DIR points
+# ffmpeg-sys-next at it. The $ORIGIN/lib rpath (DT_RPATH via --disable-new-dtags, so
+# it also covers the libraries' own siblings) makes the binary load the bundled
+# libav* from next to itself at runtime, so no system FFmpeg is needed.
 if [ "$BUNDLE_FFMPEG" = 1 ]; then
+  FFMPEG_MIN="$ROOT/build/ffmpeg-min"
+  sh "$ROOT/packaging/linux/build-ffmpeg-min.sh" "$FFMPEG_MIN"
+  export FFMPEG_DIR="$FFMPEG_MIN"
+  export PKG_CONFIG_PATH="$FFMPEG_MIN/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
   export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-rpath,\$ORIGIN/lib -C link-arg=-Wl,--disable-new-dtags"
 fi
 
@@ -47,18 +55,20 @@ rm -rf "$STAGE"; mkdir -p "$STAGE"
 install -m 0755 target/release/linamp "$STAGE/linamp"
 
 if [ "$BUNDLE_FFMPEG" = 1 ]; then
-  echo "==> Bundling FFmpeg shared libraries into $STAGE/lib (self-contained WMA build)"
+  echo "==> Bundling the from-source FFmpeg libraries into $STAGE/lib (self-contained)"
   mkdir -p "$STAGE/lib"
-  # Copy the FFmpeg family and the codec libraries it pulls, resolved from the built
-  # binary, so no system FFmpeg is needed at runtime. The C runtime and the host
-  # desktop stack (X11/Wayland/GTK/GLib/ALSA/PulseAudio/OpenGL/fontconfig/openssl/
-  # compression) are provided by the user's system and are deliberately NOT bundled,
-  # to avoid ABI clashes. NOTE: validate the resulting library set on a real Linux
-  # install; this deny-list is a heuristic and may need per-distro tuning.
-  deny='ld-linux|/libc\.so|/libm\.so|/libdl\.so|/librt\.so|/libpthread\.so|/libresolv\.so|/libgcc_s\.so|/libstdc..\.so|/libX11|/libXau|/libXdmcp|/libXext|/libXcursor|/libXrender|/libXfixes|/libXi\.|/libXrandr|/libXinerama|/libxcb|/libwayland|/libxkbcommon|/libGLX|/libGLdispatch|/libGL\.so|/libEGL|/libOpenGL|/libgbm|/libdrm|/libgtk-3|/libgdk-3|/libglib-2|/libgobject-2|/libgio-2|/libgmodule-2|/libgthread-2|/libpango|/libcairo|/libatk|/libharfbuzz|/libfreetype|/libfontconfig|/libpng|/libjpeg|/libpixman|/libgdk_pixbuf|/libepoxy|/libasound|/libpulse|/libdbus-1|/libsystemd|/libudev|/libselinux|/libmount|/libblkid|/libffi|/libpcre|/libexpat|/libz\.so|/liblzma\.so|/libzstd\.so|/libbz2\.so|/libssl|/libcrypto'
-  ldd "$STAGE/linamp" | awk '/=> \// {print $3}' | sort -u | grep -Ev "$deny" | while read -r so; do
-    [ -f "$so" ] && cp -L "$so" "$STAGE/lib/" && echo "    + $(basename "$so")"
-  done
+  # The from-source FFmpeg (build-ffmpeg-min.sh) links only libc/libm, so the whole
+  # runtime set is just its own libav*/libsw* libraries. Copy them straight from the
+  # build prefix we linked against (not by ldd-walking the binary, which would resolve
+  # against the host's full FFmpeg and drag its ~120 MB of external deps). The soname
+  # symlinks are preserved; the binary's $ORIGIN/lib rpath loads them at runtime, and
+  # the C runtime comes from the user's system.
+  cp -a "$FFMPEG_DIR"/lib/libav*.so.* "$FFMPEG_DIR"/lib/libsw*.so.* "$STAGE/lib/" 2>/dev/null || true
+  for f in "$STAGE"/lib/*.so.*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
+  # Sanity check: the installed binary must resolve every libav* from the bundle.
+  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libav|libswresample' | grep -vq "$STAGE/lib"; then
+    echo "!!  WARNING: a libav* still resolves outside $STAGE/lib; check the rpath" >&2
+  fi
 fi
 cp -r skins "$STAGE/skins"
 rm -rf "$STAGE/skins/backup"   # dev-only skin backups, not for release
