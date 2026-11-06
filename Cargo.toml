@@ -107,6 +107,11 @@ oxideav-tta = "0.0.4"
 # within 1 LSB. Pinned exact: it is a "clean-room rebuild in progress", so an
 # auto-upgrade could regress; bump deliberately after re-vetting.
 oxideav-musepack = "=0.0.4"
+# DSD (.dsf/.dff) container parsing. symphonia has no DSD support, so crate::dsd uses
+# dsd-reader (pure Rust, MIT/Apache) to pull the planar 1-bit DSD stream, then does its
+# own DSD->PCM decimation (a windowed-sinc FIR, then rubato to 44.1k). Uncompressed DSD
+# only: DST-compressed DFF is refused (its only decoder, cladst, is GPL). Mono/stereo.
+dsd-reader = "0.4.0"
 # Optional FFmpeg bindings for the `ffmpeg` feature (WMA and other proprietary
 # codecs with no permissive pure-Rust decoder). default-features off so it links
 # only the libav* we actually use (avcodec + avformat + avutil + swresample) and

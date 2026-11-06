@@ -1155,6 +1155,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dff-meta"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06301c411497b9d471ba2aa728dc666fd4c5c300673c2f4d937eb6a737824a1b"
+dependencies = [
+ "dsd-source",
+ "id3",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1243,6 +1253,39 @@ name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
+
+[[package]]
+name = "dsd-reader"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5a04f827b58374a77af114ebd44a5745be6580da7e15c06fdf2df7e61afd7d2"
+dependencies = [
+ "dff-meta",
+ "dsd-source",
+ "dsf-meta",
+ "id3",
+ "log",
+]
+
+[[package]]
+name = "dsd-source"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abefa93db26ebcaae898dedd37f9a3e8378c369b1c251adf54e73e7f1195aa37"
+dependencies = [
+ "id3",
+]
+
+[[package]]
+name = "dsf-meta"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dfc2ace16a9905a870d157d87cbd179d701714fe6315a47e61fa194a3d6f7f1a"
+dependencies = [
+ "dsd-source",
+ "id3",
+ "sampled_data_duration",
+]
 
 [[package]]
 name = "ecolor"
@@ -2153,6 +2196,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "id3"
+version = "1.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef8be496a46468ba3d43690775aa3a79102ce4daf7d99e8072589aae1a3cd955"
+dependencies = [
+ "bitflags 2.13.2",
+ "byteorder",
+ "flate2",
+]
+
+[[package]]
 name = "idna"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2442,6 +2496,7 @@ dependencies = [
  "arboard",
  "bytes",
  "dirs",
+ "dsd-reader",
  "eframe",
  "egui",
  "ffmpeg-next",
@@ -3929,6 +3984,12 @@ checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
 ]
+
+[[package]]
+name = "sampled_data_duration"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1c52ae966a8693b8d564a1dee9f2139907c9e375ee9544276bf61b5d97841ce"
 
 [[package]]
 name = "scoped-tls"
