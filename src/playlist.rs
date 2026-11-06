@@ -15,6 +15,9 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // True Audio: symphonia has no decoder, so crate::tta decodes it with the
     // pure-Rust oxideav-tta crate.
     "tta",
+    // Musepack: symphonia has no decoder, so crate::mpc decodes it with the pure-Rust
+    // oxideav-musepack crate (SV7 and SV8). Legacy SV7 extensions .mp+/.mpp too.
+    "mpc", "mp+", "mpp",
     // MPEG Layer I/II and the rest of the ISO-MP4 family, decoded via a symphonia
     // hint in crate::decode (rodio 0.20 can't open these directly) (#157/#164).
     "mp1", "mp2", "mpa", "mp4", "m4b",
@@ -188,6 +191,7 @@ impl Track {
                 .or_else(|| crate::tracker::duration(&self.path))
                 .or_else(|| crate::ape::duration(&self.path))
                 .or_else(|| crate::tta::duration(&self.path))
+                .or_else(|| crate::mpc::duration(&self.path))
                 .or_else(|| crate::ac3::duration(&self.path))
                 .or_else(|| crate::wavpack::duration(&self.path))
                 .or_else(|| crate::ts::duration(&self.path))

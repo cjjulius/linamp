@@ -368,6 +368,11 @@ impl Player {
             // True Audio (.tta) is decoded by oxideav-tta (pure Rust).
             let source = crate::tta::open_tta(path)?;
             self.append_source(source, None, true)?;
+        } else if crate::mpc::is_mpc(path) {
+            // Musepack (.mpc/.mp+/.mpp) is decoded by oxideav-musepack (pure Rust);
+            // symphonia has no Musepack decoder.
+            let source = crate::mpc::open_mpc(path)?;
+            self.append_source(source, None, true)?;
         } else if crate::ts::is_ts(path) {
             // MPEG-TS (.ts/.m2ts): symphonia can't demux it, so crate::ts pulls the
             // audio elementary stream out and decodes it through the shared path.

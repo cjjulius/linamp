@@ -2459,6 +2459,7 @@ dependencies = [
  "ogg",
  "open",
  "opus",
+ "oxideav-musepack",
  "oxideav-tta",
  "rfd",
  "rodio",
@@ -3322,6 +3323,15 @@ dependencies = [
  "bytemuck",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "oxideav-musepack"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "708d7555046637411a3ebe95fc0e4982fa44dba0e2553ce181b7c39756d1eb3b"
+dependencies = [
+ "oxideav-core",
 ]
 
 [[package]]
