@@ -18,6 +18,15 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // Musepack: symphonia has no decoder, so crate::mpc decodes it with the pure-Rust
     // oxideav-musepack crate (SV7 and SV8). Legacy SV7 extensions .mp+/.mpp too.
     "mpc", "mp+", "mpp",
+    // DSD: symphonia has no decoder, so crate::dsd parses .dsf/.dff with dsd-reader and
+    // decimates the 1-bit stream to PCM.
+    "dsf", "dff",
+    // Speex: symphonia has no decoder, so crate::speex demuxes the Ogg and decodes with
+    // libspeex (the pure-Rust option decodes incorrectly).
+    "spx",
+    // AMR: symphonia has no decoder, so crate::amr parses the .amr/.awb storage container
+    // and decodes with the pure-Rust rvoip-codec-core (AMR-NB/WB).
+    "amr", "awb",
     // MPEG Layer I/II and the rest of the ISO-MP4 family, decoded via a symphonia
     // hint in crate::decode (rodio 0.20 can't open these directly) (#157/#164).
     "mp1", "mp2", "mpa", "mp4", "m4b",
@@ -46,11 +55,19 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // MPEG Program Stream (DVD/VCD): crate::ps (mpeg-ps) extracts the audio ES
     // (MPEG audio via symphonia, AC-3 via crate::ac3).
     "mpg", "mpeg", "vob", "m2p",
-    // Windows Media Audio: only when built with `--features ffmpeg` (crate::ffdec,
-    // system FFmpeg/LGPL). No permissive pure-Rust WMA decoder exists, so the
-    // default build omits it rather than advertise a format it can't play.
+    // Windows Media Audio, DTS, and Dolby TrueHD/MLP: only when built with
+    // `--features ffmpeg` (crate::ffdec over FFmpeg/LGPL). None has a permissive pure-Rust
+    // decoder mature enough for real-time playback, so the default build omits them rather
+    // than advertise a format it can't play. TrueHD's decoder is already in the bundled
+    // minimal FFmpeg, so these cost nothing extra in the ffmpeg build.
     #[cfg(feature = "ffmpeg")]
     "wma",
+    #[cfg(feature = "ffmpeg")]
+    "dts",
+    #[cfg(feature = "ffmpeg")]
+    "thd",
+    #[cfg(feature = "ffmpeg")]
+    "mlp",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -192,6 +209,9 @@ impl Track {
                 .or_else(|| crate::ape::duration(&self.path))
                 .or_else(|| crate::tta::duration(&self.path))
                 .or_else(|| crate::mpc::duration(&self.path))
+                .or_else(|| crate::dsd::duration(&self.path))
+                .or_else(|| crate::speex::duration(&self.path))
+                .or_else(|| crate::amr::duration(&self.path))
                 .or_else(|| crate::ac3::duration(&self.path))
                 .or_else(|| crate::wavpack::duration(&self.path))
                 .or_else(|| crate::ts::duration(&self.path))
@@ -284,6 +304,17 @@ impl Playlist {
 
     pub fn current_track(&self) -> Option<&Track> {
         self.current.and_then(|i| self.tracks.get(i))
+    }
+
+    /// Fill in the current track's duration if it wasn't known from the metadata
+    /// scan. Used once playback starts so raw streams (TrueHD/MLP), whose length is
+    /// only known after a full decode, still show a time and allow scrubbing.
+    pub fn set_current_duration_if_missing(&mut self, d: Duration) {
+        if let Some(t) = self.current.and_then(|i| self.tracks.get_mut(i)) {
+            if t.duration.is_none() {
+                t.duration = Some(d);
+            }
+        }
     }
 
     /// Add a single file if it has a supported extension (tags read lazily). An
@@ -682,6 +713,77 @@ mod tests {
         assert!(is_supported(Path::new("A.FLAC")));
         assert!(!is_supported(Path::new("a.txt")));
         assert!(!is_supported(Path::new("noext")));
+    }
+
+    /// Every extension LinAmp advertises as supported must route to exactly one
+    /// decoder, and every decoder's extensions must be advertised. `SUPPORTED_EXTS`
+    /// is the single list that drag/drop, Add file/folder, the library scan and file
+    /// associations all gate on, so this ties it to the actual `player.rs` router: a
+    /// format can never be accepted in one place but silently dropped in another.
+    /// This is the guard that would have caught `.dts` being playable but missing
+    /// from the list. Feature-aware: the FFmpeg-only formats are checked only when
+    /// built with `--features ffmpeg` (which is how releases ship).
+    #[test]
+    fn supported_exts_match_the_router() {
+        type Pred = fn(&Path) -> bool;
+        let p = |e: &str| PathBuf::from(format!("x.{e}"));
+
+        // Specialised decoders: (name, predicate, the exts it owns). The const-backed
+        // ones reference the module's own list, so they can't drift from the router.
+        let mut decoders: Vec<(&str, Pred, Vec<&str>)> = vec![
+            ("midi", crate::midi::is_midi as Pred, crate::midi::MIDI_EXTS.to_vec()),
+            ("tracker", crate::tracker::is_tracker, crate::tracker::TRACKER_EXTS.to_vec()),
+            ("ac3", crate::ac3::is_ac3, crate::ac3::AC3_EXTS.to_vec()),
+            ("ts", crate::ts::is_ts, crate::ts::TS_EXTS.to_vec()),
+            ("ps", crate::ps::is_ps, crate::ps::PS_EXTS.to_vec()),
+            ("ape", crate::ape::is_ape, vec!["ape"]),
+            ("wavpack", crate::wavpack::is_wavpack, vec!["wv"]),
+            ("tta", crate::tta::is_tta, vec!["tta"]),
+            ("mpc", crate::mpc::is_mpc, vec!["mpc", "mp+", "mpp"]),
+            ("dsd", crate::dsd::is_dsd, vec!["dsf", "dff"]),
+            ("speex", crate::speex::is_speex, vec!["spx"]),
+            ("amr", crate::amr::is_amr, vec!["amr", "awb"]),
+            ("avi", crate::avi::is_avi, vec!["avi"]),
+            ("flv", crate::flv::is_flv, vec!["flv"]),
+        ];
+        #[cfg(feature = "ffmpeg")]
+        decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts", "thd", "mlp"]));
+
+        // The default path: symphonia (plus libopus for Opus), which claims every
+        // extension no specialised decoder above does.
+        let fallback: &[&str] = &[
+            "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "aiff", "aif", "opus",
+            "mp1", "mp2", "mpa", "mp4", "m4b", "mov", "m4v", "3gp", "mkv", "webm",
+            "ogv", "caf",
+        ];
+
+        // 1. Each decoder's predicate really claims each extension it declares.
+        for (name, pred, exts) in &decoders {
+            for e in exts {
+                assert!(pred(&p(e)), "{name} predicate must claim .{e}");
+            }
+        }
+        // 2. No extension is claimed by more than one specialised decoder.
+        for e in SUPPORTED_EXTS {
+            let hits: Vec<&str> =
+                decoders.iter().filter(|(_, f, _)| f(&p(e))).map(|(n, _, _)| *n).collect();
+            assert!(hits.len() <= 1, ".{e} is claimed by multiple decoders: {hits:?}");
+        }
+        // 3. Router coverage (all decoders + fallback) equals SUPPORTED_EXTS exactly:
+        //    nothing advertised that nothing decodes, nothing decodable left unadvertised.
+        let mut covered: Vec<&str> = fallback.to_vec();
+        for (_, _, exts) in &decoders {
+            covered.extend(exts.iter().copied());
+        }
+        covered.sort_unstable();
+        covered.dedup();
+        let mut advertised: Vec<&str> = SUPPORTED_EXTS.to_vec();
+        advertised.sort_unstable();
+        advertised.dedup();
+        assert_eq!(
+            covered, advertised,
+            "router coverage and SUPPORTED_EXTS disagree: add the format to both"
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ac3;
+mod amr;
 mod ape;
 mod app;
 mod avi;
@@ -13,6 +14,7 @@ mod convert_queue;
 mod cursor;
 mod decode;
 mod dock;
+mod dsd;
 mod encode;
 mod eq;
 mod eqf;
@@ -32,6 +34,7 @@ mod playlist;
 mod region;
 mod selection;
 mod skin;
+mod speex;
 mod stream;
 mod tags;
 mod text;

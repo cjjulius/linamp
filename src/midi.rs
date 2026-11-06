@@ -27,6 +27,19 @@ const TAIL_SILENCE: f32 = 1.0e-4;
 /// Safety cap on the tail (~3s) so a stuck/sustained voice can't render forever.
 const MAX_TAIL_BLOCKS: u32 = (SAMPLE_RATE as usize * 3 / BLOCK) as u32;
 
+/// MIDI file extensions, synthesized (not decoded) via this module. Like the other
+/// decoders' extension lists, this is the single place the router and the supported
+/// list agree on for MIDI (see the `supported_exts_match_the_router` guard test).
+pub const MIDI_EXTS: &[&str] = &["mid", "midi"];
+
+/// True when `path` is a MIDI file routed to this module.
+pub fn is_midi(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| MIDI_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
 /// Locate the bundled SoundFont: the first `.sf2` in a `soundfont/` folder in the
 /// working directory or next to the executable (same scheme as `skins/`).
 pub fn soundfont_path() -> Option<PathBuf> {

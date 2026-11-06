@@ -13,16 +13,23 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 - Decode MP3, MPEG Layer I/II (`.mp1`/`.mp2`/`.mpa`), FLAC, OGG/Vorbis, Opus, WAV,
   AIFF, CAF, AAC/M4A (`.m4a`/`.mp4`/`.m4b`/`.aac`), Monkey's Audio (`.ape`), WavPack
   (`.wv`), True Audio (`.tta`), Musepack (`.mpc`/`.mp+`/`.mpp`, SV7 and SV8),
+  DSD (`.dsf`/`.dff`, DSD64/128/256 decimated to PCM), Speex (`.spx`),
+  AMR (`.amr`/`.awb`, AMR-NB and AMR-WB),
   AC-3 (`.ac3`/`.eac3`, stereo and 5.1 downmix), the audio track of video
   containers (`.mp4`/`.m4v`/`.3gp`/`.mov`/`.mkv`/`.webm`/`.ogv`; MPEG-TS
   `.ts`/`.m2ts`/`.mts` via `mpeg2ts-reader`; AVI `.avi` via `filmcraft-avi` for
   MP3/MP2/PCM/AC-3; FLV `.flv` via `scuffle-flv` for MP3/AAC; MPEG program stream
   `.mpg`/`.mpeg`/`.vob` via `mpeg-ps` for MPEG-audio/AC-3), tracker modules
   (`.mod`/`.xm`/`.s3m`/`.it`) and MIDI (`.mid`/`.midi`, via a bundled SoundFont)
-- Windows Media Audio (`.wma`) in the optional FFmpeg build (`--features ffmpeg`),
-  decoded via `crate::ffdec` over the system FFmpeg libraries (LGPL). No permissive
-  pure-Rust WMA decoder exists, so the default build stays pure Rust and omits it;
-  the opt-in build links libav* and plays WMA v1/v2/Pro/Lossless downmixed to stereo
+- Windows Media Audio (`.wma`), DTS (`.dts`) and Dolby TrueHD / MLP (`.thd`/`.mlp`) in the
+  optional FFmpeg build (`--features ffmpeg`), decoded via `crate::ffdec` over FFmpeg (LGPL).
+  None has a permissive pure-Rust decoder mature enough for real-time playback (the pure-Rust
+  DTS crates are Core-profile only; the pure-Rust `truehd` crate is Apache-2.0 but self-described
+  as research-only with unoptimized DSP), so the default build stays pure Rust and omits them;
+  the opt-in build links libav* and plays WMA v1/v2/Pro/Lossless, DTS (DCA, incl. HD) and
+  TrueHD/MLP (lossless, incl. the Atmos core) downmixed to stereo. The TrueHD decoder is already
+  present in the bundled minimal FFmpeg, so it adds no dependency or binary size. This build is
+  the standard release, so shipped installers include all three
 - WavPack is decoded by the pure-Rust `wavicle` crate (symphonia 0.6's wavpack
   feature is a non-functional stub); lossless 16- and 24-bit integer, mono/stereo,
   any sample rate. Float, 8-bit, hybrid/lossy and multichannel `.wv` are refused
@@ -31,6 +38,20 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   Musepack decoder); both stream generations, SV7 (`MP+`) and SV8 (`MPCK`), mono and
   stereo. Vetted within 1 LSB of the ffmpeg `mpc8` oracle on real music before adding.
   The rare more-than-two-channel streams are refused cleanly
+- DSD (`.dsf`/`.dff`) is parsed by the pure-Rust `dsd-reader` crate; `crate::dsd` then
+  converts the 1-bit stream to PCM with its own two-stage decimating FIR (down to
+  44.1 kHz) and plays it as a normal source. DSD64/128/256, mono and stereo.
+  Uncompressed DSD only: DST-compressed DFF and more-than-two-channel streams are
+  refused cleanly (the only DST decoder is GPL, outside the permissive bar)
+- AMR (`.amr`/`.awb`) is decoded by the pure-Rust `rvoip-codec-core` crate (AMR-NB and
+  AMR-WB); unlike the Speex case the pure-Rust decoder is correct (it is tested against
+  the 3GPP conformance sequences and vetted at 0.9999 correlation vs the ffmpeg oracle,
+  so no C library is needed). The `.amr` storage container is parsed in `crate::amr`.
+  Single-channel; mono output at the stream's native rate
+- Speex (`.spx`) is demuxed from Ogg with the `ogg` crate and decoded by libspeex
+  (vendored C, built from source like libopus); the pure-Rust option decodes
+  incorrectly, so the reference decoder is used. Narrowband/wideband/ultra-wideband,
+  mono and stereo (stereo plays as dual-mono for now)
 - Audio CD playback (#160), verified on Windows and Linux hardware
 - WMA (#162): no permissive pure-Rust decoder exists, so it is supported only in the
   optional FFmpeg build (see above); the default pure-Rust build does not play it.

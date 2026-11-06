@@ -24,13 +24,21 @@ use ffmpeg::util::frame::audio::Audio as AudioFrame;
 use rodio::source::SeekError;
 use rodio::Source;
 
-/// Extensions routed through FFmpeg when the feature is on. WMA is the headline
-/// case (ASF container, wmav1/wmav2/WMA Pro/WMA Lossless), but FFmpeg demuxes and
-/// decodes them all behind one path.
+/// Extensions routed through FFmpeg when the feature is on: WMA (ASF container,
+/// wmav1/wmav2/WMA Pro/WMA Lossless), DTS (DCA Coherent Acoustics, incl. the HD
+/// extensions) and Dolby TrueHD / MLP (the MLP-based lossless codec used on Blu-ray,
+/// raw `.thd`/`.mlp` streams). None has a permissive pure-Rust decoder mature enough for
+/// real-time playback, so FFmpeg demuxes and decodes them through the one generic path
+/// here (multichannel is downmixed to stereo).
 pub fn is_ffmpeg_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("wma"))
+        .map(|e| {
+            e.eq_ignore_ascii_case("wma")
+                || e.eq_ignore_ascii_case("dts")
+                || e.eq_ignore_ascii_case("thd")
+                || e.eq_ignore_ascii_case("mlp")
+        })
         .unwrap_or(false)
 }
 
@@ -201,21 +209,45 @@ pub fn open(path: &Path) -> Result<FfmpegSource> {
     })
 }
 
-/// The length of a file FFmpeg can read, for the playlist, from the container
-/// metadata (no full decode). `None` when FFmpeg can't open it or reports no
-/// duration.
+/// The length of a file FFmpeg can read, for the playlist, without a full audio
+/// decode. `None` when FFmpeg can't open it or can't determine a length.
 pub fn duration(path: &Path) -> Option<Duration> {
     if !is_ffmpeg_audio(path) {
         return None;
     }
     ffmpeg::init().ok()?;
-    let ictx = ffmpeg::format::input(&path).ok()?;
+    let mut ictx = ffmpeg::format::input(&path).ok()?;
+    // Containered / bitrate-estimable inputs (WMA, DTS) report it directly:
     // ictx.duration() is in AV_TIME_BASE units (microseconds).
     let micros = ictx.duration();
-    if micros <= 0 {
+    if micros > 0 {
+        return Some(Duration::from_micros(micros as u64));
+    }
+    // Raw elementary streams (Dolby TrueHD / MLP, .thd/.mlp) carry no container
+    // duration, and FFmpeg can't estimate one from a lossless VBR bitrate. Sum the
+    // audio packets' own durations instead: this only demuxes (no decode), and each
+    // packet declares its sample count in the stream time base, so the total is
+    // exact and still cheap enough for the playlist scan. Without this the length
+    // only appears once playback starts (it is then backfilled from the source).
+    let (index, time_base) = {
+        let stream = ictx.streams().best(ffmpeg::media::Type::Audio)?;
+        (stream.index(), stream.time_base())
+    };
+    let mut units: i64 = 0;
+    for (stream, packet) in ictx.packets() {
+        if stream.index() == index {
+            let d = packet.duration();
+            if d > 0 {
+                units += d;
+            }
+        }
+    }
+    if units <= 0 {
         return None;
     }
-    Some(Duration::from_micros(micros as u64))
+    // units are in `time_base` ticks; seconds = units * (num / den).
+    let secs = units as f64 * time_base.numerator() as f64 / time_base.denominator() as f64;
+    (secs > 0.0).then(|| Duration::from_secs_f64(secs))
 }
 
 #[cfg(test)]
@@ -234,7 +266,7 @@ mod tests {
     #[test]
     fn decodes_close_to_the_ffmpeg_oracle() {
         let Some(wma) = sample() else { return };
-        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/hypno-wma-oracle.f32");
+        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/oracles/hypno-wma-oracle.f32");
         if !oracle_path.exists() {
             return;
         }
@@ -264,12 +296,122 @@ mod tests {
         assert!(rms < 1e-4, "RMS vs ffmpeg oracle too high: {rms}");
     }
 
+    /// Decode hypno-this.dts (DTS/DCA) and check it against an ffmpeg-CLI decode of the
+    /// same file (`ffmpeg -i hypno-this.dts -f f32le -ac 2 -ar 48000`... stored at the
+    /// file's native 44.1k). Both use ffmpeg's dca decoder, so the match is near-exact;
+    /// a small lag search absorbs any frame-alignment offset. (qa-music gitignored.)
+    #[test]
+    fn decodes_dts_close_to_the_ffmpeg_oracle() {
+        let dts = std::path::PathBuf::from("qa-music/format-samples/hypno-this.dts");
+        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/oracles/hypno-dts-oracle.f32");
+        if !dts.exists() || !oracle_path.exists() {
+            return;
+        }
+        let raw = std::fs::read(&oracle_path).unwrap();
+        let oracle: Vec<f32> = raw
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        let src = open(&dts).unwrap();
+        assert_eq!(src.channels(), 2, "stereo output");
+        let got: Vec<f32> = src.collect();
+        assert!(got.len() > 44_100 * 2, "too little audio");
+        // Left channels (step by 2).
+        let gl: Vec<f32> = got.iter().step_by(2).copied().collect();
+        let ol: Vec<f32> = oracle.iter().step_by(2).copied().collect();
+        let corr = |a: &[f32], b: &[f32]| -> f64 {
+            let n = a.len().min(b.len());
+            if n < 2000 {
+                return 0.0;
+            }
+            let (a, b) = (&a[..n], &b[..n]);
+            let (ma, mb) = (
+                a.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+                b.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+            );
+            let (mut num, mut da, mut db) = (0.0, 0.0, 0.0);
+            for i in 0..n {
+                let (xa, xb) = (a[i] as f64 - ma, b[i] as f64 - mb);
+                num += xa * xb;
+                da += xa * xa;
+                db += xb * xb;
+            }
+            if da <= 0.0 || db <= 0.0 { 0.0 } else { num / (da.sqrt() * db.sqrt()) }
+        };
+        let mut best = 0.0;
+        for lag in 0..600usize {
+            if lag >= gl.len() {
+                break;
+            }
+            let c = corr(&gl[lag..], &ol);
+            if c > best {
+                best = c;
+            }
+        }
+        assert!(best > 0.999, "DTS decode correlation vs oracle too low: {best:.4}");
+    }
+
+    /// Decode hypno-this.thd (Dolby TrueHD, MLP-based lossless) and check it against an
+    /// ffmpeg-CLI decode of the same file (the oracle: `ffmpeg -i hypno-this.thd -f f32le
+    /// -ac 2 -ar 44100`). Both use ffmpeg's truehd decoder, so the match is near-exact; a
+    /// small lag search absorbs any frame-alignment offset. (qa-music gitignored.)
+    #[test]
+    fn decodes_truehd_close_to_the_ffmpeg_oracle() {
+        let thd = std::path::PathBuf::from("qa-music/format-samples/hypno-this.thd");
+        let oracle_path =
+            std::path::PathBuf::from("qa-music/format-samples/oracles/hypno-truehd-oracle.f32");
+        if !thd.exists() || !oracle_path.exists() {
+            return;
+        }
+        let raw = std::fs::read(&oracle_path).unwrap();
+        let oracle: Vec<f32> = raw
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        let src = open(&thd).unwrap();
+        assert_eq!(src.channels(), 2, "stereo output");
+        let got: Vec<f32> = src.collect();
+        assert!(got.len() > 44_100 * 2, "too little audio");
+        let gl: Vec<f32> = got.iter().step_by(2).copied().collect();
+        let ol: Vec<f32> = oracle.iter().step_by(2).copied().collect();
+        let corr = |a: &[f32], b: &[f32]| -> f64 {
+            let n = a.len().min(b.len());
+            if n < 2000 {
+                return 0.0;
+            }
+            let (a, b) = (&a[..n], &b[..n]);
+            let (ma, mb) = (
+                a.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+                b.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+            );
+            let (mut num, mut da, mut db) = (0.0, 0.0, 0.0);
+            for i in 0..n {
+                let (xa, xb) = (a[i] as f64 - ma, b[i] as f64 - mb);
+                num += xa * xb;
+                da += xa * xa;
+                db += xb * xb;
+            }
+            if da <= 0.0 || db <= 0.0 { 0.0 } else { num / (da.sqrt() * db.sqrt()) }
+        };
+        let mut best = 0.0;
+        for lag in 0..600usize {
+            if lag >= gl.len() {
+                break;
+            }
+            let c = corr(&gl[lag..], &ol);
+            if c > best {
+                best = c;
+            }
+        }
+        assert!(best > 0.999, "TrueHD decode correlation vs oracle too low: {best:.4}");
+    }
+
     /// Seeking must land on the right samples: decode, seek to 40%, and confirm the
     /// first samples after the seek match the oracle at that offset.
     #[test]
     fn seek_lands_on_the_right_samples() {
         let Some(wma) = sample() else { return };
-        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/hypno-wma-oracle.f32");
+        let oracle_path = std::path::PathBuf::from("qa-music/format-samples/oracles/hypno-wma-oracle.f32");
         if !oracle_path.exists() {
             return;
         }
@@ -317,5 +459,20 @@ mod tests {
         let Some(wma) = sample() else { return };
         let d = duration(&wma).expect("wma duration");
         assert!(d.as_secs() > 1 && d.as_secs() < 600, "duration {d:?}");
+    }
+
+    /// Raw TrueHD/MLP streams carry no container duration, so duration() must sum
+    /// the packets' own durations to report a length before playback (otherwise the
+    /// playlist shows no time until the track is played). Local sample only.
+    #[test]
+    fn duration_of_raw_truehd_without_container() {
+        for name in ["hypno-this.thd", "hypno-this.mlp"] {
+            let p = std::path::PathBuf::from(format!("qa-music/format-samples/{name}"));
+            if !p.exists() {
+                continue;
+            }
+            let d = duration(&p).unwrap_or_else(|| panic!("{name} duration should be Some"));
+            assert!(d.as_secs() > 1 && d.as_secs() < 600, "{name} duration {d:?}");
+        }
     }
 }
