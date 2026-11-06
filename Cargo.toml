@@ -1,6 +1,6 @@
 [package]
 name = "linamp"
-version = "1.0.7"
+version = "1.0.8"
 edition = "2021"
 description = "LinAmp - a Winamp-inspired audio player for Linux and Windows, built in Rust"
 authors = ["LinAmp contributors"]
