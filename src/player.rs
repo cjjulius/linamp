@@ -34,6 +34,11 @@ pub struct Player {
     /// Extra output gain multiplier for fades (1.0 = normal).
     fade: f32,
     current_path: Option<PathBuf>,
+    /// Total length of the source now playing, captured when it was appended. Lets
+    /// the UI show a time and a working scrub bar for formats whose length isn't
+    /// known from a cheap metadata scan (raw TrueHD/MLP streams decode fully, so the
+    /// source knows its length even though `ffdec::duration` can't read it upfront).
+    current_total: Option<Duration>,
     /// The streaming URL currently playing (classic "Open location"), if any.
     current_url: Option<String>,
     /// Live ICY stream title for the current stream (updated by its decode thread).
@@ -76,6 +81,7 @@ impl Player {
             volume: 0.8,
             fade: 1.0,
             current_path: None,
+            current_total: None,
             current_url: None,
             stream_title: None,
             viz: VizShared::new(),
@@ -258,6 +264,10 @@ impl Player {
     {
         self.viz.clear();
         self.viz.set_rate(source.sample_rate());
+        // Capture the source's own length before it's consumed into the sink. For
+        // raw streams (TrueHD/MLP) this is the only reliable duration, since the
+        // cheap metadata scan can't read one; the UI backfills the track from it.
+        self.current_total = source.total_duration();
         // Shape with the EQ, then tap for visualization so the analyzer reflects
         // what you hear, and apply stereo balance last.
         let equalized = eq::eq(source, self.eq.clone());
@@ -509,6 +519,13 @@ impl Player {
             .as_ref()
             .map(|s| s.get_pos())
             .unwrap_or_default()
+    }
+
+    /// Length of the source currently playing, if it reported one. Used to backfill
+    /// a track's duration when the cheap metadata scan couldn't read it (raw
+    /// TrueHD/MLP), so the time display and scrub bar work.
+    pub fn total_duration(&self) -> Option<Duration> {
+        self.current_total
     }
 
     /// Seek to an absolute position. Not all formats support seeking.
