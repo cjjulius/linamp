@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ac3;
+mod amr;
 mod ape;
 mod app;
 mod avi;
