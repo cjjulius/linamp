@@ -5,6 +5,10 @@ Ubuntu-based Linux (Pop!_OS, Mint). The official installers are built by CI from
 a `vX.Y.Z` tag, but the tag is only pushed after the Linux machine signs off
 on the same build.
 
+Each installer bundles FFmpeg (for WMA and other formats with no permissive
+pure-Rust decoder), so one installer per platform carries everything with no
+extra downloads or separate DLLs. This is the default release configuration.
+
 ## Artifacts
 
 | Platform | Package | Installs to | How |
@@ -19,12 +23,18 @@ intact by uninstalls.
 ## Gated release flow
 
 1. Branch & version. Work on `release/vX.Y.Z`. Set `version` in `Cargo.toml`.
-2. Windows candidate (dev box).
+2. Windows candidate. The authoritative installer is the one CI builds; it
+   always bundles FFmpeg. For a local candidate that matches it, from a
+   "Developer PowerShell for VS" (so the MSVC headers are on `INCLUDE`):
    ```powershell
-   packaging\windows\build-installer.ps1
+   packaging\windows\build-installer.ps1 -FfmpegBin "<FFmpeg 5.1.x shared build>\bin"
    ```
-   Requires Inno Setup 6.3+ (`choco install innosetup`). Install the resulting
-   `dist\LinAmp-<ver>-Setup.exe` and smoke-test it.
+   That builds the WMA-bundled installer. A bare `build-installer.ps1` builds a
+   dev installer without WMA, fine for quick UI iteration but not for shipping.
+   The `--features ffmpeg` build also needs LLVM for bindgen (the pinned bindgen
+   wants LLVM 14; set `LIBCLANG_PATH`). Requires Inno Setup 6.3+
+   (`choco install innosetup`). Install the resulting
+   `dist\LinAmp-<ver>-Setup.exe` and smoke-test it, WMA playback included.
 3. Linux candidate (Linux box). Pull the branch, then:
    ```sh
    sh packaging/linux/build-tarball.sh
