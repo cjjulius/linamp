@@ -91,6 +91,20 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "at3",
     #[cfg(feature = "ffmpeg")]
     "aea",
+    // Older/retro formats FFmpeg already decodes natively (bundled): Shorten (lossless),
+    // CRI ADX (game audio), Amiga 8SVX, Creative Voice, Sun/NeXT, Sony Wave64.
+    #[cfg(feature = "ffmpeg")]
+    "shn",
+    #[cfg(feature = "ffmpeg")]
+    "8svx",
+    #[cfg(feature = "ffmpeg")]
+    "adx",
+    #[cfg(feature = "ffmpeg")]
+    "voc",
+    #[cfg(feature = "ffmpeg")]
+    "au",
+    #[cfg(feature = "ffmpeg")]
+    "w64",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -770,7 +784,7 @@ mod tests {
             ("flv", crate::flv::is_flv, vec!["flv"]),
         ];
         #[cfg(feature = "ffmpeg")]
-        decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts", "thd", "mlp", "ra", "rm", "tak", "oma", "omg", "aa3", "at3", "aea"]));
+        decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts", "thd", "mlp", "ra", "rm", "tak", "oma", "omg", "aa3", "at3", "aea", "shn", "8svx", "adx", "voc", "au", "w64"]));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.
