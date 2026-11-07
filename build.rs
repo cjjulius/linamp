@@ -24,6 +24,7 @@ fn main() {
     copy_asset_dir(&manifest, &target_dir, "soundfont");
     copy_asset_dir(&manifest, &target_dir, "music");
     link_gme(&manifest, &target_dir);
+    link_openmpt(&manifest, &target_dir);
 }
 
 /// Link libgme for the `gme` feature and copy its shared library next to the binary (into
@@ -56,6 +57,45 @@ fn link_gme(manifest: &Path, target_dir: &Path) {
             for e in entries.flatten() {
                 let name = e.file_name();
                 if name.to_string_lossy().contains("libgme.so") {
+                    let _ = fs::copy(e.path(), dst.join(&name));
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
+}
+
+/// Link libopenmpt for the `openmpt` feature and copy its shared library next to the binary,
+/// exactly as `link_gme` does for libgme (runtime resolution via an `$ORIGIN/lib` rpath). The
+/// library is found at `$OPENMPT_DIR` (a prefix with `lib/libopenmpt.so`), defaulting to the
+/// in-repo `build/openmpt-min` that `packaging/linux/build-openmpt-min.sh` produces. No-op
+/// without the feature.
+fn link_openmpt(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=OPENMPT_DIR");
+    if env::var_os("CARGO_FEATURE_OPENMPT").is_none() {
+        return;
+    }
+    let dir = env::var_os("OPENMPT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/openmpt-min"));
+    let libdir = dir.join("lib");
+    println!("cargo:rustc-link-search=native={}", libdir.display());
+    println!("cargo:rustc-link-lib=dylib=openmpt");
+
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        if let Ok(entries) = fs::read_dir(&libdir) {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                if name.to_string_lossy().contains("libopenmpt.so") {
+                    // Follow the symlink and copy the real shared object under each name, so a
+                    // dev link into a system libopenmpt bundles a usable file (not a dangling
+                    // link) next to the binary.
                     let _ = fs::copy(e.path(), dst.join(&name));
                 }
             }

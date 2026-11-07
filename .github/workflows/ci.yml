@@ -83,11 +83,20 @@ jobs:
           sh packaging/linux/build-gme-min.sh "$PWD/build/gme-min"
           echo "GME_DIR=$PWD/build/gme-min" >> "$GITHUB_ENV"
 
-      - name: Build and test (Linux, ffmpeg + gme)
+      # libopenmpt (the tracker "zoo") is built from source too, the same way as libgme. Its
+      # module decode tests skip without the gitignored qa-music samples, so on CI this is the
+      # compile check plus the router/MIME guards.
+      - name: Build libopenmpt (Linux)
         if: runner.os == 'Linux'
         run: |
-          cargo build --features ffmpeg,gme --verbose
-          LD_LIBRARY_PATH="$GME_DIR/lib" cargo test --features ffmpeg,gme --verbose
+          sh packaging/linux/build-openmpt-min.sh "$PWD/build/openmpt-min"
+          echo "OPENMPT_DIR=$PWD/build/openmpt-min" >> "$GITHUB_ENV"
+
+      - name: Build and test (Linux, ffmpeg + gme + openmpt)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --features ffmpeg,gme,openmpt --verbose
+          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib" cargo test --features ffmpeg,gme,openmpt --verbose
 
       # Windows builds libgme and its zlib dependency from source (no system libgme/zlib),
       # then builds and tests the full feature set (ffmpeg + gme). build.rs links $GME_DIR;
@@ -174,13 +183,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # ---- Linux: per-user tarball (ffmpeg + gme, their libraries bundled) ----
-      # build-tarball.sh builds and bundles a self-contained FFmpeg and libgme, so the tarball
-      # needs no system FFmpeg or libgme at runtime. The Windows installer still ships ffmpeg
-      # only until the Windows libgme build and DLL bundling land (Windows box).
+      # ---- Linux: per-user tarball (ffmpeg + gme + openmpt, their libraries bundled) ----
+      # build-tarball.sh builds and bundles a self-contained FFmpeg, libgme and libopenmpt, so the
+      # tarball needs none of them at runtime. The Windows installer ships ffmpeg + gme; libopenmpt
+      # on Windows lands when the Windows box adds its build and DLL bundling.
       - name: Build Linux tarball
         if: runner.os == 'Linux'
-        run: FEATURES=ffmpeg,gme sh packaging/linux/build-tarball.sh
+        run: FEATURES=ffmpeg,gme,openmpt sh packaging/linux/build-tarball.sh
 
       - name: Upload Linux tarball
         if: runner.os == 'Linux'

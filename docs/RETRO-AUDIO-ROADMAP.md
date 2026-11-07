@@ -218,8 +218,11 @@ Phase 1 - FFmpeg freebies
 - [ ] Speech: GSM (.gsm), G.729, QCELP, EVRC, iLBC (as useful)
 
 Phase 2 - Retro multipliers
-- [ ] Game Music Emu (NSF/SPC/GBS/VGM/AY/GYM/HES/KSS/SAP)
-- [ ] libopenmpt (the tracker zoo)
+- [x] Game Music Emu (NSF/SPC/GBS/VGM/AY/GYM/HES/KSS/SAP) - merged to main.
+- [x] libopenmpt (the tracker zoo) - `openmpt` feature, src/openmpt.rs (streaming FFI). ~28 of the
+  ~30 formats sampled and passing the visualizer test (see cookbook); `.stx`/`.j2b`/`.umx` are
+  supported but have no free QA sample yet. xmrs keeps mod/xm/s3m/it. Windows libopenmpt build and
+  DLL bundling still pending on the Windows box.
 - [ ] AdPlug / libADLMIDI (OPL FM, DRO/IMF/RAD, Doom MUS)
 - [ ] libsidplayfp (.sid)
 
@@ -306,6 +309,10 @@ LinAmp plays subsong 0, so choose one whose first track has audio.
     `python3 -c 'import struct,zlib,sys; d=open(sys.argv[1],"rb").read(); assert d[:4]==b"GYMX";
     n=struct.unpack_from("<I",d,424)[0]; b=d[428:]; open(sys.argv[2],"wb").write(zlib.decompress(b) if n else b)'
     packed.gym gym-sample.gym`
+    Pick an actual game soundtrack, not a utility: the sample in use is
+    `Megadrive GYM/_unknown/Sonic 2 Time Zone/sonic 2 time zone - title screen theme.gym` (a clear
+    ~61s melody that is easy to QA). The earlier "Art Alive" file was a drawing program's sparse,
+    noise-like audio and hard to judge by ear.
   - `.kss` (MSX): most KSS rips have a silent subsong 0 and LinAmp plays subsong 0. Of the whole
     Modland "KSS" collection (17 authors), only `KSS/Airborne/nemesis gametune.kss` has an audible
     first track; use that until the subsong-selection feature lands.
@@ -327,6 +334,27 @@ LinAmp plays subsong 0, so choose one whose first track has audio.
     out += chunk(b"DATA", nsf[0x80:]) + chunk(b"NEND", b"")
     open(sys.argv[2], "wb").write(out)
     ```
+
+### Tracker zoo (crate::openmpt, `--features openmpt`)
+libopenmpt plays ~30 module formats beyond xmrs's mod/xm/s3m/it; one build plays all. There is no
+encoder, so procure small modules per format from Modland (modland.com/pub/modules/<Format>/...),
+one file per extension named `<ext>-sample.<ext>`. libopenmpt detects format by content, so the
+on-disk extension only has to route the file to the decoder; a module stored under a different name
+on Modland can be saved under the target extension. No oracle: libopenmpt is the only decoder, so
+the test is a render smoke test (non-silent audio), same as the chiptunes. Prefer short tunes
+(most Modland modules are full songs; the source streams, so length does not bloat the tests, but a
+shorter file is nicer for manual QA). Format -> Modland directory used:
+- `669` Composer 669 | `amf` Asylum | `ams` Velvet Studio | `c67` Composer 670 (CDFM) |
+  `dbm` Digibooster Pro | `digi` Digibooster | `dmf` X-Tracker | `dtm` Digital Tracker DTM |
+  `far` Farandole Composer | `gdm` General DigiMusic | `imf` Imago Orpheus | `mdl` Digitrakker |
+  `med` OctaMED MMD0 (files are `.mmd0`; save as `.med`) | `mptm` OpenMPT MPTM |
+  `mt2` Mad Tracker 2 | `mtm` Multitracker | `okt` Oktalyzer (files are `.okta`; save as `.okt`) |
+  `plm` Disorder Tracker 2 | `psm` Epic Megagames MASI | `ptm` Polytracker |
+  `stm` Screamtracker 2 | `stp` Soundtracker Pro II | `symmod` Symphonie | `ult` Ultratracker.
+- `dsm`: use "Digital Sound Interface Kit RIFF" (the RIFF DSM), not the plain "Digital Sound
+  Interface Kit" dir - the older DSIK `.dsm` files fail to load in libopenmpt 0.6.1.
+- No free sample located yet (supported, untested here): `.stx` (STMIK), `.j2b` (Galaxy / Jazz
+  Jackrabbit 2), `.umx` (Unreal/UT package). Procure from game data when available.
 
 ### Oracles
 The `oracles/*.f32` and `*.s16` files are headerless raw-PCM decode references for the correlation
