@@ -256,6 +256,46 @@ pub fn duration(path: &Path) -> Option<Duration> {
     ms.map(|ms| Duration::from_millis(ms as u64))
 }
 
+// A GYM register dump is a log of hardware writes clocked at one frame per 1/60 s (NTSC
+// Genesis), so its length is the frame count over 60. These are the raw-GYM commands; an
+// unknown byte means the stream is not a plain register log we can trust, so we give up.
+const GYM_FRAME: u8 = 0x00; // end of frame (advance 1/60 s)
+const GYM_YM0: u8 = 0x01; // YM2612 port 0 write: 2 operand bytes
+const GYM_YM1: u8 = 0x02; // YM2612 port 1 write: 2 operand bytes
+const GYM_PSG: u8 = 0x03; // PSG write: 1 operand byte
+
+/// A cheap, approximate length for a register-dump chiptune that declares none, read from the
+/// file's structure without rendering audio. Only GYM is handled: libgme reports no length for
+/// a raw GYM (see `duration`), yet its frame-clocked log gives a length within a few percent by
+/// counting frames. This is a provisional estimate for the playlist to show at add time; the
+/// player backfills the exact length from the render once the track plays, so a small
+/// over/under-estimate here never reaches the scrub bar during playback. `None` for any other
+/// format and for a GYM whose bytes are not a plain register log (for example a packed `GYMX`,
+/// which libgme cannot play anyway).
+pub fn estimated_duration(path: &Path) -> Option<Duration> {
+    if !has_ext(path, &["gym"]) {
+        return None;
+    }
+    let data = std::fs::read(path).ok()?;
+    if data.starts_with(b"GYMX") {
+        return None;
+    }
+    let mut i = 0usize;
+    let mut frames: u64 = 0;
+    while i < data.len() {
+        match data[i] {
+            GYM_FRAME => {
+                frames += 1;
+                i += 1;
+            }
+            GYM_YM0 | GYM_YM1 => i += 3,
+            GYM_PSG => i += 2,
+            _ => return None, // not a plain register log; don't trust the count
+        }
+    }
+    (frames > 0).then(|| Duration::from_secs_f64(frames as f64 / 60.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,11 +349,33 @@ mod tests {
         }
         let rendered = open(&path).unwrap().total_duration().expect("rendered length");
         assert!(rendered.as_secs() > 1, "implausibly short render: {rendered:?}");
-        // No declared length in a raw GYM, so the add-time probe reports nothing.
-        assert!(duration(&path).is_none(), "GYM should report no add-time length");
-        // The invariant that keeps scrubbing correct: shown length <= rendered buffer.
+        // No declared length in a raw GYM, so the exact add-time probe reports nothing.
+        assert!(duration(&path).is_none(), "GYM should report no exact add-time length");
+        // The invariant that keeps scrubbing correct: an exact length <= rendered buffer.
         if let Some(d) = duration(&path) {
             assert!(d <= rendered, "shown {d:?} exceeds rendered {rendered:?}");
         }
+    }
+
+    /// The provisional estimate for a GYM (its frame count over 60) is shown in the playlist
+    /// at add time, then corrected from the render on play. It need not be exact, only close:
+    /// assert it is within 5% of the rendered length. Local sample only.
+    #[test]
+    fn gym_estimated_duration_is_close_to_rendered() {
+        let path = std::path::PathBuf::from("qa-music/format-samples/gym-sample.gym");
+        if !path.exists() {
+            return;
+        }
+        let rendered = open(&path).unwrap().total_duration().expect("rendered length");
+        let est = estimated_duration(&path).expect("GYM should have a frame-count estimate");
+        let err = (est.as_secs_f64() - rendered.as_secs_f64()).abs() / rendered.as_secs_f64();
+        assert!(err < 0.05, "estimate {est:?} is {:.1}% off rendered {rendered:?}", err * 100.0);
+    }
+
+    #[test]
+    fn estimated_duration_only_handles_gym() {
+        // Not a register dump with a missing length: no estimate.
+        assert!(estimated_duration(std::path::Path::new("x.nsf")).is_none());
+        assert!(estimated_duration(std::path::Path::new("x.mp3")).is_none());
     }
 }
