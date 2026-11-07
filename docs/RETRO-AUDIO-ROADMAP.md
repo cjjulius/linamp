@@ -353,6 +353,8 @@ shorter file is nicer for manual QA). Format -> Modland directory used:
   `stm` Screamtracker 2 | `stp` Soundtracker Pro II | `symmod` Symphonie | `ult` Ultratracker.
 - `dsm`: use "Digital Sound Interface Kit RIFF" (the RIFF DSM), not the plain "Digital Sound
   Interface Kit" dir - the older DSIK `.dsm` files fail to load in libopenmpt 0.6.1.
+- `c67`: the "Composer 670 (CDFM)" dir holds both `.670` and `.c67` files; take a `.c67` one
+  (save as `c67-sample.c67`). The `.670` variant does not load in libopenmpt (tested 0.8.9).
 - No free sample located yet (supported, untested here): `.stx` (STMIK), `.j2b` (Galaxy / Jazz
   Jackrabbit 2), `.umx` (Unreal/UT package). Procure from game data when available.
 
