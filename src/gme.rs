@@ -243,21 +243,30 @@ mod tests {
         assert!(!is_gme(std::path::Path::new("noext")));
     }
 
-    /// Render the first subsong of a real NSF and confirm it produces a plausible amount of
-    /// non-silent stereo audio. libgme is the only decoder, so there is no independent oracle;
-    /// this is a decode/render smoke test. (qa-music is gitignored, so it skips on CI.)
+    /// Render the first subsong of each real chiptune sample present and confirm it produces a
+    /// plausible amount of non-silent stereo audio, one sample per chip family (NES, Game Boy,
+    /// PC Engine, MSX, Atari). libgme is the only decoder, so there is no independent oracle;
+    /// this is a decode/render smoke test. (qa-music is gitignored, so each skips on CI.)
     #[test]
-    fn renders_a_real_nsf() {
-        let nsf = std::path::PathBuf::from("qa-music/format-samples/nsf-sample.nsf");
-        if !nsf.exists() {
-            return;
+    fn renders_real_chiptunes() {
+        let samples = [
+            "nsf-sample.nsf",
+            "gbs-sample.gbs",
+            "hes-sample.hes",
+            "sap-sample.sap",
+        ];
+        for name in samples {
+            let path = std::path::PathBuf::from(format!("qa-music/format-samples/{name}"));
+            if !path.exists() {
+                continue;
+            }
+            let src = open(&path).unwrap_or_else(|e| panic!("open {name}: {e}"));
+            assert_eq!(src.channels(), 2, "{name}: stereo output");
+            assert_eq!(src.sample_rate(), 44_100, "{name}: 44.1k");
+            let got: Vec<f32> = src.collect();
+            assert!(got.len() > 44_100 * 2, "{name}: too little audio: {}", got.len());
+            let peak = got.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+            assert!(peak > 0.01, "{name}: rendered near-silence (peak {peak})");
         }
-        let src = open(&nsf).unwrap();
-        assert_eq!(src.channels(), 2, "stereo output");
-        assert_eq!(src.sample_rate(), 44_100);
-        let got: Vec<f32> = src.collect();
-        assert!(got.len() > 44_100 * 2, "too little audio: {}", got.len());
-        let peak = got.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
-        assert!(peak > 0.01, "rendered near-silence (peak {peak})");
     }
 }
