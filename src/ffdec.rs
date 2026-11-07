@@ -26,10 +26,16 @@ use rodio::Source;
 
 /// Extensions routed through FFmpeg when the feature is on: WMA (ASF container,
 /// wmav1/wmav2/WMA Pro/WMA Lossless), DTS (DCA Coherent Acoustics, incl. the HD
-/// extensions) and Dolby TrueHD / MLP (the MLP-based lossless codec used on Blu-ray,
-/// raw `.thd`/`.mlp` streams). None has a permissive pure-Rust decoder mature enough for
-/// real-time playback, so FFmpeg demuxes and decodes them through the one generic path
-/// here (multichannel is downmixed to stereo).
+/// extensions), Dolby TrueHD / MLP (the MLP-based lossless codec used on Blu-ray,
+/// raw `.thd`/`.mlp` streams), and RealAudio / RealMedia (`.ra`/`.rm`: the RealMedia
+/// demuxer plus the reverse-engineered RealAudio decoders: ra_144/ra_288, Cook,
+/// SIPR, ATRAC3 and RealAudio Lossless). None has a permissive pure-Rust decoder
+/// mature enough for real-time playback, so FFmpeg demuxes and decodes them through
+/// the one generic path here (multichannel is downmixed to stereo; a `.rm` that also
+/// carries video plays its best audio stream).
+///
+/// `.ram` is deliberately excluded: it is a plain-text metafile holding a stream URL,
+/// not an audio container, so it would belong to playlist handling, not the decoder.
 pub fn is_ffmpeg_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -38,6 +44,8 @@ pub fn is_ffmpeg_audio(path: &Path) -> bool {
                 || e.eq_ignore_ascii_case("dts")
                 || e.eq_ignore_ascii_case("thd")
                 || e.eq_ignore_ascii_case("mlp")
+                || e.eq_ignore_ascii_case("ra")
+                || e.eq_ignore_ascii_case("rm")
         })
         .unwrap_or(false)
 }
@@ -404,6 +412,121 @@ mod tests {
             }
         }
         assert!(best > 0.999, "TrueHD decode correlation vs oracle too low: {best:.4}");
+    }
+
+    /// Decode hypno-this.ra (RealAudio, via the RealMedia demuxer) and check it against an
+    /// ffmpeg-CLI decode of the same file (the oracle: `ffmpeg -i hypno-this.ra -f f32le
+    /// -ac 2 -ar 8000`). The sample is RealAudio 1.0 (ra_144, 8 kHz mono, upmixed to
+    /// stereo); both paths run ffmpeg's ra_144 decoder, so the match is near-exact. A small
+    /// lag search absorbs any frame-alignment offset. (qa-music gitignored, so this skips
+    /// on CI.) RealAudio in the wild is usually Cook; a Cook `.ra`/`.rm` with its own oracle
+    /// drops into this same shape when present (see the README for making one).
+    #[test]
+    fn decodes_realaudio_close_to_the_ffmpeg_oracle() {
+        let ra = std::path::PathBuf::from("qa-music/format-samples/hypno-this.ra");
+        let oracle_path =
+            std::path::PathBuf::from("qa-music/format-samples/oracles/hypno-ra-oracle.f32");
+        if !ra.exists() || !oracle_path.exists() {
+            return;
+        }
+        let raw = std::fs::read(&oracle_path).unwrap();
+        let oracle: Vec<f32> = raw
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        let src = open(&ra).unwrap();
+        assert_eq!(src.channels(), 2, "stereo output");
+        let got: Vec<f32> = src.collect();
+        assert!(got.len() > 8_000 * 2, "too little audio");
+        let gl: Vec<f32> = got.iter().step_by(2).copied().collect();
+        let ol: Vec<f32> = oracle.iter().step_by(2).copied().collect();
+        let corr = |a: &[f32], b: &[f32]| -> f64 {
+            let n = a.len().min(b.len());
+            if n < 2000 {
+                return 0.0;
+            }
+            let (a, b) = (&a[..n], &b[..n]);
+            let (ma, mb) = (
+                a.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+                b.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+            );
+            let (mut num, mut da, mut db) = (0.0, 0.0, 0.0);
+            for i in 0..n {
+                let (xa, xb) = (a[i] as f64 - ma, b[i] as f64 - mb);
+                num += xa * xb;
+                da += xa * xa;
+                db += xb * xb;
+            }
+            if da <= 0.0 || db <= 0.0 { 0.0 } else { num / (da.sqrt() * db.sqrt()) }
+        };
+        let mut best = 0.0;
+        for lag in 0..600usize {
+            if lag >= gl.len() {
+                break;
+            }
+            let c = corr(&gl[lag..], &ol);
+            if c > best {
+                best = c;
+            }
+        }
+        assert!(best > 0.999, "RealAudio decode correlation vs oracle too low: {best:.4}");
+    }
+
+    /// Decode cook-sample.rm (RealAudio Cook / G2, the codec RealAudio files use in
+    /// practice) and check it against an ffmpeg-CLI decode (`ffmpeg -i cook-sample.rm
+    /// -f f32le -ac 2 -ar 44100`). Cook is decode-only (no encoder), so this uses a real
+    /// RealMedia sample rather than a minted one; both paths run ffmpeg's cook decoder, so
+    /// the match is near-exact, with a small lag search for frame alignment. (qa-music
+    /// gitignored; see the README for fetching the sample.)
+    #[test]
+    fn decodes_cook_close_to_the_ffmpeg_oracle() {
+        let rm = std::path::PathBuf::from("qa-music/format-samples/cook-sample.rm");
+        let oracle_path =
+            std::path::PathBuf::from("qa-music/format-samples/oracles/cook-oracle.f32");
+        if !rm.exists() || !oracle_path.exists() {
+            return;
+        }
+        let raw = std::fs::read(&oracle_path).unwrap();
+        let oracle: Vec<f32> = raw
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        let src = open(&rm).unwrap();
+        assert_eq!(src.channels(), 2, "stereo output");
+        let got: Vec<f32> = src.collect();
+        assert!(got.len() > 44_100, "too little audio");
+        let gl: Vec<f32> = got.iter().step_by(2).copied().collect();
+        let ol: Vec<f32> = oracle.iter().step_by(2).copied().collect();
+        let corr = |a: &[f32], b: &[f32]| -> f64 {
+            let n = a.len().min(b.len());
+            if n < 2000 {
+                return 0.0;
+            }
+            let (a, b) = (&a[..n], &b[..n]);
+            let (ma, mb) = (
+                a.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+                b.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+            );
+            let (mut num, mut da, mut db) = (0.0, 0.0, 0.0);
+            for i in 0..n {
+                let (xa, xb) = (a[i] as f64 - ma, b[i] as f64 - mb);
+                num += xa * xb;
+                da += xa * xa;
+                db += xb * xb;
+            }
+            if da <= 0.0 || db <= 0.0 { 0.0 } else { num / (da.sqrt() * db.sqrt()) }
+        };
+        let mut best = 0.0;
+        for lag in 0..600usize {
+            if lag >= gl.len() {
+                break;
+            }
+            let c = corr(&gl[lag..], &ol);
+            if c > best {
+                best = c;
+            }
+        }
+        assert!(best > 0.999, "Cook decode correlation vs oracle too low: {best:.4}");
     }
 
     /// Seeking must land on the right samples: decode, seek to 40%, and confirm the
