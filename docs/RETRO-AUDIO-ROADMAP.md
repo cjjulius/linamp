@@ -295,6 +295,10 @@ LinAmp plays subsong 0, so choose one whose first track has audio.
 - NES `.nsf`: "Nintendo Sound Format" | Game Boy `.gbs`: "Gameboy Sound System" | PC Engine `.hes`:
   "HES" | Atari `.sap`: "Slight Atari Player" | SNES `.spc`: "Nintendo SPC" | Sega/arcade `.vgz`
   (gzipped VGM): "Video Game Music".
+- `.vgm` (raw, uncompressed VGM): the same format as `.vgz` without the gzip wrapper, so just
+  gunzip the `.vgz` sample into a `.vgm` one (both route to libgme, but each is its own supported
+  extension, so cover both): `python3 -c 'import gzip,sys;
+  open(sys.argv[2],"wb").write(gzip.decompress(open(sys.argv[1],"rb").read()))' vgz-sample.vgz vgm-sample.vgm`
 - The four formats Modland does not serve directly (all now sampled; recipes below):
   - `.ay` (ZX Spectrum / Amstrad CPC): Modland's AY dirs hold `.emul`/`.amad`/`.strc`, not raw `.ay`.
     Pull a raw `.ay` (magic `ZXAYEMUL`) from the chris-y/AY mirror of Project AY. The `games`
@@ -355,8 +359,16 @@ shorter file is nicer for manual QA). Format -> Modland directory used:
   Interface Kit" dir - the older DSIK `.dsm` files fail to load in libopenmpt 0.6.1.
 - `c67`: the "Composer 670 (CDFM)" dir holds both `.670` and `.c67` files; take a `.c67` one
   (save as `c67-sample.c67`). The `.670` variant does not load in libopenmpt (tested 0.8.9).
-- No free sample located yet (supported, untested here): `.stx` (STMIK), `.j2b` (Galaxy / Jazz
-  Jackrabbit 2), `.umx` (Unreal/UT package). Procure from game data when available.
+- `.j2b` (Galaxy / Jazz Jackrabbit 2): The Mod Archive has these (search by format J2B). The
+  game's own tracks are there, e.g. `water.j2b` at
+  `https://api.modarchive.org/downloads.php?moduleid=194172` (magic `MUSE`).
+- `.stx` (STMIK, the STM-to-S3M transitional format): rare, but libxmp's test corpus has a real
+  one: `https://raw.githubusercontent.com/libxmp/libxmp/master/test-dev/data/m/FutureBrain.stx`
+  (magic `!Scream!` at offset 0x14).
+- `.umx` (Unreal/UT package): still no freely-downloadable playable sample. Every GitHub copy
+  found is a 206-byte stub, and the archive.org items are converted MP3/FLAC, not raw `.umx`. A
+  real one lives in a Deus Ex / Unreal / UT install's `Music/` folder, or wrap a module into one
+  with bunnytrack/umx-converter. Supported but untested here.
 
 ### Oracles
 The `oracles/*.f32` and `*.s16` files are headerless raw-PCM decode references for the correlation
