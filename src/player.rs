@@ -522,6 +522,11 @@ fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
     if crate::tracker::is_tracker(path) {
         return Ok(Box::new(crate::tracker::open_tracker(path)?));
     }
+    // The tracker "zoo" (the ~30 module formats xmrs doesn't cover), via libopenmpt.
+    #[cfg(feature = "openmpt")]
+    if crate::openmpt::is_openmpt(path) {
+        return Ok(Box::new(crate::openmpt::open(path)?));
+    }
     if crate::ape::is_ape(path) {
         return Ok(Box::new(crate::ape::open_ape(path)?));
     }
