@@ -292,9 +292,11 @@ LinAmp plays subsong 0, so choose one whose first track has audio.
   (gzipped VGM): "Video Game Music".
 - The four formats Modland does not serve directly (all now sampled; recipes below):
   - `.ay` (ZX Spectrum / Amstrad CPC): Modland's AY dirs hold `.emul`/`.amad`/`.strc`, not raw `.ay`.
-    Pull a raw `.ay` (magic `ZXAYEMUL`) from the chris-y/AY mirror of Project AY:
-    `https://raw.githubusercontent.com/chris-y/AY/main/music/ay/games/<name>.ay` (URL-encode spaces
-    and `[]`). `ATF(AdvancedTacticalFighter).ay` is single-track and loud (subsong 0 audible).
+    Pull a raw `.ay` (magic `ZXAYEMUL`) from the chris-y/AY mirror of Project AY. The `games`
+    tree is split into one subdirectory per leading letter, so the path carries that letter:
+    `https://raw.githubusercontent.com/chris-y/AY/main/music/ay/games/<letter>/<name>.ay`
+    (URL-encode spaces and `[]`). `a/ATF(AdvancedTacticalFighter).ay` is single-track and loud
+    (subsong 0 audible).
   - `.gym` (Sega Genesis): Modland's "Megadrive GYM" files are PACKED (magic `GYMX`), which libgme
     0.6.3 rejects with "Packed GYM file not supported". Unpack to a raw register dump libgme accepts:
     strip the 428-byte GYMX header, then zlib-decompress the body when the uint32 at header offset

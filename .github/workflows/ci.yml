@@ -89,13 +89,25 @@ jobs:
           cargo build --features ffmpeg,gme --verbose
           LD_LIBRARY_PATH="$GME_DIR/lib" cargo test --features ffmpeg,gme --verbose
 
-      # Windows gets the gme feature once the Windows libgme build and DLL bundling land
-      # (tracked for the Windows box); for now it builds and tests the ffmpeg set.
-      - name: Build and test (Windows, ffmpeg)
+      # Windows builds libgme and its zlib dependency from source (no system libgme/zlib),
+      # then builds and tests the full feature set (ffmpeg + gme). build.rs links $GME_DIR;
+      # the test binary loads gme.dll and zlib.dll from the bin dirs put on PATH below. The
+      # gme decode tests skip without the gitignored qa-music samples, so on CI this is a
+      # compile check plus the router/MIME guards, same as Linux.
+      - name: Build libgme + zlib (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh packaging\windows\build-gme.ps1
+          "GME_DIR=$PWD\build\gme-min"  | Out-File $env:GITHUB_ENV -Append
+          "$PWD\build\gme-min\bin"      | Out-File $env:GITHUB_PATH -Append
+          "$PWD\build\zlib\bin"         | Out-File $env:GITHUB_PATH -Append
+
+      - name: Build and test (Windows, ffmpeg + gme)
         if: runner.os == 'Windows'
         run: |
-          cargo build --features ffmpeg --verbose
-          cargo test --features ffmpeg --verbose
+          cargo build --features ffmpeg,gme --verbose
+          cargo test --features ffmpeg,gme --verbose
 
   # Build the per-user installers. Runs on a v* tag (official release) or a
   # manual dispatch (dry run - artifacts only, no GitHub Release).
@@ -177,22 +189,30 @@ jobs:
           name: linamp-linux-tarball
           path: dist/*.tar.gz
 
-      # ---- Windows: per-user Inno Setup installer (WMA-enabled, DLLs bundled) ----
+      # ---- Windows: per-user Inno Setup installer (ffmpeg + gme, DLLs bundled) ----
       - name: Install Inno Setup
         if: runner.os == 'Windows'
         run: choco install innosetup -y --no-progress
+
+      - name: Build libgme + zlib (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh packaging\windows\build-gme.ps1
+          "GME_DIR=$PWD\build\gme-min" | Out-File $env:GITHUB_ENV -Append
 
       - name: Build Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --release --features ffmpeg
+          cargo build --release --features ffmpeg,gme
           # Derive the version from Cargo.toml and pass it to ISCC - without this
           # the installer falls back to the version baked into linamp.iss, which
           # is how v0.3.0 shipped a "LinAmp-0.2.0-Setup.exe". /DWithFfmpeg bundles the
-          # FFmpeg DLLs from the shared build's bin dir next to the exe.
+          # FFmpeg DLLs from the shared build's bin dir, and /DWithGme bundles gme.dll
+          # plus its zlib.dll dependency, next to the exe.
           $ver = ([regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "/DWithFfmpeg" "/DFfmpegBin=$env:FFMPEG_DIR\bin" packaging\windows\linamp.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "/DWithFfmpeg" "/DFfmpegBin=$env:FFMPEG_DIR\bin" "/DWithGme" "/DGmeBin=$PWD\build\gme-min\bin" "/DZlibBin=$PWD\build\zlib\bin" packaging\windows\linamp.iss
 
       - name: Upload Windows installer
         if: runner.os == 'Windows'
