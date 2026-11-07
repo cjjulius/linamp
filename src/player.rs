@@ -595,6 +595,9 @@ mod tests {
         entries.sort();
         let mut seen_ext = HashSet::new();
         let mut checked = 0;
+        // Collect every problem sample so one run reports them all, rather than stopping at the
+        // first (a format whose decoder errors, or that renders silence).
+        let mut failures: Vec<String> = Vec::new();
         for path in entries {
             if !path.is_file() {
                 continue;
@@ -607,17 +610,23 @@ mod tests {
             if !seen_ext.insert(ext) {
                 continue; // one sample per extension keeps the run bounded
             }
-            let src = super::open_source(&path).unwrap_or_else(|e| panic!("{name}: open: {e}"));
-            // viz::tap pushes every sample it forwards into the ring, so the peak of what flows
-            // through it is exactly what the visualizer would see. Scan up to ~10s so a track
-            // with a quiet lead-in (a soft intro) is not mistaken for silent output.
-            let tapped = crate::viz::tap(src, crate::viz::VizShared::new());
-            let peak = tapped
-                .take(44_100 * 2 * 10)
-                .fold(0.0f32, |m, s| m.max(s.abs()));
-            assert!(peak > 0.001, "{name}: no visualizer output (peak {peak})");
-            checked += 1;
+            match super::open_source(&path) {
+                Ok(src) => {
+                    // viz::tap pushes every sample it forwards into the ring, so the peak of what
+                    // flows through it is exactly what the visualizer would see. Scan up to ~10s
+                    // so a quiet lead-in (a soft intro) is not mistaken for silent output.
+                    let tapped = crate::viz::tap(src, crate::viz::VizShared::new());
+                    let peak = tapped.take(44_100 * 2 * 10).fold(0.0f32, |m, s| m.max(s.abs()));
+                    if peak > 0.001 {
+                        checked += 1;
+                    } else {
+                        failures.push(format!("{name}: no visualizer output (peak {peak})"));
+                    }
+                }
+                Err(e) => failures.push(format!("{name}: open failed: {e}")),
+            }
         }
+        assert!(failures.is_empty(), "codecs with no viz output:\n  {}", failures.join("\n  "));
         assert!(checked > 0, "no supported samples found to check");
     }
 
