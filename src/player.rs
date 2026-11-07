@@ -344,17 +344,25 @@ impl Player {
         }
 
         // Chiptune/console formats are rendered by libgme (the `gme` feature), checked first
-        // since their extensions are distinct from everything below.
+        // since their extensions are distinct from everything below. This is folded into the
+        // dispatch chain rather than an early return so the shared tail below still records the
+        // path and sets PlayState::Playing - without which the UI, the visualizer included,
+        // stays idle even though audio is flowing.
         #[cfg(feature = "gme")]
-        if crate::gme::is_gme(path) {
-            let source = crate::gme::open(path)?;
-            return self.append_source(source, None, true);
-        }
+        let is_gme = crate::gme::is_gme(path);
+        #[cfg(not(feature = "gme"))]
+        let is_gme = false;
 
         // MIDI is synthesized (rustysynth + a bundled SoundFont), not decoded (#159);
         // everything else goes through the single symphonia decode path (#163). Both
         // produce a rodio `Source` fed into the shared EQ / analyzer / balance chain.
-        if crate::midi::is_midi(path) {
+        if is_gme {
+            #[cfg(feature = "gme")]
+            {
+                let source = crate::gme::open(path)?;
+                self.append_source(source, None, true)?;
+            }
+        } else if crate::midi::is_midi(path) {
             let sf = crate::midi::soundfont_path().ok_or_else(|| {
                 anyhow::anyhow!("MIDI playback needs a SoundFont (.sf2) in the soundfont/ folder")
             })?;
