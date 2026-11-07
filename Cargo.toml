@@ -1,6 +1,6 @@
 [package]
 name = "linamp"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 description = "LinAmp - a Winamp-inspired audio player for Linux and Windows, built in Rust"
 authors = ["LinAmp contributors"]
@@ -175,3 +175,7 @@ strip = true
 # Rust; enable with `--features ffmpeg` (needs the system FFmpeg dev libraries).
 [features]
 ffmpeg = ["dep:ffmpeg-next"]
+# Chiptune/console music via libgme (LGPL), linked through a hand-rolled FFI in src/gme.rs.
+# No Rust crate dependency; build.rs emits the link directives and bundles libgme.so. Needs
+# a libgme build at $GME_DIR (default build/gme-min, produced by packaging/linux/build-gme-min.sh).
+gme = []

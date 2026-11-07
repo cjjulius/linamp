@@ -344,12 +344,72 @@ pub fn duration(path: &Path) -> Option<Duration> {
             }
         }
     }
-    if units <= 0 {
+    if units > 0 {
+        // units are in `time_base` ticks; seconds = units * (num / den).
+        let secs = units as f64 * time_base.numerator() as f64 / time_base.denominator() as f64;
+        if secs > 0.0 {
+            return Some(Duration::from_secs_f64(secs));
+        }
+    }
+    // Last resort: Shorten (`.shn`) stores no length in the container, the stream,
+    // or any packet (FFmpeg reports N/A for all three), so neither path above finds
+    // one and the duration would otherwise appear only once playback starts and
+    // backfills it. Decode the stream and count the samples. This is a full decode,
+    // but it runs only for the few files the cheap paths miss, and those formats are
+    // small and fast to decode (a several-MB `.shn` decodes in well under a tenth of
+    // a second), so the playlist scan stays responsive.
+    duration_by_decode(path)
+}
+
+/// Decode a whole audio stream and count its output samples to get an exact length,
+/// for the formats that expose no duration any cheaper way (see `duration`). It only
+/// counts each decoded frame's own sample count, so there is no resampling cost, and
+/// it reuses the same guarded manual packet loop as `open` so a corrupt file ends
+/// instead of looping.
+fn duration_by_decode(path: &Path) -> Option<Duration> {
+    let mut ictx = ffmpeg::format::input(&path).ok()?;
+    let stream = ictx.streams().best(ffmpeg::media::Type::Audio)?;
+    let stream_index = stream.index();
+    let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+        .ok()?
+        .decoder()
+        .audio()
+        .ok()?;
+    let rate = decoder.rate();
+    if rate == 0 {
         return None;
     }
-    // units are in `time_base` ticks; seconds = units * (num / den).
-    let secs = units as f64 * time_base.numerator() as f64 / time_base.denominator() as f64;
-    (secs > 0.0).then(|| Duration::from_secs_f64(secs))
+
+    let mut frame = AudioFrame::empty();
+    let mut total_samples: u64 = 0;
+    let mut read_errors: u32 = 0;
+    let mut packet = ffmpeg::codec::packet::Packet::empty();
+    loop {
+        match packet.read(&mut ictx) {
+            Ok(()) => {
+                read_errors = 0;
+                if packet.stream() == stream_index && decoder.send_packet(&packet).is_ok() {
+                    while decoder.receive_frame(&mut frame).is_ok() {
+                        total_samples += frame.samples() as u64;
+                    }
+                }
+            }
+            Err(ffmpeg::Error::Eof) => break,
+            Err(_) => {
+                read_errors += 1;
+                if read_errors >= MAX_CONSECUTIVE_READ_ERRORS {
+                    break;
+                }
+            }
+        }
+    }
+    if decoder.send_eof().is_ok() {
+        while decoder.receive_frame(&mut frame).is_ok() {
+            total_samples += frame.samples() as u64;
+        }
+    }
+
+    (total_samples > 0).then(|| Duration::from_secs_f64(total_samples as f64 / rate as f64))
 }
 
 #[cfg(test)]
@@ -912,5 +972,23 @@ mod tests {
             let d = duration(&p).unwrap_or_else(|| panic!("{name} duration should be Some"));
             assert!(d.as_secs() > 1 && d.as_secs() < 600, "{name} duration {d:?}");
         }
+    }
+
+    /// Shorten (`.shn`) reports no duration in the container, the stream, or any
+    /// packet, so duration() must fall back to a decode-and-count pass; otherwise the
+    /// playlist shows no length until the track is played. The counted length must
+    /// also match what a full decode via open() reports. Local sample only.
+    #[test]
+    fn duration_of_shorten_via_decode() {
+        let p = std::path::PathBuf::from("qa-music/format-samples/shorten-sample.shn");
+        if !p.exists() {
+            return;
+        }
+        let d = duration(&p).expect("shorten duration should be Some").as_secs_f64();
+        assert!(d > 1.0 && d < 3600.0, "shorten duration {d}");
+        // The decode-count must agree with the length open() derives from the full
+        // decoded sample buffer (allow a frame's worth of slack).
+        let decoded = open(&p).unwrap().total_duration().unwrap().as_secs_f64();
+        assert!((d - decoded).abs() < 0.05, "counted {d} vs decoded {decoded}");
     }
 }

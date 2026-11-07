@@ -115,6 +115,25 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         "au" => "audio/basic",
         #[cfg(feature = "ffmpeg")]
         "w64" => "audio/x-w64",
+        // Chiptune / console music via libgme (the `gme` feature).
+        #[cfg(feature = "gme")]
+        "nsf" | "nsfe" => "audio/x-nsf",
+        #[cfg(feature = "gme")]
+        "gbs" => "audio/x-gbs",
+        #[cfg(feature = "gme")]
+        "vgm" | "vgz" => "audio/x-vgm",
+        #[cfg(feature = "gme")]
+        "spc" => "audio/x-spc",
+        #[cfg(feature = "gme")]
+        "ay" => "audio/x-ay",
+        #[cfg(feature = "gme")]
+        "sap" => "audio/x-sap",
+        #[cfg(feature = "gme")]
+        "kss" => "audio/x-kss",
+        #[cfg(feature = "gme")]
+        "hes" => "audio/x-hes",
+        #[cfg(feature = "gme")]
+        "gym" => "audio/x-gym",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -194,6 +213,18 @@ fn mime_package_xml() -> String {
         types.push(("audio/x-voc", "Creative Voice audio", &["*.voc"]));
         types.push(("audio/basic", "Sun/NeXT audio", &["*.au", "*.snd"]));
         types.push(("audio/x-w64", "Sony Wave64 audio", &["*.w64"]));
+    }
+    #[cfg(feature = "gme")]
+    {
+        types.push(("audio/x-nsf", "NES Sound Format", &["*.nsf", "*.nsfe"]));
+        types.push(("audio/x-gbs", "Game Boy Sound", &["*.gbs"]));
+        types.push(("audio/x-vgm", "Video Game Music", &["*.vgm", "*.vgz"]));
+        types.push(("audio/x-spc", "SNES SPC700 audio", &["*.spc"]));
+        types.push(("audio/x-ay", "AY (ZX Spectrum / Amstrad) audio", &["*.ay"]));
+        types.push(("audio/x-sap", "Atari SAP audio", &["*.sap"]));
+        types.push(("audio/x-kss", "MSX KSS audio", &["*.kss"]));
+        types.push(("audio/x-hes", "PC Engine HES audio", &["*.hes"]));
+        types.push(("audio/x-gym", "Genesis GYM audio", &["*.gym"]));
     }
     let mut body = String::new();
     for (ty, comment, globs) in &types {

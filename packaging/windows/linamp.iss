@@ -71,6 +71,22 @@ Source: "{#RepoRoot}\music\*"; DestDir: "{app}\music"; Flags: ignoreversion recu
   #endif
 Source: "{#FfmpegBin}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 #endif
+; GME (chiptune/console music) build only: bundle libgme and its zlib dependency
+; next to the exe so the gme-linked binary loads them at runtime. gme.dll imports
+; zlib.dll at load time (it is required for VGZ and so that gme.dll loads at all),
+; so both must ship. This is inert for a normal build; pass all three to ISCC for a
+; gme-enabled installer:
+;   ISCC /DWithGme /DGmeBin="<gme-min build>\bin" /DZlibBin="<zlib build>\bin" ...
+#ifdef WithGme
+  #ifndef GmeBin
+    #error With /DWithGme you must also pass /DGmeBin=<the libgme build's bin dir>
+  #endif
+  #ifndef ZlibBin
+    #error With /DWithGme you must also pass /DZlibBin=<the zlib build's bin dir> (gme.dll needs zlib.dll)
+  #endif
+Source: "{#GmeBin}\gme.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ZlibBin}\zlib.dll"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#RepoRoot}\FEATURES.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion

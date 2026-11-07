@@ -21,6 +21,8 @@ mod eqf;
 mod fileassoc;
 #[cfg(feature = "ffmpeg")]
 mod ffdec;
+#[cfg(feature = "gme")]
+mod gme;
 mod flv;
 mod icon;
 mod library;
