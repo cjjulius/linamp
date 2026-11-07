@@ -82,6 +82,13 @@ pub struct FfmpegSource {
 
 const OUT_CHANNELS: u16 = 2;
 
+// `ictx.packets()` only ends on EOF and silently retries every other read error, so a
+// truncated or corrupt input whose av_read_frame keeps returning a non-EOF error (e.g. an
+// I/O error) spins it forever at 100% CPU and hangs the player. We read packets manually and
+// bail after this many consecutive read errors, so a bad file ends instead of looping, while
+// a handful of transient glitches are still tolerated.
+const MAX_CONSECUTIVE_READ_ERRORS: u32 = 1024;
+
 impl Iterator for FfmpegSource {
     type Item = f32;
     fn next(&mut self) -> Option<f32> {
@@ -203,12 +210,8 @@ pub fn open(path: &Path) -> Result<FfmpegSource> {
         Ok(())
     };
 
-    // Read packets manually rather than via `ictx.packets()`: that iterator only ends on
-    // EOF and silently retries every other error, so a truncated or corrupt input whose
-    // av_read_frame keeps returning a non-EOF error (e.g. I/O error) spins it forever at
-    // 100% CPU and hangs the player. Stop on EOF, and bail after a run of read errors so a
-    // bad file ends instead of looping, while a handful of transient glitches are tolerated.
-    const MAX_CONSECUTIVE_READ_ERRORS: u32 = 1024;
+    // Read packets manually rather than via `ictx.packets()` (see MAX_CONSECUTIVE_READ_ERRORS):
+    // stop on EOF, and bail after a run of read errors so a bad file ends instead of looping.
     let mut read_errors: u32 = 0;
     let mut packet = ffmpeg::codec::packet::Packet::empty();
     loop {
@@ -256,6 +259,56 @@ pub fn open(path: &Path) -> Result<FfmpegSource> {
         pos: 0,
         total,
     })
+}
+
+/// True if FFmpeg can decode at least one audio frame from `path`. Cheap: it stops at the
+/// first decoded frame instead of decoding the whole file. Some streams open and demux fine
+/// but decode nothing - an old TAK v1 file, for instance, which our FFmpeg can read but not
+/// decode. Those should be kept out of the playlist rather than added and then skipped at
+/// playback, so the playlist uses this at add time to gate FFmpeg-routed files. `false` if
+/// the file will not open, has no audio stream, or yields no frame.
+pub fn probe_decodable(path: &Path) -> bool {
+    if ffmpeg::init().is_err() {
+        return false;
+    }
+    let Ok(mut ictx) = ffmpeg::format::input(&path) else {
+        return false;
+    };
+    let Some(stream) = ictx.streams().best(ffmpeg::media::Type::Audio) else {
+        return false;
+    };
+    let stream_index = stream.index();
+    let decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+        .ok()
+        .and_then(|c| c.decoder().audio().ok());
+    let Some(mut decoder) = decoder else {
+        return false;
+    };
+    let mut frame = AudioFrame::empty();
+    let mut read_errors: u32 = 0;
+    let mut packet = ffmpeg::codec::packet::Packet::empty();
+    loop {
+        match packet.read(&mut ictx) {
+            Ok(()) => {
+                read_errors = 0;
+                if packet.stream() == stream_index
+                    && decoder.send_packet(&packet).is_ok()
+                    && decoder.receive_frame(&mut frame).is_ok()
+                {
+                    return true;
+                }
+            }
+            Err(ffmpeg::Error::Eof) => break,
+            Err(_) => {
+                read_errors += 1;
+                if read_errors >= MAX_CONSECUTIVE_READ_ERRORS {
+                    break;
+                }
+            }
+        }
+    }
+    // A decoder may hold the first frame until it is flushed at end of stream.
+    decoder.send_eof().is_ok() && decoder.receive_frame(&mut frame).is_ok()
 }
 
 /// The length of a file FFmpeg can read, for the playlist, without a full audio
@@ -772,6 +825,22 @@ mod tests {
             "qa-music/format-samples/oracles/w64-oracle.f32",
         ) {
             assert!(best > 0.999, "Wave64 decode correlation vs oracle too low: {best:.4}");
+        }
+    }
+
+    /// probe_decodable keeps files that open but decode nothing out of the playlist. Our
+    /// bundled FFmpeg demuxes a TAK v1 stream (tak-v1.tak) but decodes zero frames from it,
+    /// while a TAK 2.x stream (tak-sample.tak) decodes normally, so the probe must reject the
+    /// first and accept the second. (qa-music gitignored, so this skips on CI.)
+    #[test]
+    fn probe_decodable_rejects_undecodable_and_accepts_good() {
+        let good = std::path::PathBuf::from("qa-music/format-samples/tak-sample.tak");
+        if good.exists() {
+            assert!(probe_decodable(&good), "a decodable TAK 2.x stream must probe true");
+        }
+        let bad = std::path::PathBuf::from("qa-music/format-samples/tak-v1.tak");
+        if bad.exists() {
+            assert!(!probe_decodable(&bad), "an undecodable TAK v1 stream must probe false");
         }
     }
 

@@ -366,7 +366,7 @@ impl Playlist {
             self.tracks.push(Track::cd_track(&dev, &t, None));
             return;
         }
-        if is_supported(&path) {
+        if playable(&path) {
             self.tracks.push(Track::new(path));
         }
     }
@@ -392,7 +392,7 @@ impl Playlist {
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file())
             .map(|e| e.into_path())
-            .filter(|p| is_supported(p))
+            .filter(|p| playable(p))
             .collect();
         found.sort();
         for p in found {
@@ -596,7 +596,7 @@ impl Playlist {
     pub fn load_file(&mut self, path: &Path) -> usize {
         let before = self.tracks.len();
         for p in parse_playlist_file(path) {
-            if p.exists() && is_supported(&p) {
+            if p.exists() && playable(&p) {
                 self.tracks.push(Track::new(p));
             }
         }
@@ -737,6 +737,24 @@ pub fn is_supported(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(|e| SUPPORTED_EXTS.contains(&e.to_lowercase().as_str()))
         .unwrap_or(false)
+}
+
+/// Whether a file should be added to the playlist: a supported extension, and - for the
+/// FFmpeg-routed formats - one FFmpeg can actually decode. Some files open and demux fine but
+/// decode no audio (an old TAK v1 stream, for example, which our FFmpeg reads but cannot
+/// decode); this keeps them out of the playlist instead of adding them and skipping at
+/// playback. It does I/O (a one-frame decode probe), so it is kept separate from the pure
+/// `is_supported` predicate and used only on the add path. Only FFmpeg-routed files are
+/// probed, so ordinary libraries (mp3/flac/...) are gated by extension alone, as before.
+pub fn playable(path: &Path) -> bool {
+    if !is_supported(path) {
+        return false;
+    }
+    #[cfg(feature = "ffmpeg")]
+    if crate::ffdec::is_ffmpeg_audio(path) {
+        return crate::ffdec::probe_decodable(path);
+    }
+    true
 }
 
 #[cfg(test)]
