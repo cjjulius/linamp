@@ -78,6 +78,19 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // reverse-engineered tak decoder (already in the bundled minimal FFmpeg).
     #[cfg(feature = "ffmpeg")]
     "tak",
+    // Sony ATRAC (ATRAC1/ATRAC3/ATRAC3+): OpenMG containers (.oma/.omg/.aa3), raw ATRAC3
+    // in RIFF (.at3), and the MiniDisc .aea; decoded via FFmpeg's reverse-engineered atrac
+    // decoders (already bundled). .at9 (ATRAC9) is held back until there is a test sample.
+    #[cfg(feature = "ffmpeg")]
+    "oma",
+    #[cfg(feature = "ffmpeg")]
+    "omg",
+    #[cfg(feature = "ffmpeg")]
+    "aa3",
+    #[cfg(feature = "ffmpeg")]
+    "at3",
+    #[cfg(feature = "ffmpeg")]
+    "aea",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -757,7 +770,7 @@ mod tests {
             ("flv", crate::flv::is_flv, vec!["flv"]),
         ];
         #[cfg(feature = "ffmpeg")]
-        decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts", "thd", "mlp", "ra", "rm", "tak"]));
+        decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts", "thd", "mlp", "ra", "rm", "tak", "oma", "omg", "aa3", "at3", "aea"]));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.
