@@ -55,11 +55,13 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     // MPEG Program Stream (DVD/VCD): crate::ps (mpeg-ps) extracts the audio ES
     // (MPEG audio via symphonia, AC-3 via crate::ac3).
     "mpg", "mpeg", "vob", "m2p",
-    // Windows Media Audio, DTS, and Dolby TrueHD/MLP: only when built with
-    // `--features ffmpeg` (crate::ffdec over FFmpeg/LGPL). None has a permissive pure-Rust
-    // decoder mature enough for real-time playback, so the default build omits them rather
-    // than advertise a format it can't play. TrueHD's decoder is already in the bundled
-    // minimal FFmpeg, so these cost nothing extra in the ffmpeg build.
+    // Windows Media Audio, DTS, Dolby TrueHD/MLP, and RealAudio/RealMedia: only when
+    // built with `--features ffmpeg` (crate::ffdec over FFmpeg/LGPL). None has a permissive
+    // pure-Rust decoder mature enough for real-time playback, so the default build omits them
+    // rather than advertise a format it can't play. All of these decoders (incl. RealAudio's
+    // ra_144/ra_288/Cook/SIPR/ATRAC3/RALF and the RealMedia demuxer) are already in the
+    // bundled minimal FFmpeg, so they cost nothing extra in the ffmpeg build. `.ram` is a
+    // text metafile (a stream URL), not an audio container, so it is not listed here.
     #[cfg(feature = "ffmpeg")]
     "wma",
     #[cfg(feature = "ffmpeg")]
@@ -68,6 +70,41 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "thd",
     #[cfg(feature = "ffmpeg")]
     "mlp",
+    #[cfg(feature = "ffmpeg")]
+    "ra",
+    #[cfg(feature = "ffmpeg")]
+    "rm",
+    // TAK (Tom's lossless Audio Kompressor): no pure-Rust decoder, decoded via FFmpeg's
+    // reverse-engineered tak decoder (already in the bundled minimal FFmpeg).
+    #[cfg(feature = "ffmpeg")]
+    "tak",
+    // Sony ATRAC (ATRAC1/ATRAC3/ATRAC3+): OpenMG containers (.oma/.omg/.aa3), raw ATRAC3
+    // in RIFF (.at3), and the MiniDisc .aea; decoded via FFmpeg's reverse-engineered atrac
+    // decoders (already bundled). .at9 (ATRAC9) is held back until there is a test sample.
+    #[cfg(feature = "ffmpeg")]
+    "oma",
+    #[cfg(feature = "ffmpeg")]
+    "omg",
+    #[cfg(feature = "ffmpeg")]
+    "aa3",
+    #[cfg(feature = "ffmpeg")]
+    "at3",
+    #[cfg(feature = "ffmpeg")]
+    "aea",
+    // Older/retro formats FFmpeg already decodes natively (bundled): Shorten (lossless),
+    // CRI ADX (game audio), Amiga 8SVX, Creative Voice, Sun/NeXT, Sony Wave64.
+    #[cfg(feature = "ffmpeg")]
+    "shn",
+    #[cfg(feature = "ffmpeg")]
+    "8svx",
+    #[cfg(feature = "ffmpeg")]
+    "adx",
+    #[cfg(feature = "ffmpeg")]
+    "voc",
+    #[cfg(feature = "ffmpeg")]
+    "au",
+    #[cfg(feature = "ffmpeg")]
+    "w64",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -329,7 +366,7 @@ impl Playlist {
             self.tracks.push(Track::cd_track(&dev, &t, None));
             return;
         }
-        if is_supported(&path) {
+        if playable(&path) {
             self.tracks.push(Track::new(path));
         }
     }
@@ -355,7 +392,7 @@ impl Playlist {
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file())
             .map(|e| e.into_path())
-            .filter(|p| is_supported(p))
+            .filter(|p| playable(p))
             .collect();
         found.sort();
         for p in found {
@@ -559,7 +596,7 @@ impl Playlist {
     pub fn load_file(&mut self, path: &Path) -> usize {
         let before = self.tracks.len();
         for p in parse_playlist_file(path) {
-            if p.exists() && is_supported(&p) {
+            if p.exists() && playable(&p) {
                 self.tracks.push(Track::new(p));
             }
         }
@@ -702,6 +739,24 @@ pub fn is_supported(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a file should be added to the playlist: a supported extension, and - for the
+/// FFmpeg-routed formats - one FFmpeg can actually decode. Some files open and demux fine but
+/// decode no audio (an old TAK v1 stream, for example, which our FFmpeg reads but cannot
+/// decode); this keeps them out of the playlist instead of adding them and skipping at
+/// playback. It does I/O (a one-frame decode probe), so it is kept separate from the pure
+/// `is_supported` predicate and used only on the add path. Only FFmpeg-routed files are
+/// probed, so ordinary libraries (mp3/flac/...) are gated by extension alone, as before.
+pub fn playable(path: &Path) -> bool {
+    if !is_supported(path) {
+        return false;
+    }
+    #[cfg(feature = "ffmpeg")]
+    if crate::ffdec::is_ffmpeg_audio(path) {
+        return crate::ffdec::probe_decodable(path);
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -747,7 +802,7 @@ mod tests {
             ("flv", crate::flv::is_flv, vec!["flv"]),
         ];
         #[cfg(feature = "ffmpeg")]
-        decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts", "thd", "mlp"]));
+        decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts", "thd", "mlp", "ra", "rm", "tak", "oma", "omg", "aa3", "at3", "aea", "shn", "8svx", "adx", "voc", "au", "w64"]));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.
