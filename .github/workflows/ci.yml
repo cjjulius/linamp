@@ -112,11 +112,23 @@ jobs:
           "$PWD\build\gme-min\bin"      | Out-File $env:GITHUB_PATH -Append
           "$PWD\build\zlib\bin"         | Out-File $env:GITHUB_PATH -Append
 
-      - name: Build and test (Windows, ffmpeg + gme)
+      # libopenmpt has no MSVC build from the autotools source, so Windows consumes the
+      # project's official prebuilt dev package (pinned + checksummed) the same way it consumes
+      # the prebuilt FFmpeg above. build.rs links $OPENMPT_DIR; the test binary loads
+      # libopenmpt.dll and its codec helpers from the bin dir put on PATH.
+      - name: Provision libopenmpt (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh packaging\windows\build-openmpt.ps1
+          "OPENMPT_DIR=$PWD\build\openmpt-min" | Out-File $env:GITHUB_ENV -Append
+          "$PWD\build\openmpt-min\bin"         | Out-File $env:GITHUB_PATH -Append
+
+      - name: Build and test (Windows, ffmpeg + gme + openmpt)
         if: runner.os == 'Windows'
         run: |
-          cargo build --features ffmpeg,gme --verbose
-          cargo test --features ffmpeg,gme --verbose
+          cargo build --features ffmpeg,gme,openmpt --verbose
+          cargo test --features ffmpeg,gme,openmpt --verbose
 
   # Build the per-user installers. Runs on a v* tag (official release) or a
   # manual dispatch (dry run - artifacts only, no GitHub Release).
@@ -198,7 +210,7 @@ jobs:
           name: linamp-linux-tarball
           path: dist/*.tar.gz
 
-      # ---- Windows: per-user Inno Setup installer (ffmpeg + gme, DLLs bundled) ----
+      # ---- Windows: per-user Inno Setup installer (ffmpeg + gme + openmpt, DLLs bundled) ----
       - name: Install Inno Setup
         if: runner.os == 'Windows'
         run: choco install innosetup -y --no-progress
@@ -210,18 +222,26 @@ jobs:
           pwsh packaging\windows\build-gme.ps1
           "GME_DIR=$PWD\build\gme-min" | Out-File $env:GITHUB_ENV -Append
 
+      - name: Provision libopenmpt (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh packaging\windows\build-openmpt.ps1
+          "OPENMPT_DIR=$PWD\build\openmpt-min" | Out-File $env:GITHUB_ENV -Append
+
       - name: Build Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --release --features ffmpeg,gme
+          cargo build --release --features ffmpeg,gme,openmpt
           # Derive the version from Cargo.toml and pass it to ISCC - without this
           # the installer falls back to the version baked into linamp.iss, which
           # is how v0.3.0 shipped a "LinAmp-0.2.0-Setup.exe". /DWithFfmpeg bundles the
-          # FFmpeg DLLs from the shared build's bin dir, and /DWithGme bundles gme.dll
-          # plus its zlib.dll dependency, next to the exe.
+          # FFmpeg DLLs from the shared build's bin dir, /DWithGme bundles gme.dll plus
+          # its zlib.dll dependency, and /DWithOpenmpt bundles libopenmpt.dll plus its
+          # codec helper DLLs, next to the exe.
           $ver = ([regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "/DWithFfmpeg" "/DFfmpegBin=$env:FFMPEG_DIR\bin" "/DWithGme" "/DGmeBin=$PWD\build\gme-min\bin" "/DZlibBin=$PWD\build\zlib\bin" packaging\windows\linamp.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "/DWithFfmpeg" "/DFfmpegBin=$env:FFMPEG_DIR\bin" "/DWithGme" "/DGmeBin=$PWD\build\gme-min\bin" "/DZlibBin=$PWD\build\zlib\bin" "/DWithOpenmpt" "/DOpenmptBin=$PWD\build\openmpt-min\bin" packaging\windows\linamp.iss
 
       - name: Upload Windows installer
         if: runner.os == 'Windows'

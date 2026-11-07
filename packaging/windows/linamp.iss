@@ -87,6 +87,17 @@ Source: "{#FfmpegBin}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#GmeBin}\gme.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ZlibBin}\zlib.dll"; DestDir: "{app}"; Flags: ignoreversion
 #endif
+; openmpt (tracker "zoo") build only: bundle libopenmpt and the codec helper DLLs it
+; imports at load time next to the exe. The whole bin dir of the OPENMPT_DIR prefix is
+; shipped (libopenmpt.dll plus openmpt-mpg123/ogg/vorbis/zlib.dll). Inert for a normal
+; build; pass both of these to ISCC for an openmpt-enabled installer:
+;   ISCC /DWithOpenmpt /DOpenmptBin="<openmpt-min build>\bin" ...
+#ifdef WithOpenmpt
+  #ifndef OpenmptBin
+    #error With /DWithOpenmpt you must also pass /DOpenmptBin=<the libopenmpt prefix's bin dir>
+  #endif
+Source: "{#OpenmptBin}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#RepoRoot}\FEATURES.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
