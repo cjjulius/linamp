@@ -37,6 +37,11 @@ use rodio::Source;
 /// video plays its best audio stream). TAK is lossless and at most 24-bit, which f32
 /// represents exactly, so routing it through the f32 path preserves its samples.
 ///
+/// Also a set of older/retro formats FFmpeg already decodes natively, routed here for the
+/// same reason (no mature pure-Rust decoder): Shorten (`.shn`, lossless), CRI ADX (`.adx`,
+/// game audio), Amiga 8SVX (`.8svx`), Creative Voice (`.voc`), Sun/NeXT (`.au`) and Sony
+/// Wave64 (`.w64`).
+///
 /// `.ram` is deliberately excluded: it is a plain-text metafile holding a stream URL,
 /// not an audio container, so it would belong to playlist handling, not the decoder.
 /// `.at9` (ATRAC9) is held back until there is a sample to verify it against.
@@ -56,6 +61,12 @@ pub fn is_ffmpeg_audio(path: &Path) -> bool {
                 || e.eq_ignore_ascii_case("aa3")
                 || e.eq_ignore_ascii_case("at3")
                 || e.eq_ignore_ascii_case("aea")
+                || e.eq_ignore_ascii_case("shn")
+                || e.eq_ignore_ascii_case("8svx")
+                || e.eq_ignore_ascii_case("adx")
+                || e.eq_ignore_ascii_case("voc")
+                || e.eq_ignore_ascii_case("au")
+                || e.eq_ignore_ascii_case("w64")
         })
         .unwrap_or(false)
 }
@@ -698,6 +709,70 @@ mod tests {
             return;
         };
         assert!(best > 0.999, "ATRAC1 decode correlation vs oracle too low: {best:.4}");
+    }
+
+    /// Tier 1 retro/older formats FFmpeg decodes natively, each against an ffmpeg-CLI oracle
+    /// (`ffmpeg -i <sample> -t 20 -f f32le -ac 2 -ar <rate> <oracle>`). Shorten is lossless;
+    /// ADX is ADPCM; the rest are PCM in older containers. Both paths use the same FFmpeg
+    /// decoder, so each matches near-exactly. (qa-music gitignored; see the README.)
+    #[test]
+    fn decodes_shorten_close_to_the_ffmpeg_oracle() {
+        if let Some(best) = oracle_correlation(
+            "qa-music/format-samples/shorten-sample.shn",
+            "qa-music/format-samples/oracles/shorten-oracle.f32",
+        ) {
+            assert!(best > 0.999, "Shorten decode correlation vs oracle too low: {best:.4}");
+        }
+    }
+
+    #[test]
+    fn decodes_8svx_close_to_the_ffmpeg_oracle() {
+        if let Some(best) = oracle_correlation(
+            "qa-music/format-samples/amiga-sample.8svx",
+            "qa-music/format-samples/oracles/amiga-oracle.f32",
+        ) {
+            assert!(best > 0.999, "8SVX decode correlation vs oracle too low: {best:.4}");
+        }
+    }
+
+    #[test]
+    fn decodes_adx_close_to_the_ffmpeg_oracle() {
+        if let Some(best) = oracle_correlation(
+            "qa-music/format-samples/adx-sample.adx",
+            "qa-music/format-samples/oracles/adx-oracle.f32",
+        ) {
+            assert!(best > 0.999, "ADX decode correlation vs oracle too low: {best:.4}");
+        }
+    }
+
+    #[test]
+    fn decodes_voc_close_to_the_ffmpeg_oracle() {
+        if let Some(best) = oracle_correlation(
+            "qa-music/format-samples/voc-sample.voc",
+            "qa-music/format-samples/oracles/voc-oracle.f32",
+        ) {
+            assert!(best > 0.999, "VOC decode correlation vs oracle too low: {best:.4}");
+        }
+    }
+
+    #[test]
+    fn decodes_au_close_to_the_ffmpeg_oracle() {
+        if let Some(best) = oracle_correlation(
+            "qa-music/format-samples/au-sample.au",
+            "qa-music/format-samples/oracles/au-oracle.f32",
+        ) {
+            assert!(best > 0.999, "AU decode correlation vs oracle too low: {best:.4}");
+        }
+    }
+
+    #[test]
+    fn decodes_wave64_close_to_the_ffmpeg_oracle() {
+        if let Some(best) = oracle_correlation(
+            "qa-music/format-samples/w64-sample.w64",
+            "qa-music/format-samples/oracles/w64-oracle.f32",
+        ) {
+            assert!(best > 0.999, "Wave64 decode correlation vs oracle too low: {best:.4}");
+        }
     }
 
     /// Seeking must land on the right samples: decode, seek to 40%, and confirm the
