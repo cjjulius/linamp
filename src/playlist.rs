@@ -74,6 +74,10 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "ra",
     #[cfg(feature = "ffmpeg")]
     "rm",
+    // TAK (Tom's lossless Audio Kompressor): no pure-Rust decoder, decoded via FFmpeg's
+    // reverse-engineered tak decoder (already in the bundled minimal FFmpeg).
+    #[cfg(feature = "ffmpeg")]
+    "tak",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -753,7 +757,7 @@ mod tests {
             ("flv", crate::flv::is_flv, vec!["flv"]),
         ];
         #[cfg(feature = "ffmpeg")]
-        decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts", "thd", "mlp", "ra", "rm"]));
+        decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts", "thd", "mlp", "ra", "rm", "tak"]));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.
