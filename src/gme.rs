@@ -11,7 +11,11 @@
 //! into the buffer. Many of these files hold several subsongs; this plays the first one
 //! (subsong selection in the UI is a later enhancement). Length comes from the file when it
 //! declares one, otherwise from libgme's intro-plus-two-loops estimate, and a fade is set at
-//! the end so an endlessly looping tune stops cleanly instead of playing forever.
+//! the end so an endlessly looping tune stops cleanly instead of playing forever. A
+//! register-dump file (GYM, VGM) that declares no length plays to the definite end of its
+//! log, so the playlist reports no length for it up front rather than libgme's 150s guess
+//! (which would overrun the audio and break the scrub bar); the exact length is backfilled
+//! from the rendered source once it plays.
 
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int};
@@ -40,10 +44,20 @@ const GME_EXTS: &[&str] = &[
     "nsf", "nsfe", "gbs", "vgm", "vgz", "spc", "ay", "sap", "kss", "hes", "gym",
 ];
 
+// Register-dump formats: a timed log of hardware writes that plays to a definite end,
+// as opposed to the emulated-CPU formats (NSF, SPC, ...) that run a program and loop
+// with no natural end. The distinction matters only for the length of a file that
+// declares none (see `duration`).
+const GME_REGISTER_DUMP_EXTS: &[&str] = &["vgm", "vgz", "gym"];
+
 pub fn is_gme(path: &Path) -> bool {
+    has_ext(path, GME_EXTS)
+}
+
+fn has_ext(path: &Path, exts: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| GME_EXTS.iter().any(|x| e.eq_ignore_ascii_case(x)))
+        .map(|e| exts.iter().any(|x| e.eq_ignore_ascii_case(x)))
         .unwrap_or(false)
 }
 
@@ -219,10 +233,22 @@ pub fn duration(path: &Path) -> Option<Duration> {
         return None;
     }
     let mut info: *mut GmeInfo = std::ptr::null_mut();
-    let ms = if unsafe { gme_track_info(emu, &mut info, 0) }.is_null() && !info.is_null() {
-        let ms = play_length_ms(unsafe { &*info });
+    let ms: Option<c_int> = if unsafe { gme_track_info(emu, &mut info, 0) }.is_null()
+        && !info.is_null()
+    {
+        // A register-dump format (GYM, VGM) that declares no length plays to the
+        // definite end of its log, which is usually well short of libgme's 150s
+        // default. Reporting that default here would make the scrub bar longer than
+        // the audio actually rendered, so seeking past the real end jumps to the next
+        // track. Report no length instead and let the player backfill the exact
+        // rendered length once the track plays. The looping CPU-emulated formats
+        // (NSF, SPC, ...) have no natural end, so the default is a sensible shown
+        // length and the render reaches it, keeping the bar and the buffer in step.
+        let declared = unsafe { (*info).length > 0 || (*info).loop_length > 0 };
+        let ms = (declared || !has_ext(path, GME_REGISTER_DUMP_EXTS))
+            .then(|| play_length_ms(unsafe { &*info }));
         unsafe { gme_free_info(info) };
-        Some(ms)
+        ms
     } else {
         None
     };
@@ -267,6 +293,27 @@ mod tests {
             assert!(got.len() > 44_100 * 2, "{name}: too little audio: {}", got.len());
             let peak = got.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
             assert!(peak > 0.01, "{name}: rendered near-silence (peak {peak})");
+        }
+    }
+
+    /// A GYM register dump declares no length, so the add-time `duration` must not hand
+    /// back libgme's 150s default: that would make the scrub bar longer than the audio
+    /// and seeking past the real end would skip to the next track. It must report no
+    /// length (the exact length is backfilled from the render), and whenever it does
+    /// report one it must never exceed what the source actually renders. Local sample only.
+    #[test]
+    fn gym_duration_never_exceeds_rendered_length() {
+        let path = std::path::PathBuf::from("qa-music/format-samples/gym-sample.gym");
+        if !path.exists() {
+            return;
+        }
+        let rendered = open(&path).unwrap().total_duration().expect("rendered length");
+        assert!(rendered.as_secs() > 1, "implausibly short render: {rendered:?}");
+        // No declared length in a raw GYM, so the add-time probe reports nothing.
+        assert!(duration(&path).is_none(), "GYM should report no add-time length");
+        // The invariant that keeps scrubbing correct: shown length <= rendered buffer.
+        if let Some(d) = duration(&path) {
+            assert!(d <= rendered, "shown {d:?} exceeds rendered {rendered:?}");
         }
     }
 }
