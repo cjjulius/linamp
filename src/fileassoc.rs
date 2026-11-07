@@ -95,6 +95,13 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         // TAK (Tom's lossless Audio Kompressor), also ffmpeg-only.
         #[cfg(feature = "ffmpeg")]
         "tak" => "audio/x-tak",
+        // Sony ATRAC, also ffmpeg-only: OpenMG containers, raw ATRAC3 in RIFF, MiniDisc.
+        #[cfg(feature = "ffmpeg")]
+        "oma" | "omg" | "aa3" => "audio/x-oma",
+        #[cfg(feature = "ffmpeg")]
+        "at3" => "audio/x-atrac3",
+        #[cfg(feature = "ffmpeg")]
+        "aea" => "audio/x-aea",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -165,6 +172,9 @@ fn mime_package_xml() -> String {
             &["*.rm"],
         ));
         types.push(("audio/x-tak", "TAK (Tom's lossless Audio Kompressor)", &["*.tak"]));
+        types.push(("audio/x-oma", "Sony OpenMG / ATRAC audio", &["*.oma", "*.omg", "*.aa3"]));
+        types.push(("audio/x-atrac3", "ATRAC3 audio", &["*.at3"]));
+        types.push(("audio/x-aea", "ATRAC1 (MiniDisc) audio", &["*.aea"]));
     }
     let mut body = String::new();
     for (ty, comment, globs) in &types {

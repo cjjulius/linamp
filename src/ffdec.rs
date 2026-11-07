@@ -29,15 +29,17 @@ use rodio::Source;
 /// extensions), Dolby TrueHD / MLP (the MLP-based lossless codec used on Blu-ray,
 /// raw `.thd`/`.mlp` streams), and RealAudio / RealMedia (`.ra`/`.rm`: the RealMedia
 /// demuxer plus the reverse-engineered RealAudio decoders: ra_144/ra_288, Cook,
-/// SIPR, ATRAC3 and RealAudio Lossless), and TAK (`.tak`, Tom's lossless Audio
-/// Kompressor). None has a permissive pure-Rust decoder mature enough for real-time
-/// playback, so FFmpeg demuxes and decodes them through the one generic path here
-/// (multichannel is downmixed to stereo; a `.rm` that also carries video plays its
-/// best audio stream). TAK is lossless and at most 24-bit, which f32 represents
-/// exactly, so routing it through the f32 path preserves its samples.
+/// SIPR, ATRAC3 and RealAudio Lossless), TAK (`.tak`, Tom's lossless Audio
+/// Kompressor), and Sony ATRAC (`.oma`/`.omg`/`.aa3` OpenMG, `.at3` RIFF, `.aea`
+/// MiniDisc: ATRAC1/ATRAC3/ATRAC3+). None has a permissive pure-Rust decoder mature
+/// enough for real-time playback, so FFmpeg demuxes and decodes them through the one
+/// generic path here (multichannel is downmixed to stereo; a `.rm` that also carries
+/// video plays its best audio stream). TAK is lossless and at most 24-bit, which f32
+/// represents exactly, so routing it through the f32 path preserves its samples.
 ///
 /// `.ram` is deliberately excluded: it is a plain-text metafile holding a stream URL,
 /// not an audio container, so it would belong to playlist handling, not the decoder.
+/// `.at9` (ATRAC9) is held back until there is a sample to verify it against.
 pub fn is_ffmpeg_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -49,6 +51,11 @@ pub fn is_ffmpeg_audio(path: &Path) -> bool {
                 || e.eq_ignore_ascii_case("ra")
                 || e.eq_ignore_ascii_case("rm")
                 || e.eq_ignore_ascii_case("tak")
+                || e.eq_ignore_ascii_case("oma")
+                || e.eq_ignore_ascii_case("omg")
+                || e.eq_ignore_ascii_case("aa3")
+                || e.eq_ignore_ascii_case("at3")
+                || e.eq_ignore_ascii_case("aea")
         })
         .unwrap_or(false)
 }
@@ -185,12 +192,32 @@ pub fn open(path: &Path) -> Result<FfmpegSource> {
         Ok(())
     };
 
-    for (stream, packet) in ictx.packets() {
-        if stream.index() == stream_index {
-            decoder
-                .send_packet(&packet)
-                .map_err(|e| anyhow!("ffmpeg send packet: {e}"))?;
-            drain(&mut decoder, &mut resampler, &mut in_layout, &mut samples)?;
+    // Read packets manually rather than via `ictx.packets()`: that iterator only ends on
+    // EOF and silently retries every other error, so a truncated or corrupt input whose
+    // av_read_frame keeps returning a non-EOF error (e.g. I/O error) spins it forever at
+    // 100% CPU and hangs the player. Stop on EOF, and bail after a run of read errors so a
+    // bad file ends instead of looping, while a handful of transient glitches are tolerated.
+    const MAX_CONSECUTIVE_READ_ERRORS: u32 = 1024;
+    let mut read_errors: u32 = 0;
+    let mut packet = ffmpeg::codec::packet::Packet::empty();
+    loop {
+        match packet.read(&mut ictx) {
+            Ok(()) => {
+                read_errors = 0;
+                if packet.stream() == stream_index {
+                    decoder
+                        .send_packet(&packet)
+                        .map_err(|e| anyhow!("ffmpeg send packet: {e}"))?;
+                    drain(&mut decoder, &mut resampler, &mut in_layout, &mut samples)?;
+                }
+            }
+            Err(ffmpeg::Error::Eof) => break,
+            Err(_) => {
+                read_errors += 1;
+                if read_errors >= MAX_CONSECUTIVE_READ_ERRORS {
+                    break;
+                }
+            }
         }
     }
     decoder
@@ -588,6 +615,89 @@ mod tests {
             }
         }
         assert!(best > 0.999, "TAK decode correlation vs oracle too low: {best:.4}");
+    }
+
+    /// Shared helper for the lossy-codec oracle tests: decode `sample` through our FFmpeg
+    /// path and return the best correlation of its left channel against `oracle` (an
+    /// ffmpeg-CLI f32le/stereo/`rate` decode of the same file), over a small lag search.
+    /// Returns None when the sample or oracle is absent (qa-music is gitignored).
+    #[cfg(feature = "ffmpeg")]
+    fn oracle_correlation(sample: &str, oracle: &str) -> Option<f64> {
+        let s = std::path::PathBuf::from(sample);
+        let o = std::path::PathBuf::from(oracle);
+        if !s.exists() || !o.exists() {
+            return None;
+        }
+        let raw = std::fs::read(&o).unwrap();
+        let oracle: Vec<f32> = raw
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        let src = open(&s).unwrap();
+        assert_eq!(src.channels(), 2, "stereo output");
+        let got: Vec<f32> = src.collect();
+        assert!(got.len() > 44_100, "too little audio from {sample}");
+        let gl: Vec<f32> = got.iter().step_by(2).copied().collect();
+        let ol: Vec<f32> = oracle.iter().step_by(2).copied().collect();
+        let corr = |a: &[f32], b: &[f32]| -> f64 {
+            let n = a.len().min(b.len());
+            if n < 2000 {
+                return 0.0;
+            }
+            let (a, b) = (&a[..n], &b[..n]);
+            let (ma, mb) = (
+                a.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+                b.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+            );
+            let (mut num, mut da, mut db) = (0.0, 0.0, 0.0);
+            for i in 0..n {
+                let (xa, xb) = (a[i] as f64 - ma, b[i] as f64 - mb);
+                num += xa * xb;
+                da += xa * xa;
+                db += xb * xb;
+            }
+            if da <= 0.0 || db <= 0.0 { 0.0 } else { num / (da.sqrt() * db.sqrt()) }
+        };
+        let mut best = 0.0;
+        for lag in 0..600usize {
+            if lag >= gl.len() {
+                break;
+            }
+            let c = corr(&gl[lag..], &ol);
+            if c > best {
+                best = c;
+            }
+        }
+        Some(best)
+    }
+
+    /// Decode atrac3plus-sample.oma (Sony ATRAC3+, the OpenMG/Walkman container) against an
+    /// ffmpeg-CLI oracle (`ffmpeg -i atrac3plus-sample.oma -t 20 -f f32le -ac 2 -ar 44100`).
+    /// ATRAC has no encoder here, so this is a procured sample; both paths run ffmpeg's
+    /// atrac3p decoder, so the match is near-exact. (qa-music gitignored; see the README.)
+    #[test]
+    fn decodes_atrac3plus_close_to_the_ffmpeg_oracle() {
+        let Some(best) = oracle_correlation(
+            "qa-music/format-samples/atrac3plus-sample.oma",
+            "qa-music/format-samples/oracles/atrac3plus-oracle.f32",
+        ) else {
+            return;
+        };
+        assert!(best > 0.999, "ATRAC3+ decode correlation vs oracle too low: {best:.4}");
+    }
+
+    /// Decode atrac1-sample.aea (Sony ATRAC1, the MiniDisc codec, a different decoder from
+    /// ATRAC3+) against an ffmpeg-CLI oracle (first 20 s). Both paths run ffmpeg's atrac1
+    /// decoder, so the match is near-exact. (qa-music gitignored; see the README.)
+    #[test]
+    fn decodes_atrac1_close_to_the_ffmpeg_oracle() {
+        let Some(best) = oracle_correlation(
+            "qa-music/format-samples/atrac1-sample.aea",
+            "qa-music/format-samples/oracles/atrac1-oracle.f32",
+        ) else {
+            return;
+        };
+        assert!(best > 0.999, "ATRAC1 decode correlation vs oracle too low: {best:.4}");
     }
 
     /// Seeking must land on the right samples: decode, seek to 40%, and confirm the
