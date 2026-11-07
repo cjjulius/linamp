@@ -154,6 +154,17 @@ fn gme_duration(_path: &std::path::Path) -> Option<Duration> {
     None
 }
 
+/// A provisional, estimated chiptune length (GYM) when no exact one is available, or `None`
+/// without the `gme` feature. A cfg shim like `gme_duration`. See gme::estimated_duration.
+#[cfg(feature = "gme")]
+fn gme_estimated_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::gme::estimated_duration(path)
+}
+#[cfg(not(feature = "gme"))]
+fn gme_estimated_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
 /// happens with ID3v2 frames whose encoding byte says ISO-8859-1 while the bytes
 /// are actually UTF-8 (common in the wild, example: zing.vn MP3s), so an accented
@@ -183,6 +194,11 @@ pub struct Track {
     pub artist: String,
     pub album: String,
     pub duration: Option<Duration>,
+    /// True when `duration` is a cheap provisional estimate (a GYM chiptune's frame count,
+    /// which libgme cannot report exactly up front) rather than a read or decoded length. The
+    /// player backfills the exact value from the rendered source on play, overwriting the
+    /// estimate, so the scrub bar always uses the real length during playback.
+    pub duration_estimated: bool,
     /// Audio properties for the classic info line.
     pub sample_rate: Option<u32>,
     pub bitrate: Option<u32>,
@@ -204,6 +220,7 @@ impl Track {
             artist: String::new(),
             album: String::new(),
             duration: None,
+            duration_estimated: false,
             sample_rate: None,
             bitrate: None,
             channels: None,
@@ -294,6 +311,15 @@ impl Track {
                 .or_else(|| gme_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
+        // Last resort for a format whose exact length no cheap probe can read: a provisional
+        // estimate, shown now and corrected from the rendered source on play. Only GYM uses
+        // this (libgme reports no length for a raw register dump); see gme::estimated_duration.
+        if self.duration.is_none() {
+            if let Some(d) = gme_estimated_duration(&self.path) {
+                self.duration = Some(d);
+                self.duration_estimated = true;
+            }
+        }
     }
 
     /// Build a fully-loaded track (tags read immediately).
@@ -330,6 +356,7 @@ impl Track {
             artist,
             album,
             duration: Some(t.duration()),
+            duration_estimated: false,
             sample_rate: Some(crate::cdda::CDDA_SAMPLE_RATE),
             // CDDA is a constant 1411 kbit/s (44100 × 16 × 2).
             bitrate: Some(1411),
@@ -382,10 +409,15 @@ impl Playlist {
     /// Fill in the current track's duration if it wasn't known from the metadata
     /// scan. Used once playback starts so raw streams (TrueHD/MLP), whose length is
     /// only known after a full decode, still show a time and allow scrubbing.
-    pub fn set_current_duration_if_missing(&mut self, d: Duration) {
+    /// Backfill the current track's length from the playing source: set it when none was known
+    /// (raw TrueHD/MLP have none up front) and also overwrite a provisional estimate (a GYM's
+    /// frame-count guess) with this exact rendered length, clearing the estimate flag so the
+    /// scrub bar uses the real value. An already-exact length is left untouched.
+    pub fn backfill_current_duration(&mut self, d: Duration) {
         if let Some(t) = self.current.and_then(|i| self.tracks.get_mut(i)) {
-            if t.duration.is_none() {
+            if t.duration.is_none() || t.duration_estimated {
                 t.duration = Some(d);
+                t.duration_estimated = false;
             }
         }
     }
@@ -1025,6 +1057,25 @@ mod tests {
         assert!(!t.loaded);
         assert_eq!(t.title, "Song");
         assert_eq!(t.display_name(), "Song");
+    }
+
+    #[test]
+    fn backfill_overwrites_an_estimate_but_keeps_an_exact_length() {
+        let mut pl = pl_of(&["/a.gym", "/b.mp3"], Some(0));
+        // A provisional estimate (GYM frame count) is replaced by the exact rendered length.
+        pl.tracks[0].duration = Some(Duration::from_secs(44));
+        pl.tracks[0].duration_estimated = true;
+        pl.backfill_current_duration(Duration::from_secs(43));
+        assert_eq!(pl.tracks[0].duration, Some(Duration::from_secs(43)));
+        assert!(!pl.tracks[0].duration_estimated, "estimate flag cleared after backfill");
+        // A second backfill with a different value no longer overwrites the now-exact length.
+        pl.backfill_current_duration(Duration::from_secs(99));
+        assert_eq!(pl.tracks[0].duration, Some(Duration::from_secs(43)));
+        // A missing length is still filled (raw TrueHD/MLP path).
+        pl.current = Some(1);
+        pl.tracks[1].duration = None;
+        pl.backfill_current_duration(Duration::from_secs(200));
+        assert_eq!(pl.tracks[1].duration, Some(Duration::from_secs(200)));
     }
 
     #[test]

@@ -276,9 +276,11 @@ Oracle for the decode tests: `ffmpeg -i <sample> -f f32le -ac 2 -ar <rate> oracl
   - RealAudio Cook `.rm`: `/real/audiosig.rm` (audio-only), `/real/RLG2_19.rm` (cook + rv20 video)
   - TAK `.tak`: `/A-codecs/tak/lostchord-tak_2_2_0.tak` (2.x works; the 1.0 file is a negative
     fixture - our FFmpeg 4.4 demuxes but cannot decode it, and playlist::playable must reject it)
-  - ATRAC: `.oma`/`.aa3` `/A-codecs/ATRAC3+/` (at3p_sample1.oma; sonateno14op27-2.aa3 is audible),
-    `.at3` `/A-codecs/ATRAC3/SND0.AT3`, `.aea` `/A-codecs/ATRAC1/Christmas1970.aea`. `.omg` =
-    `cp` of an `.oma`.
+  - ATRAC: `.oma`/`.omg`/`.aa3` `/A-codecs/ATRAC3+/sonateno14op27-2.aa3` (one OpenMG/ATRAC3+
+    container plays under all three extensions; use this audible sonata for every one. The
+    other file there, at3p_sample1.oma, decodes correctly but is a very quiet test tone that
+    sounds like wind on listening QA, so do not use it as the shown sample). `.at3`
+    `/A-codecs/ATRAC3/SND0.AT3`, `.aea` `/A-codecs/ATRAC1/Christmas1970.aea`.
 - AMR `.amr` samples.ffmpeg.org/A-codecs/amr/sample.amr; `.awb` = an AMR-WB file renamed (crate::amr
   dispatches by magic). DSD `.dsf` generated via sigma-delta; `.dff` tone procured.
 - Not advertised (no sample): `.at9` (ATRAC9). Deferred: `.als` (only ALS-in-mp4), `.vqf` (TwinVQ).
