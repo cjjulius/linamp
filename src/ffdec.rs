@@ -29,10 +29,12 @@ use rodio::Source;
 /// extensions), Dolby TrueHD / MLP (the MLP-based lossless codec used on Blu-ray,
 /// raw `.thd`/`.mlp` streams), and RealAudio / RealMedia (`.ra`/`.rm`: the RealMedia
 /// demuxer plus the reverse-engineered RealAudio decoders: ra_144/ra_288, Cook,
-/// SIPR, ATRAC3 and RealAudio Lossless). None has a permissive pure-Rust decoder
-/// mature enough for real-time playback, so FFmpeg demuxes and decodes them through
-/// the one generic path here (multichannel is downmixed to stereo; a `.rm` that also
-/// carries video plays its best audio stream).
+/// SIPR, ATRAC3 and RealAudio Lossless), and TAK (`.tak`, Tom's lossless Audio
+/// Kompressor). None has a permissive pure-Rust decoder mature enough for real-time
+/// playback, so FFmpeg demuxes and decodes them through the one generic path here
+/// (multichannel is downmixed to stereo; a `.rm` that also carries video plays its
+/// best audio stream). TAK is lossless and at most 24-bit, which f32 represents
+/// exactly, so routing it through the f32 path preserves its samples.
 ///
 /// `.ram` is deliberately excluded: it is a plain-text metafile holding a stream URL,
 /// not an audio container, so it would belong to playlist handling, not the decoder.
@@ -46,6 +48,7 @@ pub fn is_ffmpeg_audio(path: &Path) -> bool {
                 || e.eq_ignore_ascii_case("mlp")
                 || e.eq_ignore_ascii_case("ra")
                 || e.eq_ignore_ascii_case("rm")
+                || e.eq_ignore_ascii_case("tak")
         })
         .unwrap_or(false)
 }
@@ -527,6 +530,64 @@ mod tests {
             }
         }
         assert!(best > 0.999, "Cook decode correlation vs oracle too low: {best:.4}");
+    }
+
+    /// Decode tak-sample.tak (TAK, Tom's lossless Audio Kompressor) and check it against an
+    /// ffmpeg-CLI decode of the same file (the oracle: `ffmpeg -i tak-sample.tak -t 30
+    /// -f f32le -ac 2 -ar 44100`, the first 30 s only to keep the test quick). TAK has no
+    /// encoder outside the Windows reference tool, so this is a procured sample; both paths
+    /// run ffmpeg's tak decoder, so the match is near-exact (a small lag search absorbs any
+    /// frame-alignment offset). Our decode is the whole file; the correlation only compares
+    /// the overlapping prefix. (qa-music gitignored; see the README for fetching the sample.)
+    #[test]
+    fn decodes_tak_close_to_the_ffmpeg_oracle() {
+        let tak = std::path::PathBuf::from("qa-music/format-samples/tak-sample.tak");
+        let oracle_path =
+            std::path::PathBuf::from("qa-music/format-samples/oracles/tak-oracle.f32");
+        if !tak.exists() || !oracle_path.exists() {
+            return;
+        }
+        let raw = std::fs::read(&oracle_path).unwrap();
+        let oracle: Vec<f32> = raw
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        let src = open(&tak).unwrap();
+        assert_eq!(src.channels(), 2, "stereo output");
+        let got: Vec<f32> = src.collect();
+        assert!(got.len() > 44_100 * 2, "too little audio");
+        let gl: Vec<f32> = got.iter().step_by(2).copied().collect();
+        let ol: Vec<f32> = oracle.iter().step_by(2).copied().collect();
+        let corr = |a: &[f32], b: &[f32]| -> f64 {
+            let n = a.len().min(b.len());
+            if n < 2000 {
+                return 0.0;
+            }
+            let (a, b) = (&a[..n], &b[..n]);
+            let (ma, mb) = (
+                a.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+                b.iter().map(|&x| x as f64).sum::<f64>() / n as f64,
+            );
+            let (mut num, mut da, mut db) = (0.0, 0.0, 0.0);
+            for i in 0..n {
+                let (xa, xb) = (a[i] as f64 - ma, b[i] as f64 - mb);
+                num += xa * xb;
+                da += xa * xa;
+                db += xb * xb;
+            }
+            if da <= 0.0 || db <= 0.0 { 0.0 } else { num / (da.sqrt() * db.sqrt()) }
+        };
+        let mut best = 0.0;
+        for lag in 0..600usize {
+            if lag >= gl.len() {
+                break;
+            }
+            let c = corr(&gl[lag..], &ol);
+            if c > best {
+                best = c;
+            }
+        }
+        assert!(best > 0.999, "TAK decode correlation vs oracle too low: {best:.4}");
     }
 
     /// Seeking must land on the right samples: decode, seek to 40%, and confirm the

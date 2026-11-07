@@ -92,6 +92,9 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         "ra" => "audio/vnd.rn-realaudio",
         #[cfg(feature = "ffmpeg")]
         "rm" => "application/vnd.rn-realmedia",
+        // TAK (Tom's lossless Audio Kompressor), also ffmpeg-only.
+        #[cfg(feature = "ffmpeg")]
+        "tak" => "audio/x-tak",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -161,6 +164,7 @@ fn mime_package_xml() -> String {
             "RealMedia",
             &["*.rm"],
         ));
+        types.push(("audio/x-tak", "TAK (Tom's lossless Audio Kompressor)", &["*.tak"]));
     }
     let mut body = String::new();
     for (ty, comment, globs) in &types {
