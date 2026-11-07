@@ -105,6 +105,30 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "au",
     #[cfg(feature = "ffmpeg")]
     "w64",
+    // Chiptune / console music via libgme (the `gme` feature): NES, Game Boy, SNES, Genesis,
+    // ZX/CPC, Atari, MSX, PC Engine. crate::gme renders these to PCM.
+    #[cfg(feature = "gme")]
+    "nsf",
+    #[cfg(feature = "gme")]
+    "nsfe",
+    #[cfg(feature = "gme")]
+    "gbs",
+    #[cfg(feature = "gme")]
+    "vgm",
+    #[cfg(feature = "gme")]
+    "vgz",
+    #[cfg(feature = "gme")]
+    "spc",
+    #[cfg(feature = "gme")]
+    "ay",
+    #[cfg(feature = "gme")]
+    "sap",
+    #[cfg(feature = "gme")]
+    "kss",
+    #[cfg(feature = "gme")]
+    "hes",
+    #[cfg(feature = "gme")]
+    "gym",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -116,6 +140,17 @@ fn ffmpeg_duration(path: &std::path::Path) -> Option<Duration> {
 }
 #[cfg(not(feature = "ffmpeg"))]
 fn ffmpeg_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+/// Duration of a chiptune (libgme) for the playlist, or `None` without the `gme` feature.
+/// A cfg shim, like `ffmpeg_duration`, so the duration chain reads the same in both builds.
+#[cfg(feature = "gme")]
+fn gme_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::gme::duration(path)
+}
+#[cfg(not(feature = "gme"))]
+fn gme_duration(_path: &std::path::Path) -> Option<Duration> {
     None
 }
 
@@ -256,6 +291,7 @@ impl Track {
                 .or_else(|| crate::flv::duration(&self.path))
                 .or_else(|| crate::ps::duration(&self.path))
                 .or_else(|| ffmpeg_duration(&self.path))
+                .or_else(|| gme_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
     }
@@ -803,6 +839,8 @@ mod tests {
         ];
         #[cfg(feature = "ffmpeg")]
         decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts", "thd", "mlp", "ra", "rm", "tak", "oma", "omg", "aa3", "at3", "aea", "shn", "8svx", "adx", "voc", "au", "w64"]));
+        #[cfg(feature = "gme")]
+        decoders.push(("gme", crate::gme::is_gme, vec!["nsf", "nsfe", "gbs", "vgm", "vgz", "spc", "ay", "sap", "kss", "hes", "gym"]));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.

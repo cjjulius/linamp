@@ -343,6 +343,14 @@ impl Player {
             }
         }
 
+        // Chiptune/console formats are rendered by libgme (the `gme` feature), checked first
+        // since their extensions are distinct from everything below.
+        #[cfg(feature = "gme")]
+        if crate::gme::is_gme(path) {
+            let source = crate::gme::open(path)?;
+            return self.append_source(source, None, true);
+        }
+
         // MIDI is synthesized (rustysynth + a bundled SoundFont), not decoded (#159);
         // everything else goes through the single symphonia decode path (#163). Both
         // produce a rodio `Source` fed into the shared EQ / analyzer / balance chain.
