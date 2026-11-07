@@ -5239,11 +5239,12 @@ impl eframe::App for LinAmpApp {
 
         // Backfill the current track's length from the playing source once it's
         // known. Raw TrueHD/MLP streams have no duration in a cheap metadata scan,
-        // but the fully-decoded source reports one, so the time display and scrub
-        // bar start working as soon as the track is loaded.
+        // and a GYM chiptune only has a provisional frame-count estimate up front;
+        // the fully-decoded source reports the exact length, which overwrites both so
+        // the time display and scrub bar use the real value during playback.
         if self.player.state() == PlayState::Playing {
             if let Some(d) = self.player.total_duration() {
-                self.playlist.set_current_duration_if_missing(d);
+                self.playlist.backfill_current_duration(d);
             }
         }
 

@@ -27,6 +27,12 @@ case ",$FEATURES," in
   *,ffmpeg,*) BUNDLE_FFMPEG=1 ;;
   *) BUNDLE_FFMPEG=0 ;;
 esac
+# The gme feature (chiptune/console music) links libgme, which is bundled the same way as
+# FFmpeg so the install is self-contained. Pass FEATURES=ffmpeg,gme for the full build.
+case ",$FEATURES," in
+  *,gme,*) BUNDLE_GME=1 ;;
+  *) BUNDLE_GME=0 ;;
+esac
 NAME="linamp-${VERSION}-linux-x86_64${SUFFIX}"
 STAGE="dist/$NAME"
 
@@ -44,6 +50,15 @@ if [ "$BUNDLE_FFMPEG" = 1 ]; then
   export FFMPEG_DIR="$FFMPEG_MIN"
   export PKG_CONFIG_PATH="$FFMPEG_MIN/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
   export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-rpath,\$ORIGIN/lib -C link-arg=-Wl,--disable-new-dtags"
+fi
+
+# libgme (chiptune/console music) is small (~400 KB, LGPL) and built from source the same way;
+# build.rs links GME_DIR and emits the $ORIGIN/lib rpath itself, so it is self-contained even in
+# a gme-only build. We bundle its .so into $STAGE/lib below.
+if [ "$BUNDLE_GME" = 1 ]; then
+  GME_MIN="$ROOT/build/gme-min"
+  sh "$ROOT/packaging/linux/build-gme-min.sh" "$GME_MIN"
+  export GME_DIR="$GME_MIN"
 fi
 
 echo "==> cargo build --release $FEATURE_ARGS"
@@ -68,6 +83,18 @@ if [ "$BUNDLE_FFMPEG" = 1 ]; then
   # Sanity check: the installed binary must resolve every libav* from the bundle.
   if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libav|libswresample' | grep -vq "$STAGE/lib"; then
     echo "!!  WARNING: a libav* still resolves outside $STAGE/lib; check the rpath" >&2
+  fi
+fi
+if [ "$BUNDLE_GME" = 1 ]; then
+  echo "==> Bundling libgme into $STAGE/lib (self-contained)"
+  mkdir -p "$STAGE/lib"
+  # libgme depends only on libc/libstdc++ (both from the user's system), so its own .so is the
+  # whole runtime set. Copy it from the build prefix; the soname symlinks are preserved and the
+  # binary's $ORIGIN/lib rpath (emitted by build.rs) loads it at runtime.
+  cp -a "$GME_DIR"/lib/libgme.so* "$STAGE/lib/" 2>/dev/null || true
+  for f in "$STAGE"/lib/libgme.so.*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
+  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libgme' | grep -vq "$STAGE/lib"; then
+    echo "!!  WARNING: libgme still resolves outside $STAGE/lib; check the rpath" >&2
   fi
 fi
 cp -r skins "$STAGE/skins"

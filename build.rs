@@ -23,6 +23,46 @@ fn main() {
     copy_asset_dir(&manifest, &target_dir, "skins");
     copy_asset_dir(&manifest, &target_dir, "soundfont");
     copy_asset_dir(&manifest, &target_dir, "music");
+    link_gme(&manifest, &target_dir);
+}
+
+/// Link libgme for the `gme` feature and copy its shared library next to the binary (into
+/// `target/<profile>/lib`, resolved at runtime via an `$ORIGIN/lib` rpath), so dev and release
+/// runs are self-contained in the same way the FFmpeg feature bundles libav*. The library is
+/// found at `$GME_DIR` (a prefix with `lib/libgme.so`), defaulting to the in-repo
+/// `build/gme-min` that `packaging/linux/build-gme-min.sh` produces. No-op without the feature.
+fn link_gme(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=GME_DIR");
+    if env::var_os("CARGO_FEATURE_GME").is_none() {
+        return;
+    }
+    let dir = env::var_os("GME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/gme-min"));
+    let libdir = dir.join("lib");
+    println!("cargo:rustc-link-search=native={}", libdir.display());
+    println!("cargo:rustc-link-lib=dylib=gme");
+
+    // Non-Windows: resolve the bundled libgme.so next to the executable at runtime, and copy
+    // it there so a dev/release run works without a system libgme. (Windows packaging ships
+    // the DLL beside the exe, handled by the installer, so this host branch is Unix-only.)
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        if let Ok(entries) = fs::read_dir(&libdir) {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                if name.to_string_lossy().contains("libgme.so") {
+                    let _ = fs::copy(e.path(), dst.join(&name));
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
 }
 
 /// Mirror `manifest/<name>` into `target_dir/<name>` (top-level files only),

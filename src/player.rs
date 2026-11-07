@@ -343,106 +343,16 @@ impl Player {
             }
         }
 
-        // MIDI is synthesized (rustysynth + a bundled SoundFont), not decoded (#159);
-        // everything else goes through the single symphonia decode path (#163). Both
-        // produce a rodio `Source` fed into the shared EQ / analyzer / balance chain.
-        if crate::midi::is_midi(path) {
-            let sf = crate::midi::soundfont_path().ok_or_else(|| {
-                anyhow::anyhow!("MIDI playback needs a SoundFont (.sf2) in the soundfont/ folder")
-            })?;
-            let source = crate::midi::open_midi(path, &sf)?;
-            self.append_source(source, None, true)?;
-        } else if crate::tracker::is_tracker(path) {
-            // Tracker modules (.mod/.xm/.s3m/.it) are rendered by xmrs (#158).
-            let source = crate::tracker::open_tracker(path)?;
-            self.append_source(source, None, true)?;
-        } else if crate::ape::is_ape(path) {
-            // Monkey's Audio (.ape) is decoded by ape-decoder (#182).
-            let source = crate::ape::open_ape(path)?;
-            self.append_source(source, None, true)?;
-        } else if crate::ac3::is_ac3(path) {
-            // Dolby Digital (.ac3/.eac3) is decoded by filmcraft-ac3 (#161).
-            let source = crate::ac3::open_ac3(path)?;
-            self.append_source(source, None, true)?;
-        } else if crate::wavpack::is_wavpack(path) {
-            // WavPack (.wv) is decoded by wavicle (pure Rust); symphonia's wavpack
-            // feature is a non-functional stub.
-            let source = crate::wavpack::open_wavpack(path)?;
-            self.append_source(source, None, true)?;
-        } else if crate::tta::is_tta(path) {
-            // True Audio (.tta) is decoded by oxideav-tta (pure Rust).
-            let source = crate::tta::open_tta(path)?;
-            self.append_source(source, None, true)?;
-        } else if crate::mpc::is_mpc(path) {
-            // Musepack (.mpc/.mp+/.mpp) is decoded by oxideav-musepack (pure Rust);
-            // symphonia has no Musepack decoder.
-            let source = crate::mpc::open_mpc(path)?;
-            self.append_source(source, None, true)?;
-        } else if crate::dsd::is_dsd(path) {
-            // DSD (.dsf/.dff): crate::dsd pulls the 1-bit stream via dsd-reader and
-            // decimates it to PCM; symphonia has no DSD support.
-            let source = crate::dsd::open_dsd(path)?;
-            self.append_source(source, None, true)?;
-        } else if crate::speex::is_speex(path) {
-            // Speex (.spx): crate::speex demuxes the Ogg with the `ogg` crate and decodes
-            // the packets with libspeex; symphonia has no Speex decoder.
-            let source = crate::speex::open_speex(path)?;
-            self.append_source(source, None, true)?;
-        } else if crate::amr::is_amr(path) {
-            // AMR (.amr/.awb): crate::amr parses the storage container and decodes with
-            // the pure-Rust rvoip-codec-core; symphonia has no AMR decoder.
-            let source = crate::amr::open_amr(path)?;
-            self.append_source(source, None, true)?;
-        } else if crate::ts::is_ts(path) {
-            // MPEG-TS (.ts/.m2ts): symphonia can't demux it, so crate::ts pulls the
-            // audio elementary stream out and decodes it through the shared path.
-            let source = crate::ts::open_ts(path)?;
-            self.append_source(source, None, true)?;
-        } else if crate::avi::is_avi(path) {
-            // AVI (.avi): crate::avi (filmcraft-avi) pulls the audio stream out and
-            // decodes it the same way (MP3/MP2/PCM via symphonia, AC-3 via crate::ac3).
-            let source = crate::avi::open_avi(path)?;
-            self.append_source(source, None, true)?;
-        } else if crate::flv::is_flv(path) {
-            // FLV (.flv): crate::flv (scuffle-flv) pulls the audio tags out; MP3 and
-            // ADTS-wrapped AAC decode through the shared path.
-            let source = crate::flv::open_flv(path)?;
-            self.append_source(source, None, true)?;
-        } else if crate::ps::is_ps(path) {
-            // MPEG Program Stream (.mpg/.vob): crate::ps pulls the audio ES out;
-            // MPEG audio via symphonia, AC-3 (private_stream_1) via crate::ac3.
-            let source = crate::ps::open_ps(path)?;
-            self.append_source(source, None, true)?;
-        } else {
-            // Default path: symphonia, or, when built with `--features ffmpeg`,
-            // FFmpeg first for the codecs it owns (WMA). See open_fallback.
-            self.open_fallback(path)?;
-        }
+        // Decode or synthesize the file to a rodio `Source` through the shared dispatch, then
+        // feed it into the EQ / analyzer / balance chain. The routing lives in open_source so
+        // the exact same path backs both playback and the viz-coverage test.
+        let source = open_source(path)?;
+        self.append_source(source, None, true)?;
         self.current_path = Some(path.to_path_buf());
         self.current_url = None;
         self.stream_title = None;
         self.state = PlayState::Playing;
         Ok(())
-    }
-
-    /// The default open path, taken when no container/side-decoder module claims
-    /// the file. With the `ffmpeg` feature, FFmpeg handles the codecs it owns (WMA)
-    /// and everything else goes to symphonia; without it, straight to symphonia.
-    #[cfg(feature = "ffmpeg")]
-    fn open_fallback(&mut self, path: &std::path::Path) -> Result<()> {
-        if crate::ffdec::is_ffmpeg_audio(path) {
-            let source = crate::ffdec::open(path)?;
-            self.append_source(source, None, true)
-        } else {
-            let source = crate::decode::open_file(path)?;
-            self.append_source(source, None, true)
-        }
-    }
-
-    #[cfg(not(feature = "ffmpeg"))]
-    fn open_fallback(&mut self, path: &std::path::Path) -> Result<()> {
-        let source = crate::decode::open_file(path)?;
-        self.append_source(source, None, true)
     }
 
     /// Start playing an already-opened stream source (see [`crate::stream`]). The
@@ -592,9 +502,133 @@ fn crossfade_step(
     (new_in, new_out, still_fading, changed)
 }
 
+/// Open a playable file to a seekable rodio `Source`, routed to the decoder that owns its
+/// format. This is the dispatch `play_file` uses, factored out so the viz-coverage test can
+/// exercise every codec through the real path. CD and network-stream pseudo-paths are handled
+/// separately in `play_file` and are not routed here.
+fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
+    // Chiptune/console formats (NSF/VGM/SPC/...), rendered by libgme (the `gme` feature).
+    #[cfg(feature = "gme")]
+    if crate::gme::is_gme(path) {
+        return Ok(Box::new(crate::gme::open(path)?));
+    }
+    if crate::midi::is_midi(path) {
+        // MIDI is synthesized (rustysynth + a bundled SoundFont), not decoded (#159).
+        let sf = crate::midi::soundfont_path().ok_or_else(|| {
+            anyhow::anyhow!("MIDI playback needs a SoundFont (.sf2) in the soundfont/ folder")
+        })?;
+        return Ok(Box::new(crate::midi::open_midi(path, &sf)?));
+    }
+    if crate::tracker::is_tracker(path) {
+        return Ok(Box::new(crate::tracker::open_tracker(path)?));
+    }
+    if crate::ape::is_ape(path) {
+        return Ok(Box::new(crate::ape::open_ape(path)?));
+    }
+    if crate::ac3::is_ac3(path) {
+        return Ok(Box::new(crate::ac3::open_ac3(path)?));
+    }
+    if crate::wavpack::is_wavpack(path) {
+        return Ok(Box::new(crate::wavpack::open_wavpack(path)?));
+    }
+    if crate::tta::is_tta(path) {
+        return Ok(Box::new(crate::tta::open_tta(path)?));
+    }
+    if crate::mpc::is_mpc(path) {
+        return Ok(Box::new(crate::mpc::open_mpc(path)?));
+    }
+    if crate::dsd::is_dsd(path) {
+        return Ok(Box::new(crate::dsd::open_dsd(path)?));
+    }
+    if crate::speex::is_speex(path) {
+        return Ok(Box::new(crate::speex::open_speex(path)?));
+    }
+    if crate::amr::is_amr(path) {
+        return Ok(Box::new(crate::amr::open_amr(path)?));
+    }
+    if crate::ts::is_ts(path) {
+        return Ok(Box::new(crate::ts::open_ts(path)?));
+    }
+    if crate::avi::is_avi(path) {
+        return Ok(Box::new(crate::avi::open_avi(path)?));
+    }
+    if crate::flv::is_flv(path) {
+        return Ok(Box::new(crate::flv::open_flv(path)?));
+    }
+    if crate::ps::is_ps(path) {
+        return Ok(Box::new(crate::ps::open_ps(path)?));
+    }
+    // Default: FFmpeg for the codecs it owns (WMA/DTS/RealAudio/TAK/ATRAC/... with
+    // `--features ffmpeg`), otherwise symphonia.
+    #[cfg(feature = "ffmpeg")]
+    if crate::ffdec::is_ffmpeg_audio(path) {
+        return Ok(Box::new(crate::ffdec::open(path)?));
+    }
+    Ok(Box::new(crate::decode::open_file(path)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::crossfade_step;
+
+    /// Every supported codec must feed the visualizer: decode one sample per extension through
+    /// the real dispatch (open_source), run it through viz::tap, and confirm the analyzer ring
+    /// receives non-silent audio. This guards against a format whose decode path produces no
+    /// viz output (the way chiptunes did when the playing-state was skipped). qa-music is
+    /// gitignored, so it runs locally and no-ops on CI; tak-v1 is an intentionally undecodable
+    /// negative fixture and is skipped. Marked ignore because it decodes many whole files;
+    /// run with `cargo test --features "ffmpeg gme" -- --ignored feeds_the_visualizer`.
+    #[test]
+    #[ignore = "slow: decodes a sample per codec; run explicitly with --ignored"]
+    fn every_supported_codec_feeds_the_visualizer() {
+        use std::collections::HashSet;
+        let dir = std::path::Path::new("qa-music/format-samples");
+        if !dir.exists() {
+            return;
+        }
+        const SKIP: &[&str] = &["tak-v1.tak"];
+        let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        entries.sort();
+        let mut seen_ext = HashSet::new();
+        let mut checked = 0;
+        // Collect every problem sample so one run reports them all, rather than stopping at the
+        // first (a format whose decoder errors, or that renders silence).
+        let mut failures: Vec<String> = Vec::new();
+        for path in entries {
+            if !path.is_file() {
+                continue;
+            }
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if SKIP.contains(&name.as_str()) || !crate::playlist::is_supported(&path) {
+                continue;
+            }
+            let ext = path.extension().unwrap().to_string_lossy().to_lowercase();
+            if !seen_ext.insert(ext) {
+                continue; // one sample per extension keeps the run bounded
+            }
+            match super::open_source(&path) {
+                Ok(src) => {
+                    // viz::tap pushes every sample it forwards into the ring, so the peak of what
+                    // flows through it is exactly what the visualizer would see. Scan up to ~10s
+                    // so a quiet lead-in (a soft intro) is not mistaken for silent output.
+                    let tapped = crate::viz::tap(src, crate::viz::VizShared::new());
+                    let peak = tapped.take(44_100 * 2 * 10).fold(0.0f32, |m, s| m.max(s.abs()));
+                    if peak > 0.001 {
+                        checked += 1;
+                    } else {
+                        failures.push(format!("{name}: no visualizer output (peak {peak})"));
+                    }
+                }
+                Err(e) => failures.push(format!("{name}: open failed: {e}")),
+            }
+        }
+        assert!(failures.is_empty(), "codecs with no viz output:\n  {}", failures.join("\n  "));
+        assert!(checked > 0, "no supported samples found to check");
+    }
 
     #[test]
     fn crossfade_off_is_a_noop() {

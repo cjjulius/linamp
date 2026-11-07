@@ -235,3 +235,99 @@ Phase 4 - Non-codec sources
 Done this cycle (context)
 - [x] RealAudio/RealMedia, TAK, Sony ATRAC (ffdec), plus the corrupt-input decode-hang fix.
 - [x] Walls documented: AC-4 (#232), OptimFROG (#233).
+
+## Appendix: QA sample cookbook (every format)
+
+The canonical per-format recipe for building the local QA corpus in `qa-music/format-samples/`.
+That folder is gitignored (samples are large/per-box/often copyrighted), so each machine builds
+its own set from these recipes - this appendix is how both the Linux and Windows boxes stay in
+sync. Preference order per format: a real song transcoded from the CC0 clip "Hypno This" by Kevin
+MacLeod (public domain); else generate; else procure (exact URL given). The `hypno-this.wav`
+source clip is the shared base; `hypno-mono.wav` / `hypno-48k.wav` are variants.
+
+Vet any new sample before relying on it with the all-codecs test (ignored/slow), which renders a
+sample per extension and flags any that error or render silence:
+`cargo test --features "ffmpeg gme" -- --ignored every_supported_codec_feeds_the_visualizer`
+(Linux: `LD_LIBRARY_PATH=build/gme-min/lib`; Windows: libgme DLL on PATH).
+
+### Core audio and containers (symphonia and pure-Rust side-decoders)
+- Transcode from hypno-this.wav: `.mp3` (libmp3lame 192k), `.mp2`/`.mpa` (mp2), `.flac`, `.ogg`
+  (Vorbis), `.opus`, `.m4a`/`.aac`, `.wav` (pcm_s16le), `.aiff` (pcm_s16be), `.eac3`/`.ec3` (E-AC-3),
+  `.wv` (WavPack: stereo/mono/48k/24-bit/untagged variants), `.tta` (True Audio).
+- Musepack `.mpc` (SV8): `mpcenc` (musepack-tools; ffmpeg has no MPC encoder). `.mp+`/`.mpp` are copies.
+- Video-for-audio (a 320x240 test-pattern video + the audio track): `.mp4`/`.mov`/`.mkv` (H.264/AAC),
+  `.webm` (VP8/Opus), `.ogv` (Theora/Vorbis), `.mov`. `.m4b`/`.m4v`/`.3gp` are MP4-family copies.
+- Container-extract: MPEG-TS `.ts`/`.m2ts`/`.mts` (AAC/MP2/AC-3), AVI `.avi` (MP3/PCM/AC-3),
+  FLV `.flv` (MP3/AAC), MPEG-PS `.mpg`/`.mpeg`/`.vob`/`.m2p` (MP2/AC-3).
+- MP1 `.mp1`: ffmpeg has no Layer I encoder; make with mjpegtools `mp2enc -l 1` fed a real WAV on
+  stdin (`apt-get download mjpegtools`, `dpkg -x`), or procure samples.ffmpeg.org/A-codecs/mp1-sample.mp1.
+- MIDI `.mid`/`.midi`: a format-1 General MIDI song (exercises rustysynth + SoundFont).
+- Trackers: `.mod`/`.s3m`/`.it` small valid modules (TagLib test data), `.xm` = xmrs examples/note.xm.
+  Use real modules with audible notes, not empty templates (an empty module renders silence).
+
+### FFmpeg-backed formats (crate::ffdec, `--features ffmpeg`)
+Oracle for the decode tests: `ffmpeg -i <sample> -f f32le -ac 2 -ar <rate> oracles/<name>-oracle.f32`.
+- Mint from hypno-this.wav: `.wma` (`-c:a wmav2`), `.dts` (`-c:a dca -strict -2`), `.thd`/`.mlp`
+  (`-c:a truehd`/`mlp -strict -2`), `.ra` (`-ar 8000 -ac 1 -c:a real_144`, RA 1.0), `.adx`
+  (`-c:a adpcm_adx`), `.voc`/`.w64` (`-c:a pcm_s16le`), `.au` (`-c:a pcm_s16be`).
+- Procure (no encoder) from samples.ffmpeg.org:
+  - Shorten `.shn`: `/A-codecs/lossless/luckynight.shn`
+  - 8SVX `.8svx`: `/8svx/conect.8svx`
+  - RealAudio Cook `.rm`: `/real/audiosig.rm` (audio-only), `/real/RLG2_19.rm` (cook + rv20 video)
+  - TAK `.tak`: `/A-codecs/tak/lostchord-tak_2_2_0.tak` (2.x works; the 1.0 file is a negative
+    fixture - our FFmpeg 4.4 demuxes but cannot decode it, and playlist::playable must reject it)
+  - ATRAC: `.oma`/`.omg`/`.aa3` `/A-codecs/ATRAC3+/sonateno14op27-2.aa3` (one OpenMG/ATRAC3+
+    container plays under all three extensions; use this audible sonata for every one. The
+    other file there, at3p_sample1.oma, decodes correctly but is a very quiet test tone that
+    sounds like wind on listening QA, so do not use it as the shown sample). `.at3`
+    `/A-codecs/ATRAC3/SND0.AT3`, `.aea` `/A-codecs/ATRAC1/Christmas1970.aea`.
+- AMR `.amr` samples.ffmpeg.org/A-codecs/amr/sample.amr; `.awb` = an AMR-WB file renamed (crate::amr
+  dispatches by magic). DSD `.dsf` generated via sigma-delta; `.dff` tone procured.
+- Not advertised (no sample): `.at9` (ATRAC9). Deferred: `.als` (only ALS-in-mp4), `.vqf` (TwinVQ).
+
+### Chiptunes / console music (crate::gme, `--features gme`)
+libgme emulates the sound hardware; no encoder, so procure from Modland
+(modland.com/pub/modules/<Format>/<author>/...). One libgme build plays all. Pick a small file;
+LinAmp plays subsong 0, so choose one whose first track has audio.
+- NES `.nsf`: "Nintendo Sound Format" | Game Boy `.gbs`: "Gameboy Sound System" | PC Engine `.hes`:
+  "HES" | Atari `.sap`: "Slight Atari Player" | SNES `.spc`: "Nintendo SPC" | Sega/arcade `.vgz`
+  (gzipped VGM): "Video Game Music".
+- The four formats Modland does not serve directly (all now sampled; recipes below):
+  - `.ay` (ZX Spectrum / Amstrad CPC): Modland's AY dirs hold `.emul`/`.amad`/`.strc`, not raw `.ay`.
+    Pull a raw `.ay` (magic `ZXAYEMUL`) from the chris-y/AY mirror of Project AY. The `games`
+    tree is split into one subdirectory per leading letter, so the path carries that letter:
+    `https://raw.githubusercontent.com/chris-y/AY/main/music/ay/games/<letter>/<name>.ay`
+    (URL-encode spaces and `[]`). `a/ATF(AdvancedTacticalFighter).ay` is single-track and loud
+    (subsong 0 audible).
+  - `.gym` (Sega Genesis): Modland's "Megadrive GYM" files are PACKED (magic `GYMX`), which libgme
+    0.6.3 rejects with "Packed GYM file not supported". Unpack to a raw register dump libgme accepts:
+    strip the 428-byte GYMX header, then zlib-decompress the body when the uint32 at header offset
+    424 (compressed size) is nonzero. Write out just the decompressed stream (no GYMX header):
+    `python3 -c 'import struct,zlib,sys; d=open(sys.argv[1],"rb").read(); assert d[:4]==b"GYMX";
+    n=struct.unpack_from("<I",d,424)[0]; b=d[428:]; open(sys.argv[2],"wb").write(zlib.decompress(b) if n else b)'
+    packed.gym gym-sample.gym`
+  - `.kss` (MSX): most KSS rips have a silent subsong 0 and LinAmp plays subsong 0. Of the whole
+    Modland "KSS" collection (17 authors), only `KSS/Airborne/nemesis gametune.kss` has an audible
+    first track; use that until the subsong-selection feature lands.
+  - `.nsfe` (NES extended): no sample located, so derive one from any `.nsf`. NSFe is a chunked
+    (RIFF-style) container: `NSFE` magic then `<uint32 size><4cc><body>` chunks. Emit `INFO`
+    (load/init/play addrs + region + chip + track count + 0-based start), a `BANK` chunk with the
+    NSF header's 8 bankswitch bytes when any is nonzero (ours needs it), the `DATA` chunk (NSF bytes
+    from 0x80), then an empty `NEND`. The result renders byte-identical audio to the source `.nsf`
+    through libgme. Converter (`python3 nsf2nsfe.py nsf-sample.nsf nsfe-sample.nsfe`):
+
+    ```python
+    import struct, sys
+    nsf = open(sys.argv[1], "rb").read()
+    assert nsf[:5] == b"NESM\x1a"
+    def chunk(cc, body): return struct.pack("<I", len(body)) + cc + body
+    info = nsf[8:14] + bytes([nsf[0x7A], nsf[0x7B], nsf[6], max(0, nsf[7] - 1)])
+    out = b"NSFE" + chunk(b"INFO", info)
+    if any(nsf[0x70:0x78]): out += chunk(b"BANK", nsf[0x70:0x78])
+    out += chunk(b"DATA", nsf[0x80:]) + chunk(b"NEND", b"")
+    open(sys.argv[2], "wb").write(out)
+    ```
+
+### Oracles
+The `oracles/*.f32` and `*.s16` files are headerless raw-PCM decode references for the correlation
+tests. They are not a playable format and are deliberately absent from SUPPORTED_EXTS.
