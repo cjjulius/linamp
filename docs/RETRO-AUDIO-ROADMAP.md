@@ -290,12 +290,39 @@ LinAmp plays subsong 0, so choose one whose first track has audio.
 - NES `.nsf`: "Nintendo Sound Format" | Game Boy `.gbs`: "Gameboy Sound System" | PC Engine `.hes`:
   "HES" | Atari `.sap`: "Slight Atari Player" | SNES `.spc`: "Nintendo SPC" | Sega/arcade `.vgz`
   (gzipped VGM): "Video Game Music".
-- Known sample gaps (format supported, no usable sample yet; not broken, just unsampled):
-  - `.ay` (ZX Spectrum): Modland's "AY Emul" holds `.emul`, not raw `.ay`; needs a Project-AY source.
-  - `.gym` (Genesis): Modland's are PACKED GYM, which libgme 0.6.3 rejects; needs an unpacked `.gym`.
-  - `.kss` (MSX): candidates tried all have a silent subsong 0; needs an audible-first-track file,
-    or the subsong-selection feature.
-  - `.nsfe` (NES extended): none located.
+- The four formats Modland does not serve directly (all now sampled; recipes below):
+  - `.ay` (ZX Spectrum / Amstrad CPC): Modland's AY dirs hold `.emul`/`.amad`/`.strc`, not raw `.ay`.
+    Pull a raw `.ay` (magic `ZXAYEMUL`) from the chris-y/AY mirror of Project AY:
+    `https://raw.githubusercontent.com/chris-y/AY/main/music/ay/games/<name>.ay` (URL-encode spaces
+    and `[]`). `ATF(AdvancedTacticalFighter).ay` is single-track and loud (subsong 0 audible).
+  - `.gym` (Sega Genesis): Modland's "Megadrive GYM" files are PACKED (magic `GYMX`), which libgme
+    0.6.3 rejects with "Packed GYM file not supported". Unpack to a raw register dump libgme accepts:
+    strip the 428-byte GYMX header, then zlib-decompress the body when the uint32 at header offset
+    424 (compressed size) is nonzero. Write out just the decompressed stream (no GYMX header):
+    `python3 -c 'import struct,zlib,sys; d=open(sys.argv[1],"rb").read(); assert d[:4]==b"GYMX";
+    n=struct.unpack_from("<I",d,424)[0]; b=d[428:]; open(sys.argv[2],"wb").write(zlib.decompress(b) if n else b)'
+    packed.gym gym-sample.gym`
+  - `.kss` (MSX): most KSS rips have a silent subsong 0 and LinAmp plays subsong 0. Of the whole
+    Modland "KSS" collection (17 authors), only `KSS/Airborne/nemesis gametune.kss` has an audible
+    first track; use that until the subsong-selection feature lands.
+  - `.nsfe` (NES extended): no sample located, so derive one from any `.nsf`. NSFe is a chunked
+    (RIFF-style) container: `NSFE` magic then `<uint32 size><4cc><body>` chunks. Emit `INFO`
+    (load/init/play addrs + region + chip + track count + 0-based start), a `BANK` chunk with the
+    NSF header's 8 bankswitch bytes when any is nonzero (ours needs it), the `DATA` chunk (NSF bytes
+    from 0x80), then an empty `NEND`. The result renders byte-identical audio to the source `.nsf`
+    through libgme. Converter (`python3 nsf2nsfe.py nsf-sample.nsf nsfe-sample.nsfe`):
+
+    ```python
+    import struct, sys
+    nsf = open(sys.argv[1], "rb").read()
+    assert nsf[:5] == b"NESM\x1a"
+    def chunk(cc, body): return struct.pack("<I", len(body)) + cc + body
+    info = nsf[8:14] + bytes([nsf[0x7A], nsf[0x7B], nsf[6], max(0, nsf[7] - 1)])
+    out = b"NSFE" + chunk(b"INFO", info)
+    if any(nsf[0x70:0x78]): out += chunk(b"BANK", nsf[0x70:0x78])
+    out += chunk(b"DATA", nsf[0x80:]) + chunk(b"NEND", b"")
+    open(sys.argv[2], "wb").write(out)
+    ```
 
 ### Oracles
 The `oracles/*.f32` and `*.s16` files are headerless raw-PCM decode references for the correlation
