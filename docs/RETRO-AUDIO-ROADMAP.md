@@ -219,10 +219,10 @@ Phase 1 - FFmpeg freebies
 
 Phase 2 - Retro multipliers
 - [x] Game Music Emu (NSF/SPC/GBS/VGM/AY/GYM/HES/KSS/SAP) - merged to main.
-- [x] libopenmpt (the tracker zoo) - `openmpt` feature, src/openmpt.rs (streaming FFI). ~28 of the
-  ~30 formats sampled and passing the visualizer test (see cookbook); `.stx`/`.j2b`/`.umx` are
-  supported but have no free QA sample yet. xmrs keeps mod/xm/s3m/it. Windows libopenmpt build and
-  DLL bundling still pending on the Windows box.
+- [x] libopenmpt (the tracker zoo) - `openmpt` feature, src/openmpt.rs (streaming FFI). All 28
+  routed formats now have a QA sample and pass the visualizer test (recipes in the cookbook; `.stx`
+  from libxmp's corpus, `.j2b` from Mod Archive, `.umx` from a Deus Ex GOG installer via
+  innoextract). xmrs keeps mod/xm/s3m/it. Windows build/installer/CI wired by the Windows box.
 - [ ] AdPlug / libADLMIDI (OPL FM, DRO/IMF/RAD, Doom MUS)
 - [ ] libsidplayfp (.sid)
 
@@ -365,10 +365,14 @@ shorter file is nicer for manual QA). Format -> Modland directory used:
 - `.stx` (STMIK, the STM-to-S3M transitional format): rare, but libxmp's test corpus has a real
   one: `https://raw.githubusercontent.com/libxmp/libxmp/master/test-dev/data/m/FutureBrain.stx`
   (magic `!Scream!` at offset 0x14).
-- `.umx` (Unreal/UT package): still no freely-downloadable playable sample. Every GitHub copy
-  found is a 206-byte stub, and the archive.org items are converted MP3/FLAC, not raw `.umx`. A
-  real one lives in a Deus Ex / Unreal / UT install's `Music/` folder, or wrap a module into one
-  with bunnytrack/umx-converter. Supported but untested here.
+- `.umx` (Unreal/UT package): no freely-downloadable raw sample (GitHub copies are 206-byte stubs;
+  archive.org items are converted MP3/FLAC). A real one lives in a Deus Ex / Unreal / UT install's
+  `Music/` folder. Extract it straight from a GOG offline installer, which is an Inno Setup archive,
+  with `innoextract` (no Wine): `innoextract -I "Music/Title_Music.umx" setup_deus_ex_goty_*.exe`
+  writes `Music/Title_Music.umx`; save it as `umx-sample.umx`. The Deus Ex GOTY installer carries 35
+  `Music/*.umx` tracks; `Title_Music.umx` (the main theme by Alexander Brandon) is the one in use.
+  A `.umx` is an Unreal package wrapping a tracker module, which libopenmpt plays directly.
+  Verified on Linux; Windows is assumed to match (same libopenmpt 0.8.9 and shared decoder code).
 
 ### Oracles
 The `oracles/*.f32` and `*.s16` files are headerless raw-PCM decode references for the correlation
