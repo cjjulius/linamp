@@ -85,6 +85,36 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         // Dolby TrueHD / MLP (raw streams), also ffmpeg-only.
         #[cfg(feature = "ffmpeg")]
         "thd" | "mlp" => "audio/vnd.dolby.mlp",
+        // RealAudio / RealMedia, also ffmpeg-only. The freedesktop canonical types
+        // (FFmpeg's own audio/x-pn-realaudio is a legacy alias of audio/vnd.rn-realaudio);
+        // mime_package_xml declares these same strings so typing and handler agree.
+        #[cfg(feature = "ffmpeg")]
+        "ra" => "audio/vnd.rn-realaudio",
+        #[cfg(feature = "ffmpeg")]
+        "rm" => "application/vnd.rn-realmedia",
+        // TAK (Tom's lossless Audio Kompressor), also ffmpeg-only.
+        #[cfg(feature = "ffmpeg")]
+        "tak" => "audio/x-tak",
+        // Sony ATRAC, also ffmpeg-only: OpenMG containers, raw ATRAC3 in RIFF, MiniDisc.
+        #[cfg(feature = "ffmpeg")]
+        "oma" | "omg" | "aa3" => "audio/x-oma",
+        #[cfg(feature = "ffmpeg")]
+        "at3" => "audio/x-atrac3",
+        #[cfg(feature = "ffmpeg")]
+        "aea" => "audio/x-aea",
+        // Older/retro formats FFmpeg decodes natively, also ffmpeg-only.
+        #[cfg(feature = "ffmpeg")]
+        "shn" => "audio/x-shorten",
+        #[cfg(feature = "ffmpeg")]
+        "8svx" => "audio/x-8svx",
+        #[cfg(feature = "ffmpeg")]
+        "adx" => "audio/x-adx",
+        #[cfg(feature = "ffmpeg")]
+        "voc" => "audio/x-voc",
+        #[cfg(feature = "ffmpeg")]
+        "au" => "audio/basic",
+        #[cfg(feature = "ffmpeg")]
+        "w64" => "audio/x-w64",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -148,6 +178,22 @@ fn mime_package_xml() -> String {
             "Dolby TrueHD / MLP audio",
             &["*.thd", "*.mlp"],
         ));
+        types.push(("audio/vnd.rn-realaudio", "RealAudio", &["*.ra"]));
+        types.push((
+            "application/vnd.rn-realmedia",
+            "RealMedia",
+            &["*.rm"],
+        ));
+        types.push(("audio/x-tak", "TAK (Tom's lossless Audio Kompressor)", &["*.tak"]));
+        types.push(("audio/x-oma", "Sony OpenMG / ATRAC audio", &["*.oma", "*.omg", "*.aa3"]));
+        types.push(("audio/x-atrac3", "ATRAC3 audio", &["*.at3"]));
+        types.push(("audio/x-aea", "ATRAC1 (MiniDisc) audio", &["*.aea"]));
+        types.push(("audio/x-shorten", "Shorten lossless audio", &["*.shn"]));
+        types.push(("audio/x-8svx", "Amiga 8SVX audio", &["*.8svx"]));
+        types.push(("audio/x-adx", "CRI ADX audio", &["*.adx"]));
+        types.push(("audio/x-voc", "Creative Voice audio", &["*.voc"]));
+        types.push(("audio/basic", "Sun/NeXT audio", &["*.au", "*.snd"]));
+        types.push(("audio/x-w64", "Sony Wave64 audio", &["*.w64"]));
     }
     let mut body = String::new();
     for (ty, comment, globs) in &types {
