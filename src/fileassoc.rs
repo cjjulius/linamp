@@ -85,6 +85,13 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         // Dolby TrueHD / MLP (raw streams), also ffmpeg-only.
         #[cfg(feature = "ffmpeg")]
         "thd" | "mlp" => "audio/vnd.dolby.mlp",
+        // RealAudio / RealMedia, also ffmpeg-only. The freedesktop canonical types
+        // (FFmpeg's own audio/x-pn-realaudio is a legacy alias of audio/vnd.rn-realaudio);
+        // mime_package_xml declares these same strings so typing and handler agree.
+        #[cfg(feature = "ffmpeg")]
+        "ra" => "audio/vnd.rn-realaudio",
+        #[cfg(feature = "ffmpeg")]
+        "rm" => "application/vnd.rn-realmedia",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -147,6 +154,12 @@ fn mime_package_xml() -> String {
             "audio/vnd.dolby.mlp",
             "Dolby TrueHD / MLP audio",
             &["*.thd", "*.mlp"],
+        ));
+        types.push(("audio/vnd.rn-realaudio", "RealAudio", &["*.ra"]));
+        types.push((
+            "application/vnd.rn-realmedia",
+            "RealMedia",
+            &["*.rm"],
         ));
     }
     let mut body = String::new();
