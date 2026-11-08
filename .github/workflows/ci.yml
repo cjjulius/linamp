@@ -92,11 +92,20 @@ jobs:
           sh packaging/linux/build-openmpt-min.sh "$PWD/build/openmpt-min"
           echo "OPENMPT_DIR=$PWD/build/openmpt-min" >> "$GITHUB_ENV"
 
-      - name: Build and test (Linux, ffmpeg + gme + openmpt)
+      # AdPlug (+ libbinio) for the AdLib/OPL feature, built from source the same way. build.rs
+      # compiles the C++ shim and links it. Its decode tests skip without the gitignored qa-music
+      # samples, so on CI this is the compile check plus the router/MIME guards.
+      - name: Build AdPlug (Linux)
         if: runner.os == 'Linux'
         run: |
-          cargo build --features ffmpeg,gme,openmpt --verbose
-          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib" cargo test --features ffmpeg,gme,openmpt --verbose
+          sh packaging/linux/build-adplug-min.sh "$PWD/build/adplug-min"
+          echo "ADPLUG_DIR=$PWD/build/adplug-min" >> "$GITHUB_ENV"
+
+      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --features ffmpeg,gme,openmpt,adplug --verbose
+          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug --verbose
 
       # Windows builds libgme and its zlib dependency from source (no system libgme/zlib),
       # then builds and tests the full feature set (ffmpeg + gme). build.rs links $GME_DIR;
@@ -124,11 +133,23 @@ jobs:
           "OPENMPT_DIR=$PWD\build\openmpt-min" | Out-File $env:GITHUB_ENV -Append
           "$PWD\build\openmpt-min\bin"         | Out-File $env:GITHUB_PATH -Append
 
-      - name: Build and test (Windows, ffmpeg + gme + openmpt)
+      # AdPlug (+ libbinio) for the AdLib/OPL feature. Both are built from source: libbinio has no
+      # CMake/MSVC build upstream, so the script generates one; AdPlug is built from its git source
+      # archive (its release dist tarball omits CMakeLists.txt). On Windows both are linked STATICALLY
+      # into the exe (see build-adplug.ps1), so there are no DLLs to put on PATH. build.rs compiles
+      # the C++ shim and links $ADPLUG_DIR's static libs.
+      - name: Provision AdPlug (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh packaging\windows\build-adplug.ps1
+          "ADPLUG_DIR=$PWD\build\adplug-min" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Build and test (Windows, ffmpeg + gme + openmpt + adplug)
         if: runner.os == 'Windows'
         run: |
-          cargo build --features ffmpeg,gme,openmpt --verbose
-          cargo test --features ffmpeg,gme,openmpt --verbose
+          cargo build --features ffmpeg,gme,openmpt,adplug --verbose
+          cargo test --features ffmpeg,gme,openmpt,adplug --verbose
 
   # Build the per-user installers. Runs on a v* tag (official release) or a
   # manual dispatch (dry run - artifacts only, no GitHub Release).
@@ -201,7 +222,7 @@ jobs:
       # on Windows lands when the Windows box adds its build and DLL bundling.
       - name: Build Linux tarball
         if: runner.os == 'Linux'
-        run: FEATURES=ffmpeg,gme,openmpt sh packaging/linux/build-tarball.sh
+        run: FEATURES=ffmpeg,gme,openmpt,adplug sh packaging/linux/build-tarball.sh
 
       - name: Upload Linux tarball
         if: runner.os == 'Linux'
@@ -229,17 +250,25 @@ jobs:
           pwsh packaging\windows\build-openmpt.ps1
           "OPENMPT_DIR=$PWD\build\openmpt-min" | Out-File $env:GITHUB_ENV -Append
 
+      - name: Provision AdPlug (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh packaging\windows\build-adplug.ps1
+          "ADPLUG_DIR=$PWD\build\adplug-min" | Out-File $env:GITHUB_ENV -Append
+
       - name: Build Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --release --features ffmpeg,gme,openmpt
+          cargo build --release --features ffmpeg,gme,openmpt,adplug
           # Derive the version from Cargo.toml and pass it to ISCC - without this
           # the installer falls back to the version baked into linamp.iss, which
           # is how v0.3.0 shipped a "LinAmp-0.2.0-Setup.exe". /DWithFfmpeg bundles the
           # FFmpeg DLLs from the shared build's bin dir, /DWithGme bundles gme.dll plus
           # its zlib.dll dependency, and /DWithOpenmpt bundles libopenmpt.dll plus its
-          # codec helper DLLs, next to the exe.
+          # codec helper DLLs, next to the exe. The adplug feature needs no bundling: AdPlug
+          # and libbinio are linked statically into the exe on Windows.
           $ver = ([regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "/DWithFfmpeg" "/DFfmpegBin=$env:FFMPEG_DIR\bin" "/DWithGme" "/DGmeBin=$PWD\build\gme-min\bin" "/DZlibBin=$PWD\build\zlib\bin" "/DWithOpenmpt" "/DOpenmptBin=$PWD\build\openmpt-min\bin" packaging\windows\linamp.iss
 

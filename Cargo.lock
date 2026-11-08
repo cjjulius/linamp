@@ -2521,12 +2521,13 @@ dependencies = [
 
 [[package]]
 name = "linamp"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "anyhow",
  "ape-decoder",
  "arboard",
  "bytes",
+ "cc",
  "dirs",
  "dsd-reader",
  "eframe",

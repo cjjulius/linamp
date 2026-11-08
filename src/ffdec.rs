@@ -361,6 +361,42 @@ pub fn duration(path: &Path) -> Option<Duration> {
     duration_by_decode(path)
 }
 
+/// Read the best audio stream's sample rate, channel count, and bitrate (kbps) for the playlist
+/// display, without decoding. Unlike `duration`, this works for any file FFmpeg can open (not only
+/// the `is_ffmpeg_audio` set), so it also fills in the video/AV containers and the formats whose
+/// own decoders expose no metadata. Bitrate prefers the audio stream's own figure, then the
+/// container's overall rate, then a file-size / duration estimate, so even a lossless stream that
+/// declares no bitrate still shows an accurate number. `None` if there is no readable audio stream.
+pub fn media_info(path: &Path) -> Option<(u32, u8, u32)> {
+    ffmpeg::init().ok()?;
+    let ictx = ffmpeg::format::input(&path).ok()?;
+    let micros = ictx.duration();
+    let fmt_bits = ictx.bit_rate(); // AVFormatContext.bit_rate (bits/s), whole file
+    let stream = ictx.streams().best(ffmpeg::media::Type::Audio)?;
+    let decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+        .ok()?
+        .decoder()
+        .audio()
+        .ok()?;
+    let rate = decoder.rate();
+    if rate == 0 {
+        return None;
+    }
+    let channels = decoder.channels().max(0) as u8;
+    // Bitrate in bits/s: the codec's own figure, else the container's overall rate, else estimate
+    // from the file size and duration (covers lossless streams that report no bitrate).
+    let mut bits = decoder.bit_rate() as u64;
+    if bits == 0 {
+        bits = fmt_bits.max(0) as u64;
+    }
+    if bits == 0 && micros > 0 {
+        if let Ok(meta) = std::fs::metadata(path) {
+            bits = meta.len().saturating_mul(8).saturating_mul(1_000_000) / micros as u64;
+        }
+    }
+    Some((rate, channels, (bits / 1000) as u32))
+}
+
 /// Decode a whole audio stream and count its output samples to get an exact length,
 /// for the formats that expose no duration any cheaper way (see `duration`). It only
 /// counts each decoded frame's own sample count, so there is no resampling cost, and

@@ -98,6 +98,9 @@ Source: "{#ZlibBin}\zlib.dll"; DestDir: "{app}"; Flags: ignoreversion
   #endif
 Source: "{#OpenmptBin}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 #endif
+; Note: the AdLib/OPL feature (adplug) needs no bundling here. On Windows AdPlug and libbinio are
+; linked statically into linamp.exe (see packaging/windows/build-adplug.ps1), so there are no
+; adplug/binio DLLs to ship, unlike the gme/openmpt features above.
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#RepoRoot}\FEATURES.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
