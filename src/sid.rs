@@ -13,6 +13,7 @@
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int};
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -50,21 +51,86 @@ extern "C" {
     fn sid_close(h: *mut SidHandle);
 }
 
-/// A seekable rodio `Source` over a fully-rendered SID tune (interleaved f32, stereo).
+// libsidplayfp has process-global state (shared chip tables / lazy init) that is not thread-safe, so
+// two tunes opening or rendering on different threads can crash. LinAmp only ever renders one source
+// at a time (a single mixer thread, even across a crossfade), so this lock is uncontended in
+// practice; it just makes the library safe when the test harness exercises several tunes in parallel.
+static SID_LOCK: Mutex<()> = Mutex::new(());
+
+/// A seekable rodio `Source` that streams a SID tune on demand and caches what it renders. Unlike a
+/// fully-buffered decoder this does NOT render the whole tune up front: SID emulation runs at ~25x
+/// real time, so rendering the fixed default length (~150s) in `open()` would block for several
+/// seconds and freeze the UI (the slow start / unresponsive scrub). Instead it renders one chunk at
+/// a time as playback (or a forward seek) needs it, appending to a growing cache so start is instant,
+/// backward/replayed scrubbing is instant, and a forward seek only pays for the gap it skips over.
 pub struct SidSource {
-    samples: Vec<f32>,
-    pos: usize,
+    h: *mut SidHandle, // live engine; destroyed on Drop
+    cache: Vec<f32>,   // interleaved stereo, everything rendered so far (raw, fade applied on read)
+    rendered_frames: usize,
+    pos: usize, // interleaved index
+    cap_frames: usize,
+    fade_frames: usize,
     total: Option<Duration>,
+    ended: bool, // the engine stopped before the cap
+}
+
+// The libsidplayfp handle is only ever touched from the single thread that owns the source (the
+// audio thread, after it is moved there), never shared, so it is safe to send.
+unsafe impl Send for SidSource {}
+
+impl Drop for SidSource {
+    fn drop(&mut self) {
+        let _guard = SID_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { sid_close(self.h) };
+    }
+}
+
+impl SidSource {
+    /// Render one more chunk from the live engine into the cache. Returns false at the cap or when
+    /// the engine stops producing audio.
+    fn render_more(&mut self) -> bool {
+        if self.ended || self.rendered_frames >= self.cap_frames {
+            return false;
+        }
+        let mut tmp = [0.0f32; CHUNK_FRAMES * OUT_CHANNELS as usize];
+        let got = {
+            let _guard = SID_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            unsafe { sid_render(self.h, tmp.as_mut_ptr(), CHUNK_FRAMES as c_int) }
+        };
+        if got <= 0 {
+            self.ended = true;
+            return false;
+        }
+        let got = got as usize;
+        self.cache.extend_from_slice(&tmp[..got * OUT_CHANNELS as usize]);
+        self.rendered_frames += got;
+        if got < CHUNK_FRAMES {
+            self.ended = true;
+        }
+        true
+    }
+
+    /// Fade gain for a frame near the cap, so an endlessly-looping tune ends cleanly.
+    fn fade_gain(&self, frame: usize) -> f32 {
+        let fade_start = self.cap_frames.saturating_sub(self.fade_frames);
+        if self.fade_frames == 0 || frame < fade_start {
+            1.0
+        } else {
+            self.cap_frames.saturating_sub(frame) as f32 / self.fade_frames as f32
+        }
+    }
 }
 
 impl Iterator for SidSource {
     type Item = f32;
     fn next(&mut self) -> Option<f32> {
-        let s = self.samples.get(self.pos).copied();
-        if s.is_some() {
-            self.pos += 1;
+        if self.pos >= self.rendered_frames * OUT_CHANNELS as usize && !self.render_more() {
+            return None; // hit the cap or the engine ended
         }
-        s
+        let s = *self.cache.get(self.pos)?;
+        let frame = self.pos / OUT_CHANNELS as usize;
+        self.pos += 1;
+        Some(s * self.fade_gain(frame))
     }
 }
 
@@ -82,63 +148,38 @@ impl Source for SidSource {
         self.total
     }
     fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
-        let frame = (pos.as_secs_f64() * OUT_RATE as f64).round() as usize;
-        self.pos = (frame * OUT_CHANNELS as usize).min(self.samples.len());
+        let target = ((pos.as_secs_f64() * OUT_RATE as f64).round() as usize).min(self.cap_frames);
+        // A backward seek (or into already-rendered audio) is an instant index; a forward seek past
+        // the rendered edge renders the gap first, since a SID cannot be randomly seeked.
+        while self.rendered_frames < target && self.render_more() {}
+        self.pos = (target * OUT_CHANNELS as usize).min(self.cache.len());
         Ok(())
     }
 }
 
-/// Load a SID tune and render its default subsong (ROM-less) to a seekable stereo f32 source.
-/// Errors cleanly when the file is not a valid SID tune, so the skip-unplayable path takes over.
+/// Load a SID tune and expose its default subsong (ROM-less) as a lazy, seekable stereo source.
+/// Rendering happens on demand, so this is cheap. Errors cleanly when the file is not a valid SID
+/// tune, so the skip-unplayable path takes over.
 pub fn open(path: &Path) -> Result<SidSource> {
     let cpath = CString::new(path.as_os_str().to_string_lossy().as_bytes())
         .map_err(|_| anyhow!("path has an interior NUL: {}", path.display()))?;
-    let h = unsafe { sid_open(cpath.as_ptr(), OUT_RATE as c_int) };
+    let h = {
+        let _guard = SID_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { sid_open(cpath.as_ptr(), OUT_RATE as c_int) }
+    };
     if h.is_null() {
         return Err(anyhow!("libsidplayfp could not load {}", path.display()));
     }
-    let result = render(h);
-    unsafe { sid_close(h) };
-    result.map_err(|e| anyhow!("{e} ({})", path.display()))
-}
-
-fn render(h: *mut SidHandle) -> Result<SidSource> {
-    let target_frames = DEFAULT_PLAY_SECS as usize * OUT_RATE as usize;
-    let mut chunk = vec![0.0f32; CHUNK_FRAMES * OUT_CHANNELS as usize];
-    let mut samples: Vec<f32> = Vec::with_capacity(target_frames * OUT_CHANNELS as usize);
-    while samples.len() < target_frames * OUT_CHANNELS as usize {
-        let got = unsafe { sid_render(h, chunk.as_mut_ptr(), CHUNK_FRAMES as c_int) };
-        if got <= 0 {
-            break;
-        }
-        samples.extend_from_slice(&chunk[..got as usize * OUT_CHANNELS as usize]);
-        if (got as usize) < CHUNK_FRAMES {
-            break; // engine stopped early
-        }
-    }
-    if samples.is_empty() {
-        return Err(anyhow!("rendered no audio"));
-    }
-    apply_fade_out(&mut samples);
-    let frames = samples.len() / OUT_CHANNELS as usize;
-    let total = Some(Duration::from_secs_f64(frames as f64 / OUT_RATE as f64));
-    Ok(SidSource { samples, pos: 0, total })
-}
-
-/// Linear fade over the last FADE_SECS of the rendered buffer, so an endlessly-looping tune ends
-/// cleanly instead of being hard-cut.
-fn apply_fade_out(samples: &mut [f32]) {
-    let fade_frames = (FADE_SECS * OUT_RATE as f32) as usize;
-    let total_frames = samples.len() / OUT_CHANNELS as usize;
-    if fade_frames == 0 || total_frames == 0 {
-        return;
-    }
-    let start = total_frames.saturating_sub(fade_frames);
-    for f in start..total_frames {
-        let gain = (total_frames - f) as f32 / fade_frames as f32;
-        samples[f * 2] *= gain;
-        samples[f * 2 + 1] *= gain;
-    }
+    Ok(SidSource {
+        h,
+        cache: Vec::new(),
+        rendered_frames: 0,
+        pos: 0,
+        cap_frames: DEFAULT_PLAY_SECS as usize * OUT_RATE as usize,
+        fade_frames: (FADE_SECS * OUT_RATE as f32) as usize,
+        total: Some(Duration::from_secs(DEFAULT_PLAY_SECS as u64)),
+        ended: false,
+    })
 }
 
 /// Length of a SID tune for the playlist. SID tunes carry no length and loop forever, so this is the
@@ -194,5 +235,27 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0, "no SID samples found to render");
+    }
+
+    /// Seeking the streaming source: a forward seek renders the gap and lands near the target, a
+    /// backward seek is instant (served from the cache), and total_duration is the shown length so
+    /// the scrub bar maps to the buffer. Local sample only.
+    #[test]
+    fn seeking_forward_then_back_produces_audio() {
+        let p = std::path::Path::new("qa-music/format-samples/sid-sample.sid");
+        if !p.exists() {
+            return;
+        }
+        let mut src = open(p).expect("load sid");
+        assert_eq!(src.total_duration(), Some(Duration::from_secs(DEFAULT_PLAY_SECS as u64)));
+        // Forward seek to 20s, then read ~0.5s: must be audible (the gap was rendered).
+        src.try_seek(Duration::from_secs(20)).unwrap();
+        let fwd: Vec<f32> = (&mut src).take(44_100).collect();
+        assert!(fwd.len() > 1000, "no audio after forward seek");
+        assert!(fwd.iter().any(|&s| s.abs() > 0.003), "silence after forward seek");
+        // Backward seek to 2s (into already-rendered audio) is instant and still audible.
+        src.try_seek(Duration::from_secs(2)).unwrap();
+        let back: Vec<f32> = (&mut src).take(44_100).collect();
+        assert!(back.iter().any(|&s| s.abs() > 0.003), "silence after backward seek");
     }
 }
