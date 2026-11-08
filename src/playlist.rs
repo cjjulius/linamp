@@ -278,6 +278,17 @@ fn ffmpeg_duration(_path: &std::path::Path) -> Option<Duration> {
     None
 }
 
+/// Sample rate, channels, and bitrate (kbps) read from any file FFmpeg can open, for the playlist
+/// display; `None` in the pure-Rust build. A cfg shim like `ffmpeg_duration`.
+#[cfg(feature = "ffmpeg")]
+fn ffmpeg_media_info(path: &std::path::Path) -> Option<(u32, u8, u32)> {
+    crate::ffdec::media_info(path)
+}
+#[cfg(not(feature = "ffmpeg"))]
+fn ffmpeg_media_info(_path: &std::path::Path) -> Option<(u32, u8, u32)> {
+    None
+}
+
 /// Duration of a chiptune (libgme) for the playlist, or `None` without the `gme` feature.
 /// A cfg shim, like `ffmpeg_duration`, so the duration chain reads the same in both builds.
 #[cfg(feature = "gme")]
@@ -508,6 +519,20 @@ impl Track {
                 self.duration_estimated = true;
             }
         }
+        // FFmpeg-decodable formats that lofty cannot tag (ATRAC/.oma, WMA, DTS, TAK, Shorten, the
+        // video/AV containers, and the AC3/DSD/TTA streams) still have real stream info; read it
+        // straight from FFmpeg so the rate/bitrate/channels show dynamically and accurately.
+        if self.sample_rate.is_none() {
+            if let Some((rate, ch, kbps)) = ffmpeg_media_info(&self.path) {
+                self.sample_rate = Some(rate);
+                if ch > 0 {
+                    self.channels = Some(ch);
+                }
+                if kbps > 0 {
+                    self.bitrate = Some(kbps);
+                }
+            }
+        }
         // Synthesized/emulated formats (AdLib/OPL, chiptunes, trackers, MIDI) carry no codec tags,
         // so lofty leaves the rate/bitrate/channels blank and the classic readout looks dead and
         // defaults to "stereo". Fill in what LinAmp actually renders them at: 44.1 kHz 16-bit, mono
@@ -525,6 +550,19 @@ impl Track {
                 self.channels = Some(ch);
                 if self.bitrate.is_none() {
                     self.bitrate = Some(44_100 * 16 * ch as u32 / 1000);
+                }
+            }
+        }
+        // Final fallback: a lossless stream (Dolby TrueHD/MLP, Shorten) can report no bitrate and no
+        // container duration for FFmpeg to estimate from, yet its length was computed above. Derive
+        // the average bitrate from the file size and that length so the readout is never blank.
+        if self.bitrate.is_none() {
+            if let Some(secs) = self.duration.map(|d| d.as_secs_f64()).filter(|s| *s > 0.0) {
+                if let Ok(meta) = std::fs::metadata(&self.path) {
+                    let kbps = (meta.len() as f64 * 8.0 / secs / 1000.0) as u32;
+                    if kbps > 0 {
+                        self.bitrate = Some(kbps);
+                    }
                 }
             }
         }
@@ -1037,6 +1075,37 @@ pub fn playable(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    /// Every supported format must show a sample rate and a bitrate in the playlist readout: read
+    /// dynamically where the format carries it (MP3/FLAC/the FFmpeg stream info), or filled with an
+    /// accurate figure where it does not (the synthesized formats render at 44.1 kHz, and lossless
+    /// streams get a size/duration estimate). Runs over the local corpus, so it is ignored on CI
+    /// where qa-music is absent. Needs the ffmpeg/gme/openmpt/adplug features for the full set.
+    #[test]
+    #[ignore = "needs the local qa-music corpus and all decoder features"]
+    fn every_supported_sample_shows_rate_and_bitrate() {
+        let dir = Path::new("qa-music/format-samples");
+        if !dir.exists() {
+            return;
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut missing: Vec<String> = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if !p.is_file() || !is_supported(&p) {
+                continue;
+            }
+            let ext = p.extension().unwrap().to_string_lossy().to_lowercase();
+            if !seen.insert(ext.clone()) {
+                continue;
+            }
+            let t = Track::from_path(p.clone());
+            if t.sample_rate.is_none() || t.bitrate.is_none() {
+                missing.push(format!(".{ext}: rate={:?} bitrate={:?}", t.sample_rate, t.bitrate));
+            }
+        }
+        assert!(missing.is_empty(), "formats missing rate/bitrate:\n  {}", missing.join("\n  "));
+    }
 
     #[test]
     fn supported_exts() {
