@@ -218,8 +218,11 @@ Phase 1 - FFmpeg freebies
 - [ ] Speech: GSM (.gsm), G.729, QCELP, EVRC, iLBC (as useful)
 
 Phase 2 - Retro multipliers
-- [ ] Game Music Emu (NSF/SPC/GBS/VGM/AY/GYM/HES/KSS/SAP)
-- [ ] libopenmpt (the tracker zoo)
+- [x] Game Music Emu (NSF/SPC/GBS/VGM/AY/GYM/HES/KSS/SAP) - merged to main.
+- [x] libopenmpt (the tracker zoo) - `openmpt` feature, src/openmpt.rs (streaming FFI). All 28
+  routed formats now have a QA sample and pass the visualizer test (recipes in the cookbook; `.stx`
+  from libxmp's corpus, `.j2b` from Mod Archive, `.umx` from a Deus Ex GOG installer via
+  innoextract). xmrs keeps mod/xm/s3m/it. Windows build/installer/CI wired by the Windows box.
 - [ ] AdPlug / libADLMIDI (OPL FM, DRO/IMF/RAD, Doom MUS)
 - [ ] libsidplayfp (.sid)
 
@@ -292,6 +295,10 @@ LinAmp plays subsong 0, so choose one whose first track has audio.
 - NES `.nsf`: "Nintendo Sound Format" | Game Boy `.gbs`: "Gameboy Sound System" | PC Engine `.hes`:
   "HES" | Atari `.sap`: "Slight Atari Player" | SNES `.spc`: "Nintendo SPC" | Sega/arcade `.vgz`
   (gzipped VGM): "Video Game Music".
+- `.vgm` (raw, uncompressed VGM): the same format as `.vgz` without the gzip wrapper, so just
+  gunzip the `.vgz` sample into a `.vgm` one (both route to libgme, but each is its own supported
+  extension, so cover both): `python3 -c 'import gzip,sys;
+  open(sys.argv[2],"wb").write(gzip.decompress(open(sys.argv[1],"rb").read()))' vgz-sample.vgz vgm-sample.vgm`
 - The four formats Modland does not serve directly (all now sampled; recipes below):
   - `.ay` (ZX Spectrum / Amstrad CPC): Modland's AY dirs hold `.emul`/`.amad`/`.strc`, not raw `.ay`.
     Pull a raw `.ay` (magic `ZXAYEMUL`) from the chris-y/AY mirror of Project AY. The `games`
@@ -306,6 +313,10 @@ LinAmp plays subsong 0, so choose one whose first track has audio.
     `python3 -c 'import struct,zlib,sys; d=open(sys.argv[1],"rb").read(); assert d[:4]==b"GYMX";
     n=struct.unpack_from("<I",d,424)[0]; b=d[428:]; open(sys.argv[2],"wb").write(zlib.decompress(b) if n else b)'
     packed.gym gym-sample.gym`
+    Pick an actual game soundtrack, not a utility: the sample in use is
+    `Megadrive GYM/_unknown/Sonic 2 Time Zone/sonic 2 time zone - title screen theme.gym` (a clear
+    ~61s melody that is easy to QA). The earlier "Art Alive" file was a drawing program's sparse,
+    noise-like audio and hard to judge by ear.
   - `.kss` (MSX): most KSS rips have a silent subsong 0 and LinAmp plays subsong 0. Of the whole
     Modland "KSS" collection (17 authors), only `KSS/Airborne/nemesis gametune.kss` has an audible
     first track; use that until the subsong-selection feature lands.
@@ -327,6 +338,46 @@ LinAmp plays subsong 0, so choose one whose first track has audio.
     out += chunk(b"DATA", nsf[0x80:]) + chunk(b"NEND", b"")
     open(sys.argv[2], "wb").write(out)
     ```
+
+### Tracker zoo (crate::openmpt, `--features openmpt`)
+libopenmpt plays ~30 module formats beyond xmrs's mod/xm/s3m/it; one build plays all. There is no
+encoder, so procure small modules per format from Modland (modland.com/pub/modules/<Format>/...),
+one file per extension named `<ext>-sample.<ext>`. libopenmpt detects format by content, so the
+on-disk extension only has to route the file to the decoder; a module stored under a different name
+on Modland can be saved under the target extension. No oracle: libopenmpt is the only decoder, so
+the test is a render smoke test (non-silent audio), same as the chiptunes. Pick a sample at least
+~60s long, ideally one to three minutes (most Modland modules are full songs, which is fine - the
+source streams, so length does not bloat the tests). Do NOT pick a very short module: a sub-30s
+track can't be scrubbed for manual QA (seeking anywhere lands near the end, so it stops and
+auto-advances before you hear much), and tracker seeks snap to the nearest pattern row, which is
+only noticeable on a tiny track. This bit us with a 15s `.ult`; it was swapped for a ~186s one.
+The same "pick something long enough to scrub" rule applies to every streamed format here and to
+the chiptunes. Format -> Modland directory used:
+- `669` Composer 669 | `amf` Asylum | `ams` Velvet Studio | `c67` Composer 670 (CDFM) |
+  `dbm` Digibooster Pro | `digi` Digibooster | `dmf` X-Tracker | `dtm` Digital Tracker DTM |
+  `far` Farandole Composer | `gdm` General DigiMusic | `imf` Imago Orpheus | `mdl` Digitrakker |
+  `med` OctaMED MMD0 (files are `.mmd0`; save as `.med`) | `mptm` OpenMPT MPTM |
+  `mt2` Mad Tracker 2 | `mtm` Multitracker | `okt` Oktalyzer (files are `.okta`; save as `.okt`) |
+  `plm` Disorder Tracker 2 | `psm` Epic Megagames MASI | `ptm` Polytracker |
+  `stm` Screamtracker 2 | `stp` Soundtracker Pro II | `symmod` Symphonie | `ult` Ultratracker.
+- `dsm`: use "Digital Sound Interface Kit RIFF" (the RIFF DSM), not the plain "Digital Sound
+  Interface Kit" dir - the older DSIK `.dsm` files fail to load in libopenmpt 0.6.1.
+- `c67`: the "Composer 670 (CDFM)" dir holds both `.670` and `.c67` files; take a `.c67` one
+  (save as `c67-sample.c67`). The `.670` variant does not load in libopenmpt (tested 0.8.9).
+- `.j2b` (Galaxy / Jazz Jackrabbit 2): The Mod Archive has these (search by format J2B). The
+  game's own tracks are there, e.g. `water.j2b` at
+  `https://api.modarchive.org/downloads.php?moduleid=194172` (magic `MUSE`).
+- `.stx` (STMIK, the STM-to-S3M transitional format): rare, but libxmp's test corpus has a real
+  one: `https://raw.githubusercontent.com/libxmp/libxmp/master/test-dev/data/m/FutureBrain.stx`
+  (magic `!Scream!` at offset 0x14).
+- `.umx` (Unreal/UT package): no freely-downloadable raw sample (GitHub copies are 206-byte stubs;
+  archive.org items are converted MP3/FLAC). A real one lives in a Deus Ex / Unreal / UT install's
+  `Music/` folder. Extract it straight from a GOG offline installer, which is an Inno Setup archive,
+  with `innoextract` (no Wine): `innoextract -I "Music/Title_Music.umx" setup_deus_ex_goty_*.exe`
+  writes `Music/Title_Music.umx`; save it as `umx-sample.umx`. The Deus Ex GOTY installer carries 35
+  `Music/*.umx` tracks; `Title_Music.umx` (the main theme by Alexander Brandon) is the one in use.
+  A `.umx` is an Unreal package wrapping a tracker module, which libopenmpt plays directly.
+  Verified on Linux; Windows is assumed to match (same libopenmpt 0.8.9 and shared decoder code).
 
 ### Oracles
 The `oracles/*.f32` and `*.s16` files are headerless raw-PCM decode references for the correlation

@@ -33,6 +33,12 @@ case ",$FEATURES," in
   *,gme,*) BUNDLE_GME=1 ;;
   *) BUNDLE_GME=0 ;;
 esac
+# The openmpt feature (the tracker "zoo") links libopenmpt, bundled the same self-contained way.
+# Pass FEATURES=ffmpeg,gme,openmpt for the full build.
+case ",$FEATURES," in
+  *,openmpt,*) BUNDLE_OPENMPT=1 ;;
+  *) BUNDLE_OPENMPT=0 ;;
+esac
 NAME="linamp-${VERSION}-linux-x86_64${SUFFIX}"
 STAGE="dist/$NAME"
 
@@ -59,6 +65,15 @@ if [ "$BUNDLE_GME" = 1 ]; then
   GME_MIN="$ROOT/build/gme-min"
   sh "$ROOT/packaging/linux/build-gme-min.sh" "$GME_MIN"
   export GME_DIR="$GME_MIN"
+fi
+
+# libopenmpt (the tracker "zoo") is built from source the same way (BSD-3-Clause, self-contained
+# for module playback); build.rs links OPENMPT_DIR and emits the $ORIGIN/lib rpath itself. We
+# bundle its .so into $STAGE/lib below.
+if [ "$BUNDLE_OPENMPT" = 1 ]; then
+  OPENMPT_MIN="$ROOT/build/openmpt-min"
+  sh "$ROOT/packaging/linux/build-openmpt-min.sh" "$OPENMPT_MIN"
+  export OPENMPT_DIR="$OPENMPT_MIN"
 fi
 
 echo "==> cargo build --release $FEATURE_ARGS"
@@ -95,6 +110,18 @@ if [ "$BUNDLE_GME" = 1 ]; then
   for f in "$STAGE"/lib/libgme.so.*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
   if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libgme' | grep -vq "$STAGE/lib"; then
     echo "!!  WARNING: libgme still resolves outside $STAGE/lib; check the rpath" >&2
+  fi
+fi
+if [ "$BUNDLE_OPENMPT" = 1 ]; then
+  echo "==> Bundling libopenmpt into $STAGE/lib (self-contained)"
+  mkdir -p "$STAGE/lib"
+  # libopenmpt depends only on libc/libstdc++ (both from the user's system), so its own .so is
+  # the whole runtime set. Copy it from the build prefix; the soname symlinks are preserved and
+  # the binary's $ORIGIN/lib rpath (emitted by build.rs) loads it at runtime.
+  cp -a "$OPENMPT_DIR"/lib/libopenmpt.so* "$STAGE/lib/" 2>/dev/null || true
+  for f in "$STAGE"/lib/libopenmpt.so.*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
+  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libopenmpt' | grep -vq "$STAGE/lib"; then
+    echo "!!  WARNING: libopenmpt still resolves outside $STAGE/lib; check the rpath" >&2
   fi
 fi
 cp -r skins "$STAGE/skins"

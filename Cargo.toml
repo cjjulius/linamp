@@ -179,3 +179,8 @@ ffmpeg = ["dep:ffmpeg-next"]
 # No Rust crate dependency; build.rs emits the link directives and bundles libgme.so. Needs
 # a libgme build at $GME_DIR (default build/gme-min, produced by packaging/linux/build-gme-min.sh).
 gme = []
+# The tracker "zoo" (~30 module formats beyond xmrs's mod/xm/s3m/it) via libopenmpt
+# (BSD-3-Clause), linked through a hand-rolled FFI in src/openmpt.rs. No Rust crate dependency;
+# build.rs emits the link directives and bundles libopenmpt.so. Needs a libopenmpt build at
+# $OPENMPT_DIR (default build/openmpt-min, produced by packaging/linux/build-openmpt-min.sh).
+openmpt = []
