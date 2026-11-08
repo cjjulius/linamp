@@ -26,6 +26,54 @@ fn main() {
     link_gme(&manifest, &target_dir);
     link_openmpt(&manifest, &target_dir);
     link_adplug(&manifest, &target_dir);
+    link_sid(&manifest, &target_dir);
+}
+
+/// Link libsidplayfp for the `sid` feature: compile the C++ shim (src/sid_shim.cpp) that gives
+/// libsidplayfp a C API, link it, and bundle the shared library next to the binary (runtime
+/// resolution via an `$ORIGIN/lib` rpath), the same self-contained pattern as the other native
+/// features. The library and headers are found at `$SIDPLAYFP_DIR` (a prefix with
+/// `lib/libsidplayfp.so` and `include/sidplayfp/*.h`), defaulting to the in-repo
+/// `build/sidplayfp-min` that `packaging/linux/build-sidplayfp-min.sh` produces. No-op without the
+/// feature.
+fn link_sid(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=SIDPLAYFP_DIR");
+    if env::var_os("CARGO_FEATURE_SID").is_none() {
+        return;
+    }
+    println!("cargo:rerun-if-changed=src/sid_shim.cpp");
+    let dir = env::var_os("SIDPLAYFP_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/sidplayfp-min"));
+    let incdir = dir.join("include");
+    let libdir = dir.join("lib");
+
+    cc::Build::new()
+        .cpp(true)
+        .file("src/sid_shim.cpp")
+        .include(&incdir)
+        .compile("sid_shim");
+
+    println!("cargo:rustc-link-search=native={}", libdir.display());
+    println!("cargo:rustc-link-lib=dylib=sidplayfp");
+
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        if let Ok(entries) = fs::read_dir(&libdir) {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                if name.to_string_lossy().contains("libsidplayfp.so") {
+                    let _ = fs::copy(e.path(), dst.join(&name));
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
 }
 
 /// Link AdPlug for the `adplug` feature: compile the small C++ shim (src/adplug_shim.cpp) that

@@ -264,6 +264,13 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "xad",
     #[cfg(feature = "adplug")]
     "xsm",
+    // Commodore 64 SID music via libsidplayfp (the `sid` feature). crate::sid renders these to PCM.
+    #[cfg(feature = "sid")]
+    "sid",
+    #[cfg(feature = "sid")]
+    "psid",
+    #[cfg(feature = "sid")]
+    "rsid",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -332,6 +339,27 @@ fn adplug_duration(path: &std::path::Path) -> Option<Duration> {
 #[cfg(not(feature = "adplug"))]
 fn adplug_duration(_path: &std::path::Path) -> Option<Duration> {
     None
+}
+
+/// Duration of a C64 SID tune (libsidplayfp) for the playlist, or `None` without the `sid` feature.
+/// A cfg shim like `gme_duration`.
+#[cfg(feature = "sid")]
+fn sid_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::sid::duration(path)
+}
+#[cfg(not(feature = "sid"))]
+fn sid_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+/// True when `path` is a SID tune (mono C64 chip), for the display-metadata fill. Cfg shim.
+#[cfg(feature = "sid")]
+fn is_sid_file(path: &std::path::Path) -> bool {
+    crate::sid::is_sid(path)
+}
+#[cfg(not(feature = "sid"))]
+fn is_sid_file(_path: &std::path::Path) -> bool {
+    false
 }
 
 // Predicate shims for the synthesized/emulated decoders, used to fill in display metadata (these
@@ -508,6 +536,7 @@ impl Track {
                 .or_else(|| gme_duration(&self.path))
                 .or_else(|| openmpt_duration(&self.path))
                 .or_else(|| adplug_duration(&self.path))
+                .or_else(|| sid_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
         // Last resort for a format whose exact length no cheap probe can read: a provisional
@@ -539,7 +568,7 @@ impl Track {
         // for AdLib (an OPL2 is a mono chip) and stereo for the rest. The bitrate shown is the
         // resulting PCM rate. Only set fields the metadata scan didn't already provide.
         if self.sample_rate.is_none() {
-            let mono = is_adplug_file(&self.path);
+            let mono = is_adplug_file(&self.path) || is_sid_file(&self.path);
             let stereo = is_gme_file(&self.path)
                 || is_openmpt_file(&self.path)
                 || crate::tracker::is_tracker(&self.path)
@@ -1154,6 +1183,8 @@ mod tests {
         decoders.push(("openmpt", crate::openmpt::is_openmpt, crate::openmpt::OPENMPT_EXTS.to_vec()));
         #[cfg(feature = "adplug")]
         decoders.push(("adplug", crate::adplug::is_adplug, crate::adplug::ADPLUG_EXTS.to_vec()));
+        #[cfg(feature = "sid")]
+        decoders.push(("sid", crate::sid::is_sid, crate::sid::SID_EXTS.to_vec()));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.

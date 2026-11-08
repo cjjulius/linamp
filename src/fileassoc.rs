@@ -150,6 +150,10 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         | "sa2" | "sat" | "sdb" | "sng" | "sop" | "sqx" | "wlf" | "xad" | "xsm" => {
             "audio/x-adlib"
         }
+        // Commodore 64 SID music via libsidplayfp (the `sid` feature); `audio/prs.sid` is the
+        // IANA-registered type.
+        #[cfg(feature = "sid")]
+        "sid" | "psid" | "rsid" => "audio/prs.sid",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -253,6 +257,14 @@ fn mime_package_xml() -> String {
                 "*.mt2", "*.mtm", "*.okt", "*.plm", "*.psm", "*.ptm", "*.stm", "*.stp",
                 "*.stx", "*.symmod", "*.ult", "*.umx",
             ],
+        ));
+    }
+    #[cfg(feature = "sid")]
+    {
+        types.push((
+            "audio/prs.sid",
+            "Commodore 64 SID music",
+            &["*.sid", "*.psid", "*.rsid"],
         ));
     }
     #[cfg(feature = "adplug")]

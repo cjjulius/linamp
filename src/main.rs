@@ -27,6 +27,8 @@ mod gme;
 mod openmpt;
 #[cfg(feature = "adplug")]
 mod adplug;
+#[cfg(feature = "sid")]
+mod sid;
 mod flv;
 mod icon;
 mod library;
