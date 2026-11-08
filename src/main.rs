@@ -23,6 +23,8 @@ mod fileassoc;
 mod ffdec;
 #[cfg(feature = "gme")]
 mod gme;
+#[cfg(feature = "openmpt")]
+mod openmpt;
 mod flv;
 mod icon;
 mod library;

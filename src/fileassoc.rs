@@ -134,6 +134,14 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         "hes" => "audio/x-hes",
         #[cfg(feature = "gme")]
         "gym" => "audio/x-gym",
+        // The tracker "zoo" via libopenmpt (the `openmpt` feature): one shared module type for
+        // all ~30 formats, since one decoder handles them. Keep in step with OPENMPT_EXTS.
+        #[cfg(feature = "openmpt")]
+        "mptm" | "669" | "amf" | "ams" | "c67" | "dbm" | "digi" | "dmf" | "dsm" | "dtm"
+        | "far" | "gdm" | "imf" | "j2b" | "mdl" | "med" | "mt2" | "mtm" | "okt" | "plm"
+        | "psm" | "ptm" | "stm" | "stp" | "stx" | "symmod" | "ult" | "umx" => {
+            "audio/x-openmpt-module"
+        }
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -225,6 +233,19 @@ fn mime_package_xml() -> String {
         types.push(("audio/x-kss", "MSX KSS audio", &["*.kss"]));
         types.push(("audio/x-hes", "PC Engine HES audio", &["*.hes"]));
         types.push(("audio/x-gym", "Genesis GYM audio", &["*.gym"]));
+    }
+    #[cfg(feature = "openmpt")]
+    {
+        types.push((
+            "audio/x-openmpt-module",
+            "Tracker module (libopenmpt)",
+            &[
+                "*.mptm", "*.669", "*.amf", "*.ams", "*.c67", "*.dbm", "*.digi", "*.dmf",
+                "*.dsm", "*.dtm", "*.far", "*.gdm", "*.imf", "*.j2b", "*.mdl", "*.med",
+                "*.mt2", "*.mtm", "*.okt", "*.plm", "*.psm", "*.ptm", "*.stm", "*.stp",
+                "*.stx", "*.symmod", "*.ult", "*.umx",
+            ],
+        ));
     }
     let mut body = String::new();
     for (ty, comment, globs) in &types {

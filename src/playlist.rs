@@ -129,6 +129,65 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "hes",
     #[cfg(feature = "gme")]
     "gym",
+    // The tracker "zoo" via libopenmpt (the `openmpt` feature): ~30 module formats beyond the
+    // four xmrs handles. crate::openmpt renders these to PCM. Keep this list in step with
+    // crate::openmpt::OPENMPT_EXTS (the guard test checks it).
+    #[cfg(feature = "openmpt")]
+    "mptm",
+    #[cfg(feature = "openmpt")]
+    "669",
+    #[cfg(feature = "openmpt")]
+    "amf",
+    #[cfg(feature = "openmpt")]
+    "ams",
+    #[cfg(feature = "openmpt")]
+    "c67",
+    #[cfg(feature = "openmpt")]
+    "dbm",
+    #[cfg(feature = "openmpt")]
+    "digi",
+    #[cfg(feature = "openmpt")]
+    "dmf",
+    #[cfg(feature = "openmpt")]
+    "dsm",
+    #[cfg(feature = "openmpt")]
+    "dtm",
+    #[cfg(feature = "openmpt")]
+    "far",
+    #[cfg(feature = "openmpt")]
+    "gdm",
+    #[cfg(feature = "openmpt")]
+    "imf",
+    #[cfg(feature = "openmpt")]
+    "j2b",
+    #[cfg(feature = "openmpt")]
+    "mdl",
+    #[cfg(feature = "openmpt")]
+    "med",
+    #[cfg(feature = "openmpt")]
+    "mt2",
+    #[cfg(feature = "openmpt")]
+    "mtm",
+    #[cfg(feature = "openmpt")]
+    "okt",
+    #[cfg(feature = "openmpt")]
+    "plm",
+    #[cfg(feature = "openmpt")]
+    "psm",
+    #[cfg(feature = "openmpt")]
+    "ptm",
+    #[cfg(feature = "openmpt")]
+    "stm",
+    #[cfg(feature = "openmpt")]
+    "stp",
+    #[cfg(feature = "openmpt")]
+    "stx",
+    #[cfg(feature = "openmpt")]
+    "symmod",
+    #[cfg(feature = "openmpt")]
+    "ult",
+    #[cfg(feature = "openmpt")]
+    "umx",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -162,6 +221,18 @@ fn gme_estimated_duration(path: &std::path::Path) -> Option<Duration> {
 }
 #[cfg(not(feature = "gme"))]
 fn gme_estimated_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+/// Duration of a tracker-zoo module (libopenmpt) for the playlist, or `None` without the
+/// `openmpt` feature. A cfg shim, like `gme_duration`, so the duration chain reads the same
+/// in both builds.
+#[cfg(feature = "openmpt")]
+fn openmpt_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::openmpt::duration(path)
+}
+#[cfg(not(feature = "openmpt"))]
+fn openmpt_duration(_path: &std::path::Path) -> Option<Duration> {
     None
 }
 
@@ -309,6 +380,7 @@ impl Track {
                 .or_else(|| crate::ps::duration(&self.path))
                 .or_else(|| ffmpeg_duration(&self.path))
                 .or_else(|| gme_duration(&self.path))
+                .or_else(|| openmpt_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
         // Last resort for a format whose exact length no cheap probe can read: a provisional
@@ -873,6 +945,8 @@ mod tests {
         decoders.push(("ffmpeg", crate::ffdec::is_ffmpeg_audio, vec!["wma", "dts", "thd", "mlp", "ra", "rm", "tak", "oma", "omg", "aa3", "at3", "aea", "shn", "8svx", "adx", "voc", "au", "w64"]));
         #[cfg(feature = "gme")]
         decoders.push(("gme", crate::gme::is_gme, vec!["nsf", "nsfe", "gbs", "vgm", "vgz", "spc", "ay", "sap", "kss", "hes", "gym"]));
+        #[cfg(feature = "openmpt")]
+        decoders.push(("openmpt", crate::openmpt::is_openmpt, crate::openmpt::OPENMPT_EXTS.to_vec()));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.
