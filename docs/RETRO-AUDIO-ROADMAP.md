@@ -228,7 +228,10 @@ Phase 2 - Retro multipliers
   self-contained formats routed and sampled from AdPlug's own test corpus; `.ksm`/`.rol`/`.sci`
   dropped (they need a companion instrument-bank file). libADLMIDI (XMI/HMI/HMP MIDI wrappers) is
   deferred - it is GPLv3 and its embedded banks are game rips, so it needs its own feature later.
-- [ ] libsidplayfp (.sid)
+- [x] libsidplayfp (.sid) - `sid` feature, src/sid.rs + src/sid_shim.cpp (C++ shim via cc). reSIDfp
+  engine, ROM-less (ships no Commodore ROMs; plays most PSID and the majority of RSID), mono
+  rendered to both channels, default length + fade, subsong 0. `.sid`/`.psid`/`.rsid`. Windows
+  build/bundling pending on the Windows box.
 
 Phase 3 - Modern/ideal
 - [ ] QOA (.qoa)
@@ -418,6 +421,31 @@ as the chiptunes. Notes that bit us, so they are worth repeating:
   pick a file that the all-codecs visualizer test accepts. Avoid extensions that collide with other
   decoders (`.imf`/`.dtm` -> libopenmpt, `.s3m` -> xmrs, `.mid` -> MIDI, `.vgm` -> libgme) or that
   are too generic (`.raw`, `.dat`, `.m`, `.bnk`).
+
+### Commodore 64 SID (crate::sid, `--features sid`)
+libsidplayfp emulates the C64 + SID chip; no encoder, and the big archive (HVSC) is not freely
+licensed, so do not commit HVSC tunes. Reproducible free options:
+- Generate a CC0 tune with GoatTracker (GPL; its `.sng` exports to `.sid`); keep the `.sng`, commit
+  the `.sid` as `sid-sample.sid`. This is the preferred nicer sample.
+- Dependency-free fallback (what the committed sample uses): a minimal hand-authored PSID - a tiny
+  ROM-less 6502 routine that sets SID voice 1 to a sustained triangle note. Build it with:
+
+    ```python
+    import struct
+    code = bytes([0xA9,0x0F,0x8D,0x18,0xD4, 0xA9,0x1C,0x8D,0x00,0xD4, 0xA9,0x11,0x8D,0x01,0xD4,
+                  0xA9,0x00,0x8D,0x05,0xD4, 0xA9,0xF0,0x8D,0x06,0xD4, 0xA9,0x11,0x8D,0x04,0xD4,
+                  0x60, 0x60])  # init: vol/freq/ADSR/gate; play: rts
+    data = struct.pack("<H", 0x1000) + code
+    be = lambda v: struct.pack(">H", v)
+    hdr = (b"PSID" + be(2) + be(0x7C) + be(0) + be(0x1000) + be(0x1000 + len(code) - 1)
+           + be(1) + be(1) + struct.pack(">I", 0)
+           + b"LinAmp SID test".ljust(32,b"\0") + b"LinAmp".ljust(32,b"\0") + b"2026 CC0".ljust(32,b"\0")
+           + be(0) + bytes(4))
+    open("sid-sample.sid","wb").write(hdr + data)
+    ```
+No oracle (libsidplayfp is the only decoder); the test is a render smoke test (non-silent audio),
+ROM-less. Note: some RSID tunes need the real Commodore ROMs and will be quiet/wrong without them;
+that is expected and we do not ship those ROMs.
 
 ### Oracles
 The `oracles/*.f32` and `*.s16` files are headerless raw-PCM decode references for the correlation

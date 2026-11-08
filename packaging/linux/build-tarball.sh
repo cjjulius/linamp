@@ -45,6 +45,11 @@ case ",$FEATURES," in
   *,adplug,*) BUNDLE_ADPLUG=1 ;;
   *) BUNDLE_ADPLUG=0 ;;
 esac
+# The sid feature (Commodore 64 SID music) links libsidplayfp, bundled the same self-contained way.
+case ",$FEATURES," in
+  *,sid,*) BUNDLE_SID=1 ;;
+  *) BUNDLE_SID=0 ;;
+esac
 NAME="linamp-${VERSION}-linux-x86_64${SUFFIX}"
 STAGE="dist/$NAME"
 
@@ -89,6 +94,14 @@ if [ "$BUNDLE_ADPLUG" = 1 ]; then
   ADPLUG_MIN="$ROOT/build/adplug-min"
   sh "$ROOT/packaging/linux/build-adplug-min.sh" "$ADPLUG_MIN"
   export ADPLUG_DIR="$ADPLUG_MIN"
+fi
+
+# libsidplayfp (C64 SID) built from source the same way; build.rs compiles the shim, links
+# SIDPLAYFP_DIR, and emits the $ORIGIN/lib rpath. Bundled into $STAGE/lib below.
+if [ "$BUNDLE_SID" = 1 ]; then
+  SIDPLAYFP_MIN="$ROOT/build/sidplayfp-min"
+  sh "$ROOT/packaging/linux/build-sidplayfp-min.sh" "$SIDPLAYFP_MIN"
+  export SIDPLAYFP_DIR="$SIDPLAYFP_MIN"
 fi
 
 echo "==> cargo build --release $FEATURE_ARGS"
@@ -148,6 +161,17 @@ if [ "$BUNDLE_ADPLUG" = 1 ]; then
   for f in "$STAGE"/lib/libadplug*.so.* "$STAGE"/lib/libbinio*.so.*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
   if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libadplug|libbinio' | grep -vq "$STAGE/lib"; then
     echo "!!  WARNING: libadplug/libbinio still resolves outside $STAGE/lib; check the rpath" >&2
+  fi
+fi
+if [ "$BUNDLE_SID" = 1 ]; then
+  echo "==> Bundling libsidplayfp into $STAGE/lib (self-contained)"
+  mkdir -p "$STAGE/lib"
+  # libsidplayfp's own .so; the $ORIGIN/lib rpath loads it at runtime. It may link the system
+  # libgcrypt/libgpg-error (near-universal base libs, like libc/libstdc++), resolved from the system.
+  cp -a "$SIDPLAYFP_DIR"/lib/libsidplayfp.so* "$STAGE/lib/" 2>/dev/null || true
+  for f in "$STAGE"/lib/libsidplayfp.so.*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
+  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libsidplayfp' | grep -vq "$STAGE/lib"; then
+    echo "!!  WARNING: libsidplayfp still resolves outside $STAGE/lib; check the rpath" >&2
   fi
 fi
 cp -r skins "$STAGE/skins"

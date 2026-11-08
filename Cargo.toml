@@ -195,3 +195,8 @@ openmpt = []
 # (src/adplug_shim.cpp) via the cc crate and links libadplug + libbinio, bundling both .so files.
 # Needs an AdPlug build at $ADPLUG_DIR (default build/adplug-min, from build-adplug-min.sh).
 adplug = []
+# Commodore 64 SID music (.sid PSID/RSID) via libsidplayfp (GPL-2.0+, reSIDfp engine). C++-only,
+# so build.rs compiles a C++ shim (src/sid_shim.cpp) via the cc crate and links libsidplayfp,
+# bundling the .so. Needs a libsidplayfp build at $SIDPLAYFP_DIR (default build/sidplayfp-min, from
+# build-sidplayfp-min.sh). ROM-less; ships no copyrighted Commodore ROMs.
+sid = []
