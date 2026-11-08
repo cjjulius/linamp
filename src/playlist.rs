@@ -188,6 +188,82 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "ult",
     #[cfg(feature = "openmpt")]
     "umx",
+    // AdLib / OPL FM-synthesis formats via AdPlug (the `adplug` feature): early-PC game and
+    // tracker music. crate::adplug renders these to PCM. Keep in step with crate::adplug::ADPLUG_EXTS.
+    #[cfg(feature = "adplug")]
+    "a2m",
+    #[cfg(feature = "adplug")]
+    "adl",
+    #[cfg(feature = "adplug")]
+    "agd",
+    #[cfg(feature = "adplug")]
+    "amd",
+    #[cfg(feature = "adplug")]
+    "bam",
+    #[cfg(feature = "adplug")]
+    "bmf",
+    #[cfg(feature = "adplug")]
+    "cff",
+    #[cfg(feature = "adplug")]
+    "cmf",
+    #[cfg(feature = "adplug")]
+    "d00",
+    #[cfg(feature = "adplug")]
+    "dfm",
+    #[cfg(feature = "adplug")]
+    "dmo",
+    #[cfg(feature = "adplug")]
+    "dro",
+    #[cfg(feature = "adplug")]
+    "got",
+    #[cfg(feature = "adplug")]
+    "ha2",
+    #[cfg(feature = "adplug")]
+    "hsc",
+    #[cfg(feature = "adplug")]
+    "hsp",
+    #[cfg(feature = "adplug")]
+    "hsq",
+    #[cfg(feature = "adplug")]
+    "ims",
+    #[cfg(feature = "adplug")]
+    "jbm",
+    #[cfg(feature = "adplug")]
+    "laa",
+    #[cfg(feature = "adplug")]
+    "lds",
+    #[cfg(feature = "adplug")]
+    "mad",
+    #[cfg(feature = "adplug")]
+    "mdi",
+    #[cfg(feature = "adplug")]
+    "mkj",
+    #[cfg(feature = "adplug")]
+    "msc",
+    #[cfg(feature = "adplug")]
+    "mus",
+    #[cfg(feature = "adplug")]
+    "rad",
+    #[cfg(feature = "adplug")]
+    "rix",
+    #[cfg(feature = "adplug")]
+    "sa2",
+    #[cfg(feature = "adplug")]
+    "sat",
+    #[cfg(feature = "adplug")]
+    "sdb",
+    #[cfg(feature = "adplug")]
+    "sng",
+    #[cfg(feature = "adplug")]
+    "sop",
+    #[cfg(feature = "adplug")]
+    "sqx",
+    #[cfg(feature = "adplug")]
+    "wlf",
+    #[cfg(feature = "adplug")]
+    "xad",
+    #[cfg(feature = "adplug")]
+    "xsm",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -199,6 +275,17 @@ fn ffmpeg_duration(path: &std::path::Path) -> Option<Duration> {
 }
 #[cfg(not(feature = "ffmpeg"))]
 fn ffmpeg_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+/// Sample rate, channels, and bitrate (kbps) read from any file FFmpeg can open, for the playlist
+/// display; `None` in the pure-Rust build. A cfg shim like `ffmpeg_duration`.
+#[cfg(feature = "ffmpeg")]
+fn ffmpeg_media_info(path: &std::path::Path) -> Option<(u32, u8, u32)> {
+    crate::ffdec::media_info(path)
+}
+#[cfg(not(feature = "ffmpeg"))]
+fn ffmpeg_media_info(_path: &std::path::Path) -> Option<(u32, u8, u32)> {
     None
 }
 
@@ -234,6 +321,45 @@ fn openmpt_duration(path: &std::path::Path) -> Option<Duration> {
 #[cfg(not(feature = "openmpt"))]
 fn openmpt_duration(_path: &std::path::Path) -> Option<Duration> {
     None
+}
+
+/// Duration of an AdLib/OPL song (AdPlug) for the playlist, or `None` without the `adplug`
+/// feature. A cfg shim, like `gme_duration`, so the duration chain reads the same in both builds.
+#[cfg(feature = "adplug")]
+fn adplug_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::adplug::duration(path)
+}
+#[cfg(not(feature = "adplug"))]
+fn adplug_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+// Predicate shims for the synthesized/emulated decoders, used to fill in display metadata (these
+// formats carry no codec tags). Cfg shims like the duration ones, so the call sites read the same
+// in every build. AdLib/OPL (adplug) is mono; the chip/tracker formats are stereo.
+#[cfg(feature = "adplug")]
+fn is_adplug_file(path: &std::path::Path) -> bool {
+    crate::adplug::is_adplug(path)
+}
+#[cfg(not(feature = "adplug"))]
+fn is_adplug_file(_path: &std::path::Path) -> bool {
+    false
+}
+#[cfg(feature = "gme")]
+fn is_gme_file(path: &std::path::Path) -> bool {
+    crate::gme::is_gme(path)
+}
+#[cfg(not(feature = "gme"))]
+fn is_gme_file(_path: &std::path::Path) -> bool {
+    false
+}
+#[cfg(feature = "openmpt")]
+fn is_openmpt_file(path: &std::path::Path) -> bool {
+    crate::openmpt::is_openmpt(path)
+}
+#[cfg(not(feature = "openmpt"))]
+fn is_openmpt_file(_path: &std::path::Path) -> bool {
+    false
 }
 
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
@@ -381,6 +507,7 @@ impl Track {
                 .or_else(|| ffmpeg_duration(&self.path))
                 .or_else(|| gme_duration(&self.path))
                 .or_else(|| openmpt_duration(&self.path))
+                .or_else(|| adplug_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
         // Last resort for a format whose exact length no cheap probe can read: a provisional
@@ -390,6 +517,53 @@ impl Track {
             if let Some(d) = gme_estimated_duration(&self.path) {
                 self.duration = Some(d);
                 self.duration_estimated = true;
+            }
+        }
+        // FFmpeg-decodable formats that lofty cannot tag (ATRAC/.oma, WMA, DTS, TAK, Shorten, the
+        // video/AV containers, and the AC3/DSD/TTA streams) still have real stream info; read it
+        // straight from FFmpeg so the rate/bitrate/channels show dynamically and accurately.
+        if self.sample_rate.is_none() {
+            if let Some((rate, ch, kbps)) = ffmpeg_media_info(&self.path) {
+                self.sample_rate = Some(rate);
+                if ch > 0 {
+                    self.channels = Some(ch);
+                }
+                if kbps > 0 {
+                    self.bitrate = Some(kbps);
+                }
+            }
+        }
+        // Synthesized/emulated formats (AdLib/OPL, chiptunes, trackers, MIDI) carry no codec tags,
+        // so lofty leaves the rate/bitrate/channels blank and the classic readout looks dead and
+        // defaults to "stereo". Fill in what LinAmp actually renders them at: 44.1 kHz 16-bit, mono
+        // for AdLib (an OPL2 is a mono chip) and stereo for the rest. The bitrate shown is the
+        // resulting PCM rate. Only set fields the metadata scan didn't already provide.
+        if self.sample_rate.is_none() {
+            let mono = is_adplug_file(&self.path);
+            let stereo = is_gme_file(&self.path)
+                || is_openmpt_file(&self.path)
+                || crate::tracker::is_tracker(&self.path)
+                || crate::midi::is_midi(&self.path);
+            if mono || stereo {
+                let ch: u8 = if mono { 1 } else { 2 };
+                self.sample_rate = Some(44_100);
+                self.channels = Some(ch);
+                if self.bitrate.is_none() {
+                    self.bitrate = Some(44_100 * 16 * ch as u32 / 1000);
+                }
+            }
+        }
+        // Final fallback: a lossless stream (Dolby TrueHD/MLP, Shorten) can report no bitrate and no
+        // container duration for FFmpeg to estimate from, yet its length was computed above. Derive
+        // the average bitrate from the file size and that length so the readout is never blank.
+        if self.bitrate.is_none() {
+            if let Some(secs) = self.duration.map(|d| d.as_secs_f64()).filter(|s| *s > 0.0) {
+                if let Ok(meta) = std::fs::metadata(&self.path) {
+                    let kbps = (meta.len() as f64 * 8.0 / secs / 1000.0) as u32;
+                    if kbps > 0 {
+                        self.bitrate = Some(kbps);
+                    }
+                }
             }
         }
     }
@@ -902,6 +1076,37 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
+    /// Every supported format must show a sample rate and a bitrate in the playlist readout: read
+    /// dynamically where the format carries it (MP3/FLAC/the FFmpeg stream info), or filled with an
+    /// accurate figure where it does not (the synthesized formats render at 44.1 kHz, and lossless
+    /// streams get a size/duration estimate). Runs over the local corpus, so it is ignored on CI
+    /// where qa-music is absent. Needs the ffmpeg/gme/openmpt/adplug features for the full set.
+    #[test]
+    #[ignore = "needs the local qa-music corpus and all decoder features"]
+    fn every_supported_sample_shows_rate_and_bitrate() {
+        let dir = Path::new("qa-music/format-samples");
+        if !dir.exists() {
+            return;
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut missing: Vec<String> = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if !p.is_file() || !is_supported(&p) {
+                continue;
+            }
+            let ext = p.extension().unwrap().to_string_lossy().to_lowercase();
+            if !seen.insert(ext.clone()) {
+                continue;
+            }
+            let t = Track::from_path(p.clone());
+            if t.sample_rate.is_none() || t.bitrate.is_none() {
+                missing.push(format!(".{ext}: rate={:?} bitrate={:?}", t.sample_rate, t.bitrate));
+            }
+        }
+        assert!(missing.is_empty(), "formats missing rate/bitrate:\n  {}", missing.join("\n  "));
+    }
+
     #[test]
     fn supported_exts() {
         assert!(is_supported(Path::new("a.mp3")));
@@ -947,6 +1152,8 @@ mod tests {
         decoders.push(("gme", crate::gme::is_gme, vec!["nsf", "nsfe", "gbs", "vgm", "vgz", "spc", "ay", "sap", "kss", "hes", "gym"]));
         #[cfg(feature = "openmpt")]
         decoders.push(("openmpt", crate::openmpt::is_openmpt, crate::openmpt::OPENMPT_EXTS.to_vec()));
+        #[cfg(feature = "adplug")]
+        decoders.push(("adplug", crate::adplug::is_adplug, crate::adplug::ADPLUG_EXTS.to_vec()));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.

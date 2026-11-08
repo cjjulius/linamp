@@ -527,6 +527,11 @@ fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
     if crate::openmpt::is_openmpt(path) {
         return Ok(Box::new(crate::openmpt::open(path)?));
     }
+    // AdLib / OPL FM-synthesis formats (DRO/CMF/RAD/HSC/...), via AdPlug.
+    #[cfg(feature = "adplug")]
+    if crate::adplug::is_adplug(path) {
+        return Ok(Box::new(crate::adplug::open(path)?));
+    }
     if crate::ape::is_ape(path) {
         return Ok(Box::new(crate::ape::open_ape(path)?));
     }
