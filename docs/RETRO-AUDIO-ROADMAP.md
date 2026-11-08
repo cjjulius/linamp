@@ -447,6 +447,18 @@ No oracle (libsidplayfp is the only decoder); the test is a render smoke test (n
 ROM-less. Note: some RSID tunes need the real Commodore ROMs and will be quiet/wrong without them;
 that is expected and we do not ship those ROMs.
 
+Version: pin libsidplayfp 2.x (currently 2.16.1). The 2.x series bundles the reSIDfp engine in-tree
+(one library) and matches src/sid_shim.cpp's API. libsidplayfp 3.x split reSIDfp into a separate
+libresidfp package and changed the API (SidConfig::playback/MONO, SidInfo::maxsids, play signature),
+so it neither builds as a single library nor compiles against the shim; do not bump to 3.x without
+rewriting the shim.
+
+Windows: there is no DLL to bundle. `packaging/windows/build-sidplayfp.ps1` builds libsidplayfp
+2.16.1 (reSIDfp bundled) as a static library and links it into the exe. libsidplayfp has no upstream
+CMake/MSVC build, so the script generates a CMakeLists and the configured headers; no 6502 assembler
+is needed because the release tarball ships the pre-assembled PSID driver bytes. The Linux side
+(`build-sidplayfp-min.sh`) stays shared, as with gme/openmpt.
+
 ### Oracles
 The `oracles/*.f32` and `*.s16` files are headerless raw-PCM decode references for the correlation
 tests. They are not a playable format and are deliberately absent from SUPPORTED_EXTS.
