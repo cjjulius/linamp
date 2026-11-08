@@ -126,6 +126,12 @@ Sound-chip music, grouped by the machine it came from.
 |---|---|
 | `.kss` | MSX |
 
+#### Commodore 64
+
+| Extension | System | Good to know |
+|---|---|---|
+| `.sid` `.psid` `.rsid` | Commodore 64 | The SID chip, emulated. Plays without the original C64 ROMs, which covers most tunes |
+
 ### PC: AdLib and Sound Blaster (OPL FM)
 
 The bleepy FM-synth sound of early-90s DOS games, from the AdLib and Sound Blaster cards. Nearly
@@ -211,5 +217,6 @@ everything else in this section they are genuine recorded sound.
 
 ## On the roadmap
 
-- Commodore 64 SID (`.sid`) is next in line.
+- QOA (Quite OK Audio, `.qoa`), a modern open format, is next in line.
 - More AdLib MIDI-wrapper formats (XMI, HMI, HMP) may follow.
+- Wider tag editing for more of the formats above.

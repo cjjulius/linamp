@@ -532,6 +532,11 @@ fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
     if crate::adplug::is_adplug(path) {
         return Ok(Box::new(crate::adplug::open(path)?));
     }
+    // Commodore 64 SID music (.sid), via libsidplayfp.
+    #[cfg(feature = "sid")]
+    if crate::sid::is_sid(path) {
+        return Ok(Box::new(crate::sid::open(path)?));
+    }
     if crate::ape::is_ape(path) {
         return Ok(Box::new(crate::ape::open_ape(path)?));
     }
