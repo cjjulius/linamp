@@ -200,3 +200,11 @@ adplug = []
 # bundling the .so. Needs a libsidplayfp build at $SIDPLAYFP_DIR (default build/sidplayfp-min, from
 # build-sidplayfp-min.sh). ROM-less; ships no copyrighted Commodore ROMs.
 sid = []
+# Streamed game-engine audio (hundreds of console/engine formats: GameCube/Wii DSP, PS-ADPCM VAG,
+# CRI HCA, Nintendo BRSTM/BCSTM/BFSTM, FMOD FSB, etc.) via libvgmstream. The core-only build is
+# fully permissive (ISC, depends only on libc/libm; no ffmpeg/vorbis/mpg123 externals). libvgmstream
+# has a C API, so there is no shim: src/vgmstream.rs binds it through a hand-rolled FFI and build.rs
+# links + bundles libvgmstream.so. Needs a build at $VGMSTREAM_DIR (default build/vgmstream-min,
+# produced by packaging/linux/build-vgmstream-min.sh). Routes only game-specific extensions
+# (explicit allowlist) so it never claims generic .ogg/.wav/.flac/.mp3/etc.
+vgmstream = []
