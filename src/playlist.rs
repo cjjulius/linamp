@@ -271,6 +271,44 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "psid",
     #[cfg(feature = "sid")]
     "rsid",
+    // Streamed game-engine audio via libvgmstream (the `vgmstream` feature). An allowlist of
+    // game-specific stream formats (GameCube DSP, PS-ADPCM, CRI HCA, Nintendo stream, FMOD FSB,
+    // ...) that nothing else in LinAmp handles; kept in sync with crate::vgmstream::VGMSTREAM_EXTS
+    // by the supported_exts_match_the_router guard test.
+    #[cfg(feature = "vgmstream")]
+    "genh",
+    #[cfg(feature = "vgmstream")]
+    "dsp",
+    #[cfg(feature = "vgmstream")]
+    "idsp",
+    #[cfg(feature = "vgmstream")]
+    "vag",
+    #[cfg(feature = "vgmstream")]
+    "svag",
+    #[cfg(feature = "vgmstream")]
+    "hca",
+    #[cfg(feature = "vgmstream")]
+    "brstm",
+    #[cfg(feature = "vgmstream")]
+    "bcstm",
+    #[cfg(feature = "vgmstream")]
+    "bfstm",
+    #[cfg(feature = "vgmstream")]
+    "bfwav",
+    #[cfg(feature = "vgmstream")]
+    "bwav",
+    #[cfg(feature = "vgmstream")]
+    "at9",
+    #[cfg(feature = "vgmstream")]
+    "xvag",
+    #[cfg(feature = "vgmstream")]
+    "fsb",
+    #[cfg(feature = "vgmstream")]
+    "xwb",
+    #[cfg(feature = "vgmstream")]
+    "hps",
+    #[cfg(feature = "vgmstream")]
+    "ktss",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -360,6 +398,28 @@ fn is_sid_file(path: &std::path::Path) -> bool {
 #[cfg(not(feature = "sid"))]
 fn is_sid_file(_path: &std::path::Path) -> bool {
     false
+}
+
+/// Duration of a vgmstream file (opens it to read the decoded length), or `None` without the
+/// `vgmstream` feature. A cfg shim like `gme_duration`.
+#[cfg(feature = "vgmstream")]
+fn vgmstream_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::vgmstream::duration(path)
+}
+#[cfg(not(feature = "vgmstream"))]
+fn vgmstream_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+/// Sample rate, channels, and bitrate (kbps) for a vgmstream file, read from its stream info for the
+/// display; `None` without the `vgmstream` feature. A cfg shim like `ffmpeg_media_info`.
+#[cfg(feature = "vgmstream")]
+fn vgmstream_media_info(path: &std::path::Path) -> Option<(u32, u8, u32)> {
+    crate::vgmstream::media_info(path)
+}
+#[cfg(not(feature = "vgmstream"))]
+fn vgmstream_media_info(_path: &std::path::Path) -> Option<(u32, u8, u32)> {
+    None
 }
 
 // Predicate shims for the synthesized/emulated decoders, used to fill in display metadata (these
@@ -537,6 +597,7 @@ impl Track {
                 .or_else(|| openmpt_duration(&self.path))
                 .or_else(|| adplug_duration(&self.path))
                 .or_else(|| sid_duration(&self.path))
+                .or_else(|| vgmstream_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
         // Last resort for a format whose exact length no cheap probe can read: a provisional
@@ -553,6 +614,20 @@ impl Track {
         // straight from FFmpeg so the rate/bitrate/channels show dynamically and accurately.
         if self.sample_rate.is_none() {
             if let Some((rate, ch, kbps)) = ffmpeg_media_info(&self.path) {
+                self.sample_rate = Some(rate);
+                if ch > 0 {
+                    self.channels = Some(ch);
+                }
+                if kbps > 0 {
+                    self.bitrate = Some(kbps);
+                }
+            }
+        }
+        // Streamed game-engine formats (vgmstream) carry no lofty-readable tags but do have real
+        // stream info (native rate, channel count, average bitrate); read it from the file so the
+        // readout is accurate instead of a flat 44.1 kHz guess.
+        if self.sample_rate.is_none() {
+            if let Some((rate, ch, kbps)) = vgmstream_media_info(&self.path) {
                 self.sample_rate = Some(rate);
                 if ch > 0 {
                     self.channels = Some(ch);
@@ -1185,6 +1260,8 @@ mod tests {
         decoders.push(("adplug", crate::adplug::is_adplug, crate::adplug::ADPLUG_EXTS.to_vec()));
         #[cfg(feature = "sid")]
         decoders.push(("sid", crate::sid::is_sid, crate::sid::SID_EXTS.to_vec()));
+        #[cfg(feature = "vgmstream")]
+        decoders.push(("vgmstream", crate::vgmstream::is_vgmstream, crate::vgmstream::VGMSTREAM_EXTS.to_vec()));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.

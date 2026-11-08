@@ -110,11 +110,21 @@ jobs:
           sh packaging/linux/build-sidplayfp-min.sh "$PWD/build/sidplayfp-min"
           echo "SIDPLAYFP_DIR=$PWD/build/sidplayfp-min" >> "$GITHUB_ENV"
 
-      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug + sid)
+      # libvgmstream (game-engine streams) built from source via CMake, core-only (no external
+      # codecs), so the .so depends only on libc/libm. vgmstream has a C API, so there is no shim;
+      # build.rs links $VGMSTREAM_DIR. Decode tests skip without the gitignored qa-music samples, so
+      # on CI this is the compile check plus the router/MIME guards.
+      - name: Build libvgmstream (Linux)
         if: runner.os == 'Linux'
         run: |
-          cargo build --features ffmpeg,gme,openmpt,adplug,sid --verbose
-          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib:$SIDPLAYFP_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug,sid --verbose
+          sh packaging/linux/build-vgmstream-min.sh "$PWD/build/vgmstream-min"
+          echo "VGMSTREAM_DIR=$PWD/build/vgmstream-min" >> "$GITHUB_ENV"
+
+      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug + sid + vgmstream)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream --verbose
+          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib:$SIDPLAYFP_DIR/lib:$VGMSTREAM_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream --verbose
 
       # Windows builds libgme and its zlib dependency from source (no system libgme/zlib),
       # then builds and tests the full feature set (ffmpeg + gme). build.rs links $GME_DIR;
@@ -242,7 +252,7 @@ jobs:
       # on Windows lands when the Windows box adds its build and DLL bundling.
       - name: Build Linux tarball
         if: runner.os == 'Linux'
-        run: FEATURES=ffmpeg,gme,openmpt,adplug,sid sh packaging/linux/build-tarball.sh
+        run: FEATURES=ffmpeg,gme,openmpt,adplug,sid,vgmstream sh packaging/linux/build-tarball.sh
 
       - name: Upload Linux tarball
         if: runner.os == 'Linux'

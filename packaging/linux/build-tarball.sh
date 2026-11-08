@@ -50,6 +50,11 @@ case ",$FEATURES," in
   *,sid,*) BUNDLE_SID=1 ;;
   *) BUNDLE_SID=0 ;;
 esac
+# The vgmstream feature (game-engine streams) links libvgmstream (core-only), bundled the same way.
+case ",$FEATURES," in
+  *,vgmstream,*) BUNDLE_VGMSTREAM=1 ;;
+  *) BUNDLE_VGMSTREAM=0 ;;
+esac
 NAME="linamp-${VERSION}-linux-x86_64${SUFFIX}"
 STAGE="dist/$NAME"
 
@@ -102,6 +107,14 @@ if [ "$BUNDLE_SID" = 1 ]; then
   SIDPLAYFP_MIN="$ROOT/build/sidplayfp-min"
   sh "$ROOT/packaging/linux/build-sidplayfp-min.sh" "$SIDPLAYFP_MIN"
   export SIDPLAYFP_DIR="$SIDPLAYFP_MIN"
+fi
+
+# libvgmstream (game-engine streams) built from source (core-only) the same way; build.rs links
+# VGMSTREAM_DIR and emits the $ORIGIN/lib rpath. Bundled into $STAGE/lib below.
+if [ "$BUNDLE_VGMSTREAM" = 1 ]; then
+  VGMSTREAM_MIN="$ROOT/build/vgmstream-min"
+  sh "$ROOT/packaging/linux/build-vgmstream-min.sh" "$VGMSTREAM_MIN"
+  export VGMSTREAM_DIR="$VGMSTREAM_MIN"
 fi
 
 echo "==> cargo build --release $FEATURE_ARGS"
@@ -172,6 +185,17 @@ if [ "$BUNDLE_SID" = 1 ]; then
   for f in "$STAGE"/lib/libsidplayfp.so.*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
   if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libsidplayfp' | grep -vq "$STAGE/lib"; then
     echo "!!  WARNING: libsidplayfp still resolves outside $STAGE/lib; check the rpath" >&2
+  fi
+fi
+if [ "$BUNDLE_VGMSTREAM" = 1 ]; then
+  echo "==> Bundling libvgmstream into $STAGE/lib (self-contained)"
+  mkdir -p "$STAGE/lib"
+  # The core-only libvgmstream depends only on libc/libm (from the user's system), so its own .so is
+  # the whole runtime set. The binary's $ORIGIN/lib rpath (emitted by build.rs) loads it at runtime.
+  cp -a "$VGMSTREAM_DIR"/lib/libvgmstream.so* "$STAGE/lib/" 2>/dev/null || true
+  for f in "$STAGE"/lib/libvgmstream.so*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
+  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libvgmstream' | grep -vq "$STAGE/lib"; then
+    echo "!!  WARNING: libvgmstream still resolves outside $STAGE/lib; check the rpath" >&2
   fi
 fi
 cp -r skins "$STAGE/skins"

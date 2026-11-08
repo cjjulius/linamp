@@ -109,11 +109,60 @@ like the minimal FFmpeg.
   is the most restrictive license we would take; keep it isolated behind a feature so the
   license surface is explicit.
 
-### Phase 2 stretch: emulated-console song formats
-The `*SF` family (PSF/PSF2 PlayStation, GSF Game Boy Advance, 2SF DS, USF N64, SSF Saturn)
-and vgmstream (hundreds of game-engine audio formats: HCA, FSB, Wwise WEM, GameCube DSP,
-PS VAG, Nintendo BRSTM/BCSTM). High coverage, but heavier and with murkier licensing
-(vgmstream bundles several libraries; audit before adopting). Defer until 2a-2d land.
+### Phase 2 stretch: emulated-console and game-engine formats
+Two separate bodies of work, researched in depth (Nov 2026). They are nothing alike under the hood,
+so they are planned and shipped separately.
+
+#### 2e. vgmstream (game-engine streamed audio) - DONE
+Hundreds of console/engine stream formats: GameCube/Wii DSP, PS-ADPCM VAG, CRI HCA, Nintendo
+BRSTM/BCSTM/BFSTM, FMOD FSB, Microsoft XWB, Sony XVAG/ATRAC9, Koei KTSS, and more.
+
+- Library/license: libvgmstream, **ISC** (permissive - mantra tier 3, the best of any native option).
+  The roadmap's old "murkier licensing" worry is **obsolete**: upstream internalized the two
+  problematic externals (LibAtrac9 and the unknown-license G.719 decoder) as in-tree ISC decoders in
+  Oct 2026, so the **core-only** build (no ffmpeg/vorbis/mpg123 externals) is fully permissive and
+  self-contained (the `.so` depends only on libc/libm). That core already decodes the large majority
+  of formats, whose payloads are in-tree codecs (DSP/ADPCM, PS-ADPCM, HCA, ATRAC9, PCM).
+- Shape: libvgmstream exposes a C API, so there is no shim (unlike AdPlug/SID). `src/vgmstream.rs`
+  binds it via hand-rolled FFI, like gme/openmpt. It streams on demand and seeks natively
+  (sample-accurate), outputs f32 directly (`force_sfmt = FLOAT`), caps multichannel to stereo
+  (`auto_downmix_channels = 2`), duplicates mono to both channels, and plays once with looping
+  disabled (`ignore_loop`) so every track has a finite length.
+- Routing: an **explicit allowlist** (`VGMSTREAM_EXTS`), not "ask the library." vgmstream's own
+  extension table is huge and aggressively claims generic names (.ogg/.wav/.aac/...); we route only
+  game-specific extensions nothing else in LinAmp handles and run vgmstream **last** in the dispatch
+  chain, so the pure-Rust and ffmpeg paths always win a tie. `.adx`/`.at3`/`.oma` stay on ffdec;
+  `.awb` stays with AMR-WB. Pinned to vgmstream r2168.
+- Deferred within this feature: the FFmpeg-backed codecs (XMA / ATRAC3 / WMA - a lot of Xbox 360 and
+  PS3 content) and the Vorbis/CELT/Speex-payload variants (Wwise WEM Vorbis, FSB Vorbis). They need
+  an external-codec build tier; a file that needs one simply fails to open today and is skipped. Add
+  as a second tier later (LGPL FFmpeg, no `--enable-gpl`, same posture as the existing gme/adplug LGPL
+  libs) if the demand is there.
+
+#### 2f. The `*SF` family (emulated-program music) - PLANNED, not started
+PSF/PSF2 (PlayStation), GSF (GBA), 2SF (NDS), USF (N64), SSF/DSF (Saturn/Dreamcast), QSF (Capcom
+QSound), NCSF (NDS). Each file is a compressed program + driver for a specific console, played by a
+system-specific emulator core - so unlike vgmstream there is **no single library**: it is one shared
+container (`psflib`, MIT) plus ~6 emulator cores (PSF1&PSF2 share one; SSF&DSF share one), which
+together cover 8 of the 9 subformats. Integrate as `cc`-compiled cores behind per-format Cargo
+features, like the AdPlug/SID shims.
+
+- Decoders (all actively maintained; the Kodi `audiodecoder.*` binary-addons are the cleanest uniform
+  source - one shared `psflib`, all CMake, all build on Linux + Windows):
+  - PSF1/PSF2: libupse (GPL-2) for a quick win, or Highly Experimental (GPL-3) for better PS2 accuracy.
+  - SSF/DSF: Highly Theoretical (GPL-2, MAME-free).  USF: lazyusf2 (GPL-2).
+  - GSF: prefer **lazygsf + mGBA (MIT + MPL-2.0)** to keep it off GPL, else viogsf (GPL-2).
+  - QSF: Highly Quixotic (GPL-2).  NCSF: SSEQPlayer (GPL-2/BSD, lightweight - no full emulator).
+  - 2SF: vio2sf (GPL-2; drags in the full DeSmuME core - the heaviest of the set).
+- License reality: enabling any `*SF` feature makes that build **GPL** (GPL-2, or GPL-3 if HE is used
+  for PSF) - acceptable under mantra rule 5, exactly the status quo of the existing `sid` feature.
+- **Wall: SNSF** (SNES). The only core is snsf9x, which bundles snes9x under a **non-commercial /
+  personal-use-only** license. Skip it and document; the practical cost is nil, because SNES music is
+  already covered as **SPC via the existing gme feature**. Also avoid the old monolithic `nmlgc/aosdk`
+  SDK as a source - it mixes in MAME's non-commercial clause; use the kode54/Kodi split-cores instead.
+- No pure-Rust option exists for any subformat (confirmed on crates.io); C/C++ is the floor.
+- Suggested order when it is taken up: PSF1+PSF2 first (biggest corpus), then SSF+DSF and USF, then
+  GSF/QSF/NCSF, then 2SF. One tier (or a couple) per branch, like the 2a-2d work.
 
 ## Phase 3 - Modern and ideal-fit
 
@@ -184,6 +233,26 @@ Phase 2d (libsidplayfp):
   freely licensed, so prefer a known public-domain composer or a smoke test.
 - Oracle: `sidplayfp` can write a wav; convert to f32.
 
+Phase 2e (vgmstream):
+- Generate (preferred, reproducible): a GENH (`.genh`) wrapping raw PCM16 is mintable from any WAV
+  with a short script (no deps) - see the cookbook; this is the committed baseline sample and
+  exercises the full open/render/seek path. The real game ADPCM codecs are generated with VGAudio
+  (`VGAudioCli in.wav out.dsp` / `.brstm` / `.bcstm` / `.bfstm` / `.hca`) on a box with a .NET runtime
+  (the Linux dev box has none; the Windows box can). ADX is mintable with ffmpeg but ADX stays on the
+  ffdec path, so it is not a vgmstream sample.
+- Procure (no open encoder): FMOD FSB, Microsoft XWB, Sony XVAG, Koei KTSS - from freely-licensed /
+  homebrew rips and the sample files attached to vgmstream GitHub issues/PRs. Local QA only (gitignored).
+- Oracle: `vgmstream-cli -i -o ref.wav <file>` decodes with looping disabled as a reference; cross-check
+  metadata with `vgmstream-cli -m <file>`. libvgmstream and the CLI share the decode core, so for the
+  single-decoder formats the committed test is a non-silent render smoke test, like the chiptunes.
+
+Phase 2f (*SF family), when taken up:
+- Procure only: Zophar's Domain per-format music sets (`zophar.net/music/<fmt>`). These are copyrighted
+  commercial game rips - local QA only, never commit (matches the per-box gitignored-samples rule).
+  Generation (USFMaker, Zophar's PSF utilities) still needs a copyrighted ROM/EXE input, so it is not
+  truly license-free. Pick a set whose subsong 0 has audio and is long enough to scrub.
+- Oracle: each format's library is the sole decoder, so a non-silent render smoke test is the fallback.
+
 Phase 3:
 - QOA: generate directly - the reference `qoaconv` tool converts a wav to `.qoa`. Oracle:
   decode back with `qoaconv` or the reference decoder.
@@ -232,6 +301,16 @@ Phase 2 - Retro multipliers
   engine, ROM-less (ships no Commodore ROMs; plays most PSID and the majority of RSID), mono
   rendered to both channels, default length + fade, subsong 0. `.sid`/`.psid`/`.rsid`. Windows
   build/bundling pending on the Windows box.
+
+Phase 2 stretch
+- [x] vgmstream (game-engine streams: DSP/VAG/HCA/BRSTM/BCSTM/BFSTM/BFWAV/BWAV/AT9/XVAG/FSB/XWB/HPS/
+  KTSS/IDSP/SVAG/GENH) - `vgmstream` feature, src/vgmstream.rs (direct C-API FFI, no shim). Core-only
+  libvgmstream (ISC, permissive, libc/libm only); streaming + native seek + f32 out; allowlist routing,
+  runs last. Linux build (`build-vgmstream-min.sh`, CMake, pinned r2168), CI, and tarball bundling wired.
+  Windows build/bundling (`build-vgmstream.ps1` + Windows CI feature add) pending on the Windows box.
+  FFmpeg-backed codecs (XMA/ATRAC3/WMA) and Vorbis/CELT-payload variants deferred to a later build tier.
+- [ ] `*SF` family (PSF/PSF2/GSF/2SF/USF/SSF/DSF/QSF/NCSF) - planned (see "Phase 2 stretch" above);
+  not started. GPL per-core (one branch or two when taken up). SNSF is a wall (snes9x non-commercial).
 
 Phase 3 - Modern/ideal
 - [ ] QOA (.qoa)
@@ -458,6 +537,53 @@ Windows: there is no DLL to bundle. `packaging/windows/build-sidplayfp.ps1` buil
 CMake/MSVC build, so the script generates a CMakeLists and the configured headers; no 6502 assembler
 is needed because the release tarball ships the pre-assembled PSID driver bytes. The Linux side
 (`build-sidplayfp-min.sh`) stays shared, as with gme/openmpt.
+
+### Game-engine streams (crate::vgmstream, `--features vgmstream`)
+libvgmstream (ISC) plays hundreds of console/engine stream formats. We build it core-only (no
+ffmpeg/vorbis/mpg123 externals) so it is fully permissive and depends only on libc/libm; that core
+decodes the headline formats (DSP/ADPCM, PS-ADPCM, HCA, ATRAC9, PCM). One build plays all routed
+extensions. Routing is an allowlist (`VGMSTREAM_EXTS`), so it never claims generic container names.
+No oracle for the single-decoder formats: the test is a render smoke test (non-silent audio), like
+the chiptunes. Pick a sample long enough to scrub; most game streams loop, and LinAmp plays them once
+with looping disabled.
+
+Linux library: `packaging/linux/build-vgmstream-min.sh` (CMake, pinned vgmstream r2168, core-only,
+shared). Windows: `packaging/windows/build-vgmstream.ps1` (to be written by the Windows box - a core-only
+static or shared MSVC build; vgmstream ships an MSVC `.sln`/CMake and, for the external tiers, prebuilt
+dependency DLLs, but the core tier needs none).
+
+Preferred committed sample - GENH wrapping raw PCM16 (reproducible, no deps, exercises the full
+open/render/seek path). From any WAV (here a 60s cut of the shared `hypno-this.wav`):
+
+    ffmpeg -i hypno-this.wav -t 60 -c:a pcm_s16le -ar 44100 -ac 2 hypno60.wav
+    python3 genh_gen.py hypno60.wav genh-sample.genh    # script below
+
+    ```python
+    import struct, sys, wave
+    w = wave.open(sys.argv[1], "rb"); ch, sr, n = w.getnchannels(), w.getframerate(), w.getnframes()
+    assert w.getsampwidth() == 2, "need 16-bit PCM"
+    pcm = w.readframes(n); w.close()
+    START, HEADER_SIZE, PCM16LE, NO_LOOP, INTERLEAVE = 0x40, 0x24, 4, 0xFFFFFFFF, 2
+    h = bytearray(START); h[0:4] = b"GENH"
+    for off, val in [(0x04, ch), (0x08, INTERLEAVE), (0x0c, sr), (0x10, NO_LOOP),
+                     (0x14, n), (0x18, PCM16LE), (0x1c, START), (0x20, HEADER_SIZE)]:
+        struct.pack_into("<I", h, off, val)
+    open(sys.argv[2], "wb").write(bytes(h) + pcm)
+    ```
+
+Real game ADPCM codecs - generate with VGAudio (open source, .NET) on a box that has a runtime
+(`dotnet`/`mono`; the Linux dev box has neither, the Windows box can): `VGAudioCli in.wav out.dsp`
+(GameCube DSP), `out.brstm` / `out.bcstm` / `out.bfstm` (Nintendo stream), `out.hca` (CRI HCA). Save
+as `<ext>-sample.<ext>`.
+
+Procure (no open encoder) - FSB/XWB/XVAG/KTSS from freely-licensed or homebrew rips and vgmstream
+issue/PR attachments; local QA only, never commit. Oracle/cross-check if vgmstream-cli is installed:
+`vgmstream-cli -i -o ref.wav <file>` (decode, looping disabled) and `vgmstream-cli -m <file>` (metadata).
+
+Not routed on purpose: `.adx`/`.at3`/`.oma` (already on ffdec), `.awb` (AMR-WB owns it; `.acb` is only
+its cue sheet), and vgmstream's generic claims (`.ogg`/`.wav`/`.aac`/...). Formats whose payload needs
+an external codec (Vorbis FSB, XMA/ATRAC3/WMA) fail to open in the core-only build and are skipped
+until a later FFmpeg/Vorbis build tier lands.
 
 ### Oracles
 The `oracles/*.f32` and `*.s16` files are headerless raw-PCM decode references for the correlation
