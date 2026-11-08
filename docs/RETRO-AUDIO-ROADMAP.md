@@ -345,9 +345,14 @@ encoder, so procure small modules per format from Modland (modland.com/pub/modul
 one file per extension named `<ext>-sample.<ext>`. libopenmpt detects format by content, so the
 on-disk extension only has to route the file to the decoder; a module stored under a different name
 on Modland can be saved under the target extension. No oracle: libopenmpt is the only decoder, so
-the test is a render smoke test (non-silent audio), same as the chiptunes. Prefer short tunes
-(most Modland modules are full songs; the source streams, so length does not bloat the tests, but a
-shorter file is nicer for manual QA). Format -> Modland directory used:
+the test is a render smoke test (non-silent audio), same as the chiptunes. Pick a sample at least
+~60s long, ideally one to three minutes (most Modland modules are full songs, which is fine - the
+source streams, so length does not bloat the tests). Do NOT pick a very short module: a sub-30s
+track can't be scrubbed for manual QA (seeking anywhere lands near the end, so it stops and
+auto-advances before you hear much), and tracker seeks snap to the nearest pattern row, which is
+only noticeable on a tiny track. This bit us with a 15s `.ult`; it was swapped for a ~186s one.
+The same "pick something long enough to scrub" rule applies to every streamed format here and to
+the chiptunes. Format -> Modland directory used:
 - `669` Composer 669 | `amf` Asylum | `ams` Velvet Studio | `c67` Composer 670 (CDFM) |
   `dbm` Digibooster Pro | `digi` Digibooster | `dmf` X-Tracker | `dtm` Digital Tracker DTM |
   `far` Farandole Composer | `gdm` General DigiMusic | `imf` Imago Orpheus | `mdl` Digitrakker |
