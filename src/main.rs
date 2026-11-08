@@ -25,6 +25,8 @@ mod ffdec;
 mod gme;
 #[cfg(feature = "openmpt")]
 mod openmpt;
+#[cfg(feature = "adplug")]
+mod adplug;
 mod flv;
 mod icon;
 mod library;

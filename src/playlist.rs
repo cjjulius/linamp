@@ -188,6 +188,82 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "ult",
     #[cfg(feature = "openmpt")]
     "umx",
+    // AdLib / OPL FM-synthesis formats via AdPlug (the `adplug` feature): early-PC game and
+    // tracker music. crate::adplug renders these to PCM. Keep in step with crate::adplug::ADPLUG_EXTS.
+    #[cfg(feature = "adplug")]
+    "a2m",
+    #[cfg(feature = "adplug")]
+    "adl",
+    #[cfg(feature = "adplug")]
+    "agd",
+    #[cfg(feature = "adplug")]
+    "amd",
+    #[cfg(feature = "adplug")]
+    "bam",
+    #[cfg(feature = "adplug")]
+    "bmf",
+    #[cfg(feature = "adplug")]
+    "cff",
+    #[cfg(feature = "adplug")]
+    "cmf",
+    #[cfg(feature = "adplug")]
+    "d00",
+    #[cfg(feature = "adplug")]
+    "dfm",
+    #[cfg(feature = "adplug")]
+    "dmo",
+    #[cfg(feature = "adplug")]
+    "dro",
+    #[cfg(feature = "adplug")]
+    "got",
+    #[cfg(feature = "adplug")]
+    "ha2",
+    #[cfg(feature = "adplug")]
+    "hsc",
+    #[cfg(feature = "adplug")]
+    "hsp",
+    #[cfg(feature = "adplug")]
+    "hsq",
+    #[cfg(feature = "adplug")]
+    "ims",
+    #[cfg(feature = "adplug")]
+    "jbm",
+    #[cfg(feature = "adplug")]
+    "laa",
+    #[cfg(feature = "adplug")]
+    "lds",
+    #[cfg(feature = "adplug")]
+    "mad",
+    #[cfg(feature = "adplug")]
+    "mdi",
+    #[cfg(feature = "adplug")]
+    "mkj",
+    #[cfg(feature = "adplug")]
+    "msc",
+    #[cfg(feature = "adplug")]
+    "mus",
+    #[cfg(feature = "adplug")]
+    "rad",
+    #[cfg(feature = "adplug")]
+    "rix",
+    #[cfg(feature = "adplug")]
+    "sa2",
+    #[cfg(feature = "adplug")]
+    "sat",
+    #[cfg(feature = "adplug")]
+    "sdb",
+    #[cfg(feature = "adplug")]
+    "sng",
+    #[cfg(feature = "adplug")]
+    "sop",
+    #[cfg(feature = "adplug")]
+    "sqx",
+    #[cfg(feature = "adplug")]
+    "wlf",
+    #[cfg(feature = "adplug")]
+    "xad",
+    #[cfg(feature = "adplug")]
+    "xsm",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -233,6 +309,17 @@ fn openmpt_duration(path: &std::path::Path) -> Option<Duration> {
 }
 #[cfg(not(feature = "openmpt"))]
 fn openmpt_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+/// Duration of an AdLib/OPL song (AdPlug) for the playlist, or `None` without the `adplug`
+/// feature. A cfg shim, like `gme_duration`, so the duration chain reads the same in both builds.
+#[cfg(feature = "adplug")]
+fn adplug_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::adplug::duration(path)
+}
+#[cfg(not(feature = "adplug"))]
+fn adplug_duration(_path: &std::path::Path) -> Option<Duration> {
     None
 }
 
@@ -381,6 +468,7 @@ impl Track {
                 .or_else(|| ffmpeg_duration(&self.path))
                 .or_else(|| gme_duration(&self.path))
                 .or_else(|| openmpt_duration(&self.path))
+                .or_else(|| adplug_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
         // Last resort for a format whose exact length no cheap probe can read: a provisional
@@ -947,6 +1035,8 @@ mod tests {
         decoders.push(("gme", crate::gme::is_gme, vec!["nsf", "nsfe", "gbs", "vgm", "vgz", "spc", "ay", "sap", "kss", "hes", "gym"]));
         #[cfg(feature = "openmpt")]
         decoders.push(("openmpt", crate::openmpt::is_openmpt, crate::openmpt::OPENMPT_EXTS.to_vec()));
+        #[cfg(feature = "adplug")]
+        decoders.push(("adplug", crate::adplug::is_adplug, crate::adplug::ADPLUG_EXTS.to_vec()));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.

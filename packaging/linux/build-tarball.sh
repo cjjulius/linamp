@@ -39,6 +39,12 @@ case ",$FEATURES," in
   *,openmpt,*) BUNDLE_OPENMPT=1 ;;
   *) BUNDLE_OPENMPT=0 ;;
 esac
+# The adplug feature (AdLib/OPL FM music) links libadplug + libbinio, bundled the same self-contained
+# way. Pass FEATURES=ffmpeg,gme,openmpt,adplug for the full build.
+case ",$FEATURES," in
+  *,adplug,*) BUNDLE_ADPLUG=1 ;;
+  *) BUNDLE_ADPLUG=0 ;;
+esac
 NAME="linamp-${VERSION}-linux-x86_64${SUFFIX}"
 STAGE="dist/$NAME"
 
@@ -74,6 +80,15 @@ if [ "$BUNDLE_OPENMPT" = 1 ]; then
   OPENMPT_MIN="$ROOT/build/openmpt-min"
   sh "$ROOT/packaging/linux/build-openmpt-min.sh" "$OPENMPT_MIN"
   export OPENMPT_DIR="$OPENMPT_MIN"
+fi
+
+# AdPlug (AdLib/OPL FM music) + its libbinio dependency, built from source the same way; build.rs
+# compiles the C++ shim, links ADPLUG_DIR, and emits the $ORIGIN/lib rpath itself. We bundle both
+# .so files into $STAGE/lib below.
+if [ "$BUNDLE_ADPLUG" = 1 ]; then
+  ADPLUG_MIN="$ROOT/build/adplug-min"
+  sh "$ROOT/packaging/linux/build-adplug-min.sh" "$ADPLUG_MIN"
+  export ADPLUG_DIR="$ADPLUG_MIN"
 fi
 
 echo "==> cargo build --release $FEATURE_ARGS"
@@ -122,6 +137,17 @@ if [ "$BUNDLE_OPENMPT" = 1 ]; then
   for f in "$STAGE"/lib/libopenmpt.so.*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
   if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libopenmpt' | grep -vq "$STAGE/lib"; then
     echo "!!  WARNING: libopenmpt still resolves outside $STAGE/lib; check the rpath" >&2
+  fi
+fi
+if [ "$BUNDLE_ADPLUG" = 1 ]; then
+  echo "==> Bundling libadplug + libbinio into $STAGE/lib (self-contained)"
+  mkdir -p "$STAGE/lib"
+  # Both depend only on libc/libstdc++ (from the user's system); the binary's $ORIGIN/lib rpath
+  # (emitted by build.rs) loads them at runtime. Soname symlinks are preserved.
+  cp -a "$ADPLUG_DIR"/lib/libadplug*.so* "$ADPLUG_DIR"/lib/libbinio*.so* "$STAGE/lib/" 2>/dev/null || true
+  for f in "$STAGE"/lib/libadplug*.so.* "$STAGE"/lib/libbinio*.so.*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
+  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libadplug|libbinio' | grep -vq "$STAGE/lib"; then
+    echo "!!  WARNING: libadplug/libbinio still resolves outside $STAGE/lib; check the rpath" >&2
   fi
 fi
 cp -r skins "$STAGE/skins"
