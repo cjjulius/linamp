@@ -15,12 +15,15 @@
 # near-universal base libraries; the bundle still ships only libsidplayfp.so and resolves those from
 # the system (same as libc/libstdc++).
 #
-# Pinned to libsidplayfp 3.1.2. Needs a C++ toolchain and pkg-config; no system libsidplayfp.
-# Idempotent: skips the build when the prefix already holds the library.
+# Pinned to libsidplayfp 2.16.1. The 2.x series bundles the reSIDfp engine in-tree (one shared
+# library, no separate libresidfp), and src/sid_shim.cpp targets the 2.x API. libsidplayfp 3.x split
+# reSIDfp into a standalone libresidfp package and changed that API, so it neither links as a single
+# library here nor compiles against the shim; do not bump to 3.x without updating the shim.
+# Needs a C++ toolchain and pkg-config; no system libsidplayfp. Idempotent: skips when present.
 set -eu
 
-SIDPLAYFP_VERSION=3.1.2
-SIDPLAYFP_SHA256=6d16c20e523ac4d3e385531dafe247a830b59bcb4eb73a557f15cf4e7ae6da84
+SIDPLAYFP_VERSION=2.16.1
+SIDPLAYFP_SHA256=ace0f73c2ef8645ab069ce1b298b10e31e36af7b5996109983b2b67ad60ff3ca
 OUT="${1:-$PWD/build/sidplayfp-min}"
 
 if ls "$OUT"/lib/libsidplayfp.so* >/dev/null 2>&1; then
