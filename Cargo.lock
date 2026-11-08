@@ -2527,6 +2527,7 @@ dependencies = [
  "ape-decoder",
  "arboard",
  "bytes",
+ "cc",
  "dirs",
  "dsd-reader",
  "eframe",

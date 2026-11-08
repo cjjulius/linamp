@@ -25,6 +25,59 @@ fn main() {
     copy_asset_dir(&manifest, &target_dir, "music");
     link_gme(&manifest, &target_dir);
     link_openmpt(&manifest, &target_dir);
+    link_adplug(&manifest, &target_dir);
+}
+
+/// Link AdPlug for the `adplug` feature: compile the small C++ shim (src/adplug_shim.cpp) that
+/// gives AdPlug a C API, link libadplug + libbinio, and bundle both shared libraries next to the
+/// binary (runtime resolution via an `$ORIGIN/lib` rpath), the same self-contained pattern as
+/// libgme/libopenmpt. The libraries and headers are found at `$ADPLUG_DIR` (a prefix with
+/// `lib/libadplug.so` and `include/adplug/*.h`), defaulting to the in-repo `build/adplug-min`
+/// that `packaging/linux/build-adplug-min.sh` produces. No-op without the feature.
+fn link_adplug(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=ADPLUG_DIR");
+    if env::var_os("CARGO_FEATURE_ADPLUG").is_none() {
+        return;
+    }
+    println!("cargo:rerun-if-changed=src/adplug_shim.cpp");
+    let dir = env::var_os("ADPLUG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/adplug-min"));
+    let incdir = dir.join("include");
+    let libdir = dir.join("lib");
+
+    // Compile the C++ shim into a static lib linked into the crate. cc emits the link directive
+    // for the shim and pulls in the C++ standard library. AdPlug's headers include <binio.h>,
+    // which the libbinio package installs under include/libbinio, so both are on the include path.
+    cc::Build::new()
+        .cpp(true)
+        .file("src/adplug_shim.cpp")
+        .include(&incdir)
+        .include(incdir.join("libbinio"))
+        .compile("adplug_shim");
+
+    println!("cargo:rustc-link-search=native={}", libdir.display());
+    println!("cargo:rustc-link-lib=dylib=adplug");
+    println!("cargo:rustc-link-lib=dylib=binio");
+
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        if let Ok(entries) = fs::read_dir(&libdir) {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                let n = name.to_string_lossy();
+                if (n.contains("libadplug") || n.contains("libbinio")) && n.contains(".so") {
+                    let _ = fs::copy(e.path(), dst.join(&name));
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
 }
 
 /// Link libgme for the `gme` feature and copy its shared library next to the binary (into

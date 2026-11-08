@@ -164,6 +164,12 @@ tokio = { version = "1", default-features = false, features = ["rt", "sync", "ne
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
+# Build-time only: compile the small C++ shim over AdPlug (the `adplug` feature). cc only runs
+# when build.rs asks it to, i.e. when CARGO_FEATURE_ADPLUG is set, so a default build never
+# invokes it. MIT/Apache-2.0.
+[build-dependencies]
+cc = "1.0"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
@@ -184,3 +190,8 @@ gme = []
 # build.rs emits the link directives and bundles libopenmpt.so. Needs a libopenmpt build at
 # $OPENMPT_DIR (default build/openmpt-min, produced by packaging/linux/build-openmpt-min.sh).
 openmpt = []
+# AdLib / OPL FM-synthesis formats (~40: DRO, CMF, RAD, HSC, ROL, LAA, IMF/WLF, Doom MUS, and
+# many more) via AdPlug (LGPL-2.1+). AdPlug is C++-only, so build.rs compiles a small C++ shim
+# (src/adplug_shim.cpp) via the cc crate and links libadplug + libbinio, bundling both .so files.
+# Needs an AdPlug build at $ADPLUG_DIR (default build/adplug-min, from build-adplug-min.sh).
+adplug = []

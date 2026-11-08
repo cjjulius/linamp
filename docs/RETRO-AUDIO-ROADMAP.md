@@ -223,7 +223,11 @@ Phase 2 - Retro multipliers
   routed formats now have a QA sample and pass the visualizer test (recipes in the cookbook; `.stx`
   from libxmp's corpus, `.j2b` from Mod Archive, `.umx` from a Deus Ex GOG installer via
   innoextract). xmrs keeps mod/xm/s3m/it. Windows build/installer/CI wired by the Windows box.
-- [ ] AdPlug / libADLMIDI (OPL FM, DRO/IMF/RAD, Doom MUS)
+- [x] AdPlug (OPL FM: DRO/CMF/RAD/HSC/LAA/Doom MUS/Wolf IMF and ~30 more) - `adplug` feature,
+  src/adplug.rs + src/adplug_shim.cpp (C++ shim via the cc crate; AdPlug has no C API). 37
+  self-contained formats routed and sampled from AdPlug's own test corpus; `.ksm`/`.rol`/`.sci`
+  dropped (they need a companion instrument-bank file). libADLMIDI (XMI/HMI/HMP MIDI wrappers) is
+  deferred - it is GPLv3 and its embedded banks are game rips, so it needs its own feature later.
 - [ ] libsidplayfp (.sid)
 
 Phase 3 - Modern/ideal
@@ -378,6 +382,24 @@ the chiptunes. Format -> Modland directory used:
   `Music/*.umx` tracks; `Title_Music.umx` (the main theme by Alexander Brandon) is the one in use.
   A `.umx` is an Unreal package wrapping a tracker module, which libopenmpt plays directly.
   Verified on Linux; Windows is assumed to match (same libopenmpt 0.8.9 and shared decoder code).
+
+### AdLib / OPL (crate::adplug, `--features adplug`)
+AdPlug ships its own LGPL test corpus, which is the whole QA sample set in one place and is
+reproducible on both boxes. Clone a pinned AdPlug and copy one working file per routed extension:
+
+    git clone https://github.com/adplug/adplug   # or download a release tarball
+    # from adplug/test/testmus/, copy one file per extension, named <ext>-sample.<ext>, e.g.:
+    #   doofus.dro -> dro-sample.dro ; 2.CMF -> cmf-sample.cmf ; ALLOYRUN.RAD -> rad-sample.rad ...
+
+No oracle (AdPlug is the only decoder); the test is a render smoke test (non-silent audio), same
+as the chiptunes. Notes that bit us, so they are worth repeating:
+- Route only self-contained files. `.ksm`, `.rol`, and `.sci` load in the corpus only because their
+  companion instrument-bank files (`.bnk`, patch data) sit beside them there; a lone file does not
+  play, so those three extensions are not routed.
+- A few corpus files are silent or fail to load on their own (e.g. `canonind.rad`, `GRABBAG.MID`);
+  pick a file that the all-codecs visualizer test accepts. Avoid extensions that collide with other
+  decoders (`.imf`/`.dtm` -> libopenmpt, `.s3m` -> xmrs, `.mid` -> MIDI, `.vgm` -> libgme) or that
+  are too generic (`.raw`, `.dat`, `.m`, `.bnk`).
 
 ### Oracles
 The `oracles/*.f32` and `*.s16` files are headerless raw-PCM decode references for the correlation

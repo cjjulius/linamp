@@ -142,6 +142,14 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         | "psm" | "ptm" | "stm" | "stp" | "stx" | "symmod" | "ult" | "umx" => {
             "audio/x-openmpt-module"
         }
+        // AdLib / OPL formats via AdPlug (the `adplug` feature): one shared type for all ~40.
+        #[cfg(feature = "adplug")]
+        "a2m" | "adl" | "agd" | "amd" | "bam" | "bmf" | "cff" | "cmf" | "d00" | "dfm"
+        | "dmo" | "dro" | "got" | "ha2" | "hsc" | "hsp" | "hsq" | "ims" | "jbm"
+        | "laa" | "lds" | "mad" | "mdi" | "mkj" | "msc" | "mus" | "rad" | "rix"
+        | "sa2" | "sat" | "sdb" | "sng" | "sop" | "sqx" | "wlf" | "xad" | "xsm" => {
+            "audio/x-adlib"
+        }
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -244,6 +252,20 @@ fn mime_package_xml() -> String {
                 "*.dsm", "*.dtm", "*.far", "*.gdm", "*.imf", "*.j2b", "*.mdl", "*.med",
                 "*.mt2", "*.mtm", "*.okt", "*.plm", "*.psm", "*.ptm", "*.stm", "*.stp",
                 "*.stx", "*.symmod", "*.ult", "*.umx",
+            ],
+        ));
+    }
+    #[cfg(feature = "adplug")]
+    {
+        types.push((
+            "audio/x-adlib",
+            "AdLib / OPL FM music (AdPlug)",
+            &[
+                "*.a2m", "*.adl", "*.agd", "*.amd", "*.bam", "*.bmf", "*.cff", "*.cmf", "*.d00",
+                "*.dfm", "*.dmo", "*.dro", "*.got", "*.ha2", "*.hsc", "*.hsp", "*.hsq", "*.ims",
+                "*.jbm", "*.laa", "*.lds", "*.mad", "*.mdi", "*.mkj", "*.msc", "*.mus",
+                "*.rad", "*.rix", "*.sa2", "*.sat", "*.sdb", "*.sng", "*.sop",
+                "*.sqx", "*.wlf", "*.xad", "*.xsm",
             ],
         ));
     }

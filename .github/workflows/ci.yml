@@ -92,11 +92,20 @@ jobs:
           sh packaging/linux/build-openmpt-min.sh "$PWD/build/openmpt-min"
           echo "OPENMPT_DIR=$PWD/build/openmpt-min" >> "$GITHUB_ENV"
 
-      - name: Build and test (Linux, ffmpeg + gme + openmpt)
+      # AdPlug (+ libbinio) for the AdLib/OPL feature, built from source the same way. build.rs
+      # compiles the C++ shim and links it. Its decode tests skip without the gitignored qa-music
+      # samples, so on CI this is the compile check plus the router/MIME guards.
+      - name: Build AdPlug (Linux)
         if: runner.os == 'Linux'
         run: |
-          cargo build --features ffmpeg,gme,openmpt --verbose
-          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib" cargo test --features ffmpeg,gme,openmpt --verbose
+          sh packaging/linux/build-adplug-min.sh "$PWD/build/adplug-min"
+          echo "ADPLUG_DIR=$PWD/build/adplug-min" >> "$GITHUB_ENV"
+
+      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --features ffmpeg,gme,openmpt,adplug --verbose
+          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug --verbose
 
       # Windows builds libgme and its zlib dependency from source (no system libgme/zlib),
       # then builds and tests the full feature set (ffmpeg + gme). build.rs links $GME_DIR;
@@ -201,7 +210,7 @@ jobs:
       # on Windows lands when the Windows box adds its build and DLL bundling.
       - name: Build Linux tarball
         if: runner.os == 'Linux'
-        run: FEATURES=ffmpeg,gme,openmpt sh packaging/linux/build-tarball.sh
+        run: FEATURES=ffmpeg,gme,openmpt,adplug sh packaging/linux/build-tarball.sh
 
       - name: Upload Linux tarball
         if: runner.os == 'Linux'
