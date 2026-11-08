@@ -29,9 +29,11 @@ struct AdplugHandle {
 extern "C" {
 
 // Open a file and prepare its default subsong. Returns null if AdPlug recognizes no format in it
-// (so the Rust side can treat it as "not an AdPlug file" / skip-unplayable). Stereo, 16-bit.
+// (so the Rust side can treat it as "not an AdPlug file" / skip-unplayable). The OPL2 that most of
+// these formats target is a MONO chip, and CEmuopl's stereo mode leaves OPL2 output only in the
+// left channel, so we render mono here (16-bit) and duplicate it to both channels in adplug_render.
 AdplugHandle *adplug_open(const char *path, int rate) {
-    CEmuopl *opl = new (std::nothrow) CEmuopl(rate, true, true);
+    CEmuopl *opl = new (std::nothrow) CEmuopl(rate, true, false);
     if (!opl) {
         return nullptr;
     }
@@ -72,7 +74,7 @@ int adplug_render(AdplugHandle *h, float *out, int frames) {
     if (!h) {
         return 0;
     }
-    short tmp[TMP_FRAMES * 2];
+    short tmp[TMP_FRAMES]; // mono samples from the OPL emulator
     int written = 0;
     while (written < frames && h->playing) {
         if (h->toadd < 1.0) {
@@ -96,10 +98,12 @@ int adplug_render(AdplugHandle *h, float *out, int frames) {
         if (n < 1) {
             n = 1;
         }
-        h->opl->update(tmp, n); // n frames, stereo -> 2n shorts
+        h->opl->update(tmp, n); // n mono samples
         float *dst = out + (size_t)written * 2;
-        for (int i = 0; i < n * 2; i++) {
-            dst[i] = (float)tmp[i] / 32768.0f;
+        for (int i = 0; i < n; i++) {
+            float s = (float)tmp[i] / 32768.0f;
+            dst[i * 2] = s;     // duplicate mono to both channels so it plays centered
+            dst[i * 2 + 1] = s;
         }
         written += n;
         h->toadd -= n;

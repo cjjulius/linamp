@@ -323,6 +323,34 @@ fn adplug_duration(_path: &std::path::Path) -> Option<Duration> {
     None
 }
 
+// Predicate shims for the synthesized/emulated decoders, used to fill in display metadata (these
+// formats carry no codec tags). Cfg shims like the duration ones, so the call sites read the same
+// in every build. AdLib/OPL (adplug) is mono; the chip/tracker formats are stereo.
+#[cfg(feature = "adplug")]
+fn is_adplug_file(path: &std::path::Path) -> bool {
+    crate::adplug::is_adplug(path)
+}
+#[cfg(not(feature = "adplug"))]
+fn is_adplug_file(_path: &std::path::Path) -> bool {
+    false
+}
+#[cfg(feature = "gme")]
+fn is_gme_file(path: &std::path::Path) -> bool {
+    crate::gme::is_gme(path)
+}
+#[cfg(not(feature = "gme"))]
+fn is_gme_file(_path: &std::path::Path) -> bool {
+    false
+}
+#[cfg(feature = "openmpt")]
+fn is_openmpt_file(path: &std::path::Path) -> bool {
+    crate::openmpt::is_openmpt(path)
+}
+#[cfg(not(feature = "openmpt"))]
+fn is_openmpt_file(_path: &std::path::Path) -> bool {
+    false
+}
+
 /// Repair "mojibake": text that is really UTF-8 but was decoded as Latin-1. This
 /// happens with ID3v2 frames whose encoding byte says ISO-8859-1 while the bytes
 /// are actually UTF-8 (common in the wild, example: zing.vn MP3s), so an accented
@@ -478,6 +506,26 @@ impl Track {
             if let Some(d) = gme_estimated_duration(&self.path) {
                 self.duration = Some(d);
                 self.duration_estimated = true;
+            }
+        }
+        // Synthesized/emulated formats (AdLib/OPL, chiptunes, trackers, MIDI) carry no codec tags,
+        // so lofty leaves the rate/bitrate/channels blank and the classic readout looks dead and
+        // defaults to "stereo". Fill in what LinAmp actually renders them at: 44.1 kHz 16-bit, mono
+        // for AdLib (an OPL2 is a mono chip) and stereo for the rest. The bitrate shown is the
+        // resulting PCM rate. Only set fields the metadata scan didn't already provide.
+        if self.sample_rate.is_none() {
+            let mono = is_adplug_file(&self.path);
+            let stereo = is_gme_file(&self.path)
+                || is_openmpt_file(&self.path)
+                || crate::tracker::is_tracker(&self.path)
+                || crate::midi::is_midi(&self.path);
+            if mono || stereo {
+                let ch: u8 = if mono { 1 } else { 2 };
+                self.sample_rate = Some(44_100);
+                self.channels = Some(ch);
+                if self.bitrate.is_none() {
+                    self.bitrate = Some(44_100 * 16 * ch as u32 / 1000);
+                }
             }
         }
     }
