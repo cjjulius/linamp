@@ -234,3 +234,13 @@ qsf = []
 # build/psflib-min, from build-sseqplayer-min.sh and build-psflib-min.sh). ROM-less: SSEQPlayer is an
 # SDAT sequencer, not an emulator, so no DS BIOS/firmware is involved. 44.1 kHz stereo.
 ncsf = []
+# Nintendo 64 USF music (.usf/.miniusf), via lazyusf2 (a Mupen64Plus-derived emulator, GPL-2.0-or-later)
+# plus the shared libpsflib.so. Needs builds at $LAZYUSF_DIR and $PSFLIB_DIR (defaults build/lazyusf2-min
+# and build/psflib-min, from build-lazyusf2-min.sh and build-psflib-min.sh). ROM-less: a USF carries a
+# Project64 save state plus HLE RSP audio, so no N64 boot ROM is involved. 44.1 kHz stereo.
+usf = []
+# Nintendo DS 2SF music (.2sf/.mini2sf), via vio2sf (a DeSmuME-derived emulator, GPL-2.0-or-later) plus
+# the shared libpsflib.so. Needs builds at $VIO2SF_DIR and $PSFLIB_DIR (defaults build/vio2sf-min and
+# build/psflib-min, from build-vio2sf-min.sh and build-psflib-min.sh). ROM-less: DeSmuME's HLE BIOS and a
+# synthesized firmware-settings block stand in, so no DS BIOS/firmware image is involved. 44.1 kHz stereo.
+twosf = []

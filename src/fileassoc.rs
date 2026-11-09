@@ -173,6 +173,12 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         // Nintendo DS NCSF music via SSEQPlayer (the `ncsf` feature).
         #[cfg(feature = "ncsf")]
         "ncsf" | "minincsf" => "audio/x-ncsf",
+        // Nintendo 64 USF music via lazyusf2 (the `usf` feature).
+        #[cfg(feature = "usf")]
+        "usf" | "miniusf" => "audio/x-usf",
+        // Nintendo DS 2SF music via vio2sf (the `twosf` feature).
+        #[cfg(feature = "twosf")]
+        "2sf" | "mini2sf" => "audio/x-2sf",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -328,6 +334,22 @@ fn mime_package_xml() -> String {
             "audio/x-ncsf",
             "Nintendo DS NCSF music",
             &["*.ncsf", "*.minincsf"],
+        ));
+    }
+    #[cfg(feature = "usf")]
+    {
+        types.push((
+            "audio/x-usf",
+            "Nintendo 64 USF music",
+            &["*.usf", "*.miniusf"],
+        ));
+    }
+    #[cfg(feature = "twosf")]
+    {
+        types.push((
+            "audio/x-2sf",
+            "Nintendo DS 2SF music",
+            &["*.2sf", "*.mini2sf"],
         ));
     }
     #[cfg(feature = "adplug")]
