@@ -582,6 +582,14 @@ Real game ADPCM codecs - generate with VGAudio (open source, .NET) on a box that
 (GameCube DSP), `out.brstm` / `out.bcstm` / `out.bfstm` (Nintendo stream), `out.hca` (CRI HCA). Save
 as `<ext>-sample.<ext>`.
 
+ADPCM decoders without .NET - a GENH can also wrap ADPCM that ffmpeg produces, which exercises real
+ADPCM decoders (not just PCM) on a box with no VGAudio. Encode to an ADPCM WAV, then wrap the raw
+`data` chunk in a GENH with `interleave = nBlockAlign` (MS-ADPCM sets frame_size, MS-IMA sets block
+size; both need a nonzero interleave). Codecs used for the local QA samples: MS-ADPCM
+(`ffmpeg -c:a adpcm_ms`, GENH codec 11), MS-IMA (`-c:a adpcm_ima_wav`, codec 15), and AICA/Yamaha
+(`-c:a adpcm_yamaha -ac 1`, codec 10, interleave 0). These are GENH-container QA aids, not native
+`.dsp`/`.hca` files, so they stay local (gitignored) and do not replace the VGAudio/procured samples.
+
 Procure (no open encoder) - FSB/XWB/XVAG/KTSS from freely-licensed or homebrew rips and vgmstream
 issue/PR attachments; local QA only, never commit. Oracle/cross-check if vgmstream-cli is installed:
 `vgmstream-cli -i -o ref.wav <file>` (decode, looping disabled) and `vgmstream-cli -m <file>` (metadata).
