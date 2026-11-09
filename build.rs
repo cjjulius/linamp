@@ -29,6 +29,7 @@ fn main() {
     link_sid(&manifest, &target_dir);
     link_vgmstream(&manifest, &target_dir);
     link_psf(&manifest, &target_dir);
+    link_ssf(&manifest, &target_dir);
 }
 
 /// Link libsidplayfp for the `sid` feature: compile the C++ shim (src/sid_shim.cpp) that gives
@@ -286,6 +287,65 @@ fn link_psf(manifest: &Path, target_dir: &Path) {
                 let name = e.file_name();
                 if name.to_string_lossy().contains("libupse.so") {
                     let _ = fs::copy(e.path(), dst.join(&name));
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
+}
+
+/// Link Highly_Theoretical + psflib for the `ssf` feature: compile the C shim (src/ssf_shim.c) that
+/// drives psflib (container/`_lib` parsing) and the Highly_Theoretical Sega sound-chip emulator and
+/// exposes a tiny API, link both shared libraries, and bundle them next to the binary (runtime
+/// resolution via an `$ORIGIN/lib` rpath), the same self-contained pattern as the other native
+/// features. The emulator is found at `$HIGHLYTHEORETICAL_DIR` (`lib/libhighlytheoretical.so` +
+/// `include/sega.h`) and the shared container parser at `$PSFLIB_DIR` (`lib/libpsflib.so` +
+/// `include/psflib.h`), defaulting to the in-repo `build/highlytheoretical-min` and `build/psflib-min`
+/// that `packaging/linux/build-highly-theoretical-min.sh` and `build-psflib-min.sh` produce.
+/// Highly_Theoretical is ROM-less (emulates only the SCSP/AICA; no console BIOS). No-op without the
+/// feature.
+fn link_ssf(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=HIGHLYTHEORETICAL_DIR");
+    println!("cargo:rerun-if-env-changed=PSFLIB_DIR");
+    if env::var_os("CARGO_FEATURE_SSF").is_none() {
+        return;
+    }
+    println!("cargo:rerun-if-changed=src/ssf_shim.c");
+    let ht = env::var_os("HIGHLYTHEORETICAL_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/highlytheoretical-min"));
+    let psflib = env::var_os("PSFLIB_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/psflib-min"));
+
+    // Compile the C shim; it includes both the emulator and psflib headers.
+    cc::Build::new()
+        .file("src/ssf_shim.c")
+        .include(ht.join("include"))
+        .include(psflib.join("include"))
+        .compile("ssf_shim");
+
+    println!("cargo:rustc-link-search=native={}", ht.join("lib").display());
+    println!("cargo:rustc-link-search=native={}", psflib.join("lib").display());
+    println!("cargo:rustc-link-lib=dylib=highlytheoretical");
+    println!("cargo:rustc-link-lib=dylib=psflib");
+    println!("cargo:rustc-link-lib=dylib=z");
+
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        for libdir in [ht.join("lib"), psflib.join("lib")] {
+            if let Ok(entries) = fs::read_dir(&libdir) {
+                for e in entries.flatten() {
+                    let name = e.file_name();
+                    let n = name.to_string_lossy();
+                    if n.contains("libhighlytheoretical.so") || n.contains("libpsflib.so") {
+                        let _ = fs::copy(e.path(), dst.join(&name));
+                    }
                 }
             }
         }
