@@ -35,6 +35,10 @@ mod vgmstream;
 mod psf;
 #[cfg(feature = "ssf")]
 mod ssf;
+#[cfg(feature = "qsf")]
+mod qsf;
+#[cfg(feature = "ncsf")]
+mod ncsf;
 mod flv;
 mod icon;
 mod library;

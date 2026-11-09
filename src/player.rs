@@ -548,6 +548,16 @@ fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
     if crate::ssf::is_ssf(path) {
         return Ok(Box::new(crate::ssf::open(path)?));
     }
+    // Capcom QSound QSF arcade music (.qsf/.miniqsf), via Highly_Quixotic.
+    #[cfg(feature = "qsf")]
+    if crate::qsf::is_qsf(path) {
+        return Ok(Box::new(crate::qsf::open(path)?));
+    }
+    // Nintendo DS NCSF music (.ncsf/.minincsf), via SSEQPlayer.
+    #[cfg(feature = "ncsf")]
+    if crate::ncsf::is_ncsf(path) {
+        return Ok(Box::new(crate::ncsf::open(path)?));
+    }
     if crate::ape::is_ape(path) {
         return Ok(Box::new(crate::ape::open_ape(path)?));
     }

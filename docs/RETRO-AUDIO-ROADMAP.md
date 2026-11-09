@@ -215,10 +215,11 @@ PSF). Several of the others HLE and should be fine, but it must be verified - we
   SDK as a source - it mixes in MAME's non-commercial clause; use the kode54/Kodi split-cores instead.
 - No pure-Rust option exists for any subformat (confirmed on crates.io); C/C++ is the floor.
 - Implementation order (finalized 2026-11-09, after the deep-research pass above):
-  1. **SSF + DSF + QSF + NCSF** - IN PROGRESS on `feat/tier2f-ssf-dsf-qsf-ncsf`. Three psflib-based C
-     cores (Highly_Theoretical for SSF+DSF, Highly_Quixotic for QSF, SSEQPlayer for NCSF), all built the
-     exact PSF1/libupse way (vendored C + psflib + zlib, thin `cc` shim, Cargo feature). Includes the
-     `.dsf`-vs-DSD content-routing fix.
+  1. **SSF + DSF + QSF + NCSF** - DONE (pending QA/merge) on `feat/tier2f-ssf-dsf-qsf-ncsf`. Three
+     psflib-based cores (Highly_Theoretical for SSF+DSF and Highly_Quixotic for QSF are C; SSEQPlayer
+     for NCSF is C++), all built the PSF1/libupse way (vendored sources + shared psflib + zlib, thin
+     `cc` shim, Cargo feature). Includes the `.dsf`-vs-DSD content-routing fix. Validated on real
+     Saturn/Dreamcast/Capcom/DS rips.
   2. **USF** (lazyusf2) - own branch; heavy (R4300+RSP+RDP, dynarec).
   3. **GSF** (mGBA + libgsf) - own branch; different build shape (CMake, no psflib).
   4. **2SF** (vio2sf/DeSmuME) - last; heaviest core + the GPL-2-"or-later" check.
@@ -376,9 +377,10 @@ Phase 2 stretch
   platforms. Reproducible CC0 QA sample (hand-authored minimal PSF, recipe in the cookbook); for real
   PSF1 music, procure a tune from Zophar (local QA only).
 - [~] `*SF` family, the rest - deep-researched 2026-11-09: all ROM-less, none a wall (cores/licenses
-  in "Phase 2 stretch" above). SSF+DSF+QSF+NCSF IN PROGRESS on `feat/tier2f-ssf-dsf-qsf-ncsf`; then USF,
-  then GSF, then 2SF. GSF (MPL) and NCSF (WTFPL) are permissive; the rest are GPL. SNSF stays a wall
-  (snes9x non-commercial).
+  in "Phase 2 stretch" above). **SSF+DSF (Highly_Theoretical), QSF (Highly_Quixotic), NCSF (SSEQPlayer)
+  DONE** on `feat/tier2f-ssf-dsf-qsf-ncsf` (`ssf`/`qsf`/`ncsf` features, shared psflib; validated on
+  real rips; pending QA/merge). Remaining: USF, then GSF, then 2SF. GSF (MPL) and NCSF (WTFPL) are
+  permissive; the rest are GPL. SNSF stays a wall (snes9x non-commercial).
 
 Phase 3 - Modern/ideal
 - [ ] QOA (.qoa)
