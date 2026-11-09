@@ -29,7 +29,7 @@ cd "$work"
 
 tarball="audiodecoder.upse-${UPSE_COMMIT}.tar.gz"
 echo "==> Fetching libupse (audiodecoder.upse @ ${UPSE_COMMIT})" >&2
-curl -fsSL -o "$tarball" \
+curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$tarball" \
   "https://github.com/xbmc/audiodecoder.upse/archive/${UPSE_COMMIT}.tar.gz"
 echo "$UPSE_SHA256  $tarball" | sha256sum -c -
 tar xzf "$tarball"

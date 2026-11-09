@@ -31,7 +31,7 @@ trap 'rm -rf "$work"' EXIT
 cd "$work"
 
 echo "==> Fetching FFmpeg $FFMPEG_VERSION source" >&2
-curl -fsSL -o ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
 echo "$FFMPEG_SHA256  ffmpeg.tar.xz" | sha256sum -c -
 tar xf ffmpeg.tar.xz
 cd "ffmpeg-${FFMPEG_VERSION}"

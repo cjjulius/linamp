@@ -26,7 +26,7 @@ trap 'rm -rf "$work"' EXIT
 cd "$work"
 
 echo "==> Fetching game-music-emu $GME_VERSION source" >&2
-curl -fsSL -o gme.tar.gz "https://bitbucket.org/mpyne/game-music-emu/downloads/game-music-emu-${GME_VERSION}.tar.gz"
+curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o gme.tar.gz "https://bitbucket.org/mpyne/game-music-emu/downloads/game-music-emu-${GME_VERSION}.tar.gz"
 echo "$GME_SHA256  gme.tar.gz" | sha256sum -c -
 tar xzf gme.tar.gz
 cd "game-music-emu-${GME_VERSION}"
