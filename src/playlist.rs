@@ -336,6 +336,16 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "ncsf",
     #[cfg(feature = "ncsf")]
     "minincsf",
+    // Nintendo 64 USF music via lazyusf2 (the `usf` feature).
+    #[cfg(feature = "usf")]
+    "usf",
+    #[cfg(feature = "usf")]
+    "miniusf",
+    // Nintendo DS 2SF music via vio2sf (the `twosf` feature).
+    #[cfg(feature = "twosf")]
+    "2sf",
+    #[cfg(feature = "twosf")]
+    "mini2sf",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -533,6 +543,48 @@ fn is_ncsf_file(_path: &std::path::Path) -> bool {
     false
 }
 
+/// Duration of a Nintendo 64 USF tune (lazyusf2) for the playlist, or `None` without the `usf`
+/// feature. A cfg shim like `qsf_duration`.
+#[cfg(feature = "usf")]
+fn usf_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::usf::duration(path)
+}
+#[cfg(not(feature = "usf"))]
+fn usf_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+/// True when `path` is a USF tune (rendered as stereo), for the display-metadata fill. Cfg shim.
+#[cfg(feature = "usf")]
+fn is_usf_file(path: &std::path::Path) -> bool {
+    crate::usf::is_usf(path)
+}
+#[cfg(not(feature = "usf"))]
+fn is_usf_file(_path: &std::path::Path) -> bool {
+    false
+}
+
+/// Duration of a Nintendo DS 2SF tune (vio2sf) for the playlist, or `None` without the `twosf`
+/// feature. A cfg shim like `qsf_duration`.
+#[cfg(feature = "twosf")]
+fn twosf_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::twosf::duration(path)
+}
+#[cfg(not(feature = "twosf"))]
+fn twosf_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+/// True when `path` is a 2SF tune (rendered as stereo), for the display-metadata fill. Cfg shim.
+#[cfg(feature = "twosf")]
+fn is_2sf_file(path: &std::path::Path) -> bool {
+    crate::twosf::is_2sf(path)
+}
+#[cfg(not(feature = "twosf"))]
+fn is_2sf_file(_path: &std::path::Path) -> bool {
+    false
+}
+
 // Predicate shims for the synthesized/emulated decoders, used to fill in display metadata (these
 // formats carry no codec tags). Cfg shims like the duration ones, so the call sites read the same
 // in every build. AdLib/OPL (adplug) is mono; the chip/tracker formats are stereo.
@@ -713,6 +765,8 @@ impl Track {
                 .or_else(|| ssf_duration(&self.path))
                 .or_else(|| qsf_duration(&self.path))
                 .or_else(|| ncsf_duration(&self.path))
+                .or_else(|| usf_duration(&self.path))
+                .or_else(|| twosf_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
         // Last resort for a format whose exact length no cheap probe can read: a provisional
@@ -765,6 +819,8 @@ impl Track {
                 || is_ssf_file(&self.path)
                 || is_qsf_file(&self.path)
                 || is_ncsf_file(&self.path)
+                || is_usf_file(&self.path)
+                || is_2sf_file(&self.path)
                 || crate::tracker::is_tracker(&self.path)
                 || crate::midi::is_midi(&self.path);
             if mono || stereo {
@@ -1391,6 +1447,10 @@ mod tests {
         decoders.push(("qsf", crate::qsf::is_qsf, crate::qsf::QSF_EXTS.to_vec()));
         #[cfg(feature = "ncsf")]
         decoders.push(("ncsf", crate::ncsf::is_ncsf, crate::ncsf::NCSF_EXTS.to_vec()));
+        #[cfg(feature = "usf")]
+        decoders.push(("usf", crate::usf::is_usf, crate::usf::USF_EXTS.to_vec()));
+        #[cfg(feature = "twosf")]
+        decoders.push(("twosf", crate::twosf::is_2sf, crate::twosf::TWOSF_EXTS.to_vec()));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.
