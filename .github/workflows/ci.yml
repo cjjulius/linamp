@@ -129,21 +129,26 @@ jobs:
           sh packaging/linux/build-upse-min.sh "$PWD/build/upse-min"
           echo "UPSE_DIR=$PWD/build/upse-min" >> "$GITHUB_ENV"
 
-      # Highly_Theoretical (Sega SSF/DSF) + the shared psflib container parser, built from source;
-      # ROM-less (emulates only the SCSP/AICA). build.rs compiles the C shim and links both.
-      - name: Build Highly_Theoretical + psflib (Linux)
+      # The *SF emulator cores (Highly_Theoretical = Sega SSF/DSF, Highly_Quixotic = Capcom QSF,
+      # SSEQPlayer = Nintendo DS NCSF) + the shared psflib container parser, built from source; all
+      # ROM-less. build.rs compiles each shim and links the core + psflib.
+      - name: Build *SF cores + psflib (Linux)
         if: runner.os == 'Linux'
         run: |
           sh packaging/linux/build-psflib-min.sh "$PWD/build/psflib-min"
           sh packaging/linux/build-highly-theoretical-min.sh "$PWD/build/highlytheoretical-min"
+          sh packaging/linux/build-highly-quixotic-min.sh "$PWD/build/highlyquixotic-min"
+          sh packaging/linux/build-sseqplayer-min.sh "$PWD/build/sseqplayer-min"
           echo "PSFLIB_DIR=$PWD/build/psflib-min" >> "$GITHUB_ENV"
           echo "HIGHLYTHEORETICAL_DIR=$PWD/build/highlytheoretical-min" >> "$GITHUB_ENV"
+          echo "HIGHLYQUIXOTIC_DIR=$PWD/build/highlyquixotic-min" >> "$GITHUB_ENV"
+          echo "SSEQPLAYER_DIR=$PWD/build/sseqplayer-min" >> "$GITHUB_ENV"
 
-      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf)
+      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf + qsf + ncsf)
         if: runner.os == 'Linux'
         run: |
-          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf --verbose
-          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib:$SIDPLAYFP_DIR/lib:$VGMSTREAM_DIR/lib:$UPSE_DIR/lib:$HIGHLYTHEORETICAL_DIR/lib:$PSFLIB_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf --verbose
+          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf --verbose
+          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib:$SIDPLAYFP_DIR/lib:$VGMSTREAM_DIR/lib:$UPSE_DIR/lib:$HIGHLYTHEORETICAL_DIR/lib:$HIGHLYQUIXOTIC_DIR/lib:$SSEQPLAYER_DIR/lib:$PSFLIB_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf --verbose
 
       # Windows builds libgme and its zlib dependency from source (no system libgme/zlib),
       # then builds and tests the full feature set (ffmpeg + gme). build.rs links $GME_DIR;
@@ -303,7 +308,7 @@ jobs:
       # on Windows lands when the Windows box adds its build and DLL bundling.
       - name: Build Linux tarball
         if: runner.os == 'Linux'
-        run: FEATURES=ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf sh packaging/linux/build-tarball.sh
+        run: FEATURES=ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf sh packaging/linux/build-tarball.sh
 
       - name: Upload Linux tarball
         if: runner.os == 'Linux'
