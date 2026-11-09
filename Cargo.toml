@@ -1,6 +1,6 @@
 [package]
 name = "linamp"
-version = "1.1.5"
+version = "1.1.6"
 edition = "2021"
 description = "LinAmp - a Winamp-inspired audio player for Linux and Windows, built in Rust"
 authors = ["LinAmp contributors"]
@@ -214,3 +214,23 @@ vgmstream = []
 # at $UPSE_DIR (default build/upse-min, from build-upse-min.sh). ROM-less: libupse ships its own HLE
 # FakeBIOS, so no PlayStation BIOS is needed or shipped.
 psf = []
+# Sega Saturn SSF and Dreamcast DSF music (.ssf/.minissf/.dsf/.minidsf/.dcsf/.minidcsf) via
+# Highly_Theoretical (GPL-3) + the shared psflib container parser (MIT). build.rs compiles a C shim
+# (src/ssf_shim.c) and links both shared libs, bundling libhighlytheoretical.so + libpsflib.so. Needs
+# builds at $HIGHLYTHEORETICAL_DIR and $PSFLIB_DIR (defaults build/highlytheoretical-min and
+# build/psflib-min, from build-highly-theoretical-min.sh and build-psflib-min.sh). ROM-less: emulates
+# only the SCSP/AICA sound chips, no console BIOS. (.dsf is content-sniffed so DSD .dsf still routes
+# to the DSD decoder.)
+ssf = []
+# Capcom QSound QSF arcade music (.qsf/.miniqsf) via Highly_Quixotic (GPL-3) + the shared psflib (MIT).
+# build.rs compiles a C shim (src/qsf_shim.c) and links both shared libs, bundling libhighlyquixotic.so
+# + libpsflib.so. Needs builds at $HIGHLYQUIXOTIC_DIR and $PSFLIB_DIR (defaults build/highlyquixotic-min
+# and build/psflib-min, from build-highly-quixotic-min.sh and build-psflib-min.sh). ROM-less:
+# reimplemented QSound DSP, no copyrighted ROM. Native 24038 Hz, resampled by the pipeline.
+qsf = []
+# Nintendo DS NCSF music (.ncsf/.minincsf) via SSEQPlayer (WTFPL) + the shared psflib (MIT). build.rs
+# compiles a C++ shim (src/ncsf_shim.cpp) and links both shared libs, bundling libsseqplayer.so +
+# libpsflib.so. Needs builds at $SSEQPLAYER_DIR and $PSFLIB_DIR (defaults build/sseqplayer-min and
+# build/psflib-min, from build-sseqplayer-min.sh and build-psflib-min.sh). ROM-less: SSEQPlayer is an
+# SDAT sequencer, not an emulator, so no DS BIOS/firmware is involved. 44.1 kHz stereo.
+ncsf = []

@@ -225,14 +225,20 @@ game engines ship them in. Nothing to convert first, drop the file in and it pla
 Some game files hold their audio in a codec that needs an extra decoder we do not bundle yet (for
 example Vorbis inside an FSB, or Xbox 360 XMA); those are skipped for now rather than played wrong.
 
-### Console program music (PSF)
+### Console program music (the *SF family)
 
-The PlayStation's own music format: instead of a recording, the file carries the game's little music
-program and LinAmp emulates the console to play it, just like the chip formats above.
+Instead of a recording, these files carry the game's little music program (and its instrument data)
+and LinAmp emulates the console's sound hardware to play it, just like the chip formats above. All are
+played without any console BIOS or ROM. A `.mini*` variant wants its shared library file (`.psflib`,
+`.ssflib`/`.dsflib`, `.qsflib`, `.ncsflib`) sitting beside it.
 
 | Extension | System | Good to know |
 |---|---|---|
-| `.psf` `.minipsf` | PlayStation | Emulated, no BIOS needed. A `.minipsf` wants its `.psflib` beside it |
+| `.psf` `.minipsf` | PlayStation | The SPU, emulated |
+| `.ssf` `.minissf` | Sega Saturn | The SCSP sound chip, emulated |
+| `.dsf` `.minidsf` | Sega Dreamcast | The AICA sound chip, emulated (a `.dsf` is told apart from a DSD audio file by its contents) |
+| `.qsf` `.miniqsf` | Capcom CPS-2 / ZN (QSound) | The QSound arcade chip, emulated |
+| `.ncsf` `.minincsf` | Nintendo DS | The DS Nitro sound sequence, played back |
 
 ---
 

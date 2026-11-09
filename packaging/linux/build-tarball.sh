@@ -60,6 +60,28 @@ case ",$FEATURES," in
   *,psf,*) BUNDLE_PSF=1 ;;
   *) BUNDLE_PSF=0 ;;
 esac
+# The ssf feature (Sega Saturn SSF / Dreamcast DSF) links Highly_Theoretical + the shared psflib, both
+# ROM-less, bundled the same way.
+case ",$FEATURES," in
+  *,ssf,*) BUNDLE_SSF=1 ;;
+  *) BUNDLE_SSF=0 ;;
+esac
+# The qsf feature (Capcom QSound) links Highly_Quixotic + the shared psflib, both ROM-less.
+case ",$FEATURES," in
+  *,qsf,*) BUNDLE_QSF=1 ;;
+  *) BUNDLE_QSF=0 ;;
+esac
+# The ncsf feature (Nintendo DS NCSF) links SSEQPlayer + the shared psflib, both ROM-less.
+case ",$FEATURES," in
+  *,ncsf,*) BUNDLE_NCSF=1 ;;
+  *) BUNDLE_NCSF=0 ;;
+esac
+# psflib (the shared PSF-family container parser) is needed by any of ssf/qsf/ncsf; build it once.
+if [ "$BUNDLE_SSF" = 1 ] || [ "$BUNDLE_QSF" = 1 ] || [ "$BUNDLE_NCSF" = 1 ]; then
+  BUNDLE_PSFLIB=1
+else
+  BUNDLE_PSFLIB=0
+fi
 NAME="linamp-${VERSION}-linux-x86_64${SUFFIX}"
 STAGE="dist/$NAME"
 
@@ -128,6 +150,33 @@ if [ "$BUNDLE_PSF" = 1 ]; then
   UPSE_MIN="$ROOT/build/upse-min"
   sh "$ROOT/packaging/linux/build-upse-min.sh" "$UPSE_MIN"
   export UPSE_DIR="$UPSE_MIN"
+fi
+
+# Highly_Theoretical (Sega SSF/DSF) + the shared psflib container parser, built from source the same
+# way; ROM-less (emulates only the SCSP/AICA). build.rs compiles the shim, links both, emits the
+# $ORIGIN/lib rpath. Both .so bundled below.
+# The *SF emulator cores (Highly_Theoretical / Highly_Quixotic / SSEQPlayer), built from source the
+# same way; all ROM-less. They share one psflib build. build.rs compiles each shim, links the core +
+# psflib, emits the $ORIGIN/lib rpath. The .so files are bundled below.
+if [ "$BUNDLE_PSFLIB" = 1 ]; then
+  PSFLIB_MIN="$ROOT/build/psflib-min"
+  sh "$ROOT/packaging/linux/build-psflib-min.sh" "$PSFLIB_MIN"
+  export PSFLIB_DIR="$PSFLIB_MIN"
+fi
+if [ "$BUNDLE_SSF" = 1 ]; then
+  HT_MIN="$ROOT/build/highlytheoretical-min"
+  sh "$ROOT/packaging/linux/build-highly-theoretical-min.sh" "$HT_MIN"
+  export HIGHLYTHEORETICAL_DIR="$HT_MIN"
+fi
+if [ "$BUNDLE_QSF" = 1 ]; then
+  HQ_MIN="$ROOT/build/highlyquixotic-min"
+  sh "$ROOT/packaging/linux/build-highly-quixotic-min.sh" "$HQ_MIN"
+  export HIGHLYQUIXOTIC_DIR="$HQ_MIN"
+fi
+if [ "$BUNDLE_NCSF" = 1 ]; then
+  SP_MIN="$ROOT/build/sseqplayer-min"
+  sh "$ROOT/packaging/linux/build-sseqplayer-min.sh" "$SP_MIN"
+  export SSEQPLAYER_DIR="$SP_MIN"
 fi
 
 echo "==> cargo build --release $FEATURE_ARGS"
@@ -220,6 +269,23 @@ if [ "$BUNDLE_PSF" = 1 ]; then
   for f in "$STAGE"/lib/libupse.so*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
   if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libupse' | grep -vq "$STAGE/lib"; then
     echo "!!  WARNING: libupse still resolves outside $STAGE/lib; check the rpath" >&2
+  fi
+fi
+# The *SF cores + the shared psflib: each depends only on libc/libm and the system libz, so its own
+# .so is the whole runtime set. The binary's $ORIGIN/lib rpath (emitted by build.rs) loads them.
+if [ "$BUNDLE_PSFLIB" = 1 ]; then
+  echo "==> Bundling the *SF emulator cores + libpsflib into $STAGE/lib (self-contained)"
+  mkdir -p "$STAGE/lib"
+  cp -a "$PSFLIB_DIR"/lib/libpsflib.so* "$STAGE/lib/" 2>/dev/null || true
+  [ "$BUNDLE_SSF" = 1 ] && cp -a "$HIGHLYTHEORETICAL_DIR"/lib/libhighlytheoretical.so* "$STAGE/lib/" 2>/dev/null || true
+  [ "$BUNDLE_QSF" = 1 ] && cp -a "$HIGHLYQUIXOTIC_DIR"/lib/libhighlyquixotic.so* "$STAGE/lib/" 2>/dev/null || true
+  [ "$BUNDLE_NCSF" = 1 ] && cp -a "$SSEQPLAYER_DIR"/lib/libsseqplayer.so* "$STAGE/lib/" 2>/dev/null || true
+  for f in "$STAGE"/lib/libpsflib.so* "$STAGE"/lib/libhighlytheoretical.so* \
+           "$STAGE"/lib/libhighlyquixotic.so* "$STAGE"/lib/libsseqplayer.so*; do
+    [ -e "$f" ] && echo "    + $(basename "$f")"
+  done
+  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libpsflib|libhighlytheoretical|libhighlyquixotic|libsseqplayer' | grep -vq "$STAGE/lib"; then
+    echo "!!  WARNING: an *SF library still resolves outside $STAGE/lib; check the rpath" >&2
   fi
 fi
 cp -r skins "$STAGE/skins"
