@@ -32,6 +32,8 @@ fn main() {
     link_ssf(&manifest, &target_dir);
     link_qsf(&manifest, &target_dir);
     link_ncsf(&manifest, &target_dir);
+    link_usf(&manifest, &target_dir);
+    link_twosf(&manifest, &target_dir);
 }
 
 /// Link libsidplayfp for the `sid` feature: compile the C++ shim (src/sid_shim.cpp) that gives
@@ -462,6 +464,118 @@ fn link_ncsf(manifest: &Path, target_dir: &Path) {
                     let name = e.file_name();
                     let n = name.to_string_lossy();
                     if n.contains("libsseqplayer.so") || n.contains("libpsflib.so") {
+                        let _ = fs::copy(e.path(), dst.join(&name));
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
+}
+
+/// Link lazyusf2 + psflib for the `usf` feature: compile the C shim (src/usf_shim.c) that drives psflib
+/// and the lazyusf2 Nintendo 64 emulator, link both shared libraries, and bundle them next to the binary
+/// (runtime resolution via an `$ORIGIN/lib` rpath), the same pattern as the other native features. The
+/// emulator is found at `$LAZYUSF_DIR` (`lib/liblazyusf.so` + `include/usf.h`) and the shared container
+/// parser at `$PSFLIB_DIR`, defaulting to the in-repo `build/lazyusf2-min` and `build/psflib-min` that
+/// `packaging/linux/build-lazyusf2-min.sh` and `build-psflib-min.sh` produce. lazyusf2 is ROM-less (a
+/// USF carries a Project64 save state + HLE RSP audio; no N64 boot ROM). No-op without the feature.
+fn link_usf(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=LAZYUSF_DIR");
+    println!("cargo:rerun-if-env-changed=PSFLIB_DIR");
+    if env::var_os("CARGO_FEATURE_USF").is_none() {
+        return;
+    }
+    println!("cargo:rerun-if-changed=src/usf_shim.c");
+    let lu = env::var_os("LAZYUSF_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/lazyusf2-min"));
+    let psflib = env::var_os("PSFLIB_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/psflib-min"));
+
+    cc::Build::new()
+        .file("src/usf_shim.c")
+        .include(lu.join("include"))
+        .include(psflib.join("include"))
+        .compile("usf_shim");
+
+    println!("cargo:rustc-link-search=native={}", lu.join("lib").display());
+    println!("cargo:rustc-link-search=native={}", psflib.join("lib").display());
+    println!("cargo:rustc-link-lib=dylib=lazyusf");
+    println!("cargo:rustc-link-lib=dylib=psflib");
+    println!("cargo:rustc-link-lib=dylib=z");
+
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        for libdir in [lu.join("lib"), psflib.join("lib")] {
+            if let Ok(entries) = fs::read_dir(&libdir) {
+                for e in entries.flatten() {
+                    let name = e.file_name();
+                    let n = name.to_string_lossy();
+                    if n.contains("liblazyusf.so") || n.contains("libpsflib.so") {
+                        let _ = fs::copy(e.path(), dst.join(&name));
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
+}
+
+/// Link vio2sf + psflib for the `twosf` feature: compile the C++ shim (src/twosf_shim.cpp) that drives
+/// psflib and the vio2sf Nintendo DS emulator, link both shared libraries, and bundle them next to the
+/// binary (runtime resolution via an `$ORIGIN/lib` rpath). The emulator is found at `$VIO2SF_DIR`
+/// (`lib/libvio2sf.so` + `include/vio2sf/*.h`) and the shared container parser at `$PSFLIB_DIR`,
+/// defaulting to the in-repo `build/vio2sf-min` and `build/psflib-min` that
+/// `packaging/linux/build-vio2sf-min.sh` and `build-psflib-min.sh` produce. vio2sf is ROM-less
+/// (DeSmuME HLE BIOS + synthesized firmware settings; no DS BIOS/firmware image). No-op without the
+/// feature.
+fn link_twosf(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=VIO2SF_DIR");
+    println!("cargo:rerun-if-env-changed=PSFLIB_DIR");
+    if env::var_os("CARGO_FEATURE_TWOSF").is_none() {
+        return;
+    }
+    println!("cargo:rerun-if-changed=src/twosf_shim.cpp");
+    let vs = env::var_os("VIO2SF_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/vio2sf-min"));
+    let psflib = env::var_os("PSFLIB_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/psflib-min"));
+
+    cc::Build::new()
+        .cpp(true)
+        .file("src/twosf_shim.cpp")
+        .include(vs.join("include"))
+        .include(psflib.join("include"))
+        .compile("twosf_shim");
+
+    println!("cargo:rustc-link-search=native={}", vs.join("lib").display());
+    println!("cargo:rustc-link-search=native={}", psflib.join("lib").display());
+    println!("cargo:rustc-link-lib=dylib=vio2sf");
+    println!("cargo:rustc-link-lib=dylib=psflib");
+    println!("cargo:rustc-link-lib=dylib=z");
+
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        for libdir in [vs.join("lib"), psflib.join("lib")] {
+            if let Ok(entries) = fs::read_dir(&libdir) {
+                for e in entries.flatten() {
+                    let name = e.file_name();
+                    let n = name.to_string_lossy();
+                    if n.contains("libvio2sf.so") || n.contains("libpsflib.so") {
                         let _ = fs::copy(e.path(), dst.join(&name));
                     }
                 }

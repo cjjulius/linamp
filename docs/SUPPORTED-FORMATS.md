@@ -230,7 +230,7 @@ example Vorbis inside an FSB, or Xbox 360 XMA); those are skipped for now rather
 Instead of a recording, these files carry the game's little music program (and its instrument data)
 and LinAmp emulates the console's sound hardware to play it, just like the chip formats above. All are
 played without any console BIOS or ROM. A `.mini*` variant wants its shared library file (`.psflib`,
-`.ssflib`/`.dsflib`, `.qsflib`, `.ncsflib`) sitting beside it.
+`.ssflib`/`.dsflib`, `.qsflib`, `.ncsflib`, `.usflib`, `.2sflib`) sitting beside it.
 
 | Extension | System | Good to know |
 |---|---|---|
@@ -239,6 +239,8 @@ played without any console BIOS or ROM. A `.mini*` variant wants its shared libr
 | `.dsf` `.minidsf` | Sega Dreamcast | The AICA sound chip, emulated (a `.dsf` is told apart from a DSD audio file by its contents) |
 | `.qsf` `.miniqsf` | Capcom CPS-2 / ZN (QSound) | The QSound arcade chip, emulated |
 | `.ncsf` `.minincsf` | Nintendo DS | The DS Nitro sound sequence, played back |
+| `.usf` `.miniusf` | Nintendo 64 | The N64 RSP audio, emulated (High-Level Emulation, no boot ROM) |
+| `.2sf` `.mini2sf` | Nintendo DS | The DS hardware, emulated - runs the game's own sound driver, for titles NCSF cannot cover |
 
 ---
 
@@ -255,7 +257,7 @@ played without any console BIOS or ROM. A `.mini*` variant wants its shared libr
 
 - QOA (Quite OK Audio, `.qoa`), a modern open format, is next in line.
 - More game-engine codecs (Vorbis-in-FSB, Xbox XMA, ATRAC3) once the extra decoders are bundled.
-- More of the `*SF` program-music family (GSF, USF, 2SF, SSF) may follow. PSF2 is not planned: the
+- More of the `*SF` program-music family (GSF) may follow. PSF2 is not planned: the
   only ROM-less engine renders it silent, and a working one would need the copyrighted PS2 BIOS.
 - More AdLib MIDI-wrapper formats (XMI, HMI, HMP) may follow.
 - Wider tag editing for more of the formats above.

@@ -558,6 +558,16 @@ fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
     if crate::ncsf::is_ncsf(path) {
         return Ok(Box::new(crate::ncsf::open(path)?));
     }
+    // Nintendo 64 USF music (.usf/.miniusf), via lazyusf2.
+    #[cfg(feature = "usf")]
+    if crate::usf::is_usf(path) {
+        return Ok(Box::new(crate::usf::open(path)?));
+    }
+    // Nintendo DS 2SF music (.2sf/.mini2sf), via vio2sf.
+    #[cfg(feature = "twosf")]
+    if crate::twosf::is_2sf(path) {
+        return Ok(Box::new(crate::twosf::open(path)?));
+    }
     if crate::ape::is_ape(path) {
         return Ok(Box::new(crate::ape::open_ape(path)?));
     }
