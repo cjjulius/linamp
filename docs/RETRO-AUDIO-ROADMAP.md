@@ -548,9 +548,15 @@ the chiptunes. Pick a sample long enough to scrub; most game streams loop, and L
 with looping disabled.
 
 Linux library: `packaging/linux/build-vgmstream-min.sh` (CMake, pinned vgmstream r2168, core-only,
-shared). Windows: `packaging/windows/build-vgmstream.ps1` (to be written by the Windows box - a core-only
-static or shared MSVC build; vgmstream ships an MSVC `.sln`/CMake and, for the external tiers, prebuilt
-dependency DLLs, but the core tier needs none).
+shared). Windows: `packaging/windows/build-vgmstream.ps1` builds the core-only `libvgmstream` STATIC
+target via CMake and links it into the exe (nothing to bundle, like AdPlug/SID). It disables the
+Windows front-ends (`BUILD_WINAMP`/`BUILD_FB2K`, the latter needs the foobar2000 SDK) alongside the
+external codecs, and installs the static lib as `vgmstream.lib` to match `build.rs`'s `dylib=vgmstream`.
+
+VGAudio sample set (Windows box, needs .NET): `VGAudioCli in.wav out.<ext>` cleanly generates `dsp`,
+`idsp`, `hca`, `brstm`, `bcstm`, `bfstm`, and `hps` (it has no `bwav` encoder and emits an empty
+`bfwav`, so skip those two). The rest of the allowlist (`vag`, `svag`, `at9`, `xvag`, `fsb`, `xwb`,
+`ktss`) has no free encoder and is procure-only from real game rips (local QA, never committed).
 
 Preferred committed sample - GENH wrapping raw PCM16 (reproducible, no deps, exercises the full
 open/render/seek path). From any WAV (here a 60s cut of the shared `hypno-this.wav`):
