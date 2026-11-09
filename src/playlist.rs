@@ -314,10 +314,6 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "psf",
     #[cfg(feature = "psf")]
     "minipsf",
-    #[cfg(feature = "psf")]
-    "psf2",
-    #[cfg(feature = "psf")]
-    "minipsf2",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the

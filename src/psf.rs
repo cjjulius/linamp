@@ -1,4 +1,4 @@
-//! PlayStation PSF1/PSF2 music (.psf/.minipsf/.psf2/.minipsf2) via libupse (GPL), behind the `psf`
+//! PlayStation PSF1 music (.psf/.minipsf) via libupse (GPL), behind the `psf`
 //! feature. libupse ("Unix PlayStation Sound Emulator") emulates the PS1/PS2 sound hardware and runs
 //! the driver program a PSF carries. It is C, but opening a module needs an I/O-callback struct and a
 //! one-time global init, so build.rs compiles a tiny C shim (src/psf_shim.c) and we FFI to that, the
@@ -30,8 +30,11 @@ const OUT_CHANNELS: u16 = 2;
 const DEFAULT_PLAY_SECS: u64 = 150;
 
 /// Extensions routed to libupse. `.minipsf` references a shared `.psflib` base file that libupse
-/// resolves; `.psf2`/`.minipsf2` are the PlayStation 2 variants.
-pub const PSF_EXTS: &[&str] = &["psf", "minipsf", "psf2", "minipsf2"];
+/// resolves. PSF2/.minipsf2 are deliberately NOT handled: libupse's PS2 IOP HLE is a stub
+/// (`upse_ps2_iop_call` is empty), so PSF2 tunes load but decode to silence, and the only engine
+/// that plays them correctly (Highly Experimental) needs the copyrighted PS2 BIOS, which we will
+/// never ship. PSF2 files are rejected at the signature check in psf_shim.c.
+pub const PSF_EXTS: &[&str] = &["psf", "minipsf"];
 
 pub fn is_psf(path: &Path) -> bool {
     path.extension()
@@ -194,8 +197,12 @@ mod tests {
 
     #[test]
     fn is_psf_matches_the_psf_extensions() {
-        for e in ["psf", "PSF", "minipsf", "psf2", "minipsf2"] {
+        for e in ["psf", "PSF", "minipsf"] {
             assert!(is_psf(&std::path::PathBuf::from(format!("x.{e}"))), ".{e}");
+        }
+        // PSF2 is intentionally unsupported (libupse's PS2 IOP HLE is a stub -> silence).
+        for e in ["psf2", "minipsf2"] {
+            assert!(!is_psf(&std::path::PathBuf::from(format!("x.{e}"))), ".{e}");
         }
         assert!(!is_psf(std::path::Path::new("x.mp3")));
         assert!(!is_psf(std::path::Path::new("noext")));

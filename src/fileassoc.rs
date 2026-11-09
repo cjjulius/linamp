@@ -162,7 +162,7 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         // PlayStation PSF1/PSF2 music via libupse (the `psf` feature). No registered MIME type;
         // use a vendor type taught to the DB by MIME_PACKAGE_XML.
         #[cfg(feature = "psf")]
-        "psf" | "minipsf" | "psf2" | "minipsf2" => "audio/x-psf",
+        "psf" | "minipsf" => "audio/x-psf",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -293,7 +293,7 @@ fn mime_package_xml() -> String {
         types.push((
             "audio/x-psf",
             "PlayStation PSF music",
-            &["*.psf", "*.minipsf", "*.psf2", "*.minipsf2"],
+            &["*.psf", "*.minipsf"],
         ));
     }
     #[cfg(feature = "adplug")]

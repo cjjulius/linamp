@@ -36,7 +36,9 @@ static int psf_shim_has_signature(const char *path) {
     }
     size_t got = fread(h, 1, 4, f);
     fclose(f);
-    return got == 4 && h[0] == 'P' && h[1] == 'S' && h[2] == 'F' && (h[3] == 0x01 || h[3] == 0x02);
+    /* PSF1 (version 0x01) only. PSF2 (0x02) is rejected: libupse's PS2 IOP HLE is a stub, so PSF2
+     * decodes to silence, and correct PSF2 playback would require the copyrighted PS2 BIOS. */
+    return got == 4 && h[0] == 'P' && h[1] == 'S' && h[2] == 'F' && h[3] == 0x01;
 }
 
 /* Open a PSF file and return its module, or NULL on failure. Callers serialize access (libupse has
