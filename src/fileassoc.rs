@@ -154,6 +154,11 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         // IANA-registered type.
         #[cfg(feature = "sid")]
         "sid" | "psid" | "rsid" => "audio/prs.sid",
+        // Streamed game-engine audio via libvgmstream (the `vgmstream` feature). These game formats
+        // have no registered MIME types; use a shared vendor type taught to the DB by MIME_PACKAGE_XML.
+        #[cfg(feature = "vgmstream")]
+        "genh" | "dsp" | "idsp" | "vag" | "svag" | "hca" | "brstm" | "bcstm" | "bfstm" | "bfwav"
+        | "bwav" | "at9" | "xvag" | "fsb" | "xwb" | "hps" | "ktss" => "audio/x-vgmstream",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -265,6 +270,18 @@ fn mime_package_xml() -> String {
             "audio/prs.sid",
             "Commodore 64 SID music",
             &["*.sid", "*.psid", "*.rsid"],
+        ));
+    }
+    #[cfg(feature = "vgmstream")]
+    {
+        types.push((
+            "audio/x-vgmstream",
+            "Game-engine stream audio (vgmstream)",
+            &[
+                "*.genh", "*.dsp", "*.idsp", "*.vag", "*.svag", "*.hca", "*.brstm", "*.bcstm",
+                "*.bfstm", "*.bfwav", "*.bwav", "*.at9", "*.xvag", "*.fsb", "*.xwb", "*.hps",
+                "*.ktss",
+            ],
         ));
     }
     #[cfg(feature = "adplug")]

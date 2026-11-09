@@ -579,6 +579,13 @@ fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
     if crate::ffdec::is_ffmpeg_audio(path) {
         return Ok(Box::new(crate::ffdec::open(path)?));
     }
+    // Streamed game-engine audio (DSP/VAG/HCA/BRSTM/FSB/...), via libvgmstream. Runs after every
+    // other decoder - it only claims an allowlist of game-specific extensions nothing else handles,
+    // so a tie always goes to the pure-Rust / ffmpeg path above.
+    #[cfg(feature = "vgmstream")]
+    if crate::vgmstream::is_vgmstream(path) {
+        return Ok(Box::new(crate::vgmstream::open(path)?));
+    }
     Ok(Box::new(crate::decode::open_file(path)?))
 }
 

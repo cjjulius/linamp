@@ -21,6 +21,15 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   MP3/MP2/PCM/AC-3; FLV `.flv` via `scuffle-flv` for MP3/AAC; MPEG program stream
   `.mpg`/`.mpeg`/`.vob` via `mpeg-ps` for MPEG-audio/AC-3), tracker modules
   (`.mod`/`.xm`/`.s3m`/`.it`) and MIDI (`.mid`/`.midi`, via a bundled SoundFont)
+- Retro and game audio, each behind its own feature flag and bundled self-contained
+  (see `docs/SUPPORTED-FORMATS.md` for the full extension list):
+  console chiptunes via libgme (`gme`: NSF/NSFE/SPC/GBS/VGM/VGZ/AY/GYM/HES/KSS/SAP),
+  the tracker "zoo" via libopenmpt (`openmpt`: ~28 module formats beyond the big four),
+  AdLib / OPL FM synthesis via AdPlug (`adplug`: DRO/CMF/RAD/HSC/LAA/Doom MUS and ~30 more),
+  Commodore 64 SID via libsidplayfp (`sid`: `.sid`/`.psid`/`.rsid`, ROM-less), and
+  streamed game-engine audio via libvgmstream (`vgmstream`: GameCube/Wii DSP, PS-ADPCM VAG,
+  CRI HCA, Nintendo BRSTM/BCSTM/BFSTM, FMOD FSB, Microsoft XWB, Sony XVAG/ATRAC9, and more,
+  routed by an allowlist of game-specific extensions). The shipped release enables all of these
 - Windows Media Audio (`.wma`), DTS (`.dts`) and Dolby TrueHD / MLP (`.thd`/`.mlp`) in the
   optional FFmpeg build (`--features ffmpeg`), decoded via `crate::ffdec` over FFmpeg (LGPL).
   None has a permissive pure-Rust decoder mature enough for real-time playback (the pure-Rust

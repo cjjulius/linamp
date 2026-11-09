@@ -27,6 +27,7 @@ fn main() {
     link_openmpt(&manifest, &target_dir);
     link_adplug(&manifest, &target_dir);
     link_sid(&manifest, &target_dir);
+    link_vgmstream(&manifest, &target_dir);
 }
 
 /// Link libsidplayfp for the `sid` feature: compile the C++ shim (src/sid_shim.cpp) that gives
@@ -197,6 +198,45 @@ fn link_openmpt(manifest: &Path, target_dir: &Path) {
                     // Follow the symlink and copy the real shared object under each name, so a
                     // dev link into a system libopenmpt bundles a usable file (not a dangling
                     // link) next to the binary.
+                    let _ = fs::copy(e.path(), dst.join(&name));
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
+}
+
+/// Link libvgmstream for the `vgmstream` feature and copy its shared library next to the binary,
+/// exactly as `link_gme` does for libgme (runtime resolution via an `$ORIGIN/lib` rpath).
+/// libvgmstream exposes a C API directly, so there is no shim to compile. We link the core-only
+/// build (no ffmpeg/vorbis/mpg123 externals), which is fully permissive (ISC) and self-contained
+/// (depends only on libc/libm). The library and headers are found at `$VGMSTREAM_DIR` (a prefix
+/// with `lib/libvgmstream.so` and `include/libvgmstream.h`), defaulting to the in-repo
+/// `build/vgmstream-min` that `packaging/linux/build-vgmstream-min.sh` produces. No-op without the
+/// feature.
+fn link_vgmstream(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=VGMSTREAM_DIR");
+    if env::var_os("CARGO_FEATURE_VGMSTREAM").is_none() {
+        return;
+    }
+    let dir = env::var_os("VGMSTREAM_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/vgmstream-min"));
+    let libdir = dir.join("lib");
+    println!("cargo:rustc-link-search=native={}", libdir.display());
+    println!("cargo:rustc-link-lib=dylib=vgmstream");
+
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        if let Ok(entries) = fs::read_dir(&libdir) {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                if name.to_string_lossy().contains("libvgmstream.so") {
                     let _ = fs::copy(e.path(), dst.join(&name));
                 }
             }
