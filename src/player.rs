@@ -542,6 +542,22 @@ fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
     if crate::psf::is_psf(path) {
         return Ok(Box::new(crate::psf::open(path)?));
     }
+    // Sega Saturn SSF / Dreamcast DSF music, via Highly_Theoretical. Before the DSD decoder: `.dsf`
+    // is content-sniffed (claimed only for a PSF v2 container), so a DSD `.dsf` falls through to dsd.
+    #[cfg(feature = "ssf")]
+    if crate::ssf::is_ssf(path) {
+        return Ok(Box::new(crate::ssf::open(path)?));
+    }
+    // Capcom QSound QSF arcade music (.qsf/.miniqsf), via Highly_Quixotic.
+    #[cfg(feature = "qsf")]
+    if crate::qsf::is_qsf(path) {
+        return Ok(Box::new(crate::qsf::open(path)?));
+    }
+    // Nintendo DS NCSF music (.ncsf/.minincsf), via SSEQPlayer.
+    #[cfg(feature = "ncsf")]
+    if crate::ncsf::is_ncsf(path) {
+        return Ok(Box::new(crate::ncsf::open(path)?));
+    }
     if crate::ape::is_ape(path) {
         return Ok(Box::new(crate::ape::open_ape(path)?));
     }

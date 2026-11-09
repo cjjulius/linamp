@@ -29,6 +29,9 @@ fn main() {
     link_sid(&manifest, &target_dir);
     link_vgmstream(&manifest, &target_dir);
     link_psf(&manifest, &target_dir);
+    link_ssf(&manifest, &target_dir);
+    link_qsf(&manifest, &target_dir);
+    link_ncsf(&manifest, &target_dir);
 }
 
 /// Link libsidplayfp for the `sid` feature: compile the C++ shim (src/sid_shim.cpp) that gives
@@ -286,6 +289,181 @@ fn link_psf(manifest: &Path, target_dir: &Path) {
                 let name = e.file_name();
                 if name.to_string_lossy().contains("libupse.so") {
                     let _ = fs::copy(e.path(), dst.join(&name));
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
+}
+
+/// Link Highly_Theoretical + psflib for the `ssf` feature: compile the C shim (src/ssf_shim.c) that
+/// drives psflib (container/`_lib` parsing) and the Highly_Theoretical Sega sound-chip emulator and
+/// exposes a tiny API, link both shared libraries, and bundle them next to the binary (runtime
+/// resolution via an `$ORIGIN/lib` rpath), the same self-contained pattern as the other native
+/// features. The emulator is found at `$HIGHLYTHEORETICAL_DIR` (`lib/libhighlytheoretical.so` +
+/// `include/sega.h`) and the shared container parser at `$PSFLIB_DIR` (`lib/libpsflib.so` +
+/// `include/psflib.h`), defaulting to the in-repo `build/highlytheoretical-min` and `build/psflib-min`
+/// that `packaging/linux/build-highly-theoretical-min.sh` and `build-psflib-min.sh` produce.
+/// Highly_Theoretical is ROM-less (emulates only the SCSP/AICA; no console BIOS). No-op without the
+/// feature.
+fn link_ssf(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=HIGHLYTHEORETICAL_DIR");
+    println!("cargo:rerun-if-env-changed=PSFLIB_DIR");
+    if env::var_os("CARGO_FEATURE_SSF").is_none() {
+        return;
+    }
+    println!("cargo:rerun-if-changed=src/ssf_shim.c");
+    let ht = env::var_os("HIGHLYTHEORETICAL_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/highlytheoretical-min"));
+    let psflib = env::var_os("PSFLIB_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/psflib-min"));
+
+    // Compile the C shim; it includes both the emulator and psflib headers.
+    cc::Build::new()
+        .file("src/ssf_shim.c")
+        .include(ht.join("include"))
+        .include(psflib.join("include"))
+        .compile("ssf_shim");
+
+    println!("cargo:rustc-link-search=native={}", ht.join("lib").display());
+    println!("cargo:rustc-link-search=native={}", psflib.join("lib").display());
+    println!("cargo:rustc-link-lib=dylib=highlytheoretical");
+    println!("cargo:rustc-link-lib=dylib=psflib");
+    println!("cargo:rustc-link-lib=dylib=z");
+
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        for libdir in [ht.join("lib"), psflib.join("lib")] {
+            if let Ok(entries) = fs::read_dir(&libdir) {
+                for e in entries.flatten() {
+                    let name = e.file_name();
+                    let n = name.to_string_lossy();
+                    if n.contains("libhighlytheoretical.so") || n.contains("libpsflib.so") {
+                        let _ = fs::copy(e.path(), dst.join(&name));
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
+}
+
+/// Link Highly_Quixotic + psflib for the `qsf` feature: compile the C shim (src/qsf_shim.c) that
+/// drives psflib and the Highly_Quixotic Capcom QSound emulator, link both shared libraries, and
+/// bundle them next to the binary (runtime resolution via an `$ORIGIN/lib` rpath), the same pattern as
+/// the other native features. The emulator is found at `$HIGHLYQUIXOTIC_DIR`
+/// (`lib/libhighlyquixotic.so` + `include/qsound.h`) and the shared container parser at `$PSFLIB_DIR`,
+/// defaulting to the in-repo `build/highlyquixotic-min` and `build/psflib-min` that
+/// `packaging/linux/build-highly-quixotic-min.sh` and `build-psflib-min.sh` produce. Highly_Quixotic is
+/// ROM-less (reimplemented QSound DSP; no copyrighted ROM). No-op without the feature.
+fn link_qsf(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=HIGHLYQUIXOTIC_DIR");
+    println!("cargo:rerun-if-env-changed=PSFLIB_DIR");
+    if env::var_os("CARGO_FEATURE_QSF").is_none() {
+        return;
+    }
+    println!("cargo:rerun-if-changed=src/qsf_shim.c");
+    let hq = env::var_os("HIGHLYQUIXOTIC_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/highlyquixotic-min"));
+    let psflib = env::var_os("PSFLIB_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/psflib-min"));
+
+    cc::Build::new()
+        .file("src/qsf_shim.c")
+        .include(hq.join("include"))
+        .include(psflib.join("include"))
+        .compile("qsf_shim");
+
+    println!("cargo:rustc-link-search=native={}", hq.join("lib").display());
+    println!("cargo:rustc-link-search=native={}", psflib.join("lib").display());
+    println!("cargo:rustc-link-lib=dylib=highlyquixotic");
+    println!("cargo:rustc-link-lib=dylib=psflib");
+    println!("cargo:rustc-link-lib=dylib=z");
+
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        for libdir in [hq.join("lib"), psflib.join("lib")] {
+            if let Ok(entries) = fs::read_dir(&libdir) {
+                for e in entries.flatten() {
+                    let name = e.file_name();
+                    let n = name.to_string_lossy();
+                    if n.contains("libhighlyquixotic.so") || n.contains("libpsflib.so") {
+                        let _ = fs::copy(e.path(), dst.join(&name));
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
+}
+
+/// Link SSEQPlayer + psflib for the `ncsf` feature: compile the C++ shim (src/ncsf_shim.cpp) that
+/// drives psflib and the SSEQPlayer SDAT sequencer, link both shared libraries, and bundle them next
+/// to the binary (runtime resolution via an `$ORIGIN/lib` rpath). The sequencer is found at
+/// `$SSEQPLAYER_DIR` (`lib/libsseqplayer.so` + `include/SSEQPlayer/*.h`) and the shared container
+/// parser at `$PSFLIB_DIR`, defaulting to the in-repo `build/sseqplayer-min` and `build/psflib-min`
+/// that `packaging/linux/build-sseqplayer-min.sh` and `build-psflib-min.sh` produce. SSEQPlayer is
+/// ROM-less (an SDAT sequencer; no DS BIOS/firmware). `_LIBCPP_VERSION` selects SSEQPlayer's
+/// std::codecvt path (the <codecvt> header, present on libstdc++ and MSVC), matching the library
+/// build; without it its bundled codecvt header clashes with the standard library. No-op without the
+/// feature.
+fn link_ncsf(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=SSEQPLAYER_DIR");
+    println!("cargo:rerun-if-env-changed=PSFLIB_DIR");
+    if env::var_os("CARGO_FEATURE_NCSF").is_none() {
+        return;
+    }
+    println!("cargo:rerun-if-changed=src/ncsf_shim.cpp");
+    let sp = env::var_os("SSEQPLAYER_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/sseqplayer-min"));
+    let psflib = env::var_os("PSFLIB_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/psflib-min"));
+
+    cc::Build::new()
+        .cpp(true)
+        .define("_LIBCPP_VERSION", None)
+        .file("src/ncsf_shim.cpp")
+        .include(sp.join("include"))
+        .include(psflib.join("include"))
+        .compile("ncsf_shim");
+
+    println!("cargo:rustc-link-search=native={}", sp.join("lib").display());
+    println!("cargo:rustc-link-search=native={}", psflib.join("lib").display());
+    println!("cargo:rustc-link-lib=dylib=sseqplayer");
+    println!("cargo:rustc-link-lib=dylib=psflib");
+    println!("cargo:rustc-link-lib=dylib=z");
+
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        for libdir in [sp.join("lib"), psflib.join("lib")] {
+            if let Ok(entries) = fs::read_dir(&libdir) {
+                for e in entries.flatten() {
+                    let name = e.file_name();
+                    let n = name.to_string_lossy();
+                    if n.contains("libsseqplayer.so") || n.contains("libpsflib.so") {
+                        let _ = fs::copy(e.path(), dst.join(&name));
+                    }
                 }
             }
         }

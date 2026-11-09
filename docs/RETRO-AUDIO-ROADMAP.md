@@ -175,19 +175,55 @@ PSF). Several of the others HLE and should be fine, but it must be verified - we
     HE needs the real 512 KB PlayStation BIOS (a shipping wall; verified hands-on), while libupse ships
     its own HLE "FakeBIOS" and plays PSF1 ROM-less. PSF2 dropped - libupse's IOP HLE is a stub
     (silence) and HE's PS2 path needs the banned PS2 BIOS (see 2f-psf).
-  - SSF/DSF: Highly Theoretical (GPL-2, MAME-free).  USF: lazyusf2 (GPL-2).
-  - GSF: prefer **lazygsf + mGBA (MIT + MPL-2.0)** to keep it off GPL, else viogsf (GPL-2).
-  - QSF: Highly Quixotic (GPL-2).  NCSF: SSEQPlayer (GPL-2/BSD, lightweight - no full emulator).
-  - 2SF: vio2sf (GPL-2; drags in the full DeSmuME core - the heaviest of the set).
-- License reality: enabling any `*SF` feature makes that build **GPL** (GPL-2, or GPL-3 if HE is used
-  for PSF) - acceptable under mantra rule 5, exactly the status quo of the existing `sid` feature.
+  (Decoder picks below were deep-researched against primary sources 2026-11-09; each is ROM-less
+  confirmed - none needs a console BIOS/ROM - so none is a wall. Several roadmap guesses were wrong;
+  corrected here.)
+  - SSF/DSF: **Highly_Theoretical** (Saturn SCSP + Dreamcast AICA, one core for both; emulates only the
+    sound chip, no BIOS). License **GPL-3.0** (not GPL-2), psflib MIT. MAME-free confirmed. Vendor from
+    the Kodi `xbmc/audiodecoder.ssf` split-core (`lib/Highly_Theoretical` + `lib/psflib` + zlib).
+    CAVEAT: `.dsf` also means DSD Stream File (we already decode that in src/dsd.rs) - route SSF/DSF by
+    content (PSF signature + version byte 0x11=SSF / 0x12=DSF), never by extension.
+  - USF: **lazyusf2** (mupen64plus-derived; ROM-less via the USF's embedded Project64 save-state, no PIF
+    boot ROM). License **GPL-2.0-or-later**. Kodi `xbmc/audiodecoder.usf`. Heaviest-but-one (R4300 +
+    RSP + RDP, x86/x64 dynarec with interpreter fallback).
+  - GSF: **mGBA + libgsf** (MPL-2.0). mGBA's built-in HLE BIOS plays GSF ROM-less (`useBios=false`); no
+    Nintendo BIOS. Corrections: lazygsf (jprjr) is **deleted from GitHub** - use **libgsf (chrg127,
+    MPL-2.0)** from Codeberg (`codeberg.org/chrg/libgsf`, pin a copy); and viogsf is built on **VBA-M
+    (GPL-2)**, not mGBA. CAVEAT: mGBA HLE stubs the BIOS sound-driver SWIs (0x1A-0x1E), so a small
+    long tail of rips that drive sound through the BIOS driver may be imperfect - acceptable under the
+    no-BIOS rule (every HLE GSF player has this). Build uses CMake (mGBA) - its own build shape.
+  - QSF: **Highly_Quixotic** (Capcom QSound; reimplemented DSP, no copyrighted `dl-1425.bin`). License
+    **GPL-3.0** (not GPL-2), psflib MIT. Kodi `xbmc/audiodecoder.qsf`. Light.
+  - NCSF: **SSEQPlayer** (Nitro SDAT/SSEQ soundbank sequencer - no emulator, no BIOS at all). License
+    **WTFPL** (permissive; or BSD-3 via CyberBotX in_xsf) - NOT GPL. Kodi `xbmc/audiodecoder.ncsf`
+    bundles the WTFPL engine + psflib. Lightest of the set.
+  - 2SF: **vio2sf** (DeSmuME-derived; ROM-less via DeSmuME's HLE BIOS - `bios.c`, no `bios.bin`).
+    License **GPL-2.0**. Kodi `xbmc/audiodecoder.2sf`. HEAVIEST core (dual ARM7/ARM9 interpreters, MMU,
+    SPU) - do last. Verify DeSmuME is GPL-2.0-"or-later" before shipping (see license-compat note below).
+- License reality: GSF (mGBA/libgsf **MPL-2.0**) and NCSF (SSEQPlayer **WTFPL**/BSD) are permissive
+  (mantra tier 3); SSF/DSF and QSF are **GPL-3**, USF is **GPL-2-or-later**, 2SF is **GPL-2**. Enabling
+  any copyleft `*SF` feature makes that build GPL - acceptable under mantra rule 5, the status quo of
+  the existing `sid` feature.
+- License-compat note (our host is **Apache-2.0**): Apache-2.0 is compatible with **GPL-3.0** and
+  **GPL-2.0-or-later** (the feature build just becomes GPL) and with MPL/WTFPL/BSD - so SSF/DSF/QSF/USF/
+  GSF/NCSF are all clean. The one risk is a strictly **GPL-2.0-only** core: Apache-2.0 + GPL-2.0-only is
+  a real incompatibility. 2SF's DeSmuME is the one to check "or-later" on before shipping (it is last in
+  the order regardless). The existing `sid`/libsidplayfp feature already sets the GPL-opt-in precedent.
 - **Wall: SNSF** (SNES). The only core is snsf9x, which bundles snes9x under a **non-commercial /
   personal-use-only** license. Skip it and document; the practical cost is nil, because SNES music is
   already covered as **SPC via the existing gme feature**. Also avoid the old monolithic `nmlgc/aosdk`
   SDK as a source - it mixes in MAME's non-commercial clause; use the kode54/Kodi split-cores instead.
 - No pure-Rust option exists for any subformat (confirmed on crates.io); C/C++ is the floor.
-- Suggested order when it is taken up: PSF1 first (biggest corpus; done), then SSF+DSF and USF, then
-  GSF/QSF/NCSF, then 2SF. One tier (or a couple) per branch, like the 2a-2d work.
+- Implementation order (finalized 2026-11-09, after the deep-research pass above):
+  1. **SSF + DSF + QSF + NCSF** - DONE (pending QA/merge) on `feat/tier2f-ssf-dsf-qsf-ncsf`. Three
+     psflib-based cores (Highly_Theoretical for SSF+DSF and Highly_Quixotic for QSF are C; SSEQPlayer
+     for NCSF is C++), all built the PSF1/libupse way (vendored sources + shared psflib + zlib, thin
+     `cc` shim, Cargo feature). Includes the `.dsf`-vs-DSD content-routing fix. Validated on real
+     Saturn/Dreamcast/Capcom/DS rips.
+  2. **USF** (lazyusf2) - own branch; heavy (R4300+RSP+RDP, dynarec).
+  3. **GSF** (mGBA + libgsf) - own branch; different build shape (CMake, no psflib).
+  4. **2SF** (vio2sf/DeSmuME) - last; heaviest core + the GPL-2-"or-later" check.
+  PSF1 shipped first (biggest corpus; done). One grouping per branch, like the 2a-2d work.
 
 ## Phase 3 - Modern and ideal-fit
 
@@ -340,8 +376,11 @@ Phase 2 stretch
   Windows builds (`build-upse-min.sh` / `build-upse.ps1`), CI, and tarball wired; CI green on both
   platforms. Reproducible CC0 QA sample (hand-authored minimal PSF, recipe in the cookbook); for real
   PSF1 music, procure a tune from Zophar (local QA only).
-- [ ] `*SF` family, the rest (GSF/USF/2SF/SSF/DSF/QSF/NCSF) - planned (see "Phase 2 stretch" above);
-  GPL per-core. BIOS/ROM-check each core before adopting. SNSF is a wall (snes9x non-commercial).
+- [~] `*SF` family, the rest - deep-researched 2026-11-09: all ROM-less, none a wall (cores/licenses
+  in "Phase 2 stretch" above). **SSF+DSF (Highly_Theoretical), QSF (Highly_Quixotic), NCSF (SSEQPlayer)
+  DONE** on `feat/tier2f-ssf-dsf-qsf-ncsf` (`ssf`/`qsf`/`ncsf` features, shared psflib; validated on
+  real rips; pending QA/merge). Remaining: USF, then GSF, then 2SF. GSF (MPL) and NCSF (WTFPL) are
+  permissive; the rest are GPL. SNSF stays a wall (snes9x non-commercial).
 
 Phase 3 - Modern/ideal
 - [ ] QOA (.qoa)

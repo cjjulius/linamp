@@ -163,6 +163,16 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         // use a vendor type taught to the DB by MIME_PACKAGE_XML.
         #[cfg(feature = "psf")]
         "psf" | "minipsf" => "audio/x-psf",
+        // Sega Saturn SSF / Dreamcast DSF music via Highly_Theoretical (the `ssf` feature). `.dsf`
+        // keeps its DSD mapping above; SSF claims it only by content, so it is not remapped here.
+        #[cfg(feature = "ssf")]
+        "ssf" | "minissf" | "minidsf" | "dcsf" | "minidcsf" => "audio/x-ssf",
+        // Capcom QSound QSF arcade music via Highly_Quixotic (the `qsf` feature).
+        #[cfg(feature = "qsf")]
+        "qsf" | "miniqsf" => "audio/x-qsf",
+        // Nintendo DS NCSF music via SSEQPlayer (the `ncsf` feature).
+        #[cfg(feature = "ncsf")]
+        "ncsf" | "minincsf" => "audio/x-ncsf",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -294,6 +304,30 @@ fn mime_package_xml() -> String {
             "audio/x-psf",
             "PlayStation PSF music",
             &["*.psf", "*.minipsf"],
+        ));
+    }
+    #[cfg(feature = "ssf")]
+    {
+        types.push((
+            "audio/x-ssf",
+            "Sega Saturn/Dreamcast SSF music",
+            &["*.ssf", "*.minissf", "*.minidsf", "*.dcsf", "*.minidcsf"],
+        ));
+    }
+    #[cfg(feature = "qsf")]
+    {
+        types.push((
+            "audio/x-qsf",
+            "Capcom QSound QSF music",
+            &["*.qsf", "*.miniqsf"],
+        ));
+    }
+    #[cfg(feature = "ncsf")]
+    {
+        types.push((
+            "audio/x-ncsf",
+            "Nintendo DS NCSF music",
+            &["*.ncsf", "*.minincsf"],
         ));
     }
     #[cfg(feature = "adplug")]
