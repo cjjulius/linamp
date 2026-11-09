@@ -141,18 +141,20 @@ jobs:
           sh packaging/linux/build-sseqplayer-min.sh "$PWD/build/sseqplayer-min"
           sh packaging/linux/build-lazyusf2-min.sh "$PWD/build/lazyusf2-min"
           sh packaging/linux/build-vio2sf-min.sh "$PWD/build/vio2sf-min"
+          sh packaging/linux/build-libgsf-min.sh "$PWD/build/libgsf-min"
           echo "PSFLIB_DIR=$PWD/build/psflib-min" >> "$GITHUB_ENV"
           echo "HIGHLYTHEORETICAL_DIR=$PWD/build/highlytheoretical-min" >> "$GITHUB_ENV"
           echo "HIGHLYQUIXOTIC_DIR=$PWD/build/highlyquixotic-min" >> "$GITHUB_ENV"
           echo "SSEQPLAYER_DIR=$PWD/build/sseqplayer-min" >> "$GITHUB_ENV"
           echo "LAZYUSF_DIR=$PWD/build/lazyusf2-min" >> "$GITHUB_ENV"
           echo "VIO2SF_DIR=$PWD/build/vio2sf-min" >> "$GITHUB_ENV"
+          echo "LIBGSF_DIR=$PWD/build/libgsf-min" >> "$GITHUB_ENV"
 
-      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf + qsf + ncsf + usf + twosf)
+      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf + qsf + ncsf + usf + twosf + gsf)
         if: runner.os == 'Linux'
         run: |
-          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf --verbose
-          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib:$SIDPLAYFP_DIR/lib:$VGMSTREAM_DIR/lib:$UPSE_DIR/lib:$HIGHLYTHEORETICAL_DIR/lib:$HIGHLYQUIXOTIC_DIR/lib:$SSEQPLAYER_DIR/lib:$LAZYUSF_DIR/lib:$VIO2SF_DIR/lib:$PSFLIB_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf --verbose
+          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf --verbose
+          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib:$SIDPLAYFP_DIR/lib:$VGMSTREAM_DIR/lib:$UPSE_DIR/lib:$HIGHLYTHEORETICAL_DIR/lib:$HIGHLYQUIXOTIC_DIR/lib:$SSEQPLAYER_DIR/lib:$LAZYUSF_DIR/lib:$VIO2SF_DIR/lib:$LIBGSF_DIR/lib:$PSFLIB_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf --verbose
 
       # Windows builds libgme and its zlib dependency from source (no system libgme/zlib),
       # then builds and tests the full feature set (ffmpeg + gme). build.rs links $GME_DIR;
@@ -321,7 +323,7 @@ jobs:
       # on Windows lands when the Windows box adds its build and DLL bundling.
       - name: Build Linux tarball
         if: runner.os == 'Linux'
-        run: FEATURES=ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf sh packaging/linux/build-tarball.sh
+        run: FEATURES=ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf sh packaging/linux/build-tarball.sh
 
       - name: Upload Linux tarball
         if: runner.os == 'Linux'

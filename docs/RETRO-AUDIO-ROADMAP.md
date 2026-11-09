@@ -197,7 +197,11 @@ PSF). Several of the others HLE and should be fine, but it must be verified - we
     MPL-2.0)** from Codeberg (`codeberg.org/chrg/libgsf`, pin a copy); and viogsf is built on **VBA-M
     (GPL-2)**, not mGBA. CAVEAT: mGBA HLE stubs the BIOS sound-driver SWIs (0x1A-0x1E), so a small
     long tail of rips that drive sound through the BIOS driver may be imperfect - acceptable under the
-    no-BIOS rule (every HLE GSF player has this). Build uses CMake (mGBA) - its own build shape.
+    no-BIOS rule (every HLE GSF player has this). Build uses CMake (mGBA) - its own build shape. DONE:
+    pin **codeberg.org/chrg/libgsf @ df71d714** (username is `chrg`, not `chrg127`; GitHub mirror is
+    archived read-only), bundling **mGBA @ 11e16d1a** (submodule gitlink; `expected` is vendored, not a
+    submodule). No psflib - libgsf parses the container, `_lib` chain and tags itself, and seeks
+    natively. Version byte 0x22. Built + render-verified on libgsf's bundled test GSFs.
   - QSF: **Highly_Quixotic** (Capcom QSound; reimplemented DSP, no copyrighted `dl-1425.bin`). License
     **GPL-3.0** (not GPL-2), psflib MIT. Kodi `xbmc/audiodecoder.qsf`. Light.
   - NCSF: **SSEQPlayer** (Nitro SDAT/SSEQ soundbank sequencer - no emulator, no BIOS at all). License
@@ -233,10 +237,13 @@ PSF). Several of the others HLE and should be fine, but it must be verified - we
      shim, shared psflib), same pattern as grouping 1: USF = lazyusf2 (C, cached interpreter - no
      dynarec), 2SF = vio2sf (C + one C++ TU, the heaviest core). Both GPL-2-or-later (-> GPLv3 combined,
      the same posture as the merged cores). Validated on real N64 + DS rips.
-  3. **GSF** (mGBA + libgsf) - own branch; the odd one out - different build shape (CMake + C++20, no
-     psflib), MPL-2.0. Isolated so that build-tooling change lands on its own.
+  3. **GSF** - DONE (pending QA/merge) on `feat/tier2f-gsf`. The odd one out: libgsf (which bundles a
+     trimmed mGBA) parses the container itself (no psflib) and is built by its own CMake (needs C++20),
+     the one build-tooling difference in the family. MPL-2.0 (lighter than the GPL cores). ROM-less via
+     mGBA's HLE BIOS (useBios=false). libgsf supports native seeking, so no seek-by-reset. Validated by
+     building + rendering libgsf's own bundled test GSFs. This completes the *SF family.
   PSF1 shipped first (biggest corpus; done). One grouping per branch, like the 2a-2d work. USF+2SF were
-  bundled (same proven pattern, both GPL); GSF stands alone for its CMake/C++20 build.
+  bundled (same proven pattern, both GPL); GSF stood alone for its CMake/C++20 build.
 
 ## Phase 3 - Modern and ideal-fit
 
@@ -393,8 +400,10 @@ Phase 2 stretch
   in "Phase 2 stretch" above). **SSF+DSF (Highly_Theoretical), QSF (Highly_Quixotic), NCSF (SSEQPlayer)
   DONE** on `feat/tier2f-ssf-dsf-qsf-ncsf` (merged, PR #241, v1.1.6). **USF (lazyusf2) + 2SF (vio2sf)
   DONE** on `feat/tier2f-usf-2sf` (`usf`/`twosf` features, shared psflib; validated on real N64 + DS
-  rips; pending QA/merge). Remaining: GSF (its own branch). GSF (MPL) and NCSF (WTFPL) are
-  permissive; the rest are GPL. SNSF stays a wall (snes9x non-commercial).
+  rips; pending QA/merge). **GSF (libgsf/mGBA) DONE** on `feat/tier2f-gsf` (`gsf` feature; CMake build,
+  no psflib; validated by building + rendering libgsf's bundled test GSFs; pending QA/merge). This
+  completes the `*SF` family. GSF (MPL) and NCSF (WTFPL) are permissive; the rest are GPL. SNSF stays a
+  wall (snes9x non-commercial).
 
 Phase 3 - Modern/ideal
 - [ ] QOA (.qoa)

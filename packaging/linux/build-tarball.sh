@@ -86,6 +86,12 @@ case ",$FEATURES," in
   *,twosf,*) BUNDLE_TWOSF=1 ;;
   *) BUNDLE_TWOSF=0 ;;
 esac
+# The gsf feature (Game Boy Advance GSF) links libgsf (which bundles a trimmed mGBA); ROM-less, and it
+# does NOT use psflib - it is a standalone core, bundled like libvgmstream/libupse.
+case ",$FEATURES," in
+  *,gsf,*) BUNDLE_GSF=1 ;;
+  *) BUNDLE_GSF=0 ;;
+esac
 # psflib (the shared PSF-family container parser) is needed by any of ssf/qsf/ncsf/usf/twosf; build it once.
 if [ "$BUNDLE_SSF" = 1 ] || [ "$BUNDLE_QSF" = 1 ] || [ "$BUNDLE_NCSF" = 1 ] || [ "$BUNDLE_USF" = 1 ] || [ "$BUNDLE_TWOSF" = 1 ]; then
   BUNDLE_PSFLIB=1
@@ -198,6 +204,13 @@ if [ "$BUNDLE_TWOSF" = 1 ]; then
   sh "$ROOT/packaging/linux/build-vio2sf-min.sh" "$VS_MIN"
   export VIO2SF_DIR="$VS_MIN"
 fi
+# libgsf (Game Boy Advance GSF) built from source via CMake (it bundles a trimmed mGBA); ROM-less
+# (mGBA HLE BIOS). No psflib. build.rs compiles the shim, links LIBGSF_DIR, emits the rpath. Bundled below.
+if [ "$BUNDLE_GSF" = 1 ]; then
+  GSF_MIN="$ROOT/build/libgsf-min"
+  sh "$ROOT/packaging/linux/build-libgsf-min.sh" "$GSF_MIN"
+  export LIBGSF_DIR="$GSF_MIN"
+fi
 
 echo "==> cargo build --release $FEATURE_ARGS"
 # shellcheck disable=SC2086
@@ -289,6 +302,17 @@ if [ "$BUNDLE_PSF" = 1 ]; then
   for f in "$STAGE"/lib/libupse.so*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
   if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libupse' | grep -vq "$STAGE/lib"; then
     echo "!!  WARNING: libupse still resolves outside $STAGE/lib; check the rpath" >&2
+  fi
+fi
+if [ "$BUNDLE_GSF" = 1 ]; then
+  echo "==> Bundling libgsf into $STAGE/lib (self-contained)"
+  mkdir -p "$STAGE/lib"
+  # libgsf bundles mGBA statically and depends only on libc/libm and the system libz, so its own .so is
+  # the whole runtime set. The binary's $ORIGIN/lib rpath (emitted by build.rs) loads it at runtime.
+  cp -a "$LIBGSF_DIR"/lib/libgsf.so* "$STAGE/lib/" 2>/dev/null || true
+  for f in "$STAGE"/lib/libgsf.so*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
+  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libgsf' | grep -vq "$STAGE/lib"; then
+    echo "!!  WARNING: libgsf still resolves outside $STAGE/lib; check the rpath" >&2
   fi
 fi
 # The *SF cores + the shared psflib: each depends only on libc/libm and the system libz, so its own

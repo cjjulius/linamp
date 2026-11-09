@@ -346,6 +346,11 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "2sf",
     #[cfg(feature = "twosf")]
     "mini2sf",
+    // Game Boy Advance GSF music via libgsf (the `gsf` feature).
+    #[cfg(feature = "gsf")]
+    "gsf",
+    #[cfg(feature = "gsf")]
+    "minigsf",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -585,6 +590,27 @@ fn is_2sf_file(_path: &std::path::Path) -> bool {
     false
 }
 
+/// Duration of a Game Boy Advance GSF tune (libgsf) for the playlist, or `None` without the `gsf`
+/// feature. A cfg shim like `qsf_duration`.
+#[cfg(feature = "gsf")]
+fn gsf_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::gsf::duration(path)
+}
+#[cfg(not(feature = "gsf"))]
+fn gsf_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+/// True when `path` is a GSF tune (rendered as stereo), for the display-metadata fill. Cfg shim.
+#[cfg(feature = "gsf")]
+fn is_gsf_file(path: &std::path::Path) -> bool {
+    crate::gsf::is_gsf(path)
+}
+#[cfg(not(feature = "gsf"))]
+fn is_gsf_file(_path: &std::path::Path) -> bool {
+    false
+}
+
 // Predicate shims for the synthesized/emulated decoders, used to fill in display metadata (these
 // formats carry no codec tags). Cfg shims like the duration ones, so the call sites read the same
 // in every build. AdLib/OPL (adplug) is mono; the chip/tracker formats are stereo.
@@ -767,6 +793,7 @@ impl Track {
                 .or_else(|| ncsf_duration(&self.path))
                 .or_else(|| usf_duration(&self.path))
                 .or_else(|| twosf_duration(&self.path))
+                .or_else(|| gsf_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
         // Last resort for a format whose exact length no cheap probe can read: a provisional
@@ -821,6 +848,7 @@ impl Track {
                 || is_ncsf_file(&self.path)
                 || is_usf_file(&self.path)
                 || is_2sf_file(&self.path)
+                || is_gsf_file(&self.path)
                 || crate::tracker::is_tracker(&self.path)
                 || crate::midi::is_midi(&self.path);
             if mono || stereo {
@@ -1451,6 +1479,8 @@ mod tests {
         decoders.push(("usf", crate::usf::is_usf, crate::usf::USF_EXTS.to_vec()));
         #[cfg(feature = "twosf")]
         decoders.push(("twosf", crate::twosf::is_2sf, crate::twosf::TWOSF_EXTS.to_vec()));
+        #[cfg(feature = "gsf")]
+        decoders.push(("gsf", crate::gsf::is_gsf, crate::gsf::GSF_EXTS.to_vec()));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.
