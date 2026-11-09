@@ -151,9 +151,12 @@ format Cargo features behind their own cores, like the AdPlug/SID shims.
 BIOS is needed or shipped. (This is why libupse, not Highly Experimental: HE requires the real 512 KB
 Sony BIOS, which is a shipping wall - confirmed hands-on.) libupse decodes to stereo s16 at 44.1 kHz
 and seeks natively; the shim gates every call on the PSF signature because libupse crashes on
-malformed input. Routes `.psf`/`.minipsf` only. Linux build (`build-upse-min.sh`),
-CI, and tarball bundling wired; Windows build/bundling (`build-upse.ps1` + Windows CI) pending on the
-Windows box.
+malformed input. Routes `.psf`/`.minipsf` only. Linux build (`build-upse-min.sh`), CI, and tarball
+bundling wired. Windows: `build-upse.ps1` compiles the vendored libupse sources with cl (the headers
+carry a WIN32_MSC path) into a static lib, combining the static zlib from build-gme.ps1 (PSF program
+sections are zlib-compressed) so one `upse.lib` is self-contained; it is linked into the exe (no DLL),
+and Windows CI builds `--features ...,psf`. Compile libupse with /MD so it shares the dynamic CRT with
+the Rust side and the cc-compiled shim (a static-CRT build trips LNK4098 and risks cross-CRT heap bugs).
 
 **PSF2 dropped (not shippable ROM-less).** libupse's PS2 IOP HLE is a stub - `upse_ps2_iop_call()`
 in `upse_ps2_iop_base.c` is empty, so no IOP/SPU2 syscall is serviced: real PSF2 tunes load but
