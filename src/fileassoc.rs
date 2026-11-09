@@ -179,6 +179,9 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         // Nintendo DS 2SF music via vio2sf (the `twosf` feature).
         #[cfg(feature = "twosf")]
         "2sf" | "mini2sf" => "audio/x-2sf",
+        // Game Boy Advance GSF music via libgsf (the `gsf` feature).
+        #[cfg(feature = "gsf")]
+        "gsf" | "minigsf" => "audio/x-gsf",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -350,6 +353,14 @@ fn mime_package_xml() -> String {
             "audio/x-2sf",
             "Nintendo DS 2SF music",
             &["*.2sf", "*.mini2sf"],
+        ));
+    }
+    #[cfg(feature = "gsf")]
+    {
+        types.push((
+            "audio/x-gsf",
+            "Game Boy Advance GSF music",
+            &["*.gsf", "*.minigsf"],
         ));
     }
     #[cfg(feature = "adplug")]

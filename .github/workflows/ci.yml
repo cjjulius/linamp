@@ -141,18 +141,20 @@ jobs:
           sh packaging/linux/build-sseqplayer-min.sh "$PWD/build/sseqplayer-min"
           sh packaging/linux/build-lazyusf2-min.sh "$PWD/build/lazyusf2-min"
           sh packaging/linux/build-vio2sf-min.sh "$PWD/build/vio2sf-min"
+          sh packaging/linux/build-libgsf-min.sh "$PWD/build/libgsf-min"
           echo "PSFLIB_DIR=$PWD/build/psflib-min" >> "$GITHUB_ENV"
           echo "HIGHLYTHEORETICAL_DIR=$PWD/build/highlytheoretical-min" >> "$GITHUB_ENV"
           echo "HIGHLYQUIXOTIC_DIR=$PWD/build/highlyquixotic-min" >> "$GITHUB_ENV"
           echo "SSEQPLAYER_DIR=$PWD/build/sseqplayer-min" >> "$GITHUB_ENV"
           echo "LAZYUSF_DIR=$PWD/build/lazyusf2-min" >> "$GITHUB_ENV"
           echo "VIO2SF_DIR=$PWD/build/vio2sf-min" >> "$GITHUB_ENV"
+          echo "LIBGSF_DIR=$PWD/build/libgsf-min" >> "$GITHUB_ENV"
 
-      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf + qsf + ncsf + usf + twosf)
+      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf + qsf + ncsf + usf + twosf + gsf)
         if: runner.os == 'Linux'
         run: |
-          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf --verbose
-          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib:$SIDPLAYFP_DIR/lib:$VGMSTREAM_DIR/lib:$UPSE_DIR/lib:$HIGHLYTHEORETICAL_DIR/lib:$HIGHLYQUIXOTIC_DIR/lib:$SSEQPLAYER_DIR/lib:$LAZYUSF_DIR/lib:$VIO2SF_DIR/lib:$PSFLIB_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf --verbose
+          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf --verbose
+          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib:$SIDPLAYFP_DIR/lib:$VGMSTREAM_DIR/lib:$UPSE_DIR/lib:$HIGHLYTHEORETICAL_DIR/lib:$HIGHLYQUIXOTIC_DIR/lib:$SSEQPLAYER_DIR/lib:$LAZYUSF_DIR/lib:$VIO2SF_DIR/lib:$LIBGSF_DIR/lib:$PSFLIB_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf --verbose
 
       # Windows builds libgme and its zlib dependency from source (no system libgme/zlib),
       # then builds and tests the full feature set (ffmpeg + gme). build.rs links $GME_DIR;
@@ -237,18 +239,21 @@ jobs:
           pwsh packaging\windows\build-sseqplayer.ps1
           pwsh packaging\windows\build-lazyusf2.ps1
           pwsh packaging\windows\build-vio2sf.ps1
+          pwsh packaging\windows\build-libgsf.ps1
           "PSFLIB_DIR=$PWD\build\psflib-min" | Out-File $env:GITHUB_ENV -Append
           "HIGHLYTHEORETICAL_DIR=$PWD\build\highlytheoretical-min" | Out-File $env:GITHUB_ENV -Append
           "HIGHLYQUIXOTIC_DIR=$PWD\build\highlyquixotic-min" | Out-File $env:GITHUB_ENV -Append
           "SSEQPLAYER_DIR=$PWD\build\sseqplayer-min" | Out-File $env:GITHUB_ENV -Append
           "LAZYUSF_DIR=$PWD\build\lazyusf2-min" | Out-File $env:GITHUB_ENV -Append
           "VIO2SF_DIR=$PWD\build\vio2sf-min" | Out-File $env:GITHUB_ENV -Append
+          "LIBGSF_DIR=$PWD\build\libgsf-min" | Out-File $env:GITHUB_ENV -Append
+          "$PWD\build\libgsf-min\bin" | Out-File $env:GITHUB_PATH -Append
 
-      - name: Build and test (Windows, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf + qsf + ncsf + usf + twosf)
+      - name: Build and test (Windows, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf + qsf + ncsf + usf + twosf + gsf)
         if: runner.os == 'Windows'
         run: |
-          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf --verbose
-          cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf --verbose
+          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf --verbose
+          cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf --verbose
 
   # Build the per-user installers. Runs on a v* tag (official release) or a
   # manual dispatch (dry run - artifacts only, no GitHub Release).
@@ -321,7 +326,7 @@ jobs:
       # on Windows lands when the Windows box adds its build and DLL bundling.
       - name: Build Linux tarball
         if: runner.os == 'Linux'
-        run: FEATURES=ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf sh packaging/linux/build-tarball.sh
+        run: FEATURES=ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf sh packaging/linux/build-tarball.sh
 
       - name: Upload Linux tarball
         if: runner.os == 'Linux'
@@ -390,18 +395,21 @@ jobs:
           pwsh packaging\windows\build-sseqplayer.ps1
           pwsh packaging\windows\build-lazyusf2.ps1
           pwsh packaging\windows\build-vio2sf.ps1
+          pwsh packaging\windows\build-libgsf.ps1
           "PSFLIB_DIR=$PWD\build\psflib-min" | Out-File $env:GITHUB_ENV -Append
           "HIGHLYTHEORETICAL_DIR=$PWD\build\highlytheoretical-min" | Out-File $env:GITHUB_ENV -Append
           "HIGHLYQUIXOTIC_DIR=$PWD\build\highlyquixotic-min" | Out-File $env:GITHUB_ENV -Append
           "SSEQPLAYER_DIR=$PWD\build\sseqplayer-min" | Out-File $env:GITHUB_ENV -Append
           "LAZYUSF_DIR=$PWD\build\lazyusf2-min" | Out-File $env:GITHUB_ENV -Append
           "VIO2SF_DIR=$PWD\build\vio2sf-min" | Out-File $env:GITHUB_ENV -Append
+          "LIBGSF_DIR=$PWD\build\libgsf-min" | Out-File $env:GITHUB_ENV -Append
+          "$PWD\build\libgsf-min\bin" | Out-File $env:GITHUB_PATH -Append
 
       - name: Build Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --release --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf
+          cargo build --release --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf
           # Derive the version from Cargo.toml and pass it to ISCC - without this
           # the installer falls back to the version baked into linamp.iss, which
           # is how v0.3.0 shipped a "LinAmp-0.2.0-Setup.exe". /DWithFfmpeg bundles the
@@ -410,7 +418,7 @@ jobs:
           # codec helper DLLs, next to the exe. The adplug feature needs no bundling: AdPlug
           # and libbinio are linked statically into the exe on Windows.
           $ver = ([regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "/DWithFfmpeg" "/DFfmpegBin=$env:FFMPEG_DIR\bin" "/DWithGme" "/DGmeBin=$PWD\build\gme-min\bin" "/DZlibBin=$PWD\build\zlib\bin" "/DWithOpenmpt" "/DOpenmptBin=$PWD\build\openmpt-min\bin" packaging\windows\linamp.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "/DWithFfmpeg" "/DFfmpegBin=$env:FFMPEG_DIR\bin" "/DWithGme" "/DGmeBin=$PWD\build\gme-min\bin" "/DZlibBin=$PWD\build\zlib\bin" "/DWithOpenmpt" "/DOpenmptBin=$PWD\build\openmpt-min\bin" "/DWithGsf" "/DGsfBin=$PWD\build\libgsf-min\bin" packaging\windows\linamp.iss
 
       - name: Upload Windows installer
         if: runner.os == 'Windows'

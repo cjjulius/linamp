@@ -1,6 +1,6 @@
 [package]
 name = "linamp"
-version = "1.1.6"
+version = "1.1.7"
 edition = "2021"
 description = "LinAmp - a Winamp-inspired audio player for Linux and Windows, built in Rust"
 authors = ["LinAmp contributors"]
@@ -244,3 +244,8 @@ usf = []
 # build/psflib-min, from build-vio2sf-min.sh and build-psflib-min.sh). ROM-less: DeSmuME's HLE BIOS and a
 # synthesized firmware-settings block stand in, so no DS BIOS/firmware image is involved. 44.1 kHz stereo.
 twosf = []
+# Game Boy Advance GSF music (.gsf/.minigsf), via libgsf (which bundles a trimmed mGBA, both MPL-2.0).
+# Needs a build at $LIBGSF_DIR (default build/libgsf-min, from build-libgsf-min.sh, a CMake build).
+# Unlike the other *SF features it does NOT use psflib (libgsf parses the container itself). ROM-less:
+# mGBA's built-in HLE BIOS stands in for the GBA BIOS, so no Nintendo BIOS is involved. 44.1 kHz stereo.
+gsf = []

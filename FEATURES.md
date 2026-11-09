@@ -33,8 +33,9 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   program music, all ROM-less (no BIOS): PlayStation PSF1 via libupse (`psf`: `.psf`/`.minipsf`),
   Sega Saturn/Dreamcast SSF/DSF via Highly_Theoretical (`ssf`: `.ssf`/`.minissf`/`.dsf`/`.minidsf`),
   Capcom QSound QSF via Highly_Quixotic (`qsf`: `.qsf`/`.miniqsf`), Nintendo DS NCSF via SSEQPlayer
-  (`ncsf`: `.ncsf`/`.minincsf`), Nintendo 64 USF via lazyusf2 (`usf`: `.usf`/`.miniusf`), and
-  Nintendo DS 2SF via vio2sf (`twosf`: `.2sf`/`.mini2sf`).
+  (`ncsf`: `.ncsf`/`.minincsf`), Nintendo 64 USF via lazyusf2 (`usf`: `.usf`/`.miniusf`),
+  Nintendo DS 2SF via vio2sf (`twosf`: `.2sf`/`.mini2sf`), and Game Boy Advance GSF via libgsf
+  (`gsf`: `.gsf`/`.minigsf`).
   The shipped release enables all of these
 - Windows Media Audio (`.wma`), DTS (`.dts`) and Dolby TrueHD / MLP (`.thd`/`.mlp`) in the
   optional FFmpeg build (`--features ffmpeg`), decoded via `crate::ffdec` over FFmpeg (LGPL).
