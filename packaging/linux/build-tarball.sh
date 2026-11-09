@@ -76,8 +76,18 @@ case ",$FEATURES," in
   *,ncsf,*) BUNDLE_NCSF=1 ;;
   *) BUNDLE_NCSF=0 ;;
 esac
-# psflib (the shared PSF-family container parser) is needed by any of ssf/qsf/ncsf; build it once.
-if [ "$BUNDLE_SSF" = 1 ] || [ "$BUNDLE_QSF" = 1 ] || [ "$BUNDLE_NCSF" = 1 ]; then
+# The usf feature (Nintendo 64 USF) links lazyusf2 + the shared psflib, both ROM-less.
+case ",$FEATURES," in
+  *,usf,*) BUNDLE_USF=1 ;;
+  *) BUNDLE_USF=0 ;;
+esac
+# The twosf feature (Nintendo DS 2SF) links vio2sf + the shared psflib, both ROM-less.
+case ",$FEATURES," in
+  *,twosf,*) BUNDLE_TWOSF=1 ;;
+  *) BUNDLE_TWOSF=0 ;;
+esac
+# psflib (the shared PSF-family container parser) is needed by any of ssf/qsf/ncsf/usf/twosf; build it once.
+if [ "$BUNDLE_SSF" = 1 ] || [ "$BUNDLE_QSF" = 1 ] || [ "$BUNDLE_NCSF" = 1 ] || [ "$BUNDLE_USF" = 1 ] || [ "$BUNDLE_TWOSF" = 1 ]; then
   BUNDLE_PSFLIB=1
 else
   BUNDLE_PSFLIB=0
@@ -177,6 +187,16 @@ if [ "$BUNDLE_NCSF" = 1 ]; then
   SP_MIN="$ROOT/build/sseqplayer-min"
   sh "$ROOT/packaging/linux/build-sseqplayer-min.sh" "$SP_MIN"
   export SSEQPLAYER_DIR="$SP_MIN"
+fi
+if [ "$BUNDLE_USF" = 1 ]; then
+  LU_MIN="$ROOT/build/lazyusf2-min"
+  sh "$ROOT/packaging/linux/build-lazyusf2-min.sh" "$LU_MIN"
+  export LAZYUSF_DIR="$LU_MIN"
+fi
+if [ "$BUNDLE_TWOSF" = 1 ]; then
+  VS_MIN="$ROOT/build/vio2sf-min"
+  sh "$ROOT/packaging/linux/build-vio2sf-min.sh" "$VS_MIN"
+  export VIO2SF_DIR="$VS_MIN"
 fi
 
 echo "==> cargo build --release $FEATURE_ARGS"
@@ -280,11 +300,14 @@ if [ "$BUNDLE_PSFLIB" = 1 ]; then
   [ "$BUNDLE_SSF" = 1 ] && cp -a "$HIGHLYTHEORETICAL_DIR"/lib/libhighlytheoretical.so* "$STAGE/lib/" 2>/dev/null || true
   [ "$BUNDLE_QSF" = 1 ] && cp -a "$HIGHLYQUIXOTIC_DIR"/lib/libhighlyquixotic.so* "$STAGE/lib/" 2>/dev/null || true
   [ "$BUNDLE_NCSF" = 1 ] && cp -a "$SSEQPLAYER_DIR"/lib/libsseqplayer.so* "$STAGE/lib/" 2>/dev/null || true
+  [ "$BUNDLE_USF" = 1 ] && cp -a "$LAZYUSF_DIR"/lib/liblazyusf.so* "$STAGE/lib/" 2>/dev/null || true
+  [ "$BUNDLE_TWOSF" = 1 ] && cp -a "$VIO2SF_DIR"/lib/libvio2sf.so* "$STAGE/lib/" 2>/dev/null || true
   for f in "$STAGE"/lib/libpsflib.so* "$STAGE"/lib/libhighlytheoretical.so* \
-           "$STAGE"/lib/libhighlyquixotic.so* "$STAGE"/lib/libsseqplayer.so*; do
+           "$STAGE"/lib/libhighlyquixotic.so* "$STAGE"/lib/libsseqplayer.so* \
+           "$STAGE"/lib/liblazyusf.so* "$STAGE"/lib/libvio2sf.so*; do
     [ -e "$f" ] && echo "    + $(basename "$f")"
   done
-  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libpsflib|libhighlytheoretical|libhighlyquixotic|libsseqplayer' | grep -vq "$STAGE/lib"; then
+  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libpsflib|libhighlytheoretical|libhighlyquixotic|libsseqplayer|liblazyusf|libvio2sf' | grep -vq "$STAGE/lib"; then
     echo "!!  WARNING: an *SF library still resolves outside $STAGE/lib; check the rpath" >&2
   fi
 fi

@@ -184,8 +184,14 @@ PSF). Several of the others HLE and should be fine, but it must be verified - we
     CAVEAT: `.dsf` also means DSD Stream File (we already decode that in src/dsd.rs) - route SSF/DSF by
     content (PSF signature + version byte 0x11=SSF / 0x12=DSF), never by extension.
   - USF: **lazyusf2** (mupen64plus-derived; ROM-less via the USF's embedded Project64 save-state, no PIF
-    boot ROM). License **GPL-2.0-or-later**. Kodi `xbmc/audiodecoder.usf`. Heaviest-but-one (R4300 +
-    RSP + RDP, x86/x64 dynarec with interpreter fallback).
+    boot ROM). License **GPL-2.0-or-later** (verified from source headers: 79 GPL-2-or-later + 2 CC0,
+    no non-commercial code). SOURCE CORRECTION: do NOT use the Kodi `xbmc/audiodecoder.usf` tree - it
+    vendors the ORIGINAL lazyusf, whose core CPU files carry zilmar's Project64 "PERSONAL USE only /
+    non-commercial" license (field-of-use = effectively proprietary, mantra tier 6). lazyusf2 replaced
+    that core with mupen64plus's GPL R4300, so it is clean; build from **derselbst/lazyusf2** (a
+    maintained fork of kode54's, adds arm64) pinned. Built with the **cached interpreter, no dynarec**
+    (one portable recipe x86_64/arm64; a music player does not need the JIT). Audio is pinned to 44.1 kHz
+    via lazyusf2's own resampler. DONE.
   - GSF: **mGBA + libgsf** (MPL-2.0). mGBA's built-in HLE BIOS plays GSF ROM-less (`useBios=false`); no
     Nintendo BIOS. Corrections: lazygsf (jprjr) is **deleted from GitHub** - use **libgsf (chrg127,
     MPL-2.0)** from Codeberg (`codeberg.org/chrg/libgsf`, pin a copy); and viogsf is built on **VBA-M
@@ -197,9 +203,12 @@ PSF). Several of the others HLE and should be fine, but it must be verified - we
   - NCSF: **SSEQPlayer** (Nitro SDAT/SSEQ soundbank sequencer - no emulator, no BIOS at all). License
     **WTFPL** (permissive; or BSD-3 via CyberBotX in_xsf) - NOT GPL. Kodi `xbmc/audiodecoder.ncsf`
     bundles the WTFPL engine + psflib. Lightest of the set.
-  - 2SF: **vio2sf** (DeSmuME-derived; ROM-less via DeSmuME's HLE BIOS - `bios.c`, no `bios.bin`).
-    License **GPL-2.0**. Kodi `xbmc/audiodecoder.2sf`. HEAVIEST core (dual ARM7/ARM9 interpreters, MMU,
-    SPU) - do last. Verify DeSmuME is GPL-2.0-"or-later" before shipping (see license-compat note below).
+  - 2SF: **vio2sf** (DeSmuME-derived; ROM-less via DeSmuME's HLE BIOS - `bios.c`, no `bios.bin`, plus a
+    synthesized blank firmware-settings block). License **GPL-2.0-or-later** (verified from the DeSmuME
+    source headers - the "or later" confirmed, so not the GPLv2-only blocker). Kodi `xbmc/audiodecoder.2sf`
+    (vendors `lib/vio2sf` + `lib/psflib`; its `src/2SFCodec.cpp` loader was ported into `src/twosf_shim.cpp`).
+    HEAVIEST core (dual ARM7/ARM9 interpreters, MMU, SPU; one C++ TU -> libstdc++, like NCSF). The Kodi
+    silence-suppression/fade machinery is dropped - LinAmp plays what is there. 44.1 kHz native. DONE.
 - License reality: GSF (mGBA/libgsf **MPL-2.0**) and NCSF (SSEQPlayer **WTFPL**/BSD) are permissive
   (mantra tier 3); SSF/DSF and QSF are **GPL-3**, USF is **GPL-2-or-later**, 2SF is **GPL-2**. Enabling
   any copyleft `*SF` feature makes that build GPL - acceptable under mantra rule 5, the status quo of
@@ -215,15 +224,19 @@ PSF). Several of the others HLE and should be fine, but it must be verified - we
   SDK as a source - it mixes in MAME's non-commercial clause; use the kode54/Kodi split-cores instead.
 - No pure-Rust option exists for any subformat (confirmed on crates.io); C/C++ is the floor.
 - Implementation order (finalized 2026-11-09, after the deep-research pass above):
-  1. **SSF + DSF + QSF + NCSF** - DONE (pending QA/merge) on `feat/tier2f-ssf-dsf-qsf-ncsf`. Three
+  1. **SSF + DSF + QSF + NCSF** - DONE, merged (PR #241, v1.1.6). Three
      psflib-based cores (Highly_Theoretical for SSF+DSF and Highly_Quixotic for QSF are C; SSEQPlayer
      for NCSF is C++), all built the PSF1/libupse way (vendored sources + shared psflib + zlib, thin
      `cc` shim, Cargo feature). Includes the `.dsf`-vs-DSD content-routing fix. Validated on real
      Saturn/Dreamcast/Capcom/DS rips.
-  2. **USF** (lazyusf2) - own branch; heavy (R4300+RSP+RDP, dynarec).
-  3. **GSF** (mGBA + libgsf) - own branch; different build shape (CMake, no psflib).
-  4. **2SF** (vio2sf/DeSmuME) - last; heaviest core + the GPL-2-"or-later" check.
-  PSF1 shipped first (biggest corpus; done). One grouping per branch, like the 2a-2d work.
+  2. **USF + 2SF** - DONE (pending QA/merge) on `feat/tier2f-usf-2sf`. Both psflib-based (`cc`/`c++`
+     shim, shared psflib), same pattern as grouping 1: USF = lazyusf2 (C, cached interpreter - no
+     dynarec), 2SF = vio2sf (C + one C++ TU, the heaviest core). Both GPL-2-or-later (-> GPLv3 combined,
+     the same posture as the merged cores). Validated on real N64 + DS rips.
+  3. **GSF** (mGBA + libgsf) - own branch; the odd one out - different build shape (CMake + C++20, no
+     psflib), MPL-2.0. Isolated so that build-tooling change lands on its own.
+  PSF1 shipped first (biggest corpus; done). One grouping per branch, like the 2a-2d work. USF+2SF were
+  bundled (same proven pattern, both GPL); GSF stands alone for its CMake/C++20 build.
 
 ## Phase 3 - Modern and ideal-fit
 
@@ -378,8 +391,9 @@ Phase 2 stretch
   PSF1 music, procure a tune from Zophar (local QA only).
 - [~] `*SF` family, the rest - deep-researched 2026-11-09: all ROM-less, none a wall (cores/licenses
   in "Phase 2 stretch" above). **SSF+DSF (Highly_Theoretical), QSF (Highly_Quixotic), NCSF (SSEQPlayer)
-  DONE** on `feat/tier2f-ssf-dsf-qsf-ncsf` (`ssf`/`qsf`/`ncsf` features, shared psflib; validated on
-  real rips; pending QA/merge). Remaining: USF, then GSF, then 2SF. GSF (MPL) and NCSF (WTFPL) are
+  DONE** on `feat/tier2f-ssf-dsf-qsf-ncsf` (merged, PR #241, v1.1.6). **USF (lazyusf2) + 2SF (vio2sf)
+  DONE** on `feat/tier2f-usf-2sf` (`usf`/`twosf` features, shared psflib; validated on real N64 + DS
+  rips; pending QA/merge). Remaining: GSF (its own branch). GSF (MPL) and NCSF (WTFPL) are
   permissive; the rest are GPL. SNSF stays a wall (snes9x non-commercial).
 
 Phase 3 - Modern/ideal
