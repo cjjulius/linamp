@@ -225,6 +225,16 @@ game engines ship them in. Nothing to convert first, drop the file in and it pla
 Some game files hold their audio in a codec that needs an extra decoder we do not bundle yet (for
 example Vorbis inside an FSB, or Xbox 360 XMA); those are skipped for now rather than played wrong.
 
+### Console program music (PSF)
+
+The PlayStation's own music format: instead of a recording, the file carries the game's little music
+program and LinAmp emulates the console to play it, just like the chip formats above.
+
+| Extension | System | Good to know |
+|---|---|---|
+| `.psf` `.minipsf` | PlayStation | Emulated, no BIOS needed. A `.minipsf` wants its `.psflib` beside it |
+| `.psf2` `.minipsf2` | PlayStation 2 | |
+
 ---
 
 ## Other

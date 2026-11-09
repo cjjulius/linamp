@@ -139,17 +139,30 @@ BRSTM/BCSTM/BFSTM, FMOD FSB, Microsoft XWB, Sony XVAG/ATRAC9, Koei KTSS, and mor
   as a second tier later (LGPL FFmpeg, no `--enable-gpl`, same posture as the existing gme/adplug LGPL
   libs) if the demand is there.
 
-#### 2f. The `*SF` family (emulated-program music) - PLANNED, not started
+#### 2f. The `*SF` family (emulated-program music) - PSF1/PSF2 DONE, rest planned
 PSF/PSF2 (PlayStation), GSF (GBA), 2SF (NDS), USF (N64), SSF/DSF (Saturn/Dreamcast), QSF (Capcom
 QSound), NCSF (NDS). Each file is a compressed program + driver for a specific console, played by a
 system-specific emulator core - so unlike vgmstream there is **no single library**: it is one shared
-container (`psflib`, MIT) plus ~6 emulator cores (PSF1&PSF2 share one; SSF&DSF share one), which
-together cover 8 of the 9 subformats. Integrate as `cc`-compiled cores behind per-format Cargo
-features, like the AdPlug/SID shims.
+container plus several emulator cores. PSF1+PSF2 shipped first (the `psf` feature); the rest are per-
+format Cargo features behind their own cores, like the AdPlug/SID shims.
+
+**2f-psf (PSF1/PSF2) - DONE.** `psf` feature, src/psf.rs + src/psf_shim.c (C shim via cc). Decoder:
+**libupse (GPL)**, which ships its own HLE "FakeBIOS" and so plays PSF **ROM-less** - no PlayStation
+BIOS is needed or shipped. (This is why libupse, not Highly Experimental: HE requires the real 512 KB
+Sony BIOS, which is a shipping wall - confirmed hands-on.) libupse decodes to stereo s16 at 44.1 kHz
+and seeks natively; the shim gates every call on the PSF signature because libupse crashes on
+malformed input. Routes `.psf`/`.minipsf`/`.psf2`/`.minipsf2`. Linux build (`build-upse-min.sh`),
+CI, and tarball bundling wired; Windows build/bundling (`build-upse.ps1` + Windows CI) pending on the
+Windows box.
+
+A critical lesson for the remaining cores: **BIOS/ROM-check each core before adopting it** (as done for
+PSF). Several of the others HLE and should be fine, but it must be verified - we ship no console ROMs.
 
 - Decoders (all actively maintained; the Kodi `audiodecoder.*` binary-addons are the cleanest uniform
   source - one shared `psflib`, all CMake, all build on Linux + Windows):
-  - PSF1/PSF2: libupse (GPL-2) for a quick win, or Highly Experimental (GPL-3) for better PS2 accuracy.
+  - PSF1/PSF2: **libupse (GPL)** - DONE (the `psf` feature, see 2f-psf below). NOT Highly Experimental:
+    HE needs the real 512 KB PlayStation BIOS (a shipping wall; verified hands-on), while libupse ships
+    its own HLE "FakeBIOS" and plays PSF ROM-less.
   - SSF/DSF: Highly Theoretical (GPL-2, MAME-free).  USF: lazyusf2 (GPL-2).
   - GSF: prefer **lazygsf + mGBA (MIT + MPL-2.0)** to keep it off GPL, else viogsf (GPL-2).
   - QSF: Highly Quixotic (GPL-2).  NCSF: SSEQPlayer (GPL-2/BSD, lightweight - no full emulator).
@@ -309,8 +322,12 @@ Phase 2 stretch
   runs last. Linux build (`build-vgmstream-min.sh`, CMake, pinned r2168), CI, and tarball bundling wired.
   Windows build/bundling (`build-vgmstream.ps1` + Windows CI feature add) pending on the Windows box.
   FFmpeg-backed codecs (XMA/ATRAC3/WMA) and Vorbis/CELT-payload variants deferred to a later build tier.
-- [ ] `*SF` family (PSF/PSF2/GSF/2SF/USF/SSF/DSF/QSF/NCSF) - planned (see "Phase 2 stretch" above);
-  not started. GPL per-core (one branch or two when taken up). SNSF is a wall (snes9x non-commercial).
+- [x] `*SF` family, PSF1/PSF2 - `psf` feature, src/psf.rs + src/psf_shim.c (libupse, GPL). ROM-less
+  (libupse's HLE FakeBIOS; no PlayStation BIOS, not HE which needs the real BIOS). Native seek, stereo.
+  `.psf`/`.minipsf`/`.psf2`/`.minipsf2`. Linux build/CI/tarball wired; Windows build pending on the
+  Windows box. Reproducible CC0 QA sample (hand-authored minimal PSF, recipe in the cookbook).
+- [ ] `*SF` family, the rest (GSF/USF/2SF/SSF/DSF/QSF/NCSF) - planned (see "Phase 2 stretch" above);
+  GPL per-core. BIOS/ROM-check each core before adopting. SNSF is a wall (snes9x non-commercial).
 
 Phase 3 - Modern/ideal
 - [ ] QOA (.qoa)
@@ -598,6 +615,51 @@ Not routed on purpose: `.adx`/`.at3`/`.oma` (already on ffdec), `.awb` (AMR-WB o
 its cue sheet), and vgmstream's generic claims (`.ogg`/`.wav`/`.aac`/...). Formats whose payload needs
 an external codec (Vorbis FSB, XMA/ATRAC3/WMA) fail to open in the core-only build and are skipped
 until a later FFmpeg/Vorbis build tier lands.
+
+### PlayStation PSF (crate::psf, `--features psf`)
+libupse emulates the PS1/PS2 sound hardware and runs the driver a PSF carries; it is ROM-less (its own
+HLE FakeBIOS), so no PlayStation BIOS is needed or shipped. One build plays PSF1 and PSF2. No oracle
+(libupse is the only decoder); the test is a render smoke test (non-silent audio), like the chiptunes.
+
+Preferred committed sample - a minimal hand-authored CC0 PSF1 (reproducible, no copyright, exercises
+the full open/render/seek path). It is a tiny PS-X EXE that sets SPU voice 0 to noise mode and keys it
+on, producing continuous audible noise (the PS1 SPU is sample-based, so a noise voice is the simplest
+sound that needs no ADPCM sample data). Note the I/O base is `0x1F80_0000`, not the `0xBF80` KSEG1
+mirror - libupse maps I/O there. Build it with (`python3 mkpsf.py psf-sample.psf`):
+
+    ```python
+    import struct, zlib
+    def I(op, rs=0, rt=0, imm=0): return (op<<26)|(rs<<21)|(rt<<16)|(imm&0xFFFF)
+    LUI,ORI,SH,BEQ = 0x0F,0x0D,0x29,0x04; Z,T0,T1,T2 = 0,8,9,10
+    c = [I(LUI,0,T0,0x1F80),                                   # t0 = 0x1F800000 (I/O base)
+         I(ORI,Z,T1,0x1800), I(SH,T0,T1,0x1D80), I(SH,T0,T1,0x1D82),  # main vol L/R
+         I(SH,T0,T1,0x1C00), I(SH,T0,T1,0x1C02),                      # voice0 vol L/R
+         I(ORI,Z,T2,0x1000), I(SH,T0,T2,0x1C04),                      # voice0 pitch
+         I(ORI,Z,T2,0x00FF), I(SH,T0,T2,0x1C08),                      # voice0 ADSR1 (fast attack, sustain max)
+         I(ORI,Z,T2,0x0000), I(SH,T0,T2,0x1C0A),                      # voice0 ADSR2 (hold)
+         I(ORI,Z,T1,0x0001), I(SH,T0,T1,0x1D94),                      # NON: voice0 noise mode
+         I(ORI,Z,T2,0xFF00), I(SH,T0,T2,0x1DAA),                      # SPUCNT: enable+unmute+noise clock
+         I(ORI,Z,T1,0x0001), I(SH,T0,T1,0x1D88),                      # KON voice0
+         I(BEQ,Z,Z,0xFFFF), 0]                                        # b . ; nop
+    text = b"".join(struct.pack("<I",w) for w in c); text = text.ljust((len(text)+2047)&~2047, b"\0")
+    PC0 = 0x80010000
+    hdr = bytearray(0x800); hdr[0:8] = b"PS-X EXE"
+    struct.pack_into("<I",hdr,0x10,PC0); struct.pack_into("<I",hdr,0x18,PC0)
+    struct.pack_into("<I",hdr,0x1C,len(text)); struct.pack_into("<I",hdr,0x30,0x801FFF00)
+    comp = zlib.compress(bytes(hdr)+text, 9)
+    psf = b"PSF"+bytes([1])+struct.pack("<I",0)+struct.pack("<I",len(comp))+struct.pack("<I",zlib.crc32(comp)&0xFFFFFFFF)+comp
+    psf += b"[TAG]utf8=1\ntitle=LinAmp PSF test\nartist=LinAmp\ncopyright=2026 CC0\n"
+    open("psf-sample.psf","wb").write(psf)
+    ```
+
+Real game tunes (PSF2 especially, and for richer manual QA): procure from Zophar's Domain
+(`zophar.net/music/playstation-psf` for PSF1, `.../playstation2-psf2` for PSF2). These are copyrighted
+game rips - local QA only, never commit. A `.minipsf` needs its `.psflib` beside it; libupse resolves
+the `_lib` reference. Pick a tune long enough to scrub.
+
+Windows: `packaging/windows/build-upse.ps1` (to be written by the Windows box) builds libupse as a
+static lib or DLL from the same audiodecoder.upse source and links it, like the AdPlug/SID handoff.
+The Linux side (`build-upse-min.sh`) compiles the vendored lib/libupse sources into libupse.so.
 
 ### Oracles
 The `oracles/*.f32` and `*.s16` files are headerless raw-PCM decode references for the correlation

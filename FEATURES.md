@@ -29,7 +29,9 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   Commodore 64 SID via libsidplayfp (`sid`: `.sid`/`.psid`/`.rsid`, ROM-less), and
   streamed game-engine audio via libvgmstream (`vgmstream`: GameCube/Wii DSP, PS-ADPCM VAG,
   CRI HCA, Nintendo BRSTM/BCSTM/BFSTM, FMOD FSB, Microsoft XWB, Sony XVAG/ATRAC9, and more,
-  routed by an allowlist of game-specific extensions). The shipped release enables all of these
+  routed by an allowlist of game-specific extensions), and PlayStation PSF1/PSF2 program music
+  via libupse (`psf`: `.psf`/`.minipsf`/`.psf2`/`.minipsf2`, emulated ROM-less with no BIOS).
+  The shipped release enables all of these
 - Windows Media Audio (`.wma`), DTS (`.dts`) and Dolby TrueHD / MLP (`.thd`/`.mlp`) in the
   optional FFmpeg build (`--features ffmpeg`), decoded via `crate::ffdec` over FFmpeg (LGPL).
   None has a permissive pure-Rust decoder mature enough for real-time playback (the pure-Rust

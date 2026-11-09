@@ -28,6 +28,7 @@ fn main() {
     link_adplug(&manifest, &target_dir);
     link_sid(&manifest, &target_dir);
     link_vgmstream(&manifest, &target_dir);
+    link_psf(&manifest, &target_dir);
 }
 
 /// Link libsidplayfp for the `sid` feature: compile the C++ shim (src/sid_shim.cpp) that gives
@@ -237,6 +238,53 @@ fn link_vgmstream(manifest: &Path, target_dir: &Path) {
             for e in entries.flatten() {
                 let name = e.file_name();
                 if name.to_string_lossy().contains("libvgmstream.so") {
+                    let _ = fs::copy(e.path(), dst.join(&name));
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
+}
+
+/// Link libupse for the `psf` feature: compile the small C shim (src/psf_shim.c) that wires stdio
+/// into libupse's I/O callbacks and exposes a tiny API, link libupse, and bundle the shared library
+/// next to the binary (runtime resolution via an `$ORIGIN/lib` rpath), the same self-contained
+/// pattern as the other native features. The library and headers are found at `$UPSE_DIR` (a prefix
+/// with `lib/libupse.so` and `include/upse.h`), defaulting to the in-repo `build/upse-min` that
+/// `packaging/linux/build-upse-min.sh` produces. libupse is ROM-less (its own HLE BIOS; no PlayStation
+/// BIOS). No-op without the feature.
+fn link_psf(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=UPSE_DIR");
+    if env::var_os("CARGO_FEATURE_PSF").is_none() {
+        return;
+    }
+    println!("cargo:rerun-if-changed=src/psf_shim.c");
+    let dir = env::var_os("UPSE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/upse-min"));
+    let incdir = dir.join("include");
+    let libdir = dir.join("lib");
+
+    // Compile the C shim into a static lib linked into the crate; it includes libupse's headers.
+    cc::Build::new()
+        .file("src/psf_shim.c")
+        .include(&incdir)
+        .compile("psf_shim");
+
+    println!("cargo:rustc-link-search=native={}", libdir.display());
+    println!("cargo:rustc-link-lib=dylib=upse");
+
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        if let Ok(entries) = fs::read_dir(&libdir) {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                if name.to_string_lossy().contains("libupse.so") {
                     let _ = fs::copy(e.path(), dst.join(&name));
                 }
             }
