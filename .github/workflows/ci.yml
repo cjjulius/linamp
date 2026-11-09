@@ -219,23 +219,28 @@ jobs:
           pwsh packaging\windows\build-upse.ps1
           "UPSE_DIR=$PWD\build\upse-min" | Out-File $env:GITHUB_ENV -Append
 
-      # psflib (shared PSF-family container parser) + Highly_Theoretical (Sega SSF/DSF), built from
-      # source as static libs; ROM-less (emulates only the SCSP/AICA). psflib needs the static zlib
-      # from the GME step above, so this runs after it. build.rs compiles the C shim and links both.
-      - name: Provision psflib + Highly_Theoretical (Windows)
+      # The shared psflib container parser plus the three PSF-family cores, built from source as static
+      # libs, all ROM-less: Highly_Theoretical (Sega SSF/DSF), Highly_Quixotic (Capcom QSF QSound), and
+      # SSEQPlayer (Nintendo NCSF, a C++ SDAT sequencer). psflib needs the static zlib from the GME step
+      # above, so this runs after it. build.rs compiles each shim and links the cores.
+      - name: Provision psflib + Sega/Capcom/Nintendo *SF cores (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           pwsh packaging\windows\build-psflib.ps1
           pwsh packaging\windows\build-highly-theoretical.ps1
+          pwsh packaging\windows\build-highly-quixotic.ps1
+          pwsh packaging\windows\build-sseqplayer.ps1
           "PSFLIB_DIR=$PWD\build\psflib-min" | Out-File $env:GITHUB_ENV -Append
           "HIGHLYTHEORETICAL_DIR=$PWD\build\highlytheoretical-min" | Out-File $env:GITHUB_ENV -Append
+          "HIGHLYQUIXOTIC_DIR=$PWD\build\highlyquixotic-min" | Out-File $env:GITHUB_ENV -Append
+          "SSEQPLAYER_DIR=$PWD\build\sseqplayer-min" | Out-File $env:GITHUB_ENV -Append
 
-      - name: Build and test (Windows, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf)
+      - name: Build and test (Windows, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf + qsf + ncsf)
         if: runner.os == 'Windows'
         run: |
-          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf --verbose
-          cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf --verbose
+          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf --verbose
+          cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf --verbose
 
   # Build the per-user installers. Runs on a v* tag (official release) or a
   # manual dispatch (dry run - artifacts only, no GitHub Release).
@@ -364,22 +369,27 @@ jobs:
           pwsh packaging\windows\build-upse.ps1
           "UPSE_DIR=$PWD\build\upse-min" | Out-File $env:GITHUB_ENV -Append
 
-      # psflib + Highly_Theoretical (Sega SSF/DSF), static, ROM-less. psflib needs the static zlib
-      # from the GME step, so this runs after it. Both link into the exe (no DLL to bundle).
-      - name: Provision psflib + Highly_Theoretical (Windows)
+      # psflib + the three PSF-family cores (Highly_Theoretical SSF/DSF, Highly_Quixotic QSF,
+      # SSEQPlayer NCSF), static, ROM-less. psflib needs the static zlib from the GME step, so this runs
+      # after it. All link into the exe (no DLL to bundle).
+      - name: Provision psflib + Sega/Capcom/Nintendo *SF cores (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           pwsh packaging\windows\build-psflib.ps1
           pwsh packaging\windows\build-highly-theoretical.ps1
+          pwsh packaging\windows\build-highly-quixotic.ps1
+          pwsh packaging\windows\build-sseqplayer.ps1
           "PSFLIB_DIR=$PWD\build\psflib-min" | Out-File $env:GITHUB_ENV -Append
           "HIGHLYTHEORETICAL_DIR=$PWD\build\highlytheoretical-min" | Out-File $env:GITHUB_ENV -Append
+          "HIGHLYQUIXOTIC_DIR=$PWD\build\highlyquixotic-min" | Out-File $env:GITHUB_ENV -Append
+          "SSEQPLAYER_DIR=$PWD\build\sseqplayer-min" | Out-File $env:GITHUB_ENV -Append
 
       - name: Build Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --release --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf
+          cargo build --release --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf
           # Derive the version from Cargo.toml and pass it to ISCC - without this
           # the installer falls back to the version baked into linamp.iss, which
           # is how v0.3.0 shipped a "LinAmp-0.2.0-Setup.exe". /DWithFfmpeg bundles the
