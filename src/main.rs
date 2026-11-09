@@ -43,6 +43,8 @@ mod ncsf;
 mod usf;
 #[cfg(feature = "twosf")]
 mod twosf;
+#[cfg(feature = "gsf")]
+mod gsf;
 mod flv;
 mod icon;
 mod library;

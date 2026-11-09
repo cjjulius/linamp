@@ -34,6 +34,7 @@ fn main() {
     link_ncsf(&manifest, &target_dir);
     link_usf(&manifest, &target_dir);
     link_twosf(&manifest, &target_dir);
+    link_gsf(&manifest, &target_dir);
 }
 
 /// Link libsidplayfp for the `sid` feature: compile the C++ shim (src/sid_shim.cpp) that gives
@@ -578,6 +579,51 @@ fn link_twosf(manifest: &Path, target_dir: &Path) {
                     if n.contains("libvio2sf.so") || n.contains("libpsflib.so") {
                         let _ = fs::copy(e.path(), dst.join(&name));
                     }
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = target_dir;
+}
+
+/// Link libgsf for the `gsf` feature: compile the C shim (src/gsf_shim.c) that drives libgsf, link it,
+/// and bundle it next to the binary (runtime resolution via an `$ORIGIN/lib` rpath). Unlike the other
+/// *SF cores libgsf does NOT use psflib (it parses the GSF container itself) and bundles its own trimmed
+/// mGBA, so this links a single shared library. It is found at `$LIBGSF_DIR` (`lib/libgsf.so` +
+/// `include/gsf.h`), defaulting to the in-repo `build/libgsf-min` that `packaging/linux/build-libgsf-min.sh`
+/// produces (a CMake build, unlike the hand-compiled cores). libgsf is ROM-less (mGBA's HLE BIOS; no
+/// Nintendo BIOS). No-op without the feature.
+fn link_gsf(manifest: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=LIBGSF_DIR");
+    if env::var_os("CARGO_FEATURE_GSF").is_none() {
+        return;
+    }
+    println!("cargo:rerun-if-changed=src/gsf_shim.c");
+    let gsf = env::var_os("LIBGSF_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest.join("build/libgsf-min"));
+
+    cc::Build::new()
+        .file("src/gsf_shim.c")
+        .include(gsf.join("include"))
+        .compile("gsf_shim");
+
+    println!("cargo:rustc-link-search=native={}", gsf.join("lib").display());
+    println!("cargo:rustc-link-lib=dylib=gsf");
+    println!("cargo:rustc-link-lib=dylib=z");
+
+    #[cfg(not(windows))]
+    {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        let dst = target_dir.join("lib");
+        let _ = fs::create_dir_all(&dst);
+        if let Ok(entries) = fs::read_dir(gsf.join("lib")) {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                if name.to_string_lossy().contains("libgsf.so") {
+                    let _ = fs::copy(e.path(), dst.join(&name));
                 }
             }
         }

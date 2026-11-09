@@ -568,6 +568,11 @@ fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
     if crate::twosf::is_2sf(path) {
         return Ok(Box::new(crate::twosf::open(path)?));
     }
+    // Game Boy Advance GSF music (.gsf/.minigsf), via libgsf.
+    #[cfg(feature = "gsf")]
+    if crate::gsf::is_gsf(path) {
+        return Ok(Box::new(crate::gsf::open(path)?));
+    }
     if crate::ape::is_ape(path) {
         return Ok(Box::new(crate::ape::open_ape(path)?));
     }
