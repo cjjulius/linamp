@@ -159,6 +159,10 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         #[cfg(feature = "vgmstream")]
         "genh" | "dsp" | "idsp" | "vag" | "svag" | "hca" | "brstm" | "bcstm" | "bfstm" | "bfwav"
         | "bwav" | "at9" | "xvag" | "fsb" | "xwb" | "hps" | "ktss" => "audio/x-vgmstream",
+        // PlayStation PSF1/PSF2 music via libupse (the `psf` feature). No registered MIME type;
+        // use a vendor type taught to the DB by MIME_PACKAGE_XML.
+        #[cfg(feature = "psf")]
+        "psf" | "minipsf" => "audio/x-psf",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -282,6 +286,14 @@ fn mime_package_xml() -> String {
                 "*.bfstm", "*.bfwav", "*.bwav", "*.at9", "*.xvag", "*.fsb", "*.xwb", "*.hps",
                 "*.ktss",
             ],
+        ));
+    }
+    #[cfg(feature = "psf")]
+    {
+        types.push((
+            "audio/x-psf",
+            "PlayStation PSF music",
+            &["*.psf", "*.minipsf"],
         ));
     }
     #[cfg(feature = "adplug")]

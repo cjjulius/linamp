@@ -44,7 +44,7 @@ if (-not $GmeDir)  { $GmeDir  = Join-Path $repo 'build\gme-min' }
 
 function Get-Verified([string]$url, [string]$outFile, [string]$sha256) {
     Write-Host "==> Fetching $url"
-    Invoke-WebRequest -Uri $url -OutFile $outFile
+    Invoke-WebRequest -Uri $url -OutFile $outFile -MaximumRetryCount 5 -RetryIntervalSec 5
     $got = (Get-FileHash -Algorithm SHA256 $outFile).Hash.ToLower()
     if ($got -ne $sha256.ToLower()) {
         throw "SHA256 mismatch for $outFile`n  expected $sha256`n  got      $got"

@@ -139,17 +139,42 @@ BRSTM/BCSTM/BFSTM, FMOD FSB, Microsoft XWB, Sony XVAG/ATRAC9, Koei KTSS, and mor
   as a second tier later (LGPL FFmpeg, no `--enable-gpl`, same posture as the existing gme/adplug LGPL
   libs) if the demand is there.
 
-#### 2f. The `*SF` family (emulated-program music) - PLANNED, not started
-PSF/PSF2 (PlayStation), GSF (GBA), 2SF (NDS), USF (N64), SSF/DSF (Saturn/Dreamcast), QSF (Capcom
+#### 2f. The `*SF` family (emulated-program music) - PSF1 DONE (PSF2 dropped), rest planned
+PSF (PlayStation), GSF (GBA), 2SF (NDS), USF (N64), SSF/DSF (Saturn/Dreamcast), QSF (Capcom
 QSound), NCSF (NDS). Each file is a compressed program + driver for a specific console, played by a
 system-specific emulator core - so unlike vgmstream there is **no single library**: it is one shared
-container (`psflib`, MIT) plus ~6 emulator cores (PSF1&PSF2 share one; SSF&DSF share one), which
-together cover 8 of the 9 subformats. Integrate as `cc`-compiled cores behind per-format Cargo
-features, like the AdPlug/SID shims.
+container plus several emulator cores. PSF1 shipped first (the `psf` feature); the rest are per-
+format Cargo features behind their own cores, like the AdPlug/SID shims.
+
+**2f-psf (PSF1) - DONE.** `psf` feature, src/psf.rs + src/psf_shim.c (C shim via cc). Decoder:
+**libupse (GPL)**, which ships its own HLE "FakeBIOS" and so plays PSF **ROM-less** - no PlayStation
+BIOS is needed or shipped. (This is why libupse, not Highly Experimental: HE requires the real 512 KB
+Sony BIOS, which is a shipping wall - confirmed hands-on.) libupse decodes to stereo s16 at 44.1 kHz
+and seeks natively; the shim gates every call on the PSF signature because libupse crashes on
+malformed input. Routes `.psf`/`.minipsf` only. Linux build (`build-upse-min.sh`), CI, and tarball
+bundling wired. Windows: `build-upse.ps1` compiles the vendored libupse sources with cl (the headers
+carry a WIN32_MSC path) into a static lib, combining the static zlib from build-gme.ps1 (PSF program
+sections are zlib-compressed) so one `upse.lib` is self-contained; it is linked into the exe (no DLL),
+and Windows CI builds `--features ...,psf`. Compile libupse with /MD so it shares the dynamic CRT with
+the Rust side and the cc-compiled shim (a static-CRT build trips LNK4098 and risks cross-CRT heap bugs).
+
+**PSF2 dropped (not shippable ROM-less).** libupse's PS2 IOP HLE is a stub - `upse_ps2_iop_call()`
+in `upse_ps2_iop_base.c` is empty, so no IOP/SPU2 syscall is serviced: real PSF2 tunes load but
+decode to pure silence (confirmed hands-on on Chess Challenger and Dark Cloud). The only engine that
+plays PSF2 correctly is Highly Experimental, which needs the copyrighted 512 KB PS2 BIOS - the same
+shipping wall as PSF1's HE path, and banned. So `.psf2`/`.minipsf2` are rejected at the signature
+check (psf_shim.c accepts version 0x01 only) and are not in any routing/MIME/ext list. Revisit only
+if a ROM-less PS2 IOP HLE that actually drives the SPU2 appears.
+
+A critical lesson for the remaining cores: **BIOS/ROM-check each core before adopting it** (as done for
+PSF). Several of the others HLE and should be fine, but it must be verified - we ship no console ROMs.
 
 - Decoders (all actively maintained; the Kodi `audiodecoder.*` binary-addons are the cleanest uniform
   source - one shared `psflib`, all CMake, all build on Linux + Windows):
-  - PSF1/PSF2: libupse (GPL-2) for a quick win, or Highly Experimental (GPL-3) for better PS2 accuracy.
+  - PSF1: **libupse (GPL)** - DONE (the `psf` feature, see 2f-psf below). NOT Highly Experimental:
+    HE needs the real 512 KB PlayStation BIOS (a shipping wall; verified hands-on), while libupse ships
+    its own HLE "FakeBIOS" and plays PSF1 ROM-less. PSF2 dropped - libupse's IOP HLE is a stub
+    (silence) and HE's PS2 path needs the banned PS2 BIOS (see 2f-psf).
   - SSF/DSF: Highly Theoretical (GPL-2, MAME-free).  USF: lazyusf2 (GPL-2).
   - GSF: prefer **lazygsf + mGBA (MIT + MPL-2.0)** to keep it off GPL, else viogsf (GPL-2).
   - QSF: Highly Quixotic (GPL-2).  NCSF: SSEQPlayer (GPL-2/BSD, lightweight - no full emulator).
@@ -161,7 +186,7 @@ features, like the AdPlug/SID shims.
   already covered as **SPC via the existing gme feature**. Also avoid the old monolithic `nmlgc/aosdk`
   SDK as a source - it mixes in MAME's non-commercial clause; use the kode54/Kodi split-cores instead.
 - No pure-Rust option exists for any subformat (confirmed on crates.io); C/C++ is the floor.
-- Suggested order when it is taken up: PSF1+PSF2 first (biggest corpus), then SSF+DSF and USF, then
+- Suggested order when it is taken up: PSF1 first (biggest corpus; done), then SSF+DSF and USF, then
   GSF/QSF/NCSF, then 2SF. One tier (or a couple) per branch, like the 2a-2d work.
 
 ## Phase 3 - Modern and ideal-fit
@@ -233,15 +258,13 @@ Phase 2d (libsidplayfp):
   freely licensed, so prefer a known public-domain composer or a smoke test.
 - Oracle: `sidplayfp` can write a wav; convert to f32.
 
-Phase 2e (vgmstream):
-- Generate (preferred, reproducible): a GENH (`.genh`) wrapping raw PCM16 is mintable from any WAV
-  with a short script (no deps) - see the cookbook; this is the committed baseline sample and
-  exercises the full open/render/seek path. The real game ADPCM codecs are generated with VGAudio
-  (`VGAudioCli in.wav out.dsp` / `.brstm` / `.bcstm` / `.bfstm` / `.hca`) on a box with a .NET runtime
-  (the Linux dev box has none; the Windows box can). ADX is mintable with ffmpeg but ADX stays on the
-  ffdec path, so it is not a vgmstream sample.
-- Procure (no open encoder): FMOD FSB, Microsoft XWB, Sony XVAG, Koei KTSS - from freely-licensed /
-  homebrew rips and the sample files attached to vgmstream GitHub issues/PRs. Local QA only (gitignored).
+Phase 2e (vgmstream): see the appendix cookbook for the full, validated recipes. In short:
+- Generate (reproducible, no copyright): `genh` from a WAV with a short script; `vag`/`svag` with the
+  committed pure-Python PS-ADPCM encoder; `dsp`/`idsp`/`hca`/`brstm`/`bcstm`/`bfstm`/`hps` with VGAudio
+  (.NET - the Windows box runs it; the Linux dev box is sandbox-blocked). VGAudio has no ATRAC9 encoder.
+- Procure real rips (local QA only, gitignored): `brstm`/`bcstm`/`bfstm`/`bfwav`/`bwav`/`hca` from
+  GameBanana (login-free; the working source now that joshw.info is down and SCM needs a login).
+- Still procure-only (no free encoder, not on GameBanana): `at9`, `xvag`, `fsb`, `xwb`, `ktss`.
 - Oracle: `vgmstream-cli -i -o ref.wav <file>` decodes with looping disabled as a reference; cross-check
   metadata with `vgmstream-cli -m <file>`. libvgmstream and the CLI share the decode core, so for the
   single-decoder formats the committed test is a non-silent render smoke test, like the chiptunes.
@@ -269,10 +292,11 @@ to the coordination Slack (the self-DM, messages marked as from the Linux box) w
 - Any platform caveat.
 
 All the generator tools named above (ffmpeg, openmpt123, Furnace, FamiStudio, Game Music Emu
-CLI, sidplayfp, qoaconv) run on Windows as well, so the recipes are cross-platform; note any
-path or packaging differences when they come up. The canonical, always-current copy of each
-recipe lives in `qa-music/format-samples/README.md`; this roadmap is the plan, the README is
-the cookbook.
+CLI, sidplayfp, qoaconv, VGAudio, the committed Python encoders) run on Windows as well, so the
+recipes are cross-platform; note any path or packaging differences when they come up. The canonical,
+committed copy of every recipe is the **"Appendix: QA sample cookbook" below** - use that, since it
+is in git and the same on both boxes. Each box's `qa-music/format-samples/README.md` is a local,
+gitignored scratch note of what that box happened to build, not a source of truth.
 
 ## Status tracker
 
@@ -299,18 +323,25 @@ Phase 2 - Retro multipliers
   deferred - it is GPLv3 and its embedded banks are game rips, so it needs its own feature later.
 - [x] libsidplayfp (.sid) - `sid` feature, src/sid.rs + src/sid_shim.cpp (C++ shim via cc). reSIDfp
   engine, ROM-less (ships no Commodore ROMs; plays most PSID and the majority of RSID), mono
-  rendered to both channels, default length + fade, subsong 0. `.sid`/`.psid`/`.rsid`. Windows
-  build/bundling pending on the Windows box.
+  rendered to both channels, default length + fade, subsong 0. `.sid`/`.psid`/`.rsid`. Linux and
+  Windows builds (`build-sidplayfp.ps1`) wired; CI green on both platforms.
 
 Phase 2 stretch
 - [x] vgmstream (game-engine streams: DSP/VAG/HCA/BRSTM/BCSTM/BFSTM/BFWAV/BWAV/AT9/XVAG/FSB/XWB/HPS/
   KTSS/IDSP/SVAG/GENH) - `vgmstream` feature, src/vgmstream.rs (direct C-API FFI, no shim). Core-only
   libvgmstream (ISC, permissive, libc/libm only); streaming + native seek + f32 out; allowlist routing,
   runs last. Linux build (`build-vgmstream-min.sh`, CMake, pinned r2168), CI, and tarball bundling wired.
-  Windows build/bundling (`build-vgmstream.ps1` + Windows CI feature add) pending on the Windows box.
-  FFmpeg-backed codecs (XMA/ATRAC3/WMA) and Vorbis/CELT-payload variants deferred to a later build tier.
-- [ ] `*SF` family (PSF/PSF2/GSF/2SF/USF/SSF/DSF/QSF/NCSF) - planned (see "Phase 2 stretch" above);
-  not started. GPL per-core (one branch or two when taken up). SNSF is a wall (snes9x non-commercial).
+  Windows build (`build-vgmstream.ps1`, static link) and CI feature-add wired by the Windows box; CI
+  green on both platforms. FFmpeg-backed codecs (XMA/ATRAC3/WMA) and Vorbis/CELT-payload variants
+  deferred to a later build tier.
+- [x] `*SF` family, PSF1 - `psf` feature, src/psf.rs + src/psf_shim.c (libupse, GPL). ROM-less
+  (libupse's HLE FakeBIOS; no PlayStation BIOS, not HE which needs the real BIOS). Native seek, stereo.
+  `.psf`/`.minipsf` only (PSF2 dropped - libupse IOP HLE is a stub -> silence; see 2f-psf). Linux and
+  Windows builds (`build-upse-min.sh` / `build-upse.ps1`), CI, and tarball wired; CI green on both
+  platforms. Reproducible CC0 QA sample (hand-authored minimal PSF, recipe in the cookbook); for real
+  PSF1 music, procure a tune from Zophar (local QA only).
+- [ ] `*SF` family, the rest (GSF/USF/2SF/SSF/DSF/QSF/NCSF) - planned (see "Phase 2 stretch" above);
+  GPL per-core. BIOS/ROM-check each core before adopting. SNSF is a wall (snes9x non-commercial).
 
 Phase 3 - Modern/ideal
 - [ ] QOA (.qoa)
@@ -553,10 +584,19 @@ target via CMake and links it into the exe (nothing to bundle, like AdPlug/SID).
 Windows front-ends (`BUILD_WINAMP`/`BUILD_FB2K`, the latter needs the foobar2000 SDK) alongside the
 external codecs, and installs the static lib as `vgmstream.lib` to match `build.rs`'s `dylib=vgmstream`.
 
-VGAudio sample set (Windows box, needs .NET): `VGAudioCli in.wav out.<ext>` cleanly generates `dsp`,
-`idsp`, `hca`, `brstm`, `bcstm`, `bfstm`, and `hps` (it has no `bwav` encoder and emits an empty
-`bfwav`, so skip those two). The rest of the allowlist (`vag`, `svag`, `at9`, `xvag`, `fsb`, `xwb`,
-`ktss`) has no free encoder and is procure-only from real game rips (local QA, never committed).
+How each allowlist extension gets a sample (all validated hands-on; local QA, gitignored):
+- `genh` - minted from any WAV with the script below (the committed baseline sample).
+- `vag`, `svag` - the committed pure-Python PS-ADPCM encoder below (reproducible, no .NET, no copyright).
+- `dsp`, `idsp`, `hca`, `brstm`, `bcstm`, `bfstm`, `hps` - VGAudio (`VGAudioCli in.wav out.<ext>`),
+  needs .NET: the Windows box runs it natively; on the Linux dev box it is sandbox-blocked. `.at9`
+  output throws (VGAudio decodes ATRAC9 but has no encoder) and `.bwav`/`.bfwav` come out empty -
+  procure those two instead.
+- `brstm`, `bcstm`, `bfstm`, `bfwav`, `bwav`, `hca` - also procurable as real game rips from
+  GameBanana (method below); that is the only free source found for `bwav`/`bfwav`.
+- `at9`, `xvag`, `fsb`, `xwb`, `ktss` - no free encoder and none on GameBanana; procure-only from
+  real game rips (Sony `at9tool` makes `.at9` on Windows; otherwise rips).
+Mirrors note (2026-11-08): joshw.info is unreachable and SmashCustomMusic gates downloads behind a
+login, so GameBanana is the working procurement source for the rip-only formats.
 
 Preferred committed sample - GENH wrapping raw PCM16 (reproducible, no deps, exercises the full
 open/render/seek path). From any WAV (here a 60s cut of the shared `hypno-this.wav`):
@@ -579,8 +619,70 @@ open/render/seek path). From any WAV (here a 60s cut of the shared `hypno-this.w
 
 Real game ADPCM codecs - generate with VGAudio (open source, .NET) on a box that has a runtime
 (`dotnet`/`mono`; the Linux dev box has neither, the Windows box can): `VGAudioCli in.wav out.dsp`
-(GameCube DSP), `out.brstm` / `out.bcstm` / `out.bfstm` (Nintendo stream), `out.hca` (CRI HCA). Save
-as `<ext>-sample.<ext>`.
+(GameCube DSP), `out.idsp`, `out.brstm` / `out.bcstm` / `out.bfstm` (Nintendo stream), `out.hca`
+(CRI HCA), `out.hps` (HAL stream). Save as `<ext>-sample.<ext>`. VGAudio has no ATRAC9 encoder, so
+`.at9` output throws; its `.bwav`/`.bfwav` output is empty - procure those three from GameBanana below.
+On Linux, VGAudio's netcoreapp2.0 build runs under .NET 8 with `DOTNET_ROLL_FORWARD=LatestMajor`, but
+executing it is sandbox-blocked on the dev box ("Code from External"); the Windows box has no such gate.
+
+PS-ADPCM (`vag`, `svag`) - the committed pure-Python encoder below (no .NET, no copyright, cross-
+platform). It mirrors vgmstream's `psx_decoder.c` exactly, so round-trips are faithful, and writes a
+standard `VAGp` (meta/vag.c) and a Konami `Svag` (meta/svag_kcet.c), both mono. Run
+`python3 mk_vag.py in.wav vag-sample.vag svag-sample.svag` (any 16-bit WAV; stereo is downmixed):
+
+    ```python
+    import struct, sys, wave
+    F0 = [0, 60, 115, 98, 122]; F1 = [0, 0, -52, -55, -60]
+    def clamp16(x): return 32767 if x > 32767 else -32768 if x < -32768 else x
+    def read_wav_mono(path):
+        w = wave.open(path, "rb"); assert w.getsampwidth() == 2, "need 16-bit PCM"
+        ch, sr, n = w.getnchannels(), w.getframerate(), w.getnframes()
+        s = list(struct.unpack("<%dh" % (n*ch), w.readframes(n))); w.close()
+        if ch > 1: s = [clamp16(sum(s[i:i+ch])//ch) for i in range(0, len(s), ch)]
+        return sr, s
+    def encode_psx(samples):
+        s = list(samples) + [0]*((28 - len(samples) % 28) % 28)
+        out = bytearray(); h1 = h2 = 0; nf = len(s)//28
+        for fi in range(nf):
+            block = s[fi*28:(fi+1)*28]; best = None
+            for filt in range(5):
+                c0, c1 = F0[filt], F1[filt]
+                for shift in range(13):
+                    a, b = h1, h2; nibs = []; sse = 0
+                    for x in block:
+                        pred = (c0*a + c1*b) >> 6
+                        t = int(round((x - pred) * (1 << shift) / 4096.0))
+                        t = 7 if t > 7 else -8 if t < -8 else t
+                        dec = clamp16(((t << 12) >> shift) + pred)
+                        sse += (dec - x)**2; b, a = a, dec; nibs.append(t & 0x0F)
+                    if best is None or sse < best[0]: best = (sse, filt, shift, nibs, a, b)
+            _, filt, shift, nibs, h1, h2 = best
+            out.append((filt << 4) | shift); out.append(0x01 if fi == nf-1 else 0x00)
+            for i in range(0, 28, 2): out.append((nibs[i] & 0x0F) | ((nibs[i+1] & 0x0F) << 4))
+        return bytes(out)
+    sr, pcm = read_wav_mono(sys.argv[1]); adpcm = encode_psx(pcm); data = b"\x00"*16 + adpcm
+    v = bytearray(0x30); v[0:4] = b"VAGp"            # VAGp, big-endian, mono
+    struct.pack_into(">I", v, 0x04, 0x20); struct.pack_into(">I", v, 0x0C, len(data))
+    struct.pack_into(">I", v, 0x10, sr); v[0x20:0x29] = b"linamp-qa"
+    open(sys.argv[2], "wb").write(bytes(v) + data)
+    k = bytearray(0x800); k[0:4] = b"Svag"           # Konami Svag, little-endian, data at 0x800
+    struct.pack_into("<I", k, 0x04, len(data)); struct.pack_into("<I", k, 0x08, sr)
+    struct.pack_into("<H", k, 0x0C, 1)               # channels=1 skips the stereo padding check
+    open(sys.argv[3], "wb").write(bytes(k) + data)
+    ```
+
+Procure real rips - GameBanana (`gamebanana.com`) hosts "Sound" mods as individual, login-free
+downloads, and is the working source for `brstm`, `bcstm`, `bfstm`, `bfwav`, `bwav`, and `hca`. Find
+one via its API (no auth), download the mod archive, and extract the file with the extension you want:
+
+    # search Sound mods for an extension, list each hit's download archive, pick a small one,
+    # 7z-extract it, and copy out the first file that actually has that extension.
+    curl -s "https://gamebanana.com/apiv11/Util/Search/Results?_sSearchString=brstm&_sModelName=Sound&_nPerpage=20&_nPage=1"
+    curl -s "https://gamebanana.com/apiv11/Sound/<idRow>?_csvProperties=_aFiles"   # -> _sDownloadUrl, _nFilesize
+    # then: curl -L <url> -o mod.zip && 7z x mod.zip && find . -iname '*.brstm'
+
+Keep these local only (gitignored, never commit). GameBanana `.xwb` are XMA voice banks that the
+core-only (no-ffmpeg) vgmstream build cannot decode, so `xwb` stays genuinely procure-only elsewhere.
 
 ADPCM decoders without .NET - a GENH can also wrap ADPCM that ffmpeg produces, which exercises real
 ADPCM decoders (not just PCM) on a box with no VGAudio. Encode to an ADPCM WAV, then wrap the raw
@@ -590,14 +692,62 @@ size; both need a nonzero interleave). Codecs used for the local QA samples: MS-
 (`-c:a adpcm_yamaha -ac 1`, codec 10, interleave 0). These are GENH-container QA aids, not native
 `.dsp`/`.hca` files, so they stay local (gitignored) and do not replace the VGAudio/procured samples.
 
-Procure (no open encoder) - FSB/XWB/XVAG/KTSS from freely-licensed or homebrew rips and vgmstream
-issue/PR attachments; local QA only, never commit. Oracle/cross-check if vgmstream-cli is installed:
-`vgmstream-cli -i -o ref.wav <file>` (decode, looping disabled) and `vgmstream-cli -m <file>` (metadata).
+Still procure-only (no free encoder, not on GameBanana) - `at9` (Sony `at9tool`, Windows SDK),
+`xvag`, `fsb`, `xwb`, `ktss`: real game rips or vgmstream issue/PR attachments; local QA only, never
+commit. Oracle/cross-check if vgmstream-cli is installed: `vgmstream-cli -i -o ref.wav <file>` (decode,
+looping disabled) and `vgmstream-cli -m <file>` (metadata).
 
 Not routed on purpose: `.adx`/`.at3`/`.oma` (already on ffdec), `.awb` (AMR-WB owns it; `.acb` is only
 its cue sheet), and vgmstream's generic claims (`.ogg`/`.wav`/`.aac`/...). Formats whose payload needs
 an external codec (Vorbis FSB, XMA/ATRAC3/WMA) fail to open in the core-only build and are skipped
 until a later FFmpeg/Vorbis build tier lands.
+
+### PlayStation PSF (crate::psf, `--features psf`)
+libupse emulates the PS1 sound hardware and runs the driver a PSF carries; it is ROM-less (its own
+HLE FakeBIOS), so no PlayStation BIOS is needed or shipped. PSF1 only - PSF2 was dropped because
+libupse's PS2 IOP HLE is a stub (`upse_ps2_iop_call` is empty) so PSF2 decodes to silence, and the
+only working engine (Highly Experimental) needs the banned PS2 BIOS. No oracle (libupse is the only
+decoder); the test is a render smoke test (non-silent audio), like the chiptunes.
+
+Preferred committed sample - a minimal hand-authored CC0 PSF1 (reproducible, no copyright, exercises
+the full open/render/seek path). It is a tiny PS-X EXE that sets SPU voice 0 to noise mode and keys it
+on, producing continuous audible noise (the PS1 SPU is sample-based, so a noise voice is the simplest
+sound that needs no ADPCM sample data). Note the I/O base is `0x1F80_0000`, not the `0xBF80` KSEG1
+mirror - libupse maps I/O there. Build it with (`python3 mkpsf.py psf-sample.psf`):
+
+    ```python
+    import struct, zlib
+    def I(op, rs=0, rt=0, imm=0): return (op<<26)|(rs<<21)|(rt<<16)|(imm&0xFFFF)
+    LUI,ORI,SH,BEQ = 0x0F,0x0D,0x29,0x04; Z,T0,T1,T2 = 0,8,9,10
+    c = [I(LUI,0,T0,0x1F80),                                   # t0 = 0x1F800000 (I/O base)
+         I(ORI,Z,T1,0x1800), I(SH,T0,T1,0x1D80), I(SH,T0,T1,0x1D82),  # main vol L/R
+         I(SH,T0,T1,0x1C00), I(SH,T0,T1,0x1C02),                      # voice0 vol L/R
+         I(ORI,Z,T2,0x1000), I(SH,T0,T2,0x1C04),                      # voice0 pitch
+         I(ORI,Z,T2,0x00FF), I(SH,T0,T2,0x1C08),                      # voice0 ADSR1 (fast attack, sustain max)
+         I(ORI,Z,T2,0x0000), I(SH,T0,T2,0x1C0A),                      # voice0 ADSR2 (hold)
+         I(ORI,Z,T1,0x0001), I(SH,T0,T1,0x1D94),                      # NON: voice0 noise mode
+         I(ORI,Z,T2,0xFF00), I(SH,T0,T2,0x1DAA),                      # SPUCNT: enable+unmute+noise clock
+         I(ORI,Z,T1,0x0001), I(SH,T0,T1,0x1D88),                      # KON voice0
+         I(BEQ,Z,Z,0xFFFF), 0]                                        # b . ; nop
+    text = b"".join(struct.pack("<I",w) for w in c); text = text.ljust((len(text)+2047)&~2047, b"\0")
+    PC0 = 0x80010000
+    hdr = bytearray(0x800); hdr[0:8] = b"PS-X EXE"
+    struct.pack_into("<I",hdr,0x10,PC0); struct.pack_into("<I",hdr,0x18,PC0)
+    struct.pack_into("<I",hdr,0x1C,len(text)); struct.pack_into("<I",hdr,0x30,0x801FFF00)
+    comp = zlib.compress(bytes(hdr)+text, 9)
+    psf = b"PSF"+bytes([1])+struct.pack("<I",0)+struct.pack("<I",len(comp))+struct.pack("<I",zlib.crc32(comp)&0xFFFFFFFF)+comp
+    psf += b"[TAG]utf8=1\ntitle=LinAmp PSF test\nartist=LinAmp\ncopyright=2026 CC0\n"
+    open("psf-sample.psf","wb").write(psf)
+    ```
+
+Real game tunes (for richer manual QA): procure PSF1 from Zophar's Domain
+(`zophar.net/music/playstation-psf`). These are copyrighted game rips - local QA only, never commit.
+A `.minipsf` needs its `.psflib` beside it; libupse resolves the `_lib` reference. Pick a tune long
+enough to scrub. (PSF2 is not supported - see above - so there is no PSF2 QA sample.)
+
+Windows: `packaging/windows/build-upse.ps1` (written by the Windows box) builds libupse from the same
+audiodecoder.upse source and links it, like the AdPlug/SID handoff.
+The Linux side (`build-upse-min.sh`) compiles the vendored lib/libupse sources into libupse.so.
 
 ### Oracles
 The `oracles/*.f32` and `*.s16` files are headerless raw-PCM decode references for the correlation

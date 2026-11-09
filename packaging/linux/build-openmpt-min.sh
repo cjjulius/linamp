@@ -29,7 +29,7 @@ cd "$work"
 
 tarball="libopenmpt-${OPENMPT_VERSION}+release.autotools.tar.gz"
 echo "==> Fetching libopenmpt $OPENMPT_VERSION source" >&2
-curl -fsSL -o "$tarball" "https://lib.openmpt.org/files/libopenmpt/src/${tarball}"
+curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$tarball" "https://lib.openmpt.org/files/libopenmpt/src/${tarball}"
 echo "$OPENMPT_SHA256  $tarball" | sha256sum -c -
 tar xzf "$tarball"
 cd "libopenmpt-${OPENMPT_VERSION}+release.autotools"

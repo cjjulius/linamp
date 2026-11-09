@@ -56,7 +56,7 @@ jobs:
         shell: pwsh
         run: |
           $url = "https://github.com/GyanD/codexffmpeg/releases/download/5.1.2/ffmpeg-5.1.2-full_build-shared.zip"
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -MaximumRetryCount 5 -RetryIntervalSec 5
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dev
           $root = (Get-ChildItem ffmpeg-dev -Directory)[0].FullName
           # ffmpeg-sys-next locates the libs/headers via FFMPEG_DIR; also put the
@@ -120,11 +120,20 @@ jobs:
           sh packaging/linux/build-vgmstream-min.sh "$PWD/build/vgmstream-min"
           echo "VGMSTREAM_DIR=$PWD/build/vgmstream-min" >> "$GITHUB_ENV"
 
-      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug + sid + vgmstream)
+      # libupse (PlayStation PSF1/PSF2) built from source; ROM-less (its own HLE FakeBIOS, no PS1
+      # BIOS). build.rs compiles the C shim and links $UPSE_DIR. Decode tests skip without the
+      # gitignored qa-music samples, so on CI this is the compile check plus the router/MIME guards.
+      - name: Build libupse (Linux)
         if: runner.os == 'Linux'
         run: |
-          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream --verbose
-          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib:$SIDPLAYFP_DIR/lib:$VGMSTREAM_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream --verbose
+          sh packaging/linux/build-upse-min.sh "$PWD/build/upse-min"
+          echo "UPSE_DIR=$PWD/build/upse-min" >> "$GITHUB_ENV"
+
+      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf --verbose
+          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib:$SIDPLAYFP_DIR/lib:$VGMSTREAM_DIR/lib:$UPSE_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf --verbose
 
       # Windows builds libgme and its zlib dependency from source (no system libgme/zlib),
       # then builds and tests the full feature set (ffmpeg + gme). build.rs links $GME_DIR;
@@ -185,11 +194,21 @@ jobs:
           pwsh packaging\windows\build-vgmstream.ps1
           "VGMSTREAM_DIR=$PWD\build\vgmstream-min" | Out-File $env:GITHUB_ENV -Append
 
-      - name: Build and test (Windows, ffmpeg + gme + openmpt + adplug + sid + vgmstream)
+      # libupse (PlayStation PSF1) built from the Kodi audiodecoder.upse source (ROM-less FakeBIOS).
+      # Static-linked into the exe (no DLL on PATH), same as the others; needs the static zlib from the
+      # GME step above (PSF program sections are zlib-compressed), so this runs after it.
+      - name: Provision libupse (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh packaging\windows\build-upse.ps1
+          "UPSE_DIR=$PWD\build\upse-min" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Build and test (Windows, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf)
         if: runner.os == 'Windows'
         run: |
-          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream --verbose
-          cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream --verbose
+          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf --verbose
+          cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf --verbose
 
   # Build the per-user installers. Runs on a v* tag (official release) or a
   # manual dispatch (dry run - artifacts only, no GitHub Release).
@@ -240,7 +259,7 @@ jobs:
         shell: pwsh
         run: |
           $url = "https://github.com/GyanD/codexffmpeg/releases/download/5.1.2/ffmpeg-5.1.2-full_build-shared.zip"
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -MaximumRetryCount 5 -RetryIntervalSec 5
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dev
           $root = (Get-ChildItem ffmpeg-dev -Directory)[0].FullName
           # ffmpeg-sys-next finds libs/headers via FFMPEG_DIR; include/lib go on
@@ -262,7 +281,7 @@ jobs:
       # on Windows lands when the Windows box adds its build and DLL bundling.
       - name: Build Linux tarball
         if: runner.os == 'Linux'
-        run: FEATURES=ffmpeg,gme,openmpt,adplug,sid,vgmstream sh packaging/linux/build-tarball.sh
+        run: FEATURES=ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf sh packaging/linux/build-tarball.sh
 
       - name: Upload Linux tarball
         if: runner.os == 'Linux'
@@ -311,11 +330,18 @@ jobs:
           pwsh packaging\windows\build-vgmstream.ps1
           "VGMSTREAM_DIR=$PWD\build\vgmstream-min" | Out-File $env:GITHUB_ENV -Append
 
+      - name: Provision libupse (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh packaging\windows\build-upse.ps1
+          "UPSE_DIR=$PWD\build\upse-min" | Out-File $env:GITHUB_ENV -Append
+
       - name: Build Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --release --features ffmpeg,gme,openmpt,adplug,sid,vgmstream
+          cargo build --release --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf
           # Derive the version from Cargo.toml and pass it to ISCC - without this
           # the installer falls back to the version baked into linamp.iss, which
           # is how v0.3.0 shipped a "LinAmp-0.2.0-Setup.exe". /DWithFfmpeg bundles the

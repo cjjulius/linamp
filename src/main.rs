@@ -31,6 +31,8 @@ mod adplug;
 mod sid;
 #[cfg(feature = "vgmstream")]
 mod vgmstream;
+#[cfg(feature = "psf")]
+mod psf;
 mod flv;
 mod icon;
 mod library;

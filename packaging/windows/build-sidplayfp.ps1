@@ -55,7 +55,7 @@ $work = New-Item -ItemType Directory -Force -Path (Join-Path ([IO.Path]::GetTemp
 try {
     $tgz = Join-Path $work 'libsidplayfp.tar.gz'
     Write-Host "==> Fetching libsidplayfp $SIDPLAYFP_VERSION"
-    Invoke-WebRequest -Uri "https://github.com/libsidplayfp/libsidplayfp/releases/download/v$SIDPLAYFP_VERSION/libsidplayfp-$SIDPLAYFP_VERSION.tar.gz" -OutFile $tgz
+    Invoke-WebRequest -Uri "https://github.com/libsidplayfp/libsidplayfp/releases/download/v$SIDPLAYFP_VERSION/libsidplayfp-$SIDPLAYFP_VERSION.tar.gz" -OutFile $tgz -MaximumRetryCount 5 -RetryIntervalSec 5
     $got = (Get-FileHash -Algorithm SHA256 $tgz).Hash.ToLower()
     if ($got -ne $SIDPLAYFP_SHA256.ToLower()) {
         throw "SHA256 mismatch for libsidplayfp`n  expected $SIDPLAYFP_SHA256`n  got      $got"

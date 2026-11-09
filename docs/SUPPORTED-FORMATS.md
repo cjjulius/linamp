@@ -225,6 +225,15 @@ game engines ship them in. Nothing to convert first, drop the file in and it pla
 Some game files hold their audio in a codec that needs an extra decoder we do not bundle yet (for
 example Vorbis inside an FSB, or Xbox 360 XMA); those are skipped for now rather than played wrong.
 
+### Console program music (PSF)
+
+The PlayStation's own music format: instead of a recording, the file carries the game's little music
+program and LinAmp emulates the console to play it, just like the chip formats above.
+
+| Extension | System | Good to know |
+|---|---|---|
+| `.psf` `.minipsf` | PlayStation | Emulated, no BIOS needed. A `.minipsf` wants its `.psflib` beside it |
+
 ---
 
 ## Other
@@ -240,6 +249,7 @@ example Vorbis inside an FSB, or Xbox 360 XMA); those are skipped for now rather
 
 - QOA (Quite OK Audio, `.qoa`), a modern open format, is next in line.
 - More game-engine codecs (Vorbis-in-FSB, Xbox XMA, ATRAC3) once the extra decoders are bundled.
-- Console "program" music: the `*SF` family (PSF/PSF2, GSF, USF, 2SF, SSF), still to come.
+- More of the `*SF` program-music family (GSF, USF, 2SF, SSF) may follow. PSF2 is not planned: the
+  only ROM-less engine renders it silent, and a working one would need the copyrighted PS2 BIOS.
 - More AdLib MIDI-wrapper formats (XMI, HMI, HMP) may follow.
 - Wider tag editing for more of the formats above.

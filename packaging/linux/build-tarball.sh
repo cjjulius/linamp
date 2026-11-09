@@ -55,6 +55,11 @@ case ",$FEATURES," in
   *,vgmstream,*) BUNDLE_VGMSTREAM=1 ;;
   *) BUNDLE_VGMSTREAM=0 ;;
 esac
+# The psf feature (PlayStation PSF1/PSF2) links libupse (ROM-less), bundled the same way.
+case ",$FEATURES," in
+  *,psf,*) BUNDLE_PSF=1 ;;
+  *) BUNDLE_PSF=0 ;;
+esac
 NAME="linamp-${VERSION}-linux-x86_64${SUFFIX}"
 STAGE="dist/$NAME"
 
@@ -115,6 +120,14 @@ if [ "$BUNDLE_VGMSTREAM" = 1 ]; then
   VGMSTREAM_MIN="$ROOT/build/vgmstream-min"
   sh "$ROOT/packaging/linux/build-vgmstream-min.sh" "$VGMSTREAM_MIN"
   export VGMSTREAM_DIR="$VGMSTREAM_MIN"
+fi
+
+# libupse (PlayStation PSF) built from source the same way; ROM-less (its own HLE FakeBIOS, no PS1
+# BIOS). build.rs compiles the shim, links UPSE_DIR, emits the $ORIGIN/lib rpath. Bundled below.
+if [ "$BUNDLE_PSF" = 1 ]; then
+  UPSE_MIN="$ROOT/build/upse-min"
+  sh "$ROOT/packaging/linux/build-upse-min.sh" "$UPSE_MIN"
+  export UPSE_DIR="$UPSE_MIN"
 fi
 
 echo "==> cargo build --release $FEATURE_ARGS"
@@ -196,6 +209,17 @@ if [ "$BUNDLE_VGMSTREAM" = 1 ]; then
   for f in "$STAGE"/lib/libvgmstream.so*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
   if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libvgmstream' | grep -vq "$STAGE/lib"; then
     echo "!!  WARNING: libvgmstream still resolves outside $STAGE/lib; check the rpath" >&2
+  fi
+fi
+if [ "$BUNDLE_PSF" = 1 ]; then
+  echo "==> Bundling libupse into $STAGE/lib (self-contained)"
+  mkdir -p "$STAGE/lib"
+  # libupse depends only on libc and the system libz, so its own .so is the whole runtime set. The
+  # binary's $ORIGIN/lib rpath (emitted by build.rs) loads it at runtime.
+  cp -a "$UPSE_DIR"/lib/libupse.so* "$STAGE/lib/" 2>/dev/null || true
+  for f in "$STAGE"/lib/libupse.so*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
+  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libupse' | grep -vq "$STAGE/lib"; then
+    echo "!!  WARNING: libupse still resolves outside $STAGE/lib; check the rpath" >&2
   fi
 fi
 cp -r skins "$STAGE/skins"
