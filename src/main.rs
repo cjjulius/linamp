@@ -29,6 +29,8 @@ mod openmpt;
 mod adplug;
 #[cfg(feature = "sid")]
 mod sid;
+#[cfg(feature = "vgmstream")]
+mod vgmstream;
 mod flv;
 mod icon;
 mod library;

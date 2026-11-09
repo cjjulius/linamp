@@ -204,6 +204,27 @@ everything else in this section they are genuine recorded sound.
 | `.voc` | Creative Voice | The Sound Blaster sample format |
 | `.adx` | CRI ADX | Game audio (Dreamcast and arcade) |
 
+### Game-engine streams
+
+The streamed music and sound inside modern console and PC games, straight out of the formats the
+game engines ship them in. Nothing to convert first, drop the file in and it plays.
+
+| Extension | Format | Good to know |
+|---|---|---|
+| `.dsp` `.idsp` | GameCube / Wii ADPCM | Nintendo's console audio |
+| `.brstm` `.bcstm` `.bfstm` `.bfwav` `.bwav` | Nintendo stream / wave | Wii, 3DS, Switch |
+| `.vag` `.svag` | Sony PS-ADPCM | PlayStation audio |
+| `.xvag` `.at9` | Sony XVAG / ATRAC9 | PS3 / PS4 / Vita |
+| `.hca` | CRI HCA | A very common middleware format |
+| `.fsb` | FMOD Sound Bank | The FMOD engine's audio bank |
+| `.xwb` | Microsoft XACT | Xbox and PC games |
+| `.hps` | HAL stream | GameCube (Smash Bros. and friends) |
+| `.ktss` | Koei Tecmo stream | |
+| `.genh` | Generic header | A manual header for raw/headerless audio |
+
+Some game files hold their audio in a codec that needs an extra decoder we do not bundle yet (for
+example Vorbis inside an FSB, or Xbox 360 XMA); those are skipped for now rather than played wrong.
+
 ---
 
 ## Other
@@ -218,5 +239,7 @@ everything else in this section they are genuine recorded sound.
 ## On the roadmap
 
 - QOA (Quite OK Audio, `.qoa`), a modern open format, is next in line.
+- More game-engine codecs (Vorbis-in-FSB, Xbox XMA, ATRAC3) once the extra decoders are bundled.
+- Console "program" music: the `*SF` family (PSF/PSF2, GSF, USF, 2SF, SSF), still to come.
 - More AdLib MIDI-wrapper formats (XMI, HMI, HMP) may follow.
 - Wider tag editing for more of the formats above.
