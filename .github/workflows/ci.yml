@@ -56,7 +56,7 @@ jobs:
         shell: pwsh
         run: |
           $url = "https://github.com/GyanD/codexffmpeg/releases/download/5.1.2/ffmpeg-5.1.2-full_build-shared.zip"
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -MaximumRetryCount 5 -RetryIntervalSec 5
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dev
           $root = (Get-ChildItem ffmpeg-dev -Directory)[0].FullName
           # ffmpeg-sys-next locates the libs/headers via FFMPEG_DIR; also put the
@@ -259,7 +259,7 @@ jobs:
         shell: pwsh
         run: |
           $url = "https://github.com/GyanD/codexffmpeg/releases/download/5.1.2/ffmpeg-5.1.2-full_build-shared.zip"
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -MaximumRetryCount 5 -RetryIntervalSec 5
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dev
           $root = (Get-ChildItem ffmpeg-dev -Directory)[0].FullName
           # ffmpeg-sys-next finds libs/headers via FFMPEG_DIR; include/lib go on

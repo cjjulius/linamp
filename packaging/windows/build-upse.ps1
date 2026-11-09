@@ -72,7 +72,7 @@ $work = New-Item -ItemType Directory -Force -Path (Join-Path ([IO.Path]::GetTemp
 try {
     $tgz = Join-Path $work 'upse.tar.gz'
     Write-Host "==> Fetching libupse (audiodecoder.upse @ $UPSE_COMMIT)"
-    Invoke-WebRequest -Uri "https://github.com/xbmc/audiodecoder.upse/archive/$UPSE_COMMIT.tar.gz" -OutFile $tgz
+    Invoke-WebRequest -Uri "https://github.com/xbmc/audiodecoder.upse/archive/$UPSE_COMMIT.tar.gz" -OutFile $tgz -MaximumRetryCount 5 -RetryIntervalSec 5
     $got = (Get-FileHash -Algorithm SHA256 $tgz).Hash.ToLower()
     if ($got -ne $UPSE_SHA256.ToLower()) {
         throw "SHA256 mismatch for libupse`n  expected $UPSE_SHA256`n  got      $got"

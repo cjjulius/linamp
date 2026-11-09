@@ -46,7 +46,7 @@ $work = New-Item -ItemType Directory -Force -Path (Join-Path ([IO.Path]::GetTemp
 try {
     $tgz = Join-Path $work 'vgmstream.tar.gz'
     Write-Host "==> Fetching vgmstream $VGMSTREAM_VERSION"
-    Invoke-WebRequest -Uri "https://github.com/vgmstream/vgmstream/archive/refs/tags/$VGMSTREAM_VERSION.tar.gz" -OutFile $tgz
+    Invoke-WebRequest -Uri "https://github.com/vgmstream/vgmstream/archive/refs/tags/$VGMSTREAM_VERSION.tar.gz" -OutFile $tgz -MaximumRetryCount 5 -RetryIntervalSec 5
     $got = (Get-FileHash -Algorithm SHA256 $tgz).Hash.ToLower()
     if ($got -ne $VGMSTREAM_SHA256.ToLower()) {
         throw "SHA256 mismatch for vgmstream`n  expected $VGMSTREAM_SHA256`n  got      $got"
