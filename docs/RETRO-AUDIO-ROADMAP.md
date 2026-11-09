@@ -258,15 +258,13 @@ Phase 2d (libsidplayfp):
   freely licensed, so prefer a known public-domain composer or a smoke test.
 - Oracle: `sidplayfp` can write a wav; convert to f32.
 
-Phase 2e (vgmstream):
-- Generate (preferred, reproducible): a GENH (`.genh`) wrapping raw PCM16 is mintable from any WAV
-  with a short script (no deps) - see the cookbook; this is the committed baseline sample and
-  exercises the full open/render/seek path. The real game ADPCM codecs are generated with VGAudio
-  (`VGAudioCli in.wav out.dsp` / `.brstm` / `.bcstm` / `.bfstm` / `.hca`) on a box with a .NET runtime
-  (the Linux dev box has none; the Windows box can). ADX is mintable with ffmpeg but ADX stays on the
-  ffdec path, so it is not a vgmstream sample.
-- Procure (no open encoder): FMOD FSB, Microsoft XWB, Sony XVAG, Koei KTSS - from freely-licensed /
-  homebrew rips and the sample files attached to vgmstream GitHub issues/PRs. Local QA only (gitignored).
+Phase 2e (vgmstream): see the appendix cookbook for the full, validated recipes. In short:
+- Generate (reproducible, no copyright): `genh` from a WAV with a short script; `vag`/`svag` with the
+  committed pure-Python PS-ADPCM encoder; `dsp`/`idsp`/`hca`/`brstm`/`bcstm`/`bfstm`/`hps` with VGAudio
+  (.NET - the Windows box runs it; the Linux dev box is sandbox-blocked). VGAudio has no ATRAC9 encoder.
+- Procure real rips (local QA only, gitignored): `brstm`/`bcstm`/`bfstm`/`bfwav`/`bwav`/`hca` from
+  GameBanana (login-free; the working source now that joshw.info is down and SCM needs a login).
+- Still procure-only (no free encoder, not on GameBanana): `at9`, `xvag`, `fsb`, `xwb`, `ktss`.
 - Oracle: `vgmstream-cli -i -o ref.wav <file>` decodes with looping disabled as a reference; cross-check
   metadata with `vgmstream-cli -m <file>`. libvgmstream and the CLI share the decode core, so for the
   single-decoder formats the committed test is a non-silent render smoke test, like the chiptunes.
@@ -294,10 +292,11 @@ to the coordination Slack (the self-DM, messages marked as from the Linux box) w
 - Any platform caveat.
 
 All the generator tools named above (ffmpeg, openmpt123, Furnace, FamiStudio, Game Music Emu
-CLI, sidplayfp, qoaconv) run on Windows as well, so the recipes are cross-platform; note any
-path or packaging differences when they come up. The canonical, always-current copy of each
-recipe lives in `qa-music/format-samples/README.md`; this roadmap is the plan, the README is
-the cookbook.
+CLI, sidplayfp, qoaconv, VGAudio, the committed Python encoders) run on Windows as well, so the
+recipes are cross-platform; note any path or packaging differences when they come up. The canonical,
+committed copy of every recipe is the **"Appendix: QA sample cookbook" below** - use that, since it
+is in git and the same on both boxes. Each box's `qa-music/format-samples/README.md` is a local,
+gitignored scratch note of what that box happened to build, not a source of truth.
 
 ## Status tracker
 
@@ -324,21 +323,23 @@ Phase 2 - Retro multipliers
   deferred - it is GPLv3 and its embedded banks are game rips, so it needs its own feature later.
 - [x] libsidplayfp (.sid) - `sid` feature, src/sid.rs + src/sid_shim.cpp (C++ shim via cc). reSIDfp
   engine, ROM-less (ships no Commodore ROMs; plays most PSID and the majority of RSID), mono
-  rendered to both channels, default length + fade, subsong 0. `.sid`/`.psid`/`.rsid`. Windows
-  build/bundling pending on the Windows box.
+  rendered to both channels, default length + fade, subsong 0. `.sid`/`.psid`/`.rsid`. Linux and
+  Windows builds (`build-sidplayfp.ps1`) wired; CI green on both platforms.
 
 Phase 2 stretch
 - [x] vgmstream (game-engine streams: DSP/VAG/HCA/BRSTM/BCSTM/BFSTM/BFWAV/BWAV/AT9/XVAG/FSB/XWB/HPS/
   KTSS/IDSP/SVAG/GENH) - `vgmstream` feature, src/vgmstream.rs (direct C-API FFI, no shim). Core-only
   libvgmstream (ISC, permissive, libc/libm only); streaming + native seek + f32 out; allowlist routing,
   runs last. Linux build (`build-vgmstream-min.sh`, CMake, pinned r2168), CI, and tarball bundling wired.
-  Windows build/bundling (`build-vgmstream.ps1` + Windows CI feature add) pending on the Windows box.
-  FFmpeg-backed codecs (XMA/ATRAC3/WMA) and Vorbis/CELT-payload variants deferred to a later build tier.
+  Windows build (`build-vgmstream.ps1`, static link) and CI feature-add wired by the Windows box; CI
+  green on both platforms. FFmpeg-backed codecs (XMA/ATRAC3/WMA) and Vorbis/CELT-payload variants
+  deferred to a later build tier.
 - [x] `*SF` family, PSF1 - `psf` feature, src/psf.rs + src/psf_shim.c (libupse, GPL). ROM-less
   (libupse's HLE FakeBIOS; no PlayStation BIOS, not HE which needs the real BIOS). Native seek, stereo.
-  `.psf`/`.minipsf` only (PSF2 dropped - libupse IOP HLE is a stub -> silence; see 2f-psf). Linux
-  build/CI/tarball wired; Windows build pending on the Windows box. Reproducible CC0 QA sample
-  (hand-authored minimal PSF, recipe in the cookbook).
+  `.psf`/`.minipsf` only (PSF2 dropped - libupse IOP HLE is a stub -> silence; see 2f-psf). Linux and
+  Windows builds (`build-upse-min.sh` / `build-upse.ps1`), CI, and tarball wired; CI green on both
+  platforms. Reproducible CC0 QA sample (hand-authored minimal PSF, recipe in the cookbook); for real
+  PSF1 music, procure a tune from Zophar (local QA only).
 - [ ] `*SF` family, the rest (GSF/USF/2SF/SSF/DSF/QSF/NCSF) - planned (see "Phase 2 stretch" above);
   GPL per-core. BIOS/ROM-check each core before adopting. SNSF is a wall (snes9x non-commercial).
 
@@ -583,10 +584,19 @@ target via CMake and links it into the exe (nothing to bundle, like AdPlug/SID).
 Windows front-ends (`BUILD_WINAMP`/`BUILD_FB2K`, the latter needs the foobar2000 SDK) alongside the
 external codecs, and installs the static lib as `vgmstream.lib` to match `build.rs`'s `dylib=vgmstream`.
 
-VGAudio sample set (Windows box, needs .NET): `VGAudioCli in.wav out.<ext>` cleanly generates `dsp`,
-`idsp`, `hca`, `brstm`, `bcstm`, `bfstm`, and `hps` (it has no `bwav` encoder and emits an empty
-`bfwav`, so skip those two). The rest of the allowlist (`vag`, `svag`, `at9`, `xvag`, `fsb`, `xwb`,
-`ktss`) has no free encoder and is procure-only from real game rips (local QA, never committed).
+How each allowlist extension gets a sample (all validated hands-on; local QA, gitignored):
+- `genh` - minted from any WAV with the script below (the committed baseline sample).
+- `vag`, `svag` - the committed pure-Python PS-ADPCM encoder below (reproducible, no .NET, no copyright).
+- `dsp`, `idsp`, `hca`, `brstm`, `bcstm`, `bfstm`, `hps` - VGAudio (`VGAudioCli in.wav out.<ext>`),
+  needs .NET: the Windows box runs it natively; on the Linux dev box it is sandbox-blocked. `.at9`
+  output throws (VGAudio decodes ATRAC9 but has no encoder) and `.bwav`/`.bfwav` come out empty -
+  procure those two instead.
+- `brstm`, `bcstm`, `bfstm`, `bfwav`, `bwav`, `hca` - also procurable as real game rips from
+  GameBanana (method below); that is the only free source found for `bwav`/`bfwav`.
+- `at9`, `xvag`, `fsb`, `xwb`, `ktss` - no free encoder and none on GameBanana; procure-only from
+  real game rips (Sony `at9tool` makes `.at9` on Windows; otherwise rips).
+Mirrors note (2026-11-08): joshw.info is unreachable and SmashCustomMusic gates downloads behind a
+login, so GameBanana is the working procurement source for the rip-only formats.
 
 Preferred committed sample - GENH wrapping raw PCM16 (reproducible, no deps, exercises the full
 open/render/seek path). From any WAV (here a 60s cut of the shared `hypno-this.wav`):
@@ -609,8 +619,70 @@ open/render/seek path). From any WAV (here a 60s cut of the shared `hypno-this.w
 
 Real game ADPCM codecs - generate with VGAudio (open source, .NET) on a box that has a runtime
 (`dotnet`/`mono`; the Linux dev box has neither, the Windows box can): `VGAudioCli in.wav out.dsp`
-(GameCube DSP), `out.brstm` / `out.bcstm` / `out.bfstm` (Nintendo stream), `out.hca` (CRI HCA). Save
-as `<ext>-sample.<ext>`.
+(GameCube DSP), `out.idsp`, `out.brstm` / `out.bcstm` / `out.bfstm` (Nintendo stream), `out.hca`
+(CRI HCA), `out.hps` (HAL stream). Save as `<ext>-sample.<ext>`. VGAudio has no ATRAC9 encoder, so
+`.at9` output throws; its `.bwav`/`.bfwav` output is empty - procure those three from GameBanana below.
+On Linux, VGAudio's netcoreapp2.0 build runs under .NET 8 with `DOTNET_ROLL_FORWARD=LatestMajor`, but
+executing it is sandbox-blocked on the dev box ("Code from External"); the Windows box has no such gate.
+
+PS-ADPCM (`vag`, `svag`) - the committed pure-Python encoder below (no .NET, no copyright, cross-
+platform). It mirrors vgmstream's `psx_decoder.c` exactly, so round-trips are faithful, and writes a
+standard `VAGp` (meta/vag.c) and a Konami `Svag` (meta/svag_kcet.c), both mono. Run
+`python3 mk_vag.py in.wav vag-sample.vag svag-sample.svag` (any 16-bit WAV; stereo is downmixed):
+
+    ```python
+    import struct, sys, wave
+    F0 = [0, 60, 115, 98, 122]; F1 = [0, 0, -52, -55, -60]
+    def clamp16(x): return 32767 if x > 32767 else -32768 if x < -32768 else x
+    def read_wav_mono(path):
+        w = wave.open(path, "rb"); assert w.getsampwidth() == 2, "need 16-bit PCM"
+        ch, sr, n = w.getnchannels(), w.getframerate(), w.getnframes()
+        s = list(struct.unpack("<%dh" % (n*ch), w.readframes(n))); w.close()
+        if ch > 1: s = [clamp16(sum(s[i:i+ch])//ch) for i in range(0, len(s), ch)]
+        return sr, s
+    def encode_psx(samples):
+        s = list(samples) + [0]*((28 - len(samples) % 28) % 28)
+        out = bytearray(); h1 = h2 = 0; nf = len(s)//28
+        for fi in range(nf):
+            block = s[fi*28:(fi+1)*28]; best = None
+            for filt in range(5):
+                c0, c1 = F0[filt], F1[filt]
+                for shift in range(13):
+                    a, b = h1, h2; nibs = []; sse = 0
+                    for x in block:
+                        pred = (c0*a + c1*b) >> 6
+                        t = int(round((x - pred) * (1 << shift) / 4096.0))
+                        t = 7 if t > 7 else -8 if t < -8 else t
+                        dec = clamp16(((t << 12) >> shift) + pred)
+                        sse += (dec - x)**2; b, a = a, dec; nibs.append(t & 0x0F)
+                    if best is None or sse < best[0]: best = (sse, filt, shift, nibs, a, b)
+            _, filt, shift, nibs, h1, h2 = best
+            out.append((filt << 4) | shift); out.append(0x01 if fi == nf-1 else 0x00)
+            for i in range(0, 28, 2): out.append((nibs[i] & 0x0F) | ((nibs[i+1] & 0x0F) << 4))
+        return bytes(out)
+    sr, pcm = read_wav_mono(sys.argv[1]); adpcm = encode_psx(pcm); data = b"\x00"*16 + adpcm
+    v = bytearray(0x30); v[0:4] = b"VAGp"            # VAGp, big-endian, mono
+    struct.pack_into(">I", v, 0x04, 0x20); struct.pack_into(">I", v, 0x0C, len(data))
+    struct.pack_into(">I", v, 0x10, sr); v[0x20:0x29] = b"linamp-qa"
+    open(sys.argv[2], "wb").write(bytes(v) + data)
+    k = bytearray(0x800); k[0:4] = b"Svag"           # Konami Svag, little-endian, data at 0x800
+    struct.pack_into("<I", k, 0x04, len(data)); struct.pack_into("<I", k, 0x08, sr)
+    struct.pack_into("<H", k, 0x0C, 1)               # channels=1 skips the stereo padding check
+    open(sys.argv[3], "wb").write(bytes(k) + data)
+    ```
+
+Procure real rips - GameBanana (`gamebanana.com`) hosts "Sound" mods as individual, login-free
+downloads, and is the working source for `brstm`, `bcstm`, `bfstm`, `bfwav`, `bwav`, and `hca`. Find
+one via its API (no auth), download the mod archive, and extract the file with the extension you want:
+
+    # search Sound mods for an extension, list each hit's download archive, pick a small one,
+    # 7z-extract it, and copy out the first file that actually has that extension.
+    curl -s "https://gamebanana.com/apiv11/Util/Search/Results?_sSearchString=brstm&_sModelName=Sound&_nPerpage=20&_nPage=1"
+    curl -s "https://gamebanana.com/apiv11/Sound/<idRow>?_csvProperties=_aFiles"   # -> _sDownloadUrl, _nFilesize
+    # then: curl -L <url> -o mod.zip && 7z x mod.zip && find . -iname '*.brstm'
+
+Keep these local only (gitignored, never commit). GameBanana `.xwb` are XMA voice banks that the
+core-only (no-ffmpeg) vgmstream build cannot decode, so `xwb` stays genuinely procure-only elsewhere.
 
 ADPCM decoders without .NET - a GENH can also wrap ADPCM that ffmpeg produces, which exercises real
 ADPCM decoders (not just PCM) on a box with no VGAudio. Encode to an ADPCM WAV, then wrap the raw
@@ -620,9 +692,10 @@ size; both need a nonzero interleave). Codecs used for the local QA samples: MS-
 (`-c:a adpcm_yamaha -ac 1`, codec 10, interleave 0). These are GENH-container QA aids, not native
 `.dsp`/`.hca` files, so they stay local (gitignored) and do not replace the VGAudio/procured samples.
 
-Procure (no open encoder) - FSB/XWB/XVAG/KTSS from freely-licensed or homebrew rips and vgmstream
-issue/PR attachments; local QA only, never commit. Oracle/cross-check if vgmstream-cli is installed:
-`vgmstream-cli -i -o ref.wav <file>` (decode, looping disabled) and `vgmstream-cli -m <file>` (metadata).
+Still procure-only (no free encoder, not on GameBanana) - `at9` (Sony `at9tool`, Windows SDK),
+`xvag`, `fsb`, `xwb`, `ktss`: real game rips or vgmstream issue/PR attachments; local QA only, never
+commit. Oracle/cross-check if vgmstream-cli is installed: `vgmstream-cli -i -o ref.wav <file>` (decode,
+looping disabled) and `vgmstream-cli -m <file>` (metadata).
 
 Not routed on purpose: `.adx`/`.at3`/`.oma` (already on ffdec), `.awb` (AMR-WB owns it; `.acb` is only
 its cue sheet), and vgmstream's generic claims (`.ogg`/`.wav`/`.aac`/...). Formats whose payload needs
@@ -672,8 +745,8 @@ Real game tunes (for richer manual QA): procure PSF1 from Zophar's Domain
 A `.minipsf` needs its `.psflib` beside it; libupse resolves the `_lib` reference. Pick a tune long
 enough to scrub. (PSF2 is not supported - see above - so there is no PSF2 QA sample.)
 
-Windows: `packaging/windows/build-upse.ps1` (to be written by the Windows box) builds libupse as a
-static lib or DLL from the same audiodecoder.upse source and links it, like the AdPlug/SID handoff.
+Windows: `packaging/windows/build-upse.ps1` (written by the Windows box) builds libupse from the same
+audiodecoder.upse source and links it, like the AdPlug/SID handoff.
 The Linux side (`build-upse-min.sh`) compiles the vendored lib/libupse sources into libupse.so.
 
 ### Oracles
