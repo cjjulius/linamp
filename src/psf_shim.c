@@ -66,25 +66,9 @@ int psf_shim_seek(upse_module_t *mod, uint32_t ms) {
     return upse_eventloop_seek(mod, ms);
 }
 
-/* Declared length of the currently-open module in milliseconds (0 when the tune carries no length
- * tag). */
-uint32_t psf_shim_length_ms(upse_module_t *mod) {
-    return (mod && mod->metadata) ? mod->metadata->length : 0;
-}
-
-/* Length in milliseconds read from the PSF tags without loading/emulating the module (cheap, for the
- * playlist). 0 when unknown or unreadable. */
-uint32_t psf_shim_metadata_length_ms(const char *path) {
-    if (!psf_shim_has_signature(path)) {
-        return 0;
-    }
-    upse_psf_t *m = upse_get_psf_metadata(path, &PSF_IO);
-    uint32_t len = m ? m->length : 0;
-    if (m) {
-        upse_free_psf_metadata(m);
-    }
-    return len;
-}
+/* The tune's play length is read from its PSF `length` tag on the Rust side (src/psf.rs,
+ * tagged_length_secs); libupse's own length parser overflows on high-precision fractional seconds
+ * (it reads `length=2:30.819682` as ~22 hours), so this shim no longer exposes a length call. */
 
 void psf_shim_close(upse_module_t *mod) {
     if (mod) {

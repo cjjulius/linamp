@@ -47,8 +47,6 @@ extern "C" {
     fn psf_shim_open(path: *const c_char) -> *mut c_void;
     fn psf_shim_render(module: *mut c_void, out: *mut *mut i16) -> c_int;
     fn psf_shim_seek(module: *mut c_void, ms: u32) -> c_int;
-    fn psf_shim_length_ms(module: *mut c_void) -> u32;
-    fn psf_shim_metadata_length_ms(path: *const c_char) -> u32;
     fn psf_shim_close(module: *mut c_void);
 }
 
@@ -146,6 +144,48 @@ impl Source for PsfSource {
     }
 }
 
+/// Parse a PSF time field (`[[HH:]MM:]SS[.frac]`, e.g. `2:30.819682`) into seconds. We parse the
+/// `length` tag ourselves rather than use libupse's length, because libupse's time parser mishandles
+/// fractional seconds with more than two digits: it reads `.819682` as the integer 819682 and so
+/// inflates a `length=2:30.819682` tune to ~22 hours, which then drives both the shown duration and
+/// the play cap. Returns `None` on an unparseable field.
+fn parse_psf_time(s: &str) -> Option<f64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // Colon-separated, least significant last: seconds (possibly fractional), then minutes, then hours.
+    let mut total = 0.0f64;
+    for (i, field) in s.rsplit(':').enumerate() {
+        let v: f64 = field.trim().parse().ok()?;
+        total += match i {
+            0 => v,
+            1 => v * 60.0,
+            2 => v * 3600.0,
+            _ => return None,
+        };
+    }
+    Some(total)
+}
+
+/// Play length in seconds from the PSF's `[TAG]` section (`length` tag), or `None` when the tune
+/// declares none (callers fall back to `DEFAULT_PLAY_SECS`). The tag block is `[TAG]` followed by
+/// `key=value` lines and sits after the compressed program, so the last `[TAG]` in the file is the
+/// real one. Tag names are case-insensitive.
+fn tagged_length_secs(path: &Path) -> Option<f64> {
+    let data = std::fs::read(path).ok()?;
+    let pos = data.windows(5).rposition(|w| w == b"[TAG]")? + 5;
+    let text = String::from_utf8_lossy(&data[pos..]);
+    for line in text.split(['\n', '\r']) {
+        if let Some((key, value)) = line.split_once('=') {
+            if key.trim().eq_ignore_ascii_case("length") {
+                return parse_psf_time(value);
+            }
+        }
+    }
+    None
+}
+
 /// Load a PSF tune as a lazy, seekable stereo source. Errors cleanly when the file is not a valid
 /// PSF (the shim checks the signature before touching libupse, which crashes on malformed input), so
 /// the skip-unplayable path takes over.
@@ -159,11 +199,11 @@ pub fn open(path: &Path) -> Result<PsfSource> {
     if module.is_null() {
         return Err(anyhow!("libupse could not load {}", path.display()));
     }
-    let len_ms = unsafe { psf_shim_length_ms(module) };
-    let total_secs = if len_ms > 0 {
-        len_ms as f64 / 1000.0
-    } else {
-        DEFAULT_PLAY_SECS as f64
+    // Length comes from the PSF's own `length` tag, parsed in Rust (see tagged_length_secs); libupse's
+    // length is unreliable for high-precision fractional tags.
+    let total_secs = match tagged_length_secs(path) {
+        Some(secs) if secs > 0.0 => secs,
+        _ => DEFAULT_PLAY_SECS as f64,
     };
     Ok(PsfSource {
         module,
@@ -182,13 +222,11 @@ pub fn duration(path: &Path) -> Option<Duration> {
     if !is_psf(path) {
         return None;
     }
-    let cpath = CString::new(path.as_os_str().to_string_lossy().as_bytes()).ok()?;
-    let ms = unsafe { psf_shim_metadata_length_ms(cpath.as_ptr()) };
-    Some(if ms > 0 {
-        Duration::from_millis(ms as u64)
-    } else {
-        Duration::from_secs(DEFAULT_PLAY_SECS)
-    })
+    let secs = match tagged_length_secs(path) {
+        Some(secs) if secs > 0.0 => secs,
+        _ => DEFAULT_PLAY_SECS as f64,
+    };
+    Some(Duration::from_secs_f64(secs))
 }
 
 #[cfg(test)]
@@ -206,6 +244,32 @@ mod tests {
         }
         assert!(!is_psf(std::path::Path::new("x.mp3")));
         assert!(!is_psf(std::path::Path::new("noext")));
+    }
+
+    #[test]
+    fn psf_time_parses_high_precision_fractional_seconds() {
+        // Regression: libupse's parser read "2:30.819682" as ~22 hours; the real length is ~150.8s.
+        assert!((parse_psf_time("2:30.819682").unwrap() - 150.819_682).abs() < 1e-3);
+        assert_eq!(parse_psf_time("90").unwrap(), 90.0);
+        assert_eq!(parse_psf_time("2:30").unwrap(), 150.0);
+        assert_eq!(parse_psf_time("1:02:03").unwrap(), 3723.0);
+        assert!((parse_psf_time("0:05.5").unwrap() - 5.5).abs() < 1e-9);
+        assert!(parse_psf_time("").is_none());
+        assert!(parse_psf_time("abc").is_none());
+    }
+
+    #[test]
+    fn tagged_length_reads_the_length_tag() {
+        // A minimal file with a [TAG] block (tagged_length_secs only scans for the tag, not a real PSF).
+        let p = std::env::temp_dir().join("linamp_psf_length.psf");
+        std::fs::write(&p, b"PSF\x01....junk....[TAG]utf8=1\nlength=2:30.819682\nfade=10\n").unwrap();
+        assert!((tagged_length_secs(&p).unwrap() - 150.819_682).abs() < 1e-3);
+        let _ = std::fs::remove_file(&p);
+        // No length tag -> None, so callers fall back to the default.
+        let q = std::env::temp_dir().join("linamp_psf_nolength.psf");
+        std::fs::write(&q, b"PSF\x01....junk....[TAG]utf8=1\ntitle=x\n").unwrap();
+        assert!(tagged_length_secs(&q).is_none());
+        let _ = std::fs::remove_file(&q);
     }
 
     #[test]
