@@ -214,11 +214,23 @@ jobs:
           pwsh packaging\windows\build-upse.ps1
           "UPSE_DIR=$PWD\build\upse-min" | Out-File $env:GITHUB_ENV -Append
 
-      - name: Build and test (Windows, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf)
+      # psflib (shared PSF-family container parser) + Highly_Theoretical (Sega SSF/DSF), built from
+      # source as static libs; ROM-less (emulates only the SCSP/AICA). psflib needs the static zlib
+      # from the GME step above, so this runs after it. build.rs compiles the C shim and links both.
+      - name: Provision psflib + Highly_Theoretical (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh packaging\windows\build-psflib.ps1
+          pwsh packaging\windows\build-highly-theoretical.ps1
+          "PSFLIB_DIR=$PWD\build\psflib-min" | Out-File $env:GITHUB_ENV -Append
+          "HIGHLYTHEORETICAL_DIR=$PWD\build\highlytheoretical-min" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Build and test (Windows, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf)
         if: runner.os == 'Windows'
         run: |
-          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf --verbose
-          cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf --verbose
+          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf --verbose
+          cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf --verbose
 
   # Build the per-user installers. Runs on a v* tag (official release) or a
   # manual dispatch (dry run - artifacts only, no GitHub Release).
@@ -347,11 +359,22 @@ jobs:
           pwsh packaging\windows\build-upse.ps1
           "UPSE_DIR=$PWD\build\upse-min" | Out-File $env:GITHUB_ENV -Append
 
+      # psflib + Highly_Theoretical (Sega SSF/DSF), static, ROM-less. psflib needs the static zlib
+      # from the GME step, so this runs after it. Both link into the exe (no DLL to bundle).
+      - name: Provision psflib + Highly_Theoretical (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh packaging\windows\build-psflib.ps1
+          pwsh packaging\windows\build-highly-theoretical.ps1
+          "PSFLIB_DIR=$PWD\build\psflib-min" | Out-File $env:GITHUB_ENV -Append
+          "HIGHLYTHEORETICAL_DIR=$PWD\build\highlytheoretical-min" | Out-File $env:GITHUB_ENV -Append
+
       - name: Build Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --release --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf
+          cargo build --release --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf
           # Derive the version from Cargo.toml and pass it to ISCC - without this
           # the installer falls back to the version baked into linamp.iss, which
           # is how v0.3.0 shipped a "LinAmp-0.2.0-Setup.exe". /DWithFfmpeg bundles the
