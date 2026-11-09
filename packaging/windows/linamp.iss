@@ -98,6 +98,17 @@ Source: "{#ZlibBin}\zlib.dll"; DestDir: "{app}"; Flags: ignoreversion
   #endif
 Source: "{#OpenmptBin}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 #endif
+; gsf (Game Boy Advance) build only: bundle gsf.dll (libgsf + the trimmed mGBA it statically bundles)
+; next to the exe. gsf.dll imports zlib.dll, which the gme block above already ships, so no extra DLL is
+; needed. Unlike the other *SF cores (static), libgsf is a DLL, the same as gme/openmpt. Inert for a
+; normal build; pass both of these to ISCC for a gsf-enabled installer:
+;   ISCC /DWithGsf /DGsfBin="<libgsf-min build>\bin" ...
+#ifdef WithGsf
+  #ifndef GsfBin
+    #error With /DWithGsf you must also pass /DGsfBin=<the libgsf build's bin dir>
+  #endif
+Source: "{#GsfBin}\gsf.dll"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 ; Note: the AdLib/OPL feature (adplug) needs no bundling here. On Windows AdPlug and libbinio are
 ; linked statically into linamp.exe (see packaging/windows/build-adplug.ps1), so there are no
 ; adplug/binio DLLs to ship, unlike the gme/openmpt features above.
