@@ -33,6 +33,8 @@ mod sid;
 mod vgmstream;
 #[cfg(feature = "psf")]
 mod psf;
+#[cfg(feature = "ssf")]
+mod ssf;
 mod flv;
 mod icon;
 mod library;

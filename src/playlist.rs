@@ -314,6 +314,18 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "psf",
     #[cfg(feature = "psf")]
     "minipsf",
+    // Sega Saturn SSF / Dreamcast DSF music via Highly_Theoretical (the `ssf` feature). `.dsf` is not
+    // listed here: it is already advertised (DSD) and SSF claims it only by content, not extension.
+    #[cfg(feature = "ssf")]
+    "ssf",
+    #[cfg(feature = "ssf")]
+    "minissf",
+    #[cfg(feature = "ssf")]
+    "minidsf",
+    #[cfg(feature = "ssf")]
+    "dcsf",
+    #[cfg(feature = "ssf")]
+    "minidcsf",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -445,6 +457,27 @@ fn is_psf_file(path: &std::path::Path) -> bool {
 }
 #[cfg(not(feature = "psf"))]
 fn is_psf_file(_path: &std::path::Path) -> bool {
+    false
+}
+
+/// Duration of a Sega SSF/DSF tune (Highly_Theoretical) for the playlist, or `None` without the `ssf`
+/// feature. A cfg shim like `psf_duration`.
+#[cfg(feature = "ssf")]
+fn ssf_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::ssf::duration(path)
+}
+#[cfg(not(feature = "ssf"))]
+fn ssf_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+/// True when `path` is an SSF/DSF tune (rendered as stereo), for the display-metadata fill. Cfg shim.
+#[cfg(feature = "ssf")]
+fn is_ssf_file(path: &std::path::Path) -> bool {
+    crate::ssf::is_ssf(path)
+}
+#[cfg(not(feature = "ssf"))]
+fn is_ssf_file(_path: &std::path::Path) -> bool {
     false
 }
 
@@ -625,6 +658,7 @@ impl Track {
                 .or_else(|| sid_duration(&self.path))
                 .or_else(|| vgmstream_duration(&self.path))
                 .or_else(|| psf_duration(&self.path))
+                .or_else(|| ssf_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
         // Last resort for a format whose exact length no cheap probe can read: a provisional
@@ -674,6 +708,7 @@ impl Track {
             let stereo = is_gme_file(&self.path)
                 || is_openmpt_file(&self.path)
                 || is_psf_file(&self.path)
+                || is_ssf_file(&self.path)
                 || crate::tracker::is_tracker(&self.path)
                 || crate::midi::is_midi(&self.path);
             if mono || stereo {
@@ -1292,6 +1327,10 @@ mod tests {
         decoders.push(("vgmstream", crate::vgmstream::is_vgmstream, crate::vgmstream::VGMSTREAM_EXTS.to_vec()));
         #[cfg(feature = "psf")]
         decoders.push(("psf", crate::psf::is_psf, crate::psf::PSF_EXTS.to_vec()));
+        // SSF_EXTS holds only the unambiguous extensions; `.dsf` is routed by content (not extension)
+        // and stays owned by dsd in this extension-level guard, so it is not listed here.
+        #[cfg(feature = "ssf")]
+        decoders.push(("ssf", crate::ssf::is_ssf, crate::ssf::SSF_EXTS.to_vec()));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.

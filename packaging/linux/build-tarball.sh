@@ -60,6 +60,12 @@ case ",$FEATURES," in
   *,psf,*) BUNDLE_PSF=1 ;;
   *) BUNDLE_PSF=0 ;;
 esac
+# The ssf feature (Sega Saturn SSF / Dreamcast DSF) links Highly_Theoretical + the shared psflib, both
+# ROM-less, bundled the same way.
+case ",$FEATURES," in
+  *,ssf,*) BUNDLE_SSF=1 ;;
+  *) BUNDLE_SSF=0 ;;
+esac
 NAME="linamp-${VERSION}-linux-x86_64${SUFFIX}"
 STAGE="dist/$NAME"
 
@@ -128,6 +134,18 @@ if [ "$BUNDLE_PSF" = 1 ]; then
   UPSE_MIN="$ROOT/build/upse-min"
   sh "$ROOT/packaging/linux/build-upse-min.sh" "$UPSE_MIN"
   export UPSE_DIR="$UPSE_MIN"
+fi
+
+# Highly_Theoretical (Sega SSF/DSF) + the shared psflib container parser, built from source the same
+# way; ROM-less (emulates only the SCSP/AICA). build.rs compiles the shim, links both, emits the
+# $ORIGIN/lib rpath. Both .so bundled below.
+if [ "$BUNDLE_SSF" = 1 ]; then
+  PSFLIB_MIN="$ROOT/build/psflib-min"
+  HT_MIN="$ROOT/build/highlytheoretical-min"
+  sh "$ROOT/packaging/linux/build-psflib-min.sh" "$PSFLIB_MIN"
+  sh "$ROOT/packaging/linux/build-highly-theoretical-min.sh" "$HT_MIN"
+  export PSFLIB_DIR="$PSFLIB_MIN"
+  export HIGHLYTHEORETICAL_DIR="$HT_MIN"
 fi
 
 echo "==> cargo build --release $FEATURE_ARGS"
@@ -220,6 +238,20 @@ if [ "$BUNDLE_PSF" = 1 ]; then
   for f in "$STAGE"/lib/libupse.so*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
   if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libupse' | grep -vq "$STAGE/lib"; then
     echo "!!  WARNING: libupse still resolves outside $STAGE/lib; check the rpath" >&2
+  fi
+fi
+if [ "$BUNDLE_SSF" = 1 ]; then
+  echo "==> Bundling libhighlytheoretical + libpsflib into $STAGE/lib (self-contained)"
+  mkdir -p "$STAGE/lib"
+  # Both depend only on libc/libm and the system libz, so their .so files are the whole runtime set.
+  # The binary's $ORIGIN/lib rpath (emitted by build.rs) loads them at runtime.
+  cp -a "$HIGHLYTHEORETICAL_DIR"/lib/libhighlytheoretical.so* "$STAGE/lib/" 2>/dev/null || true
+  cp -a "$PSFLIB_DIR"/lib/libpsflib.so* "$STAGE/lib/" 2>/dev/null || true
+  for f in "$STAGE"/lib/libhighlytheoretical.so* "$STAGE"/lib/libpsflib.so*; do
+    [ -e "$f" ] && echo "    + $(basename "$f")"
+  done
+  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libhighlytheoretical|libpsflib' | grep -vq "$STAGE/lib"; then
+    echo "!!  WARNING: libhighlytheoretical/libpsflib still resolves outside $STAGE/lib; check the rpath" >&2
   fi
 fi
 cp -r skins "$STAGE/skins"

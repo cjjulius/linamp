@@ -214,3 +214,11 @@ vgmstream = []
 # at $UPSE_DIR (default build/upse-min, from build-upse-min.sh). ROM-less: libupse ships its own HLE
 # FakeBIOS, so no PlayStation BIOS is needed or shipped.
 psf = []
+# Sega Saturn SSF and Dreamcast DSF music (.ssf/.minissf/.dsf/.minidsf/.dcsf/.minidcsf) via
+# Highly_Theoretical (GPL-3) + the shared psflib container parser (MIT). build.rs compiles a C shim
+# (src/ssf_shim.c) and links both shared libs, bundling libhighlytheoretical.so + libpsflib.so. Needs
+# builds at $HIGHLYTHEORETICAL_DIR and $PSFLIB_DIR (defaults build/highlytheoretical-min and
+# build/psflib-min, from build-highly-theoretical-min.sh and build-psflib-min.sh). ROM-less: emulates
+# only the SCSP/AICA sound chips, no console BIOS. (.dsf is content-sniffed so DSD .dsf still routes
+# to the DSD decoder.)
+ssf = []
