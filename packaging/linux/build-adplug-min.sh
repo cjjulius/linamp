@@ -29,10 +29,10 @@ trap 'rm -rf "$work"' EXIT
 cd "$work"
 
 echo "==> Fetching libbinio $BINIO_VERSION and AdPlug $ADPLUG_VERSION" >&2
-curl -fsSL -o libbinio.tar.bz2 \
+curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o libbinio.tar.bz2 \
   "https://github.com/adplug/libbinio/releases/download/libbinio-${BINIO_VERSION}/libbinio-${BINIO_VERSION}.tar.bz2"
 echo "$BINIO_SHA256  libbinio.tar.bz2" | sha256sum -c -
-curl -fsSL -o adplug.tar.bz2 \
+curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o adplug.tar.bz2 \
   "https://github.com/adplug/adplug/releases/download/adplug-${ADPLUG_VERSION}/adplug-${ADPLUG_VERSION}.tar.bz2"
 echo "$ADPLUG_SHA256  adplug.tar.bz2" | sha256sum -c -
 

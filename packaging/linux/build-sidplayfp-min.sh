@@ -37,7 +37,7 @@ cd "$work"
 
 tarball="libsidplayfp-${SIDPLAYFP_VERSION}.tar.gz"
 echo "==> Fetching libsidplayfp $SIDPLAYFP_VERSION source" >&2
-curl -fsSL -o "$tarball" \
+curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$tarball" \
   "https://github.com/libsidplayfp/libsidplayfp/releases/download/v${SIDPLAYFP_VERSION}/${tarball}"
 echo "$SIDPLAYFP_SHA256  $tarball" | sha256sum -c -
 tar xzf "$tarball"
