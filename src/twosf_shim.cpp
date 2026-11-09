@@ -13,6 +13,12 @@
 #include <cstring>
 #include <new>
 
+// MSVC has no POSIX strcasecmp; it spells the case-insensitive compare _stricmp (declared in <cstring>).
+// Map it so twosf_info's tag matching below builds on Windows as it does on Linux/glibc.
+#ifdef _MSC_VER
+#define strcasecmp _stricmp
+#endif
+
 #include <zlib.h>
 
 extern "C" {
