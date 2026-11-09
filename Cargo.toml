@@ -208,3 +208,9 @@ sid = []
 # produced by packaging/linux/build-vgmstream-min.sh). Routes only game-specific extensions
 # (explicit allowlist) so it never claims generic .ogg/.wav/.flac/.mp3/etc.
 vgmstream = []
+# PlayStation PSF1/PSF2 music (.psf/.minipsf/.psf2/.minipsf2) via libupse (GPL). libupse is C but
+# opening a module needs an I/O-callback struct and a one-time init, so build.rs compiles a small C
+# shim (src/psf_shim.c) via the cc crate and links libupse, bundling libupse.so. Needs a libupse build
+# at $UPSE_DIR (default build/upse-min, from build-upse-min.sh). ROM-less: libupse ships its own HLE
+# FakeBIOS, so no PlayStation BIOS is needed or shipped.
+psf = []
