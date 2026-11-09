@@ -32,7 +32,7 @@ cd "$work"
 
 tarball="vgmstream-${VGMSTREAM_VERSION}.tar.gz"
 echo "==> Fetching vgmstream $VGMSTREAM_VERSION source" >&2
-curl -fsSL -o "$tarball" \
+curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$tarball" \
   "https://github.com/vgmstream/vgmstream/archive/refs/tags/${VGMSTREAM_VERSION}.tar.gz"
 echo "$VGMSTREAM_SHA256  $tarball" | sha256sum -c -
 tar xzf "$tarball"

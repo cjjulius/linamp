@@ -309,6 +309,11 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "hps",
     #[cfg(feature = "vgmstream")]
     "ktss",
+    // PlayStation PSF1/PSF2 music via libupse (the `psf` feature). crate::psf renders these to PCM.
+    #[cfg(feature = "psf")]
+    "psf",
+    #[cfg(feature = "psf")]
+    "minipsf",
 ];
 
 /// Duration of an FFmpeg-only file (WMA) for the playlist, or `None` in the
@@ -420,6 +425,27 @@ fn vgmstream_media_info(path: &std::path::Path) -> Option<(u32, u8, u32)> {
 #[cfg(not(feature = "vgmstream"))]
 fn vgmstream_media_info(_path: &std::path::Path) -> Option<(u32, u8, u32)> {
     None
+}
+
+/// Duration of a PlayStation PSF tune (libupse) for the playlist, or `None` without the `psf`
+/// feature. A cfg shim like `gme_duration`.
+#[cfg(feature = "psf")]
+fn psf_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::psf::duration(path)
+}
+#[cfg(not(feature = "psf"))]
+fn psf_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+/// True when `path` is a PSF tune (rendered as stereo), for the display-metadata fill. Cfg shim.
+#[cfg(feature = "psf")]
+fn is_psf_file(path: &std::path::Path) -> bool {
+    crate::psf::is_psf(path)
+}
+#[cfg(not(feature = "psf"))]
+fn is_psf_file(_path: &std::path::Path) -> bool {
+    false
 }
 
 // Predicate shims for the synthesized/emulated decoders, used to fill in display metadata (these
@@ -598,6 +624,7 @@ impl Track {
                 .or_else(|| adplug_duration(&self.path))
                 .or_else(|| sid_duration(&self.path))
                 .or_else(|| vgmstream_duration(&self.path))
+                .or_else(|| psf_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
         // Last resort for a format whose exact length no cheap probe can read: a provisional
@@ -646,6 +673,7 @@ impl Track {
             let mono = is_adplug_file(&self.path) || is_sid_file(&self.path);
             let stereo = is_gme_file(&self.path)
                 || is_openmpt_file(&self.path)
+                || is_psf_file(&self.path)
                 || crate::tracker::is_tracker(&self.path)
                 || crate::midi::is_midi(&self.path);
             if mono || stereo {
@@ -1262,6 +1290,8 @@ mod tests {
         decoders.push(("sid", crate::sid::is_sid, crate::sid::SID_EXTS.to_vec()));
         #[cfg(feature = "vgmstream")]
         decoders.push(("vgmstream", crate::vgmstream::is_vgmstream, crate::vgmstream::VGMSTREAM_EXTS.to_vec()));
+        #[cfg(feature = "psf")]
+        decoders.push(("psf", crate::psf::is_psf, crate::psf::PSF_EXTS.to_vec()));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.

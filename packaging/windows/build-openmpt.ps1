@@ -53,7 +53,7 @@ $work = New-Item -ItemType Directory -Force -Path (Join-Path ([IO.Path]::GetTemp
 try {
     $zipPath = Join-Path $work $ZIP
     Write-Host "==> Fetching libopenmpt $OPENMPT_VERSION dev package"
-    Invoke-WebRequest -Uri "https://lib.openmpt.org/files/libopenmpt/dev/$ZIP" -OutFile $zipPath
+    Invoke-WebRequest -Uri "https://lib.openmpt.org/files/libopenmpt/dev/$ZIP" -OutFile $zipPath -MaximumRetryCount 5 -RetryIntervalSec 5
     $got = (Get-FileHash -Algorithm SHA256 $zipPath).Hash.ToLower()
     if ($got -ne $ZIP_SHA256) {
         throw "SHA256 mismatch for $ZIP`n  expected $ZIP_SHA256`n  got      $got"

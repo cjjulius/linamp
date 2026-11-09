@@ -537,6 +537,11 @@ fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
     if crate::sid::is_sid(path) {
         return Ok(Box::new(crate::sid::open(path)?));
     }
+    // PlayStation PSF1/PSF2 music (.psf/.minipsf/.psf2/.minipsf2), via libupse.
+    #[cfg(feature = "psf")]
+    if crate::psf::is_psf(path) {
+        return Ok(Box::new(crate::psf::open(path)?));
+    }
     if crate::ape::is_ape(path) {
         return Ok(Box::new(crate::ape::open_ape(path)?));
     }
