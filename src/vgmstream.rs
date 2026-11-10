@@ -51,6 +51,11 @@ pub const VGMSTREAM_EXTS: &[&str] = &[
     "xwb",  // Microsoft XACT wave bank
     "hps",  // HAL (GameCube)
     "ktss", // Koei Tecmo KTSS
+    // External-codec tier (the `vgmstream-ext` build): these decode only when libvgmstream is built
+    // with Vorbis + FFmpeg (VGM_EXT=1). In a core-only build they route here and skip gracefully, the
+    // same as a Vorbis-payload .fsb does today.
+    "wem", // Wwise encoded media (usually Vorbis; also XMA/other)
+    "xma", // Microsoft XMA1/2 (Xbox 360), via FFmpeg
 ];
 // Note: CRI AWB/ACB containers are not routed - .awb already belongs to AMR-WB in LinAmp, and .acb
 // is only a cue sheet that points at the .awb, so neither is useful here.

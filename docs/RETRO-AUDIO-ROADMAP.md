@@ -133,11 +133,14 @@ BRSTM/BCSTM/BFSTM, FMOD FSB, Microsoft XWB, Sony XVAG/ATRAC9, Koei KTSS, and mor
   game-specific extensions nothing else in LinAmp handles and run vgmstream **last** in the dispatch
   chain, so the pure-Rust and ffmpeg paths always win a tie. `.adx`/`.at3`/`.oma` stay on ffdec;
   `.awb` stays with AMR-WB. Pinned to vgmstream r2168.
-- Deferred within this feature: the FFmpeg-backed codecs (XMA / ATRAC3 / WMA - a lot of Xbox 360 and
-  PS3 content) and the Vorbis/CELT/Speex-payload variants (Wwise WEM Vorbis, FSB Vorbis). They need
-  an external-codec build tier; a file that needs one simply fails to open today and is skipped. Add
-  as a second tier later (LGPL FFmpeg, no `--enable-gpl`, same posture as the existing gme/adplug LGPL
-  libs) if the demand is there.
+- External-codec tier - DONE (the `vgmstream-ext` feature). Rebuilds libvgmstream with `USE_VORBIS`
+  (Wwise `.wem` + FSB Vorbis via libvorbis/libogg, BSD) and `USE_FFMPEG` (Xbox 360 XMA, PS3/PSP
+  ATRAC3, WMA-in-container) pointed at the same LGPL `ffmpeg-min` the `ffmpeg` feature builds (no
+  `--enable-gpl`, no static link, so it DT_NEEDs the identical `libavcodec.so.58` and shares one copy -
+  no duplicate-symbol clash). Routing adds `.wem`/`.xma`; previously-routed containers (`.fsb`/`.xwb`/
+  `.xvag`) now decode their Vorbis/XMA payloads instead of skipping. build-vgmstream-min.sh takes
+  `VGM_EXT=1`; build-libvorbis-min.sh supplies libvorbis. Combined license stays GPLv3. (CELT/Speex/
+  mpg123 payloads remain off - niche; add later if wanted.)
 
 #### 2f. The `*SF` family (emulated-program music) - PSF1 DONE (PSF2 dropped), rest planned
 PSF (PlayStation), GSF (GBA), 2SF (NDS), USF (N64), SSF/DSF (Saturn/Dreamcast), QSF (Capcom
@@ -247,18 +250,27 @@ PSF). Several of the others HLE and should be fine, but it must be verified - we
 
 ## Phase 3 - Modern and ideal-fit
 
-- QOA (Quite OK Audio, `.qoa`): a 2023 format, dead simple, MIT/public-domain, with a
-  pure-Rust decoder already available (`qoaudio`). This is the only candidate that satisfies
-  every principle at once. Low effort, good signal that we track new formats.
+- QOA (Quite OK Audio, `.qoa`) - DONE (the `qoa` feature, crate::qoa). Pure-Rust `qoaudio` 0.7.0
+  (MIT/Apache-2.0), no FFI, no bundled library - satisfies every principle at once. The decoder is an
+  iterator of interleaved i16 samples; the fixed-mode header gives rate/channels/length. Seek-by-reset
+  (re-create the decoder from the in-memory bytes + render forward). Validated against the crate's own
+  reference `.qoa` fixture.
 - Tagging: `lofty` 0.21 is already a dependency. Audit which of the new formats it can tag
   and widen read/write coverage as formats land (principle 1 covers tagging, not just decode).
 
 ## Phase 4 - Non-codec audio sources (the "drop anything" glue)
 
-- CUE sheets (`.cue`): split a single-file album (with `.flac`/`.ape`/`.wv`) into real
-  tracks. Large UX win for ripped albums; no new codec, just index + seek.
-- Playlists: `.m3u`/`.m3u8`, `.pls`, `.xspf`, `.asx`, and `.ram` (RealAudio metafile).
-- Internet radio: SHOUTcast/Icecast streaming (existing issue #146, the minibrowser pane).
+- CUE sheets (`.cue`) - DONE (crate::cue). Split a single-file album (`.flac`/`.ape`/`.wv`/`.wav`
+  plus a `.cue`) into real tracks. Pure-Rust `cuna` 0.7.0 (MIT). Each track is a `cue://<start>:<len>/
+  <audio>` pseudo-path (the `cdda://` trick), opened through the normal dispatch and wrapped in a
+  `SubTrackSource` that seeks to the start, caps to the length, and re-bases `try_seek` for correct
+  mid-track scrubbing. No new codec, just index + seek.
+- Playlists - DONE. `.m3u`/`.m3u8`/`.pls` were already handled (parse_playlist_file); added `.xspf` and
+  `.asx` (XML, via `quick-xml`) and `.ram` (line-based). A playlist expands into tracks on load; remote
+  stream URLs are never auto-fetched (dropped by the `exists()` filter) to avoid SSRF/privacy exposure.
+- Internet radio - the streaming ENGINE is already DONE (src/stream.rs: a full ICY/SHOUTcast client,
+  Ctrl+L "Open location" UI). What remains (deferred) is an in-app station-directory UI; the engine
+  works today via a stream URL. (#146)
 
 ## Walls (proprietary - do not implement)
 
@@ -325,6 +337,17 @@ Phase 2e (vgmstream): see the appendix cookbook for the full, validated recipes.
   metadata with `vgmstream-cli -m <file>`. libvgmstream and the CLI share the decode core, so for the
   single-decoder formats the committed test is a non-silent render smoke test, like the chiptunes.
 
+vgmstream external tier (`vgmstream-ext`: `wem`/`xma`, and Vorbis/XMA/ATRAC3 payloads inside already-routed
+containers):
+- Procure only (no free encoder - these need proprietary tools or a game's own banks): `.wem` is
+  extracted from a game's Wwise `.bnk`/`.pck` banks (or exported from Wwise with a Vorbis conversion);
+  `.xma` from Xbox 360 rips; ATRAC3 `.fsb`/`.xvag` from PS3/PSP rips. Local QA only, gitignored.
+- Verify with `vgmstream-cli -m <file>` (prints the codec: "Wwise Vorbis", "XMA2", "ATRAC3", ...) and
+  `vgmstream-cli -i -o ref.wav <file>` for a reference decode. The committed render test is the
+  non-silent smoke test (libvgmstream is the sole decoder).
+- There is no license-free generated sample for these, so the render test simply skips when none is
+  present; validate against a procured bank.
+
 Phase 2f (*SF family), when taken up:
 - Procure only: Zophar's Domain per-format music sets (`zophar.net/music/<fmt>`). These are copyrighted
   commercial game rips - local QA only, never commit (matches the per-box gitignored-samples rule).
@@ -333,8 +356,21 @@ Phase 2f (*SF family), when taken up:
 - Oracle: each format's library is the sole decoder, so a non-silent render smoke test is the fallback.
 
 Phase 3:
-- QOA: generate directly - the reference `qoaconv` tool converts a wav to `.qoa`. Oracle:
-  decode back with `qoaconv` or the reference decoder.
+- QOA (`.qoa`): generate directly, license-free. Reference tool: `qoaconv` from phoboslab/qoa builds
+  with `make` and converts `qoaconv in.wav out.qoa` (make the WAV with a short tone script, ffmpeg or
+  sox). Pure-Rust alternative: a tiny program on `qoaudio`'s git `master` (which has `QoaEncoder`;
+  the 0.7.0 crate release is decode-only) encodes an i16 tone to `.qoa`. The `qoaudio` crate also ships
+  a reference `.qoa` fixture (`fixtures/`), used here for local decode validation. Oracle: decode back
+  with `qoaconv`; the committed test is a non-silent render smoke test.
+
+Phase 4 (non-codec glue), all generated license-free:
+- CUE (`.cue`): a short script writes a multi-tone stereo WAV and a `.cue` with one `TRACK`/`INDEX 01`
+  per tone (see `scratchpad/mkcue.py` in the dev notes); open the `.cue` and confirm it expands to the
+  right tracks with the right lengths, and that each track plays its own tone and scrubs correctly.
+- Playlists (`m3u`/`m3u8`/`pls`/`xspf`/`asx`/`ram`): hand-write a tiny playlist pointing at a local
+  sample (for XSPF a `<location>file:///...</location>`, for ASX a `<REF HREF=.../>`, for RAM one path
+  per line); load it and confirm the track is added. Include one remote `http(s)`/`rtsp` entry and
+  confirm it is NOT fetched (dropped by the exists() filter).
 
 ### Briefing the Windows box
 
@@ -406,13 +442,16 @@ Phase 2 stretch
   wall (snes9x non-commercial).
 
 Phase 3 - Modern/ideal
-- [ ] QOA (.qoa)
+- [x] QOA (.qoa) - the `qoa` feature (qoaudio, pure Rust)
 - [ ] Tagging coverage audit (lofty)
 
 Phase 4 - Non-codec sources
-- [ ] CUE sheets
-- [ ] Playlists (m3u/pls/xspf/asx/ram)
-- [ ] Internet radio (#146)
+- [x] CUE sheets - crate::cue (cuna; cue:// virtual tracks + SubTrackSource)
+- [x] Playlists (m3u/m3u8/pls already done; added xspf/asx/ram)
+- [~] Internet radio (#146) - streaming engine DONE (src/stream.rs); station-directory UI deferred
+
+vgmstream external-codec tier
+- [x] `vgmstream-ext` - Wwise/FSB Vorbis (libvorbis) + XMA/ATRAC3/WMA (bundled LGPL FFmpeg)
 
 Done this cycle (context)
 - [x] RealAudio/RealMedia, TAK, Sony ATRAC (ffdec), plus the corrupt-input decode-hang fix.
@@ -446,6 +485,18 @@ sample per extension and flags any that error or render silence:
 - MIDI `.mid`/`.midi`: a format-1 General MIDI song (exercises rustysynth + SoundFont).
 - Trackers: `.mod`/`.s3m`/`.it` small valid modules (TagLib test data), `.xm` = xmrs examples/note.xm.
   Use real modules with audible notes, not empty templates (an empty module renders silence).
+
+### QOA, CUE sheets and playlists (crate::qoa, crate::cue, playlist.rs; pure Rust)
+- QOA `.qoa`: generate license-free with phoboslab/qoa `qoaconv in.wav out.qoa`, or a tiny program on
+  `qoaudio` git master (`QoaEncoder`). The `qoaudio` 0.7.0 crate ships `fixtures/*.qoa` for local decode
+  validation. Committed test: non-silent render smoke test (`qoa::tests::decodes_real_qoa_files`).
+- CUE `.cue`: `scratchpad/mkcue.py` writes a 3-tone stereo WAV + a `.cue` with one `TRACK`/`INDEX 01`
+  per tone. The committed test (`cue::tests::decodes_real_cue_album_tracks`) expands it and confirms
+  each virtual track decodes its own non-silent audio (SubTrackSource seeks + caps correctly).
+- Playlists `.xspf`/`.asx`/`.ram`: hand-write a tiny file pointing at a local sample; `.m3u`/`.pls`
+  were already covered. Unit test (`playlist::tests::parse_xspf_asx_ram_extract_locations`) checks the
+  parser, including that a remote `http`/`rtsp` entry is extracted but (via load_file's exists() filter)
+  never fetched.
 
 ### FFmpeg-backed formats (crate::ffdec, `--features ffmpeg`)
 Oracle for the decode tests: `ffmpeg -i <sample> -f f32le -ac 2 -ar <rate> oracles/<name>-oracle.f32`.
@@ -632,10 +683,12 @@ is needed because the release tarball ships the pre-assembled PSID driver bytes.
 (`build-sidplayfp-min.sh`) stays shared, as with gme/openmpt.
 
 ### Game-engine streams (crate::vgmstream, `--features vgmstream`)
-libvgmstream (ISC) plays hundreds of console/engine stream formats. We build it core-only (no
-ffmpeg/vorbis/mpg123 externals) so it is fully permissive and depends only on libc/libm; that core
-decodes the headline formats (DSP/ADPCM, PS-ADPCM, HCA, ATRAC9, PCM). One build plays all routed
-extensions. Routing is an allowlist (`VGMSTREAM_EXTS`), so it never claims generic container names.
+libvgmstream (ISC) plays hundreds of console/engine stream formats. The core build is permissive and
+depends only on libc/libm; that core decodes the headline formats (DSP/ADPCM, PS-ADPCM, HCA, ATRAC9,
+PCM). The optional `vgmstream-ext` build (VGM_EXT=1) adds libvorbis (BSD, Wwise `.wem`/FSB Vorbis) and
+the bundled LGPL FFmpeg (XMA/ATRAC3/WMA), so those payloads decode instead of being skipped; it
+DT_NEEDs the same `libavcodec.so.58` the `ffmpeg` feature bundles (shared, no second copy). One build
+plays all routed extensions. Routing is an allowlist (`VGMSTREAM_EXTS`), so it never claims generic container names.
 No oracle for the single-decoder formats: the test is a render smoke test (non-silent audio), like
 the chiptunes. Pick a sample long enough to scrub; most game streams loop, and LinAmp plays them once
 with looping disabled.

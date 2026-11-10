@@ -158,7 +158,7 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         // have no registered MIME types; use a shared vendor type taught to the DB by MIME_PACKAGE_XML.
         #[cfg(feature = "vgmstream")]
         "genh" | "dsp" | "idsp" | "vag" | "svag" | "hca" | "brstm" | "bcstm" | "bfstm" | "bfwav"
-        | "bwav" | "at9" | "xvag" | "fsb" | "xwb" | "hps" | "ktss" => "audio/x-vgmstream",
+        | "bwav" | "at9" | "xvag" | "fsb" | "xwb" | "hps" | "ktss" | "wem" | "xma" => "audio/x-vgmstream",
         // PlayStation PSF1/PSF2 music via libupse (the `psf` feature). No registered MIME type;
         // use a vendor type taught to the DB by MIME_PACKAGE_XML.
         #[cfg(feature = "psf")]
@@ -182,6 +182,9 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
         // Game Boy Advance GSF music via libgsf (the `gsf` feature).
         #[cfg(feature = "gsf")]
         "gsf" | "minigsf" => "audio/x-gsf",
+        // QOA (Quite OK Audio) via qoaudio (the `qoa` feature).
+        #[cfg(feature = "qoa")]
+        "qoa" => "audio/x-qoa",
         // Video containers opened for their audio track (#180), plus CAF.
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
@@ -303,7 +306,7 @@ fn mime_package_xml() -> String {
             &[
                 "*.genh", "*.dsp", "*.idsp", "*.vag", "*.svag", "*.hca", "*.brstm", "*.bcstm",
                 "*.bfstm", "*.bfwav", "*.bwav", "*.at9", "*.xvag", "*.fsb", "*.xwb", "*.hps",
-                "*.ktss",
+                "*.ktss", "*.wem", "*.xma",
             ],
         ));
     }
@@ -361,6 +364,14 @@ fn mime_package_xml() -> String {
             "audio/x-gsf",
             "Game Boy Advance GSF music",
             &["*.gsf", "*.minigsf"],
+        ));
+    }
+    #[cfg(feature = "qoa")]
+    {
+        types.push((
+            "audio/x-qoa",
+            "QOA (Quite OK Audio)",
+            &["*.qoa"],
         ));
     }
     #[cfg(feature = "adplug")]

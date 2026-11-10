@@ -341,6 +341,17 @@ impl Player {
                 self.state = PlayState::Playing;
                 return Ok(());
             }
+            // CUE virtual track: `cue://<start_ms>:<len_ms>/<audio>` - decode the underlying album
+            // file, seek to the track start, cap to the track length (crate::cue::SubTrackSource).
+            if crate::cue::is_cue_path(s) {
+                let source = crate::cue::open(s)?;
+                self.append_source(source, None, true)?;
+                self.current_path = Some(path.to_path_buf());
+                self.current_url = None;
+                self.stream_title = None;
+                self.state = PlayState::Playing;
+                return Ok(());
+            }
         }
 
         // Decode or synthesize the file to a rodio `Source` through the shared dispatch, then
@@ -506,7 +517,7 @@ fn crossfade_step(
 /// format. This is the dispatch `play_file` uses, factored out so the viz-coverage test can
 /// exercise every codec through the real path. CD and network-stream pseudo-paths are handled
 /// separately in `play_file` and are not routed here.
-fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
+pub(crate) fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
     // Chiptune/console formats (NSF/VGM/SPC/...), rendered by libgme (the `gme` feature).
     #[cfg(feature = "gme")]
     if crate::gme::is_gme(path) {
@@ -614,6 +625,11 @@ fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>> {
     #[cfg(feature = "ffmpeg")]
     if crate::ffdec::is_ffmpeg_audio(path) {
         return Ok(Box::new(crate::ffdec::open(path)?));
+    }
+    // QOA (Quite OK Audio), via the pure-Rust qoaudio decoder.
+    #[cfg(feature = "qoa")]
+    if crate::qoa::is_qoa(path) {
+        return Ok(Box::new(crate::qoa::open(path)?));
     }
     // Streamed game-engine audio (DSP/VAG/HCA/BRSTM/FSB/...), via libvgmstream. Runs after every
     // other decoder - it only claims an allowlist of game-specific extensions nothing else handles,

@@ -114,11 +114,17 @@ jobs:
       # codecs), so the .so depends only on libc/libm. vgmstream has a C API, so there is no shim;
       # build.rs links $VGMSTREAM_DIR. Decode tests skip without the gitignored qa-music samples, so
       # on CI this is the compile check plus the router/MIME guards.
-      - name: Build libvgmstream (Linux)
+      - name: Build libvgmstream + libvorbis (Linux, external-codec tier)
         if: runner.os == 'Linux'
         run: |
-          sh packaging/linux/build-vgmstream-min.sh "$PWD/build/vgmstream-min"
+          # The vgmstream-ext feature decodes Wwise/FSB Vorbis (libvorbis) and XMA/ATRAC3/WMA (FFmpeg).
+          # libvorbis is built from source; FFmpeg is the apt libav* installed above (found via
+          # pkg-config). VGM_EXT=1 rebuilds libvgmstream with those externals.
+          sh packaging/linux/build-libvorbis-min.sh "$PWD/build/libvorbis-min"
+          LIBVORBIS_DIR="$PWD/build/libvorbis-min" FFMPEG_DIR="" VGM_EXT=1 \
+            sh packaging/linux/build-vgmstream-min.sh "$PWD/build/vgmstream-min"
           echo "VGMSTREAM_DIR=$PWD/build/vgmstream-min" >> "$GITHUB_ENV"
+          echo "LIBVORBIS_DIR=$PWD/build/libvorbis-min" >> "$GITHUB_ENV"
 
       # libupse (PlayStation PSF1/PSF2) built from source; ROM-less (its own HLE FakeBIOS, no PS1
       # BIOS). build.rs compiles the C shim and links $UPSE_DIR. Decode tests skip without the
@@ -150,11 +156,11 @@ jobs:
           echo "VIO2SF_DIR=$PWD/build/vio2sf-min" >> "$GITHUB_ENV"
           echo "LIBGSF_DIR=$PWD/build/libgsf-min" >> "$GITHUB_ENV"
 
-      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf + qsf + ncsf + usf + twosf + gsf)
+      - name: Build and test (Linux, ffmpeg + gme + openmpt + adplug + sid + vgmstream(+ext) + psf + ssf + qsf + ncsf + usf + twosf + gsf + qoa)
         if: runner.os == 'Linux'
         run: |
-          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf --verbose
-          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib:$SIDPLAYFP_DIR/lib:$VGMSTREAM_DIR/lib:$UPSE_DIR/lib:$HIGHLYTHEORETICAL_DIR/lib:$HIGHLYQUIXOTIC_DIR/lib:$SSEQPLAYER_DIR/lib:$LAZYUSF_DIR/lib:$VIO2SF_DIR/lib:$LIBGSF_DIR/lib:$PSFLIB_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf --verbose
+          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,vgmstream-ext,psf,ssf,qsf,ncsf,usf,twosf,gsf,qoa --verbose
+          LD_LIBRARY_PATH="$GME_DIR/lib:$OPENMPT_DIR/lib:$ADPLUG_DIR/lib:$SIDPLAYFP_DIR/lib:$VGMSTREAM_DIR/lib:$LIBVORBIS_DIR/lib:$UPSE_DIR/lib:$HIGHLYTHEORETICAL_DIR/lib:$HIGHLYQUIXOTIC_DIR/lib:$SSEQPLAYER_DIR/lib:$LAZYUSF_DIR/lib:$VIO2SF_DIR/lib:$LIBGSF_DIR/lib:$PSFLIB_DIR/lib" cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,vgmstream-ext,psf,ssf,qsf,ncsf,usf,twosf,gsf,qoa --verbose
 
       # Windows builds libgme and its zlib dependency from source (no system libgme/zlib),
       # then builds and tests the full feature set (ffmpeg + gme). build.rs links $GME_DIR;
@@ -326,7 +332,7 @@ jobs:
       # on Windows lands when the Windows box adds its build and DLL bundling.
       - name: Build Linux tarball
         if: runner.os == 'Linux'
-        run: FEATURES=ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf sh packaging/linux/build-tarball.sh
+        run: FEATURES=ffmpeg,gme,openmpt,adplug,sid,vgmstream,vgmstream-ext,psf,ssf,qsf,ncsf,usf,twosf,gsf,qoa sh packaging/linux/build-tarball.sh
 
       - name: Upload Linux tarball
         if: runner.os == 'Linux'
