@@ -844,23 +844,47 @@ impl super::LinAmpApp {
         if self.prefs.double_size == dbl {
             return;
         }
-        // Remember whether the library rides with the group so it can re-dock to
-        // the resized stack; a floating library is left to resize in place.
-        let lib_docked = self.library_docked();
+        // Capture the docked container from the CURRENT (pre-scale) geometry: the
+        // windows and library transitively docked to the main window. They scale as
+        // one unit about main's top-left, so flush edges stay flush and the group
+        // keeps its arrangement. Windows that are not docked keep their own top-left
+        // and just resize in place (they stay where they are).
+        let rects = [
+            self.win_rect_pts(0),
+            self.win_rect_pts(1),
+            self.win_rect_pts(2),
+            egui::Rect::from_min_size(self.geom.lib_pos, self.lib_size()),
+        ];
+        let vis = [true, self.eq_visible, self.pl_visible, self.lib_visible];
+        let in_group = dock_group_from_main(&rects, &vis);
         let old_scale = self.scale;
         self.prefs.double_size = dbl;
         self.scale = self.prefs.scale();
         self.prefs.save();
-        self.restack();
-        if lib_docked && old_scale > 0.0 {
-            // The whole group scales from the main window's top-left, so scaling the
-            // library's offset from main by the same ratio keeps it docked.
+        if old_scale > 0.0 {
+            // Each docked window's offset from main's (fixed) top-left scales by the
+            // same ratio as the window sizes, so a flush edge stays flush. A group
+            // that ends up off-screen is pulled back by the usual on-screen clamp.
             let ratio = self.scale / old_scale;
             let main = self.geom.win_pos[0];
-            self.geom.lib_pos = main + (self.geom.lib_pos - main) * ratio;
+            for j in [1usize, 2] {
+                if in_group[j] {
+                    self.geom.win_pos[j] = scale_about(main, self.geom.win_pos[j], ratio);
+                }
+            }
+            if in_group[3] {
+                self.geom.lib_pos = scale_about(main, self.geom.lib_pos, ratio);
+            }
         }
         self.geom.root_last = None; // force the root window to resize next frame
     }
+}
+
+/// Scale a point's offset from a fixed `anchor` by `ratio`. Used when the UI scale
+/// (1x/2x) changes: a docked window's top-left scales about the main window's top-left
+/// by the same ratio as the window sizes, so a flush edge stays flush.
+fn scale_about(anchor: egui::Pos2, p: egui::Pos2, ratio: f32) -> egui::Pos2 {
+    anchor + (p - anchor) * ratio
 }
 
 /// Volume after one mouse-wheel notch over the main window: scrolling up is
@@ -879,7 +903,37 @@ pub(crate) fn wheel_volume(current: f32, scroll: f32, step: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::wheel_volume;
+    use super::{scale_about, wheel_volume};
+
+    #[test]
+    fn scaling_keeps_docked_edges_flush() {
+        use egui::{pos2, vec2};
+        // Main at the top-left; EQ docked flush below it; playlist docked flush to its
+        // right (the arrangement from the bug report). Scale 1x -> 2x.
+        let main = pos2(100.0, 100.0);
+        let main_sz = vec2(275.0, 116.0);
+        let eq = pos2(100.0, 216.0); // flush below main (100 + 116)
+        let pl = pos2(375.0, 100.0); // flush right of main (100 + 275)
+        let ratio = 2.0;
+        // Main's top-left is the anchor and does not move; its size scales by `ratio`.
+        let main_sz2 = main_sz * ratio;
+        let eq2 = scale_about(main, eq, ratio);
+        let pl2 = scale_about(main, pl, ratio);
+        // EQ is still left-aligned with main and flush below its (now taller) bottom.
+        assert!((eq2.x - main.x).abs() < 1e-3, "eq stays left-aligned with main");
+        assert!((eq2.y - (main.y + main_sz2.y)).abs() < 1e-3, "eq stays flush below main");
+        // Playlist is still top-aligned with main and flush to its (now wider) right.
+        assert!((pl2.y - main.y).abs() < 1e-3, "pl stays top-aligned with main");
+        assert!((pl2.x - (main.x + main_sz2.x)).abs() < 1e-3, "pl stays flush right of main");
+    }
+
+    #[test]
+    fn scaling_is_identity_at_same_ratio() {
+        use egui::pos2;
+        let anchor = pos2(40.0, 60.0);
+        let p = pos2(123.0, 456.0);
+        assert_eq!(scale_about(anchor, p, 1.0), p, "ratio 1 leaves the point put");
+    }
 
     #[test]
     fn wheel_volume_scrolls_and_clamps() {
