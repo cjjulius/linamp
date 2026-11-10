@@ -248,6 +248,22 @@ fn link_vgmstream(manifest: &Path, target_dir: &Path) {
                 }
             }
         }
+        // The external-codec tier (vgmstream-ext) build DT_NEEDs libvorbis/libvorbisfile/libogg; bundle
+        // them beside libvgmstream.so (the libav* it also needs are bundled by the ffmpeg feature).
+        if env::var_os("CARGO_FEATURE_VGMSTREAM_EXT").is_some() {
+            let vorbis = env::var_os("LIBVORBIS_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| manifest.join("build/libvorbis-min"));
+            if let Ok(entries) = fs::read_dir(vorbis.join("lib")) {
+                for e in entries.flatten() {
+                    let name = e.file_name();
+                    let n = name.to_string_lossy();
+                    if n.contains("libvorbis.so") || n.contains("libvorbisfile.so") || n.contains("libogg.so") {
+                        let _ = fs::copy(e.path(), dst.join(&name));
+                    }
+                }
+            }
+        }
     }
     #[cfg(windows)]
     let _ = target_dir;

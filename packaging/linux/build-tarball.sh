@@ -55,6 +55,12 @@ case ",$FEATURES," in
   *,vgmstream,*) BUNDLE_VGMSTREAM=1 ;;
   *) BUNDLE_VGMSTREAM=0 ;;
 esac
+# The vgmstream-ext feature rebuilds libvgmstream with Vorbis (libvorbis, BSD) + FFmpeg (the bundled
+# LGPL ffmpeg-min) so it decodes Wwise/FSB Vorbis and XMA/ATRAC3/WMA. It implies vgmstream + ffmpeg.
+case ",$FEATURES," in
+  *,vgmstream-ext,*) BUNDLE_VGMSTREAM_EXT=1 ;;
+  *) BUNDLE_VGMSTREAM_EXT=0 ;;
+esac
 # The psf feature (PlayStation PSF1/PSF2) links libupse (ROM-less), bundled the same way.
 case ",$FEATURES," in
   *,psf,*) BUNDLE_PSF=1 ;;
@@ -156,7 +162,16 @@ fi
 # VGMSTREAM_DIR and emits the $ORIGIN/lib rpath. Bundled into $STAGE/lib below.
 if [ "$BUNDLE_VGMSTREAM" = 1 ]; then
   VGMSTREAM_MIN="$ROOT/build/vgmstream-min"
-  sh "$ROOT/packaging/linux/build-vgmstream-min.sh" "$VGMSTREAM_MIN"
+  if [ "$BUNDLE_VGMSTREAM_EXT" = 1 ]; then
+    # External-codec tier: build libvorbis (BSD) and rebuild libvgmstream with Vorbis + FFmpeg,
+    # pointed at the same ffmpeg-min the ffmpeg feature builds (FFMPEG_DIR is exported above).
+    LIBVORBIS_MIN="$ROOT/build/libvorbis-min"
+    sh "$ROOT/packaging/linux/build-libvorbis-min.sh" "$LIBVORBIS_MIN"
+    export LIBVORBIS_DIR="$LIBVORBIS_MIN"
+    VGM_EXT=1 sh "$ROOT/packaging/linux/build-vgmstream-min.sh" "$VGMSTREAM_MIN"
+  else
+    sh "$ROOT/packaging/linux/build-vgmstream-min.sh" "$VGMSTREAM_MIN"
+  fi
   export VGMSTREAM_DIR="$VGMSTREAM_MIN"
 fi
 
@@ -288,9 +303,18 @@ if [ "$BUNDLE_VGMSTREAM" = 1 ]; then
   # The core-only libvgmstream depends only on libc/libm (from the user's system), so its own .so is
   # the whole runtime set. The binary's $ORIGIN/lib rpath (emitted by build.rs) loads it at runtime.
   cp -a "$VGMSTREAM_DIR"/lib/libvgmstream.so* "$STAGE/lib/" 2>/dev/null || true
-  for f in "$STAGE"/lib/libvgmstream.so*; do [ -e "$f" ] && echo "    + $(basename "$f")"; done
-  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libvgmstream' | grep -vq "$STAGE/lib"; then
-    echo "!!  WARNING: libvgmstream still resolves outside $STAGE/lib; check the rpath" >&2
+  # External-codec tier: also bundle libvorbis/libvorbisfile/libogg (the FFmpeg libav* come from the
+  # ffmpeg bundle block above, which the extended libvgmstream shares).
+  if [ "$BUNDLE_VGMSTREAM_EXT" = 1 ]; then
+    cp -a "$LIBVORBIS_DIR"/lib/libvorbis.so* "$LIBVORBIS_DIR"/lib/libvorbisfile.so* \
+          "$LIBVORBIS_DIR"/lib/libogg.so* "$STAGE/lib/" 2>/dev/null || true
+  fi
+  for f in "$STAGE"/lib/libvgmstream.so* "$STAGE"/lib/libvorbis.so* "$STAGE"/lib/libvorbisfile.so* \
+           "$STAGE"/lib/libogg.so*; do
+    [ -e "$f" ] && echo "    + $(basename "$f")"
+  done
+  if ldd "$STAGE/linamp" 2>/dev/null | grep -E 'libvgmstream|libvorbis|libogg' | grep -vq "$STAGE/lib"; then
+    echo "!!  WARNING: a vgmstream library still resolves outside $STAGE/lib; check the rpath" >&2
   fi
 fi
 if [ "$BUNDLE_PSF" = 1 ]; then

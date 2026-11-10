@@ -309,6 +309,14 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "hps",
     #[cfg(feature = "vgmstream")]
     "ktss",
+    // External-codec tier (decode only in a `vgmstream-ext` build; route+skip otherwise).
+    #[cfg(feature = "vgmstream")]
+    "wem",
+    #[cfg(feature = "vgmstream")]
+    "xma",
+    // QOA (Quite OK Audio) via the pure-Rust qoaudio decoder (the `qoa` feature).
+    #[cfg(feature = "qoa")]
+    "qoa",
     // PlayStation PSF1/PSF2 music via libupse (the `psf` feature). crate::psf renders these to PCM.
     #[cfg(feature = "psf")]
     "psf",
@@ -611,6 +619,28 @@ fn is_gsf_file(_path: &std::path::Path) -> bool {
     false
 }
 
+/// Duration of a QOA file (qoaudio) for the playlist, read from its header, or `None` without the
+/// `qoa` feature. A cfg shim like `qsf_duration`.
+#[cfg(feature = "qoa")]
+fn qoa_duration(path: &std::path::Path) -> Option<Duration> {
+    crate::qoa::duration(path)
+}
+#[cfg(not(feature = "qoa"))]
+fn qoa_duration(_path: &std::path::Path) -> Option<Duration> {
+    None
+}
+
+/// Real (sample_rate, channels) of a QOA file from its header, for the display-metadata fill (QOA
+/// carries its own rate and 1-8 channel count, unlike the flat-stereo synthesized formats). Cfg shim.
+#[cfg(feature = "qoa")]
+fn qoa_media_info(path: &std::path::Path) -> Option<(u32, u8)> {
+    crate::qoa::media_info(path)
+}
+#[cfg(not(feature = "qoa"))]
+fn qoa_media_info(_path: &std::path::Path) -> Option<(u32, u8)> {
+    None
+}
+
 // Predicate shims for the synthesized/emulated decoders, used to fill in display metadata (these
 // formats carry no codec tags). Cfg shims like the duration ones, so the call sites read the same
 // in every build. AdLib/OPL (adplug) is mono; the chip/tracker formats are stereo.
@@ -794,6 +824,7 @@ impl Track {
                 .or_else(|| usf_duration(&self.path))
                 .or_else(|| twosf_duration(&self.path))
                 .or_else(|| gsf_duration(&self.path))
+                .or_else(|| qoa_duration(&self.path))
                 .or_else(|| crate::decode::probe_duration(&self.path));
         }
         // Last resort for a format whose exact length no cheap probe can read: a provisional
@@ -830,6 +861,19 @@ impl Track {
                 }
                 if kbps > 0 {
                     self.bitrate = Some(kbps);
+                }
+            }
+        }
+        // QOA carries its own sample rate and channel count in the header (qoaudio reads no tags), so
+        // fill the real values rather than the flat 44.1 kHz stereo guess below.
+        if self.sample_rate.is_none() {
+            if let Some((rate, ch)) = qoa_media_info(&self.path) {
+                self.sample_rate = Some(rate);
+                if ch > 0 {
+                    self.channels = Some(ch);
+                    if self.bitrate.is_none() {
+                        self.bitrate = Some(rate * 16 * ch as u32 / 1000);
+                    }
                 }
             }
         }
@@ -918,6 +962,24 @@ impl Track {
         }
     }
 
+    /// Build a playlist track from a parsed CUE entry. The path is a `cue://` pseudo-path (not a real
+    /// file), so the track is marked loaded (its title/performer/length come from the sheet; the
+    /// rate/channels are filled when it is decoded).
+    pub fn cue_track(entry: &crate::cue::CueEntry) -> Track {
+        Track {
+            path: PathBuf::from(&entry.path),
+            title: entry.title.clone(),
+            artist: entry.performer.clone(),
+            album: entry.album.clone(),
+            duration: entry.duration,
+            duration_estimated: false,
+            sample_rate: None,
+            bitrate: None,
+            channels: None,
+            loaded: true,
+        }
+    }
+
     /// "Artist - Title" when an artist is known, otherwise just the title.
     pub fn display_name(&self) -> String {
         if self.artist.trim().is_empty() {
@@ -985,6 +1047,16 @@ impl Playlist {
             // No disc metadata lookup on this GVfs path; the cdda:// entry gets titles
             // from the watcher once it's in the library view.
             self.tracks.push(Track::cd_track(&dev, &t, None));
+            return;
+        }
+        // A .cue sheet expands into one virtual track per TRACK (each a cue:// pseudo-path into the
+        // underlying album file); it is not itself a playable file.
+        if crate::cue::is_cue(&path) {
+            if let Ok(entries) = crate::cue::expand(&path) {
+                for e in &entries {
+                    self.tracks.push(Track::cue_track(e));
+                }
+            }
             return;
         }
         if playable(&path) {
@@ -1312,7 +1384,16 @@ pub fn parse_playlist_file(path: &Path) -> Vec<PathBuf> {
         }
         entries.sort_by_key(|(n, _)| *n);
         out.extend(entries.into_iter().map(|(_, p)| p));
+    } else if ext == "xspf" {
+        // XSPF: <trackList><track><location>uri</location>. Pull each <location>'s text.
+        out.extend(parse_xml_playlist(content, base, "location", None));
+    } else if ext == "asx" {
+        // ASX (Windows Media): <ASX><ENTRY><REF HREF="uri"/>. Tag/attr names are case-insensitive.
+        out.extend(parse_xml_playlist(content, base, "ref", Some("href")));
     } else {
+        // Line-based (m3u, m3u8, ram): one entry per non-comment line. Remote URLs (http/mms/rtsp,
+        // common in .ram and .m3u) resolve to non-existent local paths and are dropped by load_file's
+        // `exists()` filter, so a dropped playlist never makes LinAmp fetch arbitrary hosts.
         for line in content.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -1322,6 +1403,131 @@ pub fn parse_playlist_file(path: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+/// Pull playlist entries out of an XML playlist (XSPF or ASX). `tag` is the element whose value holds
+/// the location; when `attr` is Some, the value is that attribute (ASX `<ref href=...>`), otherwise it
+/// is the element's text content (XSPF `<location>`). Tag and attribute names are matched
+/// case-insensitively. Each location is `file://`-stripped, lightly percent-decoded, and resolved
+/// relative to the playlist; remote URLs are left as-is and later dropped by the `exists()` filter.
+fn parse_xml_playlist(content: &str, base: Option<&Path>, tag: &str, attr: Option<&str>) -> Vec<PathBuf> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    let mut reader = Reader::from_str(content);
+    reader.config_mut().trim_text(true);
+    let mut out = Vec::new();
+    let mut in_tag = false; // for text-content mode: inside the target element
+    loop {
+        match reader.read_event() {
+            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                let local = String::from_utf8_lossy(e.name().as_ref()).to_ascii_lowercase();
+                let matches_tag = local == tag || local.rsplit(':').next() == Some(tag);
+                if matches_tag {
+                    if let Some(a) = attr {
+                        for att in e.attributes().flatten() {
+                            let key = String::from_utf8_lossy(att.key.as_ref()).to_ascii_lowercase();
+                            if key == a || key.rsplit(':').next() == Some(a) {
+                                let val = xml_unescape(&String::from_utf8_lossy(&att.value));
+                                if let Some(p) = xml_location_to_path(&val, base) {
+                                    out.push(p);
+                                }
+                            }
+                        }
+                    } else {
+                        in_tag = true;
+                    }
+                }
+            }
+            Ok(Event::Text(t)) if in_tag => {
+                let val = xml_unescape(&String::from_utf8_lossy(t.as_ref()));
+                if let Some(p) = xml_location_to_path(&val, base) {
+                    out.push(p);
+                }
+                in_tag = false;
+            }
+            Ok(Event::End(_)) => in_tag = false,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Minimal XML entity unescape (the five named entities plus numeric `&#NN;` / `&#xNN;`).
+fn xml_unescape(s: &str) -> String {
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp..];
+        if let Some(semi) = after.find(';') {
+            let ent = &after[1..semi];
+            let decoded = match ent {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                _ => ent
+                    .strip_prefix('#')
+                    .and_then(|n| {
+                        n.strip_prefix(['x', 'X'])
+                            .and_then(|h| u32::from_str_radix(h, 16).ok())
+                            .or_else(|| n.parse::<u32>().ok())
+                    })
+                    .and_then(char::from_u32),
+            };
+            match decoded {
+                Some(c) => out.push(c),
+                None => out.push_str(&after[..=semi]),
+            }
+            rest = &after[semi + 1..];
+        } else {
+            out.push('&');
+            rest = &after[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Turn an XML playlist location (a URI or path) into a resolved local path. Strips a `file://` scheme
+/// and lightly percent-decodes it; non-file URIs (http/mms/rtsp) are returned unresolved so the
+/// `exists()` filter drops them rather than LinAmp fetching them.
+fn xml_location_to_path(loc: &str, base: Option<&Path>) -> Option<PathBuf> {
+    let loc = loc.trim();
+    if loc.is_empty() {
+        return None;
+    }
+    let stripped = loc
+        .strip_prefix("file://localhost")
+        .or_else(|| loc.strip_prefix("file://"))
+        .map(percent_decode)
+        .unwrap_or_else(|| loc.to_string());
+    Some(resolve(base, &stripped))
+}
+
+/// Minimal percent-decoder for file URIs (handles %NN; leaves malformed escapes untouched).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(byte) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn resolve(base: Option<&Path>, value: &str) -> PathBuf {
@@ -1481,6 +1687,8 @@ mod tests {
         decoders.push(("twosf", crate::twosf::is_2sf, crate::twosf::TWOSF_EXTS.to_vec()));
         #[cfg(feature = "gsf")]
         decoders.push(("gsf", crate::gsf::is_gsf, crate::gsf::GSF_EXTS.to_vec()));
+        #[cfg(feature = "qoa")]
+        decoders.push(("qoa", crate::qoa::is_qoa, crate::qoa::QOA_EXTS.to_vec()));
 
         // The default path: symphonia (plus libopus for Opus), which claims every
         // extension no specialised decoder above does.
@@ -1787,6 +1995,49 @@ mod tests {
             "header leaked as a path: {got:?}"
         );
         let _ = std::fs::remove_file(&m3u);
+    }
+
+    #[test]
+    fn parse_xspf_asx_ram_extract_locations() {
+        let dir = std::env::temp_dir();
+        let pid = std::process::id();
+
+        // XSPF: file:// location with a percent-encoded space, plus a remote http one (kept here; the
+        // exists() filter in load_file drops it later).
+        let xspf = dir.join(format!("linamp_{pid}.xspf"));
+        std::fs::write(
+            &xspf,
+            r#"<?xml version="1.0"?><playlist><trackList>
+               <track><location>file:///music/My%20Song.flac</location></track>
+               <track><location>http://host/stream.mp3</location></track>
+               </trackList></playlist>"#,
+        )
+        .unwrap();
+        let got = parse_playlist_file(&xspf);
+        assert!(got.iter().any(|p| p.to_string_lossy() == "/music/My Song.flac"), "got {got:?}");
+        assert!(got.iter().any(|p| p.to_string_lossy().contains("stream.mp3")), "got {got:?}");
+
+        // ASX: case-insensitive tags/attrs, href on a self-closing REF.
+        let asx = dir.join(format!("linamp_{pid}.asx"));
+        std::fs::write(
+            &asx,
+            r#"<ASX version="3.0"><ENTRY><REF HREF="/music/track.mp3"/></ENTRY>
+               <Entry><Ref Href="relative/next.mp3"/></Entry></ASX>"#,
+        )
+        .unwrap();
+        let got = parse_playlist_file(&asx);
+        assert!(got.iter().any(|p| p.to_string_lossy() == "/music/track.mp3"), "got {got:?}");
+        assert!(got.iter().any(|p| p.file_name().is_some_and(|n| n == "next.mp3")), "got {got:?}");
+
+        // RAM: one URL/path per line (line-based, like m3u).
+        let ram = dir.join(format!("linamp_{pid}.ram"));
+        std::fs::write(&ram, "/music/a.mp3\nrtsp://host/live\n").unwrap();
+        let got = parse_playlist_file(&ram);
+        assert!(got.iter().any(|p| p.to_string_lossy() == "/music/a.mp3"), "got {got:?}");
+
+        for f in [xspf, asx, ram] {
+            let _ = std::fs::remove_file(f);
+        }
     }
 
     #[test]
