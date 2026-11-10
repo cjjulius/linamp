@@ -22,19 +22,18 @@ impl super::LinAmpApp {
         // never off-screen when the player sits near the right or bottom edge. A position
         // the user has since dragged (prefs_pos is Some) is left alone: off-screen is
         // allowed once they move it there themselves.
-        let pos = match self.prefs_pos {
-            Some(p) => p,
+        let (pos, first_open) = match self.prefs_pos {
+            Some(p) => (p, false),
             None => {
                 let size = self.prefs_size.unwrap_or(PREFS_DEFAULT_SIZE);
                 let anchored = self.geom.win_pos[0] + egui::vec2(24.0, 24.0);
                 let p = clamp_pos_onscreen(ctx, anchored, size);
                 self.prefs_pos = Some(p);
-                p
+                (p, true)
             }
         };
-        let builder = egui::ViewportBuilder::default()
+        let mut builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
-            .with_position(pos)
             // A bit larger than before so the longest page (Conversion) fits without
             // scrolling and the grouped category tree (whose "General Preferences"
             // heading is wider than the old flat labels) has room. Kept well under the
@@ -51,6 +50,13 @@ impl super::LinAmpApp {
             // raises it (see `prefs_raise`), covering the rare case of two topmost
             // windows where a sibling can still come forward.
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
+        // Pin the position only on first open (clamped on-screen above). After that the
+        // title-bar drag drives the window through OuterPosition, so it is the sole
+        // position authority and the user can drag the window partly off-screen.
+        // Re-asserting with_position every frame fights the drag and pins it on-screen.
+        if first_open {
+            builder = builder.with_position(pos);
+        }
         let id = egui::ViewportId::from_hash_of("linamp_prefs");
         // When the current skin ships general-purpose window art (GEN.BMP/GENEX.BMP),
         // frame Preferences with the skin's own composited window exactly like the Media
