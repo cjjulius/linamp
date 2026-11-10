@@ -266,7 +266,24 @@ fn link_vgmstream(manifest: &Path, target_dir: &Path) {
         }
     }
     #[cfg(windows)]
-    let _ = target_dir;
+    {
+        // On Windows vgmstream is static-linked into the exe. The external-codec tier (vgmstream-ext)
+        // compiles the Vorbis decoder into vgmstream.lib but leaves its vorbis/vorbisfile/ogg symbols
+        // unresolved (static lib); link the static libvorbis built by build-libvorbis.ps1. The ffmpeg
+        // symbols it also needs resolve against the same avcodec/avformat/avutil the `ffmpeg` feature
+        // links and ships (ffmpeg-next) - one ffmpeg, not a second copy - so nothing ffmpeg here.
+        if env::var_os("CARGO_FEATURE_VGMSTREAM_EXT").is_some() {
+            println!("cargo:rerun-if-env-changed=LIBVORBIS_DIR");
+            let vorbis = env::var_os("LIBVORBIS_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| manifest.join("build/libvorbis-min"));
+            println!("cargo:rustc-link-search=native={}", vorbis.join("lib").display());
+            println!("cargo:rustc-link-lib=static=vorbisfile");
+            println!("cargo:rustc-link-lib=static=vorbis");
+            println!("cargo:rustc-link-lib=static=ogg");
+        }
+        let _ = target_dir;
+    }
 }
 
 /// Link libupse for the `psf` feature: compile the small C shim (src/psf_shim.c) that wires stdio
