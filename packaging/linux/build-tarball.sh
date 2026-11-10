@@ -368,6 +368,28 @@ cp assets/linamp_logo_256.png "$STAGE/linamp_256.png"
 cp assets/linamp_logo.svg "$STAGE/linamp.svg"
 for d in README.md FEATURES.md SHORTCUTS.md LINUX.md LICENSE; do [ -f "$d" ] && cp "$d" "$STAGE/" || true; done
 
+# Normalise each bundled library's own rpath to $ORIGIN so it finds its siblings
+# in the same directory. A library built with a DT_RUNPATH (for example libadplug,
+# whose RUNPATH points at its CI build dir) otherwise fails to load its own
+# dependency on the user's machine: a DT_RUNPATH suppresses the executable's
+# $ORIGIN/lib rpath for that library's transitive deps, so libadplug can't find
+# libbinio even though it sits right beside it. Rewriting every bundled .so to
+# rpath $ORIGIN fixes that uniformly (harmless for libs that already resolve).
+if [ -d "$STAGE/lib" ]; then
+  if ! command -v patchelf >/dev/null 2>&1; then
+    echo "!!  patchelf not found: cannot normalise bundled library rpaths, so" >&2
+    echo "!!  transitive deps (e.g. libadplug -> libbinio) will fail to load at" >&2
+    echo "!!  runtime. Install it and rebuild (e.g. apt-get install patchelf)." >&2
+    exit 1
+  fi
+  for so in "$STAGE"/lib/*.so*; do
+    [ -L "$so" ] && continue   # skip soname symlinks; patch the real file they point to
+    [ -f "$so" ] || continue
+    patchelf --set-rpath '$ORIGIN' "$so"
+  done
+  echo "==> Normalised bundled library rpaths to \$ORIGIN"
+fi
+
 echo "==> Creating dist/$NAME.tar.gz"
 ( cd dist && tar czf "$NAME.tar.gz" "$NAME" )
 echo "==> Done: dist/$NAME.tar.gz"

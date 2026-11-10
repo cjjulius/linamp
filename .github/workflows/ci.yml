@@ -291,8 +291,9 @@ jobs:
           # C toolchain + curl to build it, plus llvm-14 for the ffmpeg-sys-next bindgen
           # (its pinned bindgen 0.59.2 panics against the runner's newer libclang).
           # cmake is also needed to build libgme from source for the gme feature.
+          # patchelf normalises the bundled libraries' rpaths to $ORIGIN (build-tarball.sh).
           sudo apt-get install -y libasound2-dev libgtk-3-dev pkg-config \
-            build-essential curl cmake llvm-14 libclang-14-dev clang-14
+            build-essential curl cmake llvm-14 libclang-14-dev clang-14 patchelf
           echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
 
       # Same bindgen/libclang pin on Windows (see the ffmpeg-build job).
