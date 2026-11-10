@@ -1508,7 +1508,23 @@ fn xml_location_to_path(loc: &str, base: Option<&Path>) -> Option<PathBuf> {
         .or_else(|| loc.strip_prefix("file://"))
         .map(percent_decode)
         .unwrap_or_else(|| loc.to_string());
+    // A Windows file URI is file:///C:/path; stripping the scheme leaves "/C:/path", and that leading
+    // slash before the drive letter makes it resolve against the wrong root on Windows. Drop it. Only a
+    // "/<letter>:/" prefix is a drive path; a bare Unix "/music/..." is left untouched.
+    let stripped = strip_leading_slash_before_drive(stripped);
     Some(resolve(base, &stripped))
+}
+
+/// Drop the leading slash a `file://` URI leaves before a Windows drive letter ("/C:/x" -> "C:/x"), so
+/// `file:///C:/path` resolves to a real path on Windows. A non-drive rooted path ("/music/x") is
+/// returned unchanged, so this is a no-op on Unix-authored playlists.
+fn strip_leading_slash_before_drive(s: String) -> String {
+    let b = s.as_bytes();
+    if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' {
+        s[1..].to_string()
+    } else {
+        s
+    }
 }
 
 /// Minimal percent-decoder for file URIs (handles %NN; leaves malformed escapes untouched).
@@ -2014,7 +2030,10 @@ mod tests {
         )
         .unwrap();
         let got = parse_playlist_file(&xspf);
-        assert!(got.iter().any(|p| p.to_string_lossy() == "/music/My Song.flac"), "got {got:?}");
+        // Assert on the file name, not the full path: a bare "/music/..." is absolute on Unix but
+        // drive-relative on Windows (resolves to C:/music/...), the same platform split the pls/m3u
+        // tests work around. The basename still proves the location was extracted and the %20 decoded.
+        assert!(got.iter().any(|p| p.file_name().is_some_and(|n| n == "My Song.flac")), "got {got:?}");
         assert!(got.iter().any(|p| p.to_string_lossy().contains("stream.mp3")), "got {got:?}");
 
         // ASX: case-insensitive tags/attrs, href on a self-closing REF.
@@ -2026,18 +2045,32 @@ mod tests {
         )
         .unwrap();
         let got = parse_playlist_file(&asx);
-        assert!(got.iter().any(|p| p.to_string_lossy() == "/music/track.mp3"), "got {got:?}");
+        assert!(got.iter().any(|p| p.file_name().is_some_and(|n| n == "track.mp3")), "got {got:?}");
         assert!(got.iter().any(|p| p.file_name().is_some_and(|n| n == "next.mp3")), "got {got:?}");
 
         // RAM: one URL/path per line (line-based, like m3u).
         let ram = dir.join(format!("linamp_{pid}.ram"));
         std::fs::write(&ram, "/music/a.mp3\nrtsp://host/live\n").unwrap();
         let got = parse_playlist_file(&ram);
-        assert!(got.iter().any(|p| p.to_string_lossy() == "/music/a.mp3"), "got {got:?}");
+        assert!(got.iter().any(|p| p.file_name().is_some_and(|n| n == "a.mp3")), "got {got:?}");
 
         for f in [xspf, asx, ram] {
             let _ = std::fs::remove_file(f);
         }
+    }
+
+    #[test]
+    fn file_uri_with_windows_drive_letter_resolves() {
+        // The standard Windows XSPF location file:///C:/path strips to "/C:/path"; the leading slash
+        // before the drive must be dropped or it resolves against the wrong root on Windows. The
+        // string transform is platform-independent, so this locks the fix on both OSes.
+        assert_eq!(strip_leading_slash_before_drive("/C:/music/x.mp3".into()), "C:/music/x.mp3");
+        assert_eq!(strip_leading_slash_before_drive("/music/x.mp3".into()), "/music/x.mp3"); // Unix: untouched
+        let p = xml_location_to_path("file:///C:/music/My%20Song.flac", None).unwrap();
+        assert!(
+            p.to_string_lossy().replace('\\', "/").ends_with("C:/music/My Song.flac"),
+            "got {p:?}"
+        );
     }
 
     #[test]
