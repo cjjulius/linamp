@@ -647,10 +647,9 @@ impl super::LinAmpApp {
             }
         });
         // Cancel/Esc discards; Update closes only when the write succeeds, so a
-        // failed save leaves the window open with its error.
-        if close {
-            self.tag_editor = None;
-        } else if do_save && self.save_tag_editor() {
+        // failed save leaves the window open with its error (|| short-circuits, so a
+        // close never triggers a save).
+        if close || (do_save && self.save_tag_editor()) {
             self.tag_editor = None;
         }
     }

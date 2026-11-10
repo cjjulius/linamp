@@ -84,11 +84,11 @@ pub fn load_wsz(path: &Path) -> Result<Theme> {
     let pl = parse_pledit(&pledit);
     let vis = parse_viscolor(&viscolor);
 
-    let mut theme = Theme::default();
-    theme.name = path
+    let name = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Skin".to_string());
+    let mut theme = Theme { name, ..Default::default() };
 
     if let Some(c) = pl.normal_bg {
         theme.list_bg = c;
@@ -138,7 +138,7 @@ fn read_named<R: Read + Seek>(
         .iter()
         .find(|(_, n)| {
             let base = n
-                .rsplit(|c| c == '/' || c == '\\')
+                .rsplit(['/', '\\'])
                 .next()
                 .unwrap_or(n)
                 .to_ascii_lowercase();

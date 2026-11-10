@@ -352,7 +352,7 @@ pub fn scan_folder_bg(dir: PathBuf) -> mpsc::Receiver<ScanMsg> {
             for p in chunk {
                 tracks.push(Track::from_path(p.clone()));
                 done += 1;
-                if done % 25 == 0 {
+                if done.is_multiple_of(25) {
                     let _ = tx.send(ScanMsg::Progress { done, total });
                 }
             }
@@ -389,7 +389,7 @@ fn supported_files(dir: &Path) -> Vec<PathBuf> {
 
 /// `?,?,…` for an `IN (…)` clause with `n` binds.
 fn placeholders(n: usize) -> String {
-    std::iter::repeat("?").take(n).collect::<Vec<_>>().join(",")
+    std::iter::repeat_n("?", n).collect::<Vec<_>>().join(",")
 }
 
 fn now() -> i64 {

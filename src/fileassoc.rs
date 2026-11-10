@@ -229,6 +229,9 @@ fn supported_mime_types() -> Vec<&'static str> {
 /// types are gated, so a pure-Rust build does not teach a type it cannot play.
 #[cfg(any(target_os = "linux", test))]
 fn mime_package_xml() -> String {
+    // `mut` is used only by the feature-gated `push`es below, so it is unused when no
+    // optional decoder features are enabled (the default build).
+    #[allow(unused_mut)]
     let mut types: Vec<(&str, &str, &[&str])> = vec![
         ("audio/x-mod", "Amiga SoundTracker module", &["*.mod"]),
         ("audio/x-xm", "FastTracker 2 module", &["*.xm"]),

@@ -158,7 +158,7 @@ mod tests {
         }
         let raw = std::fs::read(&oracle_path).unwrap();
         let oracle: Vec<i16> = raw
-            .chunks_exact(2)
+            .as_chunks::<2>().0.iter()
             .map(|b| i16::from_le_bytes([b[0], b[1]]))
             .collect();
 
@@ -195,7 +195,7 @@ mod tests {
         }
         let raw = std::fs::read(&oracle_path).unwrap();
         let oracle: Vec<i16> = raw
-            .chunks_exact(2)
+            .as_chunks::<2>().0.iter()
             .map(|b| i16::from_le_bytes([b[0], b[1]]))
             .collect();
 
