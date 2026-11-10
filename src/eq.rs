@@ -207,8 +207,8 @@ impl<S> EqSource<S> {
         let p = self.shared.snapshot();
         self.enabled = p.enabled;
         self.preamp = 10f32.powf(p.preamp_db / 20.0);
-        for i in 0..10 {
-            self.coeffs[i] = peaking(BAND_FREQS[i], Q, p.bands[i], self.sample_rate);
+        for (i, coeff) in self.coeffs.iter_mut().enumerate() {
+            *coeff = peaking(BAND_FREQS[i], Q, p.bands[i], self.sample_rate);
         }
         self.local_ver = ver;
     }

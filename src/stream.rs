@@ -350,7 +350,7 @@ mod tests {
         // metaint = 4: 4 audio bytes, then a 1-byte length (×16) + that many meta
         // bytes, then audio again.
         let title_text = b"StreamTitle='Now Playing';";
-        let blocks = (title_text.len() + 15) / 16; // length byte is in 16-byte units
+        let blocks = title_text.len().div_ceil(16); // length byte is in 16-byte units
         let mut meta = vec![0u8; blocks * 16];
         meta[..title_text.len()].copy_from_slice(title_text);
         let mut raw = Vec::new();

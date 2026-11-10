@@ -416,10 +416,10 @@ mod linux_impl {
                     // Build the connection, claim the MPRIS name, and serve both
                     // interfaces at the standard object path.
                     let built = (|| -> zbus::Result<_> {
-                        Ok(zbus::connection::Builder::session()?
+                        zbus::connection::Builder::session()?
                             .name("org.mpris.MediaPlayer2.linamp")?
                             .serve_at("/org/mpris/MediaPlayer2", Root)?
-                            .serve_at("/org/mpris/MediaPlayer2", player)?)
+                            .serve_at("/org/mpris/MediaPlayer2", player)
                     })();
                     let builder = match built {
                         Ok(b) => b,

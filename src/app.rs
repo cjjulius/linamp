@@ -1904,7 +1904,7 @@ impl LinAmpApp {
         let t = &mut self.playlist.tracks;
         match self.sort_key {
             SortKey::Custom => {}
-            SortKey::Title => t.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
+            SortKey::Title => t.sort_by_key(|a| a.title.to_lowercase()),
             SortKey::Artist => t.sort_by(|a, b| {
                 (a.artist.to_lowercase(), a.album.to_lowercase(), a.title.to_lowercase()).cmp(&(
                     b.artist.to_lowercase(),
@@ -1916,9 +1916,9 @@ impl LinAmpApp {
                 (a.album.to_lowercase(), a.title.to_lowercase())
                     .cmp(&(b.album.to_lowercase(), b.title.to_lowercase()))
             }),
-            SortKey::Duration => t.sort_by(|a, b| a.duration.cmp(&b.duration)),
+            SortKey::Duration => t.sort_by_key(|a| a.duration),
             SortKey::Filename => {
-                t.sort_by(|a, b| file_name_key(&a.path).cmp(&file_name_key(&b.path)))
+                t.sort_by_key(|a| file_name_key(&a.path))
             }
             SortKey::Path => t.sort_by(|a, b| {
                 a.path
@@ -4485,6 +4485,7 @@ impl LinAmpApp {
         self.shaped_any = true;
     }
 
+    #[allow(clippy::too_many_arguments)] // per-window shaping params; refactor candidate
     fn shape_one(
         &mut self,
         idx: usize,
@@ -5596,9 +5597,10 @@ mod tests {
         // star count: the empty-star glyph (U+2606) sorts AFTER the filled star
         // (U+2605), so sorting the rendered star string would rank a 3-star row
         // above a 5-star one. Numeric sorting is correct; string sorting is not.
+        // The empty-star glyph sorts after the filled star, and 3-filled+2-empty sorts
+        // above 5-filled as strings: both wrong. Numeric star counts (5 > 3) sort right.
         assert!('\u{2606}' > '\u{2605}');
         assert!("\u{2605}\u{2605}\u{2605}\u{2606}\u{2606}" > "\u{2605}\u{2605}\u{2605}\u{2605}\u{2605}");
-        assert!(5i64 > 3); // numeric order a descending sort gets right
     }
 
     #[test]

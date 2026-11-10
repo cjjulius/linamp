@@ -229,7 +229,7 @@ mod tests {
 
     fn oracle_mono(path: &str) -> Vec<f32> {
         let raw = std::fs::read(path).unwrap();
-        raw.chunks_exact(2)
+        raw.as_chunks::<2>().0.iter()
             .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32_768.0)
             .collect()
     }
@@ -269,10 +269,10 @@ mod tests {
         assert_eq!(src.sample_rate(), 32_000);
         let got: Vec<f32> = src.collect();
         // Mono-sum both (step by 2 channels).
-        let ours: Vec<f32> = got.chunks_exact(2).map(|c| c[0] + c[1]).collect();
+        let ours: Vec<f32> = got.as_chunks::<2>().0.iter().map(|c| c[0] + c[1]).collect();
         let raw = std::fs::read(oracle).unwrap();
         let want: Vec<f32> = raw
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .map(|c| {
                 let l = i16::from_le_bytes([c[0], c[1]]) as f32 / 32_768.0;
                 let r = i16::from_le_bytes([c[2], c[3]]) as f32 / 32_768.0;

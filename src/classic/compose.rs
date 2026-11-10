@@ -37,7 +37,7 @@ impl ClassicSkin {
             let mut f = zip.by_index(i)?;
             let name = f.name().to_string();
             let base = name
-                .rsplit(|c| c == '/' || c == '\\')
+                .rsplit(['/', '\\'])
                 .next()
                 .unwrap_or(&name)
                 .to_ascii_lowercase();
@@ -367,6 +367,7 @@ fn gen_glyph(c: char) -> Option<(u32, u32)> {
 
 /// Copy `src[sx..+sw, sy..+sh]` to `dst` at (dx,dy), skipping pixels that match the
 /// key colour (transparent).
+#[allow(clippy::too_many_arguments)] // low-level sprite blit: source/dest rects are inherent
 fn blit_keyed(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, sy: u32, w: u32, h: u32, key: [u8; 3]) {
     // Treat pixels *near* the key colour as transparent too, not just an exact
     // match. This drops faint anti-alias fringe pixels that were blended toward
@@ -534,7 +535,7 @@ fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool)
     };
     let total = (up.chars().map(advance).sum::<i32>() - GEN_TRACKING as i32).max(0) as u32;
     let dw = dst.width();
-    let mut x = (dw / 2).saturating_sub((total + 1) / 2) as i32;
+    let mut x = (dw / 2).saturating_sub(total.div_ceil(2)) as i32;
     // Nudged up 2px from the geometric centre so the caption lines up with the
     // classic windows' own title text (which sits a little above centre).
     let ty = GEN_TB_H.saturating_sub(GEN_FONT_H) / 2 - 2;
@@ -553,6 +554,7 @@ fn blit_gen_title(dst: &mut RgbaImage, g: &RgbaImage, title: &str, active: bool)
 }
 
 /// Horizontally tile `src[sx..+sw, sy..+sh]` across the destination span `[x0, x1)`.
+#[allow(clippy::too_many_arguments)] // low-level sprite tile: source/dest rects are inherent
 fn tile_h(dst: &mut RgbaImage, src: &RgbaImage, x0: u32, x1: u32, dy: i32, sx: u32, sy: u32, sw: u32, sh: u32) {
     let mut x = x0;
     while x < x1 {
@@ -563,6 +565,7 @@ fn tile_h(dst: &mut RgbaImage, src: &RgbaImage, x0: u32, x1: u32, dy: i32, sx: u
 }
 
 /// Vertically tile `src[sx..+sw, sy..+sh]` down the destination span `[y0, y1)`.
+#[allow(clippy::too_many_arguments)] // low-level sprite tile: source/dest rects are inherent
 fn tile_v(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, y0: u32, y1: u32, sx: u32, sy: u32, sw: u32, sh: u32) {
     let mut y = y0;
     while y < y1 {
@@ -682,6 +685,7 @@ fn blit_btn(dst: &mut RgbaImage, src: &RgbaImage, b: Btn, sx: u32, sy: u32) {
 }
 
 /// Copy a sub-rectangle of `src` to `dst` at (dx,dy), clipping to both.
+#[allow(clippy::too_many_arguments)] // low-level sprite blit: source/dest rects are inherent
 fn blit(dst: &mut RgbaImage, src: &RgbaImage, dx: i32, dy: i32, sx: u32, sy: u32, w: u32, h: u32) {
     let (sw, sh) = src.dimensions();
     let (dw, dh) = dst.dimensions();
@@ -942,7 +946,7 @@ impl ClassicSkin {
                 fill_rect(&mut c, PL_LIST_X - 2, ry - 1, w - PL_LIST_X - 22, PL_ROW_H, st.colors.selbg);
             }
             let col = if *is_cur { st.colors.current } else { st.colors.normal };
-            let time = dur.map(|d| fmt_pl_time(d));
+            let time = dur.map(fmt_pl_time);
             // Default title width (no time): up to the right frame.
             let mut title_w = w - PL_LIST_X - 24;
             if let Some(t) = &time {
@@ -1222,9 +1226,9 @@ fn draw_viz(c: &mut RgbaImage, st: &MainState, x: i32, y: i32, w: i32, h: i32) {
             let amp = (h as f32 / 2.0 - 1.0).max(1.0);
             let yat = |s: f32| mid - (s.clamp(-1.0, 1.0) * amp) as i32;
             let mut prev = yat(samples[0]);
-            for i in 1..n {
+            for (i, &s) in samples.iter().enumerate().skip(1) {
                 let px = x + (i as i32 * w / n as i32);
-                let cur = yat(samples[i]);
+                let cur = yat(s);
                 let (lo, hi) = (prev.min(cur), prev.max(cur));
                 fill_rect(c, px, lo, 1, (hi - lo + 1).max(1), st.fg);
                 prev = cur;
@@ -1312,6 +1316,7 @@ fn dominant_color(img: &RgbaImage) -> [u8; 3] {
 /// of the glyph when it differs enough from the font background `bg`; for the
 /// usual light-on-black font this is the same as "bright", but it also handles
 /// dark-on-light fonts (which otherwise paint as solid blocks).
+#[allow(clippy::too_many_arguments)] // low-level glyph blit: source/dest rects plus tint colors
 fn blit_tinted(
     dst: &mut RgbaImage,
     src: &RgbaImage,

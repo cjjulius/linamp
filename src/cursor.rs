@@ -196,8 +196,8 @@ fn decode_dib(d: &[u8]) -> Option<(u32, u32, Vec<u32>)> {
     let w = width as usize;
     let h = height as usize;
     // Rows are padded to a 4-byte boundary.
-    let xor_row = ((w * bit_count as usize + 31) / 32) * 4;
-    let and_row = ((w + 31) / 32) * 4;
+    let xor_row = (w * bit_count as usize).div_ceil(32) * 4;
+    let and_row = w.div_ceil(32) * 4;
     let xor_off = hdr_size + palette.len() * 4;
     let and_off = xor_off + xor_row * h;
 
@@ -283,7 +283,7 @@ fn read_index(d: &[u8], row_off: usize, x: usize, bit_count: u16) -> usize {
         }
         4 => {
             let byte = *d.get(row_off + x / 2).unwrap_or(&0);
-            if x % 2 == 0 {
+            if x.is_multiple_of(2) {
                 (byte >> 4) as usize
             } else {
                 (byte & 0x0F) as usize

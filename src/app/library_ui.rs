@@ -855,7 +855,7 @@ impl super::LinAmpApp {
         let s = self.scale;
         if (s - 1.0).abs() > 0.01 {
             let st = ui.style_mut();
-            for (_, f) in st.text_styles.iter_mut() {
+            for f in st.text_styles.values_mut() {
                 f.size *= s;
             }
             st.spacing.item_spacing *= s;
@@ -898,7 +898,7 @@ impl super::LinAmpApp {
 
     fn ui_lib_top(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
         let s = cx.s;
-        let panel_frame = cx.panel_frame.clone();
+        let panel_frame = cx.panel_frame;
         let accent = cx.accent;
         // ---- top: search + scan -------------------------------------------
         egui::TopBottomPanel::top("lib_top")
@@ -935,7 +935,7 @@ impl super::LinAmpApp {
 
     fn ui_lib_bottom(&mut self, ui: &mut egui::Ui, cx: &LibCx, act: &mut LibActs) {
         let s = cx.s;
-        let panel_frame = cx.panel_frame.clone();
+        let panel_frame = cx.panel_frame;
         let accent = cx.accent;
         let dim = cx.dim;
         // ---- bottom: play / enqueue / rating / status ---------------------
