@@ -17,11 +17,23 @@ impl super::LinAmpApp {
         // borderless main window. Borderless with a skin-drawn title bar (like the
         // classic windows and the Library) so the skin cursor covers the whole
         // window, including the title bar, with no OS chrome to break it.
-        let default_pos = self.geom.win_pos[0] + egui::vec2(24.0, 24.0);
-        let pos = *self.prefs_pos.get_or_insert(default_pos);
-        let builder = egui::ViewportBuilder::default()
+        // On first open, anchor to the main window (top-left + 24) but keep the whole
+        // window on the virtual desktop, the same bump the classic windows get, so it is
+        // never off-screen when the player sits near the right or bottom edge. A position
+        // the user has since dragged (prefs_pos is Some) is left alone: off-screen is
+        // allowed once they move it there themselves.
+        let (pos, first_open) = match self.prefs_pos {
+            Some(p) => (p, false),
+            None => {
+                let size = self.prefs_size.unwrap_or(PREFS_DEFAULT_SIZE);
+                let anchored = self.geom.win_pos[0] + egui::vec2(24.0, 24.0);
+                let p = clamp_pos_onscreen(ctx, anchored, size);
+                self.prefs_pos = Some(p);
+                (p, true)
+            }
+        };
+        let mut builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
-            .with_position(pos)
             // A bit larger than before so the longest page (Conversion) fits without
             // scrolling and the grouped category tree (whose "General Preferences"
             // heading is wider than the old flat labels) has room. Kept well under the
@@ -38,6 +50,14 @@ impl super::LinAmpApp {
             // raises it (see `prefs_raise`), covering the rare case of two topmost
             // windows where a sibling can still come forward.
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
+        // Pin the position only on first open (clamped on-screen above). After that the
+        // window manager owns the position: the title bar hands off to an interactive
+        // move (StartDrag), which the user can drag partly off-screen, and the real
+        // position is read back from the viewport each frame below. Re-asserting
+        // with_position every frame would fight the move and pin it back on-screen.
+        if first_open {
+            builder = builder.with_position(pos);
+        }
         let id = egui::ViewportId::from_hash_of("linamp_prefs");
         // When the current skin ships general-purpose window art (GEN.BMP/GENEX.BMP),
         // frame Preferences with the skin's own composited window exactly like the Media
@@ -61,6 +81,17 @@ impl super::LinAmpApp {
             self.geom.foc_prefs = ctx
                 .input(|i| i.viewport().focused)
                 .unwrap_or(self.geom.foc_prefs);
+            // The window manager moves the window during a title-bar drag (StartDrag),
+            // so the app is no longer the position authority. Read the real outer
+            // position back each frame (egui logical points, the same space as
+            // prefs_pos) so the resize grip and the next reopen use the window's current
+            // location. Skip the very first frame, whose position is the one we just
+            // asked for and which the compositor may not have reported yet.
+            if !first_open {
+                if let Some(r) = ctx.input(|i| i.viewport().outer_rect) {
+                    self.prefs_pos = Some(r.min);
+                }
+            }
             if gen {
                 self.ui_prefs_gen(ctx, &mut close);
             } else {
@@ -74,7 +105,7 @@ impl super::LinAmpApp {
             let grip_col = self.skin_window_bg();
             let grip = resize_grip(
                 ctx,
-                egui::Rect::from_min_size(pos, cur),
+                egui::Rect::from_min_size(self.prefs_pos.unwrap_or(pos), cur),
                 &mut self.prefs_resize,
                 PREFS_DEFAULT_SIZE,
                 PREFS_DEFAULT_SIZE * 2.0,
@@ -202,7 +233,14 @@ impl super::LinAmpApp {
                     ui.id().with("prefs_gen_drag"),
                     egui::Sense::click_and_drag(),
                 );
-                self.handle_prefs_drag(ctx, &dresp);
+                // Hand the move to the window manager (interactive _NET_WM_MOVERESIZE via
+                // StartDrag) so the window can be dragged partly off-screen. A programmatic
+                // OuterPosition move is clamped back on-screen by the compositor, which is
+                // why app-driven dragging could never leave the edge. The real position is
+                // read back from the viewport each frame in `ui_prefs`.
+                if dresp.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
                 // Inset the content into the frame interior.
                 let content = egui::Rect::from_min_max(
                     egui::pos2(full.left() + left, full.top() + top),
@@ -283,35 +321,11 @@ impl super::LinAmpApp {
         if x_resp.clicked() {
             *close = true;
         }
-        // Drag starts only off the × box; the move/stop handling is shared.
+        // Drag starts only off the × box. Hand the move to the window manager so the
+        // window can go partly off-screen (same StartDrag path as the GEN title bar; the
+        // real position is read back each frame in `ui_prefs`).
         if bar_resp.drag_started() && !x_resp.hovered() {
-            if let (Some(g), Some(p)) = (global_cursor_points(ctx), self.prefs_pos) {
-                self.prefs_drag = Some(g - p);
-            }
-        }
-        if bar_resp.dragged() || bar_resp.drag_stopped() {
-            self.handle_prefs_drag(ctx, &bar_resp);
-        }
-    }
-
-    /// Move the Preferences window while its title bar is dragged, mirroring the
-    /// Library's `handle_lib_drag`. `drag_started` arming is done by the caller (the
-    /// flat title bar skips the × box; the GEN path uses a dedicated drag rect).
-    fn handle_prefs_drag(&mut self, ctx: &egui::Context, resp: &egui::Response) {
-        if resp.drag_started() {
-            if let (Some(g), Some(p)) = (global_cursor_points(ctx), self.prefs_pos) {
-                self.prefs_drag = Some(g - p);
-            }
-        }
-        if resp.dragged() {
-            if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.prefs_drag) {
-                let np = g - grab;
-                self.prefs_pos = Some(np);
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(np));
-            }
-        }
-        if resp.drag_stopped() {
-            self.prefs_drag = None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
     }
 
@@ -764,5 +778,60 @@ impl super::LinAmpApp {
                 "https://github.com/cjjulius/linamp",
             );
         });
+    }
+}
+
+/// Bump a window's top-left so a window of `size` sits fully on the virtual desktop
+/// (all monitors). Falls back to the given position if the desktop bounds are unknown.
+fn clamp_pos_onscreen(ctx: &egui::Context, pos: egui::Pos2, size: egui::Vec2) -> egui::Pos2 {
+    match platform_win::virtual_desktop_rect(ctx) {
+        Some(vr) => clamp_pos_into(pos, size, vr),
+        None => pos,
+    }
+}
+
+/// Keep a `size`-sized window at `pos` within `bounds`: pull it left or up when it
+/// would spill off the right or bottom edge, but always keep the top-left corner
+/// visible (so a window larger than `bounds` is pinned to the top-left rather than
+/// hidden). Mirrors the clamp the classic windows use.
+fn clamp_pos_into(pos: egui::Pos2, size: egui::Vec2, bounds: egui::Rect) -> egui::Pos2 {
+    let max_x = (bounds.max.x - size.x).max(bounds.min.x);
+    let max_y = (bounds.max.y - size.y).max(bounds.min.y);
+    egui::pos2(pos.x.clamp(bounds.min.x, max_x), pos.y.clamp(bounds.min.y, max_y))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_pos_into;
+    use egui::{pos2, vec2, Rect};
+
+    fn desktop() -> Rect {
+        Rect::from_min_size(pos2(0.0, 0.0), vec2(1920.0, 1080.0))
+    }
+
+    #[test]
+    fn onscreen_position_is_unchanged() {
+        let p = pos2(200.0, 150.0);
+        assert_eq!(clamp_pos_into(p, vec2(520.0, 360.0), desktop()), p);
+    }
+
+    #[test]
+    fn offscreen_right_and_bottom_bump_back_in() {
+        // Player near the right/bottom edge: the window would spill off, so it is
+        // pulled in to sit flush against the right/bottom edge.
+        let got = clamp_pos_into(pos2(1700.0, 900.0), vec2(520.0, 360.0), desktop());
+        assert_eq!(got, pos2(1920.0 - 520.0, 1080.0 - 360.0));
+    }
+
+    #[test]
+    fn negative_position_bumps_to_the_top_left() {
+        let got = clamp_pos_into(pos2(-40.0, -40.0), vec2(520.0, 360.0), desktop());
+        assert_eq!(got, pos2(0.0, 0.0));
+    }
+
+    #[test]
+    fn window_larger_than_desktop_keeps_top_left_visible() {
+        let got = clamp_pos_into(pos2(500.0, 500.0), vec2(4000.0, 4000.0), desktop());
+        assert_eq!(got, pos2(0.0, 0.0));
     }
 }
