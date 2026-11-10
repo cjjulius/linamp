@@ -3166,17 +3166,6 @@ impl LinAmpApp {
         }
     }
 
-    /// Whether the library window is currently edge-docked to the player group.
-    fn library_docked(&self) -> bool {
-        if !self.lib_visible {
-            return false;
-        }
-        let lib = egui::Rect::from_min_size(self.geom.lib_pos, self.lib_size());
-        rects_docked(lib, self.win_rect_pts(0))
-            || (self.eq_visible && rects_docked(lib, self.win_rect_pts(1)))
-            || (self.pl_visible && rects_docked(lib, self.win_rect_pts(2)))
-    }
-
     /// The Media Library nav palette for the current skin: (list fill, row text,
     /// selection bg, selection text, tree-guide gray). The Preferences category tree
     /// draws from these so it matches the library nav across skins, using the skin's
