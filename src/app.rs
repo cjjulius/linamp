@@ -918,10 +918,10 @@ pub struct LinAmpApp {
     prefs_open: bool,
     /// Which Preferences category is selected in the sidebar.
     prefs_tab: PrefTab,
-    /// Preferences window position (None when closed, so it re-anchors to the
-    /// main window on open) and the grab offset while its title bar is dragged.
+    /// Preferences window position (None when closed, so it re-anchors to the main
+    /// window on open). While open the window manager owns the position during a
+    /// title-bar drag; it is read back from the viewport each frame in `ui_prefs`.
     prefs_pos: Option<egui::Pos2>,
-    prefs_drag: Option<egui::Vec2>,
     /// Pixels-per-point at which the Preferences window's rounded corner region was
     /// last applied (None when closed or not yet applied, so it re-rounds on open and
     /// when the DPI changes). See `round_popup_window`.
@@ -1296,7 +1296,6 @@ impl LinAmpApp {
             prefs_open: false,
             prefs_tab: PrefTab::Display,
             prefs_pos: None,
-            prefs_drag: None,
             prefs_rounded: None,
             prefs_raise: false,
             prefs_tex: None,
