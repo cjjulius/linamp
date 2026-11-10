@@ -241,7 +241,7 @@ played without any console BIOS or ROM. A `.mini*` variant wants its shared libr
 |---|---|---|
 | `.psf` `.minipsf` | PlayStation | The SPU, emulated |
 | `.ssf` `.minissf` | Sega Saturn | The SCSP sound chip, emulated |
-| `.dsf` `.minidsf` | Sega Dreamcast | The AICA sound chip, emulated (a `.dsf` is told apart from a DSD audio file by its contents) |
+| `.dsf` `.minidsf` `.dcsf` `.minidcsf` | Sega Dreamcast | The AICA sound chip, emulated (a `.dsf` is told apart from a DSD audio file by its contents) |
 | `.qsf` `.miniqsf` | Capcom CPS-2 / ZN (QSound) | The QSound arcade chip, emulated |
 | `.ncsf` `.minincsf` | Nintendo DS | The DS Nitro sound sequence, played back |
 | `.usf` `.miniusf` | Nintendo 64 | The N64 RSP audio, emulated (High-Level Emulation, no boot ROM) |

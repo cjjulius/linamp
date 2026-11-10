@@ -5,6 +5,10 @@ A Winamp-inspired audio player for Linux and Windows, written in Rust
 
 Legend: everything listed is done unless it is flagged Planned or Partial.
 
+Winamp 2.666 parity: the classic-mode target is Winamp 2.666, and that functional
+feature set is complete as of the v1.0 line. The one remaining in-scope 2.666 gap is the
+minibrowser SHOUTcast station directory (#146); everything else below is "beyond 2.666".
+
 > Planned work and known shortfalls are tracked as GitHub issues in
 > [cjjulius/linamp](https://github.com/cjjulius/linamp/issues), that's the
 > backlog of record. The Planned: items below are kept only as a quick overview.
@@ -86,7 +90,9 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
 - Open location / internet-radio streaming (Ctrl+L or the Options menu),
   HTTP/HTTPS with the live ICY song title
 - Skips tracks that can't be opened or decoded instead of stalling
-- Crossfade between tracks (Preferences > Playback, on/off with a 1-12s length)
+- Crossfade between tracks (Preferences > Playback, on/off with a 1-12s length).
+  Two tracks on one optical drive hard-cut instead (a single drive can't serve two
+  read streams at once); file-to-file and file-to-CD still blend
 - Planned: Gapless playback (#42), ReplayGain (#44)
 - Planned: Playback speed / pitch
 
