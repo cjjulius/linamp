@@ -1,6 +1,6 @@
 [package]
 name = "linamp"
-version = "1.1.7"
+version = "1.2.0"
 edition = "2021"
 description = "LinAmp - a Winamp-inspired audio player for Linux and Windows, built in Rust"
 authors = ["LinAmp contributors"]
@@ -132,6 +132,9 @@ rvoip-codec-core = { version = "0.4.0", default-features = false, features = ["a
 # not avfilter/avdevice/swscale, which aren't installed and aren't needed. See the
 # [features] section at the bottom of the file.
 ffmpeg-next = { version = "5.1.1", optional = true, default-features = false, features = ["codec", "format", "software-resampling"] }
+qoaudio = { version = "0.7.0", optional = true }
+cuna = "0.7.0"
+quick-xml = "0.41"
 
 # Linux/X11 only: query the global cursor position (XQueryPointer) so classic
 # windows can be dragged and docked as a group, matching the Windows behaviour.
@@ -181,6 +184,9 @@ strip = true
 # Rust; enable with `--features ffmpeg` (needs the system FFmpeg dev libraries).
 [features]
 ffmpeg = ["dep:ffmpeg-next"]
+# QOA (Quite OK Audio, .qoa): a simple 2023 lossy format, decoded by the pure-Rust qoaudio crate
+# (MIT/Apache-2.0). No native library, no FFI - crate::qoa wraps qoaudio as a seekable rodio Source.
+qoa = ["dep:qoaudio"]
 # Chiptune/console music via libgme (LGPL), linked through a hand-rolled FFI in src/gme.rs.
 # No Rust crate dependency; build.rs emits the link directives and bundles libgme.so. Needs
 # a libgme build at $GME_DIR (default build/gme-min, produced by packaging/linux/build-gme-min.sh).
@@ -208,6 +214,13 @@ sid = []
 # produced by packaging/linux/build-vgmstream-min.sh). Routes only game-specific extensions
 # (explicit allowlist) so it never claims generic .ogg/.wav/.flac/.mp3/etc.
 vgmstream = []
+# External-codec tier for vgmstream: rebuild libvgmstream with Vorbis (libvorbis/libogg, BSD) + FFmpeg
+# (the LGPL ffmpeg LinAmp already builds) so it decodes the payloads the core-only build skips - Wwise
+# .wem Vorbis, FMOD FSB Vorbis, Xbox 360 XMA, PS3/PSP ATRAC3, WMA-in-container. Needs the libvgmstream
+# build done with VGM_EXT=1 (build-vgmstream-min.sh) plus a libvorbis build at $LIBVORBIS_DIR (default
+# build/libvorbis-min, from build-libvorbis-min.sh); build.rs bundles the libvorbis .so files, and the
+# libav* .so files come from the `ffmpeg` feature this enables. Combined license stays GPLv3.
+vgmstream-ext = ["vgmstream", "ffmpeg"]
 # PlayStation PSF1/PSF2 music (.psf/.minipsf/.psf2/.minipsf2) via libupse (GPL). libupse is C but
 # opening a module needs an I/O-callback struct and a one-time init, so build.rs compiles a small C
 # shim (src/psf_shim.c) via the cc crate and links libupse, bundling libupse.so. Needs a libupse build

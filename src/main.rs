@@ -45,6 +45,9 @@ mod usf;
 mod twosf;
 #[cfg(feature = "gsf")]
 mod gsf;
+#[cfg(feature = "qoa")]
+mod qoa;
+mod cue;
 mod flv;
 mod icon;
 mod library;

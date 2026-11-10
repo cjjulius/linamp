@@ -39,6 +39,7 @@ The files you probably have the most of.
 | `.oma` `.omg` `.aa3` `.at3` `.aea` | Sony ATRAC | MiniDisc and OpenMG (ATRAC1 / 3 / 3+) |
 | `.amr` `.awb` | AMR | Voice recordings (narrowband and wideband) |
 | `.spx` | Speex | Another speech codec |
+| `.qoa` | QOA (Quite OK Audio) | A simple, modern lossy format, decoded in pure Rust |
 
 ### Lossless (nothing thrown away)
 
@@ -220,10 +221,14 @@ game engines ship them in. Nothing to convert first, drop the file in and it pla
 | `.xwb` | Microsoft XACT | Xbox and PC games |
 | `.hps` | HAL stream | GameCube (Smash Bros. and friends) |
 | `.ktss` | Koei Tecmo stream | |
+| `.wem` | Wwise encoded media | The Audiokinetic Wwise middleware, common in modern games (usually Vorbis) |
+| `.xma` | Microsoft XMA | Xbox 360 audio (XMA1/2) |
 | `.genh` | Generic header | A manual header for raw/headerless audio |
 
-Some game files hold their audio in a codec that needs an extra decoder we do not bundle yet (for
-example Vorbis inside an FSB, or Xbox 360 XMA); those are skipped for now rather than played wrong.
+Many of these containers hold their audio in a codec that needs an extra decoder: Vorbis (Wwise `.wem`
+and FMOD `.fsb`), or the FFmpeg-backed codecs (Xbox 360 XMA, PlayStation ATRAC3, WMA). LinAmp bundles
+those decoders (libvorbis, and the same LGPL FFmpeg it uses elsewhere), so these now play rather than
+being skipped. A file in a codec still not bundled is skipped rather than played wrong.
 
 ### Console program music (the *SF family)
 
@@ -251,14 +256,17 @@ played without any console BIOS or ROM. A `.mini*` variant wants its shared libr
 |---|---|
 | MIDI (`.mid` `.midi`) | Played through a built-in SoundFont, so you do not need any external synth |
 | Audio CD | Pops in an audio CD and plays it straight from the drive |
+| CUE sheet (`.cue`) | Splits a single-file album (one big `.flac`/`.ape`/`.wv`/`.wav` plus a `.cue`) into its real tracks |
+| Playlists (`.m3u` `.m3u8` `.pls` `.xspf` `.asx` `.ram`) | Load a playlist file and its tracks are added to yours |
+| Internet radio | Open a stream URL (Ctrl+L) and play a SHOUTcast/Icecast station, with live track titles |
 
 ---
 
 ## On the roadmap
 
-- QOA (Quite OK Audio, `.qoa`), a modern open format, is next in line.
-- More game-engine codecs (Vorbis-in-FSB, Xbox XMA, ATRAC3) once the extra decoders are bundled.
+- More game-engine codecs for the containers vgmstream routes (as upstream support lands).
 - PSF2 is not planned: the only ROM-less engine renders it silent, and a working one would need the
   copyrighted PS2 BIOS. (The rest of the `*SF` program-music family is now supported.)
+- An in-app internet-radio station directory (the streaming engine itself already works).
 - More AdLib MIDI-wrapper formats (XMI, HMI, HMP) may follow.
 - Wider tag editing for more of the formats above.

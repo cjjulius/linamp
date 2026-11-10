@@ -248,9 +248,42 @@ fn link_vgmstream(manifest: &Path, target_dir: &Path) {
                 }
             }
         }
+        // The external-codec tier (vgmstream-ext) build DT_NEEDs libvorbis/libvorbisfile/libogg; bundle
+        // them beside libvgmstream.so (the libav* it also needs are bundled by the ffmpeg feature).
+        if env::var_os("CARGO_FEATURE_VGMSTREAM_EXT").is_some() {
+            let vorbis = env::var_os("LIBVORBIS_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| manifest.join("build/libvorbis-min"));
+            if let Ok(entries) = fs::read_dir(vorbis.join("lib")) {
+                for e in entries.flatten() {
+                    let name = e.file_name();
+                    let n = name.to_string_lossy();
+                    if n.contains("libvorbis.so") || n.contains("libvorbisfile.so") || n.contains("libogg.so") {
+                        let _ = fs::copy(e.path(), dst.join(&name));
+                    }
+                }
+            }
+        }
     }
     #[cfg(windows)]
-    let _ = target_dir;
+    {
+        // On Windows vgmstream is static-linked into the exe. The external-codec tier (vgmstream-ext)
+        // compiles the Vorbis decoder into vgmstream.lib but leaves its vorbis/vorbisfile/ogg symbols
+        // unresolved (static lib); link the static libvorbis built by build-libvorbis.ps1. The ffmpeg
+        // symbols it also needs resolve against the same avcodec/avformat/avutil the `ffmpeg` feature
+        // links and ships (ffmpeg-next) - one ffmpeg, not a second copy - so nothing ffmpeg here.
+        if env::var_os("CARGO_FEATURE_VGMSTREAM_EXT").is_some() {
+            println!("cargo:rerun-if-env-changed=LIBVORBIS_DIR");
+            let vorbis = env::var_os("LIBVORBIS_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| manifest.join("build/libvorbis-min"));
+            println!("cargo:rustc-link-search=native={}", vorbis.join("lib").display());
+            println!("cargo:rustc-link-lib=static=vorbisfile");
+            println!("cargo:rustc-link-lib=static=vorbis");
+            println!("cargo:rustc-link-lib=static=ogg");
+        }
+        let _ = target_dir;
+    }
 }
 
 /// Link libupse for the `psf` feature: compile the small C shim (src/psf_shim.c) that wires stdio
