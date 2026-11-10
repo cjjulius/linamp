@@ -51,9 +51,10 @@ impl super::LinAmpApp {
             // windows where a sibling can still come forward.
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
         // Pin the position only on first open (clamped on-screen above). After that the
-        // title-bar drag drives the window through OuterPosition, so it is the sole
-        // position authority and the user can drag the window partly off-screen.
-        // Re-asserting with_position every frame fights the drag and pins it on-screen.
+        // window manager owns the position: the title bar hands off to an interactive
+        // move (StartDrag), which the user can drag partly off-screen, and the real
+        // position is read back from the viewport each frame below. Re-asserting
+        // with_position every frame would fight the move and pin it back on-screen.
         if first_open {
             builder = builder.with_position(pos);
         }
@@ -80,6 +81,17 @@ impl super::LinAmpApp {
             self.geom.foc_prefs = ctx
                 .input(|i| i.viewport().focused)
                 .unwrap_or(self.geom.foc_prefs);
+            // The window manager moves the window during a title-bar drag (StartDrag),
+            // so the app is no longer the position authority. Read the real outer
+            // position back each frame (egui logical points, the same space as
+            // prefs_pos) so the resize grip and the next reopen use the window's current
+            // location. Skip the very first frame, whose position is the one we just
+            // asked for and which the compositor may not have reported yet.
+            if !first_open {
+                if let Some(r) = ctx.input(|i| i.viewport().outer_rect) {
+                    self.prefs_pos = Some(r.min);
+                }
+            }
             if gen {
                 self.ui_prefs_gen(ctx, &mut close);
             } else {
@@ -93,7 +105,7 @@ impl super::LinAmpApp {
             let grip_col = self.skin_window_bg();
             let grip = resize_grip(
                 ctx,
-                egui::Rect::from_min_size(pos, cur),
+                egui::Rect::from_min_size(self.prefs_pos.unwrap_or(pos), cur),
                 &mut self.prefs_resize,
                 PREFS_DEFAULT_SIZE,
                 PREFS_DEFAULT_SIZE * 2.0,
@@ -221,7 +233,14 @@ impl super::LinAmpApp {
                     ui.id().with("prefs_gen_drag"),
                     egui::Sense::click_and_drag(),
                 );
-                self.handle_prefs_drag(ctx, &dresp);
+                // Hand the move to the window manager (interactive _NET_WM_MOVERESIZE via
+                // StartDrag) so the window can be dragged partly off-screen. A programmatic
+                // OuterPosition move is clamped back on-screen by the compositor, which is
+                // why app-driven dragging could never leave the edge. The real position is
+                // read back from the viewport each frame in `ui_prefs`.
+                if dresp.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
                 // Inset the content into the frame interior.
                 let content = egui::Rect::from_min_max(
                     egui::pos2(full.left() + left, full.top() + top),
@@ -302,35 +321,11 @@ impl super::LinAmpApp {
         if x_resp.clicked() {
             *close = true;
         }
-        // Drag starts only off the × box; the move/stop handling is shared.
+        // Drag starts only off the × box. Hand the move to the window manager so the
+        // window can go partly off-screen (same StartDrag path as the GEN title bar; the
+        // real position is read back each frame in `ui_prefs`).
         if bar_resp.drag_started() && !x_resp.hovered() {
-            if let (Some(g), Some(p)) = (global_cursor_points(ctx), self.prefs_pos) {
-                self.prefs_drag = Some(g - p);
-            }
-        }
-        if bar_resp.dragged() || bar_resp.drag_stopped() {
-            self.handle_prefs_drag(ctx, &bar_resp);
-        }
-    }
-
-    /// Move the Preferences window while its title bar is dragged, mirroring the
-    /// Library's `handle_lib_drag`. `drag_started` arming is done by the caller (the
-    /// flat title bar skips the × box; the GEN path uses a dedicated drag rect).
-    fn handle_prefs_drag(&mut self, ctx: &egui::Context, resp: &egui::Response) {
-        if resp.drag_started() {
-            if let (Some(g), Some(p)) = (global_cursor_points(ctx), self.prefs_pos) {
-                self.prefs_drag = Some(g - p);
-            }
-        }
-        if resp.dragged() {
-            if let (Some(g), Some(grab)) = (global_cursor_points(ctx), self.prefs_drag) {
-                let np = g - grab;
-                self.prefs_pos = Some(np);
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(np));
-            }
-        }
-        if resp.drag_stopped() {
-            self.prefs_drag = None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
     }
 
