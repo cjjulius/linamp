@@ -2267,10 +2267,16 @@ impl LinAmpApp {
     /// Whether the classic UI has live motion and should keep repainting at
     /// ~30fps. When false the app idles (egui still wakes on input). A stopped
     /// player with its spectrum bars still falling counts as animating.
+    /// True when something is moving smoothly enough to want ~30fps repaints.
+    /// A *paused* player is deliberately excluded: it freezes the visualizer and
+    /// marquee and only flashes the time at ~2Hz (`time_blink_hidden`, toggled on
+    /// a 500ms clock), which the slow 250ms idle cadence drives perfectly well.
+    /// Letting a paused player idle at 250ms instead of 33ms cuts its repaint and
+    /// (fingerprint-cached) recomposite work ~7x, which matters on low-end
+    /// hardware. A paused player that is also dragging, fading, connecting a
+    /// stream, scanning, etc. still animates via the clauses below.
     fn is_animating(&self) -> bool {
         self.player.state() == PlayState::Playing
-            // Paused flashes the time (see `time_blink_hidden`), so keep repainting.
-            || self.player.state() == PlayState::Paused
             || self.fade.is_some()
             || self.geom.drag.is_some()
             || self.classic_seek_preview.is_some()
@@ -3995,9 +4001,9 @@ impl eframe::App for LinAmpApp {
             self.marquee_offset = (self.marquee_offset + dt * 4.0) % 100000.0;
         }
         // The classic player flashes the time display while paused (~1 Hz). Toggle the
-        // hidden half off the frame clock; is_animating() keeps repaints coming so
-        // it blinks, and the per-window fingerprint includes it so the texture
-        // actually refreshes on each toggle.
+        // hidden half off the wall clock; the 250ms idle cadence wakes often enough to
+        // flip it on each 500ms boundary (paused no longer forces 30fps), and the
+        // per-window fingerprint includes it so the texture refreshes on each toggle.
         self.time_blink_hidden = self.player.state() == PlayState::Paused
             && (ctx.input(|i| i.time) / 0.5) as i64 % 2 == 1;
 
