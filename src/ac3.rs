@@ -146,9 +146,12 @@ fn downmix_stereo(d: &Decoded, out: &mut Vec<f32>) {
     }
 }
 
+/// Frame indices of (L, R, C, Ls, Rs); `None` when a role is absent.
+type Roles = (Option<usize>, Option<usize>, Option<usize>, Option<usize>, Option<usize>);
+
 /// Indices of (L, R, C, Ls, Rs) within a decoded frame's WAV-ordered channel vec,
 /// given `acmod`, `lfeon` and the channel count. LFE occupies the slot after C.
-fn roles(acmod: u8, lfeon: bool, nch: usize) -> (Option<usize>, Option<usize>, Option<usize>, Option<usize>, Option<usize>) {
+fn roles(acmod: u8, lfeon: bool, nch: usize) -> Roles {
     // Mono (1/0): the single plane is centre; feed it to both.
     if acmod == 1 {
         return (Some(0), Some(0), None, None, None);

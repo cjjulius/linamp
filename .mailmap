@@ -1,0 +1,5 @@
+# Unify commit identities for `git shortlog` / `git log` (display only).
+# Note: GitHub's contributor graph is keyed on the raw commit email, not on
+# .mailmap, so this does not change that graph on its own.
+cjjulius <4412545+cjjulius@users.noreply.github.com> <cjjulius@users.noreply.github.com>
+cjjulius <4412545+cjjulius@users.noreply.github.com> <charlton.julius@candid.org>

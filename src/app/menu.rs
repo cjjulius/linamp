@@ -274,7 +274,7 @@ pub(super) fn menu_item_resp(
 ) -> egui::Response {
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 18.0), egui::Sense::click());
-    let vis = ui.visuals().widgets.style(&resp).clone();
+    let vis = *ui.visuals().widgets.style(&resp);
     // egui buttons colour their text with `override_text_color` when the skin
     // sets one (apply_theme does); fall back to the widget's own colour.
     let text_color = ui

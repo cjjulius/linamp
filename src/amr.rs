@@ -193,7 +193,7 @@ mod tests {
         let got: Vec<f32> = src.collect();
         let raw = std::fs::read(oracle).unwrap();
         let want: Vec<f32> = raw
-            .chunks_exact(2)
+            .as_chunks::<2>().0.iter()
             .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32_768.0)
             .collect();
         let n = got.len().min(want.len());

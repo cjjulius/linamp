@@ -123,7 +123,7 @@ pub const CDDA_SAMPLES_PER_SECTOR: usize = CDDA_SECTOR_BYTES / 2;
 /// A trailing odd byte (which a correct 2352-byte sector never has) is ignored.
 pub fn pcm_s16le_to_f32(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(2)
+        .as_chunks::<2>().0.iter()
         .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
         .collect()
 }

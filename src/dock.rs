@@ -48,7 +48,7 @@ pub(crate) fn snap_rect(
     let mut best_dx: Option<f32> = None;
     let mut best_dy: Option<f32> = None;
     let consider = |cur: &mut Option<f32>, off: f32| {
-        if off.abs() < s && cur.map_or(true, |b: f32| off.abs() < b.abs()) {
+        if off.abs() < s && cur.is_none_or(|b: f32| off.abs() < b.abs()) {
             *cur = Some(off);
         }
     };

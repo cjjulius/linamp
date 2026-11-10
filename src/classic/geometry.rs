@@ -282,7 +282,7 @@ pub fn main_shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
         return Some(ShadeHit::Minimize);
     }
     // Wave/clutter button at the far left opens the Options menu.
-    if x >= 1.0 && x < 18.0 {
+    if (1.0..18.0).contains(&x) {
         return Some(ShadeHit::Options);
     }
     for (hit, bx, bw) in MAIN_SHADE_BTNS {
@@ -291,7 +291,7 @@ pub fn main_shade_region_at(x: f32, y: f32) -> Option<ShadeHit> {
         }
     }
     // Mini position/seek slider (between the transport buttons and Restore).
-    if x >= SHADE_POS_X && x < SHADE_POS_X + SHADE_POS_W {
+    if (SHADE_POS_X..SHADE_POS_X + SHADE_POS_W).contains(&x) {
         return Some(ShadeHit::Pos);
     }
     Some(ShadeHit::TitleBar)
@@ -519,11 +519,11 @@ pub(crate) const PL_LIST_X: i32 = 14;
 pub(crate) const PL_LIST_Y: i32 = 21;
 
 pub fn pl_region_at(x: f32, y: f32, width: f32, height: f32) -> Option<PlRegion> {
-    if x >= width - 11.0 && x < width - 2.0 && y >= 3.0 && y < 12.0 {
+    if x >= width - 11.0 && x < width - 2.0 && (3.0..12.0).contains(&y) {
         return Some(PlRegion::Close);
     }
     // Windowshade (collapse) button, just left of Close in the title bar.
-    if x >= width - 20.0 && x < width - 11.0 && y >= 3.0 && y < 12.0 {
+    if x >= width - 20.0 && x < width - 11.0 && (3.0..12.0).contains(&y) {
         return Some(PlRegion::Shade);
     }
     if y < 20.0 {

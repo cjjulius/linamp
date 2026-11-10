@@ -307,7 +307,7 @@ mod linux_impl {
             return Vec::new();
         };
         let mut data = Vec::with_capacity(rgba.len());
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             let [r, g, b, a] = [px[0], px[1], px[2], px[3]];
             data.extend_from_slice(&[a, r, g, b]);
         }
