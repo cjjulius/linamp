@@ -1483,7 +1483,7 @@ impl LinAmpApp {
                 self.playlist.add_folder(&p);
             } else if matches!(
                 p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
-                Some("m3u") | Some("m3u8") | Some("pls")
+                Some("m3u") | Some("m3u8") | Some("pls") | Some("xspf") | Some("asx") | Some("ram")
             ) {
                 self.playlist.load_file(&p);
             } else {
@@ -1975,6 +1975,9 @@ impl LinAmpApp {
                 // Single source of truth: the same list `is_supported` gates on, so
                 // adding a format only touches `SUPPORTED_EXTS`.
                 .add_filter("Audio", crate::playlist::SUPPORTED_EXTS)
+                // CUE sheets are not playable files themselves (they expand into virtual tracks), so
+                // they are not in SUPPORTED_EXTS; offer them as their own filter.
+                .add_filter("CUE sheet", &["cue"])
                 .pick_files()
         }) {
             let was_empty = self.playlist.is_empty();
@@ -2121,7 +2124,7 @@ impl LinAmpApp {
         for p in dropped {
             let is_pl = matches!(
                 p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
-                Some("m3u") | Some("m3u8") | Some("pls")
+                Some("m3u") | Some("m3u8") | Some("pls") | Some("xspf") | Some("asx") | Some("ram")
             );
             if p.is_dir() {
                 self.playlist.add_folder(&p);
@@ -2189,7 +2192,7 @@ impl LinAmpApp {
         hide_popup_window();
         if let Some(path) = self.pick_dialog(|| {
             rfd::FileDialog::new()
-                .add_filter("Playlists", &["m3u", "m3u8", "pls"])
+                .add_filter("Playlists", &["m3u", "m3u8", "pls", "xspf", "asx", "ram"])
                 .pick_file()
         }) {
             let was_empty = self.playlist.is_empty();

@@ -1149,6 +1149,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cuna"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a5facc425455986a13e7a8ad9fcf9c967e0740b72dcc0a3eaba3473a13c6ee1"
+dependencies = [
+ "nom",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2521,13 +2531,14 @@ dependencies = [
 
 [[package]]
 name = "linamp"
-version = "1.1.7"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "ape-decoder",
  "arboard",
  "bytes",
  "cc",
+ "cuna",
  "dirs",
  "dsd-reader",
  "eframe",
@@ -2549,6 +2560,8 @@ dependencies = [
  "opus",
  "oxideav-musepack",
  "oxideav-tta",
+ "qoaudio",
+ "quick-xml 0.41.0",
  "rfd",
  "rodio",
  "rubato",
@@ -3649,6 +3662,12 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
+
+[[package]]
+name = "qoaudio"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf46b47dc3906b2c2bc928a04398dd483e66e3d0cc56913355ba236ab9fa2441"
 
 [[package]]
 name = "quick-error"

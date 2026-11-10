@@ -29,7 +29,10 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   Commodore 64 SID via libsidplayfp (`sid`: `.sid`/`.psid`/`.rsid`, ROM-less), and
   streamed game-engine audio via libvgmstream (`vgmstream`: GameCube/Wii DSP, PS-ADPCM VAG,
   CRI HCA, Nintendo BRSTM/BCSTM/BFSTM, FMOD FSB, Microsoft XWB, Sony XVAG/ATRAC9, and more,
-  routed by an allowlist of game-specific extensions), and the `*SF` family of emulated console
+  routed by an allowlist of game-specific extensions), with an optional external-codec tier
+  (`vgmstream-ext`) that adds Wwise `.wem` / FSB Vorbis via libvorbis and Xbox 360 XMA /
+  PlayStation ATRAC3 / WMA via the bundled LGPL FFmpeg, QOA (Quite OK Audio) via the pure-Rust
+  qoaudio decoder (`qoa`: `.qoa`), and the `*SF` family of emulated console
   program music, all ROM-less (no BIOS): PlayStation PSF1 via libupse (`psf`: `.psf`/`.minipsf`),
   Sega Saturn/Dreamcast SSF/DSF via Highly_Theoretical (`ssf`: `.ssf`/`.minissf`/`.dsf`/`.minidsf`),
   Capcom QSound QSF via Highly_Quixotic (`qsf`: `.qsf`/`.miniqsf`), Nintendo DS NCSF via SSEQPlayer
@@ -111,9 +114,13 @@ Legend: everything listed is done unless it is flagged Planned or Partial.
   Shift+click / Shift+arrows select a range, Home/End jump; Invert/Crop and
   Remove operate on the selection
 - Editor extras (Rem/Misc menus): remove missing files, randomize, reverse
-- Robust playlist loading, M3U/PLS decoded leniently (tolerates a BOM or a
-  stray non-UTF-8 byte), PLS ordered by `File<N>` index and Windows-authored
-  relative paths (backslashes) resolve on Linux too
+- Robust playlist loading (M3U/M3U8, PLS, XSPF, ASX and RealAudio RAM), decoded
+  leniently (tolerates a BOM or a stray non-UTF-8 byte), PLS ordered by `File<N>`
+  index and Windows-authored relative paths (backslashes) resolve on Linux too;
+  remote stream URLs in a dropped playlist are never auto-fetched
+- CUE sheets: a single-file album (`.flac`/`.ape`/`.wv`/`.wav` plus a `.cue`)
+  loads as its real per-track entries, each seeking into the album file, with
+  correct per-track scrubbing
 - Jump-to-file (J) and jump-to-time (Ctrl+J)
 
 ## Metadata / Library
