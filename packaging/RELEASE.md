@@ -5,9 +5,11 @@ Ubuntu-based Linux (Pop!_OS, Mint). The official installers are built by CI from
 a `vX.Y.Z` tag, but the tag is only pushed after the Linux machine signs off
 on the same build.
 
-Each installer bundles FFmpeg (for WMA and other formats with no permissive
-pure-Rust decoder), so one installer per platform carries everything with no
-extra downloads or separate DLLs. This is the default release configuration.
+Each installer bundles FFmpeg (for WMA and other formats with no permissive pure-Rust
+decoder) and the retro/codec libraries (libgme, libopenmpt, AdPlug, libsidplayfp, vgmstream,
+libupse and the `*SF` cores), so one installer per platform carries everything with no extra
+downloads or separate DLLs. This is the default release configuration (all Cargo features
+on); see Licensing below.
 
 ## Artifacts
 
@@ -101,6 +103,25 @@ skip the branch entirely: bump `version` on `main`, push, run the Windows/Linux
 candidates from `main`, then tag that `main` commit. With nothing to merge back,
 `main` can't drift. Use a `release/*` branch only when you genuinely need it,
 and when you do, step 6 is mandatory.
+
+## Licensing
+
+LinAmp's own source is Apache-2.0. The default pure-Rust build is permissive throughout:
+Apache/MIT decoders, symphonia (MPL-2.0), and the statically linked BSD libopus and LGPL
+LAME used for Opus/MP3 encoding (LGPL static linking is satisfied because the project is
+open source and therefore relinkable). The full-featured release additionally bundles
+several copyleft decoders, so the shipped binary as a whole is distributed under GPLv3:
+libsidplayfp (GPL-2+), Highly_Theoretical and Highly_Quixotic (GPL-3), lazyusf2 and vio2sf
+(GPL-2+), and libupse (GPL). GSF (mGBA/libgsf, MPL-2.0) and NCSF (SSEQPlayer, WTFPL) are
+permissive. FFmpeg is built LGPL-only, with no GPL components (x264/libass/etc.); do not use
+a GPL FFmpeg configuration, which would force the whole binary to GPL regardless. No
+proprietary code and no console BIOS or ROM is bundled anywhere.
+
+The retro and codec libraries (FFmpeg, libgme, libopenmpt, AdPlug, libsidplayfp, vgmstream,
+libupse and the `*SF` cores, libvorbis) are built trimmed from source and bundled next to the
+binary by the `packaging/{linux,windows}/build-*` scripts; each script pins its version and
+documents its build gotchas inline (for example libsidplayfp is pinned to the 2.x API, and
+libupse is compiled `/MD` on Windows to share the dynamic CRT).
 
 ## Notes
 

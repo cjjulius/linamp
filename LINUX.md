@@ -51,6 +51,19 @@ identically but is not yet verified on hardware.
 Target distros: Pop!_OS and Linux Mint, latest stock releases (both
 Ubuntu/Debian-based). Commands below assume `apt`.
 
+## Audio CD on Linux
+
+Playback and ripping read raw sectors from the optical device, so the user must be able to
+read it. If CD access fails with a permission error, confirm your user can read the drive
+(on the target distros a desktop login usually grants this via a session ACL on `/dev/sr0`;
+otherwise add the user to the `cdrom` group and re-login). There is also ~2 s of
+unavoidable silence at the start of a disc or track while the drive spins up and seeks.
+
+If a CD is added through a file-manager's GVfs/KDE `cdda://` mount (its `Track N.wav`
+entries), LinAmp stores them as native `cdda://` tracks and plays from the drive directly.
+Adding such a folder orders tracks lexically (1, 10, 2, ...); use Options > Open Audio CD
+to get them in disc order.
+
 ## Build prerequisites
 
 Install Rust via [rustup](https://rustup.rs), then the system dev libraries:
