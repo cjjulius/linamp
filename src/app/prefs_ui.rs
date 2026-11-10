@@ -17,8 +17,21 @@ impl super::LinAmpApp {
         // borderless main window. Borderless with a skin-drawn title bar (like the
         // classic windows and the Library) so the skin cursor covers the whole
         // window, including the title bar, with no OS chrome to break it.
-        let default_pos = self.geom.win_pos[0] + egui::vec2(24.0, 24.0);
-        let pos = *self.prefs_pos.get_or_insert(default_pos);
+        // On first open, anchor to the main window (top-left + 24) but keep the whole
+        // window on the virtual desktop, the same bump the classic windows get, so it is
+        // never off-screen when the player sits near the right or bottom edge. A position
+        // the user has since dragged (prefs_pos is Some) is left alone: off-screen is
+        // allowed once they move it there themselves.
+        let pos = match self.prefs_pos {
+            Some(p) => p,
+            None => {
+                let size = self.prefs_size.unwrap_or(PREFS_DEFAULT_SIZE);
+                let anchored = self.geom.win_pos[0] + egui::vec2(24.0, 24.0);
+                let p = clamp_pos_onscreen(ctx, anchored, size);
+                self.prefs_pos = Some(p);
+                p
+            }
+        };
         let builder = egui::ViewportBuilder::default()
             .with_title("LinAmp Preferences")
             .with_position(pos)
@@ -764,5 +777,60 @@ impl super::LinAmpApp {
                 "https://github.com/cjjulius/linamp",
             );
         });
+    }
+}
+
+/// Bump a window's top-left so a window of `size` sits fully on the virtual desktop
+/// (all monitors). Falls back to the given position if the desktop bounds are unknown.
+fn clamp_pos_onscreen(ctx: &egui::Context, pos: egui::Pos2, size: egui::Vec2) -> egui::Pos2 {
+    match platform_win::virtual_desktop_rect(ctx) {
+        Some(vr) => clamp_pos_into(pos, size, vr),
+        None => pos,
+    }
+}
+
+/// Keep a `size`-sized window at `pos` within `bounds`: pull it left or up when it
+/// would spill off the right or bottom edge, but always keep the top-left corner
+/// visible (so a window larger than `bounds` is pinned to the top-left rather than
+/// hidden). Mirrors the clamp the classic windows use.
+fn clamp_pos_into(pos: egui::Pos2, size: egui::Vec2, bounds: egui::Rect) -> egui::Pos2 {
+    let max_x = (bounds.max.x - size.x).max(bounds.min.x);
+    let max_y = (bounds.max.y - size.y).max(bounds.min.y);
+    egui::pos2(pos.x.clamp(bounds.min.x, max_x), pos.y.clamp(bounds.min.y, max_y))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_pos_into;
+    use egui::{pos2, vec2, Rect};
+
+    fn desktop() -> Rect {
+        Rect::from_min_size(pos2(0.0, 0.0), vec2(1920.0, 1080.0))
+    }
+
+    #[test]
+    fn onscreen_position_is_unchanged() {
+        let p = pos2(200.0, 150.0);
+        assert_eq!(clamp_pos_into(p, vec2(520.0, 360.0), desktop()), p);
+    }
+
+    #[test]
+    fn offscreen_right_and_bottom_bump_back_in() {
+        // Player near the right/bottom edge: the window would spill off, so it is
+        // pulled in to sit flush against the right/bottom edge.
+        let got = clamp_pos_into(pos2(1700.0, 900.0), vec2(520.0, 360.0), desktop());
+        assert_eq!(got, pos2(1920.0 - 520.0, 1080.0 - 360.0));
+    }
+
+    #[test]
+    fn negative_position_bumps_to_the_top_left() {
+        let got = clamp_pos_into(pos2(-40.0, -40.0), vec2(520.0, 360.0), desktop());
+        assert_eq!(got, pos2(0.0, 0.0));
+    }
+
+    #[test]
+    fn window_larger_than_desktop_keeps_top_left_visible() {
+        let got = clamp_pos_into(pos2(500.0, 500.0), vec2(4000.0, 4000.0), desktop());
+        assert_eq!(got, pos2(0.0, 0.0));
     }
 }
