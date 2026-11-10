@@ -68,6 +68,9 @@ pub fn expand(cue_path: &Path) -> Result<Vec<CueEntry>> {
     for disc in sheet.files() {
         let audio = dir.join(&disc.name);
         let audio = audio.canonicalize().unwrap_or(audio);
+        // The last track of a file runs to end-of-file, so its length is (file duration - its start).
+        // Probe the album file once for that total; best-effort (blank if the file can't be opened).
+        let file_total = crate::player::open_source(&audio).ok().and_then(|s| s.total_duration());
         let tracks = &disc.tracks;
         for (i, tk) in tracks.iter().enumerate() {
             let start = match track_start(tk) {
@@ -75,7 +78,10 @@ pub fn expand(cue_path: &Path) -> Result<Vec<CueEntry>> {
                 None => continue, // a track with no index is unplayable; skip it
             };
             let next = tracks.get(i + 1).and_then(track_start);
-            let len = next.map(|n| n.saturating_sub(start));
+            // Length is the gap to the next track; for the last track, to end-of-file.
+            let len = next
+                .map(|n| n.saturating_sub(start))
+                .or_else(|| file_total.map(|t| t.saturating_sub(start)));
             let start_ms = start.as_millis() as u64;
             let len_ms = len.map(|d| d.as_millis() as u64).unwrap_or(0);
             let title = tk.title.first().cloned().unwrap_or_else(|| format!("Track {}", i + 1));
@@ -199,6 +205,11 @@ mod tests {
         }
         let entries = expand(cue).unwrap_or_else(|e| panic!("expand: {e}"));
         assert!(entries.len() >= 2, "expected multiple tracks, got {}", entries.len());
+        // Every track, including the LAST one, must have a known length (the last runs to end-of-file,
+        // computed from the album's total duration - the fix for a blank final-track length).
+        for e in &entries {
+            assert!(e.duration.is_some(), "{}: blank length", e.title);
+        }
         for e in &entries {
             let src = open(&e.path).unwrap_or_else(|err| panic!("open {}: {err}", e.path));
             let ch = src.channels().max(1) as usize;
