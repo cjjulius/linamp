@@ -214,12 +214,14 @@ jobs:
       # libvgmstream (game-engine streams) built core-only from source via CMake (vgmstream has
       # first-class MSVC support). Static-linked into the exe (no DLL on PATH), same as AdPlug/SID.
       # build.rs links $VGMSTREAM_DIR; src/vgmstream.rs binds the C API directly (no shim).
-      - name: Provision libvgmstream (Windows)
+      - name: Provision libvgmstream + libvorbis (Windows, vgmstream-ext tier)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          pwsh packaging\windows\build-vgmstream.ps1
+          pwsh packaging\windows\build-libvorbis.ps1
+          pwsh packaging\windows\build-vgmstream.ps1 -Ext
           "VGMSTREAM_DIR=$PWD\build\vgmstream-min" | Out-File $env:GITHUB_ENV -Append
+          "LIBVORBIS_DIR=$PWD\build\libvorbis-min" | Out-File $env:GITHUB_ENV -Append
 
       # libupse (PlayStation PSF1) built from the Kodi audiodecoder.upse source (ROM-less FakeBIOS).
       # Static-linked into the exe (no DLL on PATH), same as the others; needs the static zlib from the
@@ -255,11 +257,11 @@ jobs:
           "LIBGSF_DIR=$PWD\build\libgsf-min" | Out-File $env:GITHUB_ENV -Append
           "$PWD\build\libgsf-min\bin" | Out-File $env:GITHUB_PATH -Append
 
-      - name: Build and test (Windows, ffmpeg + gme + openmpt + adplug + sid + vgmstream + psf + ssf + qsf + ncsf + usf + twosf + gsf)
+      - name: Build and test (Windows, ffmpeg + gme + openmpt + adplug + sid + vgmstream + vgmstream-ext + psf + ssf + qsf + ncsf + usf + twosf + gsf + qoa)
         if: runner.os == 'Windows'
         run: |
-          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf --verbose
-          cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf --verbose
+          cargo build --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,vgmstream-ext,psf,ssf,qsf,ncsf,usf,twosf,gsf,qoa --verbose
+          cargo test --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,vgmstream-ext,psf,ssf,qsf,ncsf,usf,twosf,gsf,qoa --verbose
 
   # Build the per-user installers. Runs on a v* tag (official release) or a
   # manual dispatch (dry run - artifacts only, no GitHub Release).
@@ -374,12 +376,14 @@ jobs:
           pwsh packaging\windows\build-sidplayfp.ps1
           "SIDPLAYFP_DIR=$PWD\build\sidplayfp-min" | Out-File $env:GITHUB_ENV -Append
 
-      - name: Provision libvgmstream (Windows)
+      - name: Provision libvgmstream + libvorbis (Windows, vgmstream-ext tier)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          pwsh packaging\windows\build-vgmstream.ps1
+          pwsh packaging\windows\build-libvorbis.ps1
+          pwsh packaging\windows\build-vgmstream.ps1 -Ext
           "VGMSTREAM_DIR=$PWD\build\vgmstream-min" | Out-File $env:GITHUB_ENV -Append
+          "LIBVORBIS_DIR=$PWD\build\libvorbis-min" | Out-File $env:GITHUB_ENV -Append
 
       - name: Provision libupse (Windows)
         if: runner.os == 'Windows'
@@ -415,7 +419,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --release --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,psf,ssf,qsf,ncsf,usf,twosf,gsf
+          cargo build --release --features ffmpeg,gme,openmpt,adplug,sid,vgmstream,vgmstream-ext,psf,ssf,qsf,ncsf,usf,twosf,gsf,qoa
           # Derive the version from Cargo.toml and pass it to ISCC - without this
           # the installer falls back to the version baked into linamp.iss, which
           # is how v0.3.0 shipped a "LinAmp-0.2.0-Setup.exe". /DWithFfmpeg bundles the
