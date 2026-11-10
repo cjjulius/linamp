@@ -168,6 +168,34 @@ window). The root closes last once the children are gone.
 current track, playlist-window size, volume and balance) under the OS data
 directory, restored on launch unless files are passed on the command line.
 
+## Adding a format
+
+Every format ends as a seekable `rodio::Source`, reached either by a side-decoder module
+in `src/` (wrapping a Rust crate or a thin FFI, with an `is_<fmt>` predicate and an
+`open()`) or by the FFmpeg path (`ffdec.rs`, behind the `ffmpeg` feature). Wiring a new
+one touches: the decoder module; `playlist.rs` (`SUPPORTED_EXTS` + the router table, kept
+honest by the `supported_exts_match_the_router` guard test); `player.rs` (route the file);
+`fileassoc.rs` (MIME + `mime_package_xml`); and a decode test with a QA sample. Native
+C/C++ libraries are built trimmed from source and bundled next to the binary with an
+`$ORIGIN/lib` rpath, so the installer stays self-contained. The mantra, license decision
+order, and the rule to BIOS/ROM-check each emulator core before adopting it are in
+[RETRO-AUDIO-ROADMAP.md](RETRO-AUDIO-ROADMAP.md), which also holds the per-format QA
+sample cookbook.
+
+## Tag writing (cross-format interop)
+
+`tags.rs` writes each field where mainstream players actually read it, working around
+lofty where its typed writers drop fields on a real-file save. ID3v2 (MP3) keeps its
+standard frames untouched. Vorbis comments (FLAC/Ogg/Opus) and APEv2 use the
+community-convention keys that Picard/foobar2000/Kid3/ffmpeg read (`ORIGINALARTIST`,
+`URL`, `DISCNUMBER`, `BPM`, `COMPILATION`), written via `insert_unchecked` because
+`Tag::insert` silently drops an `ItemKey::Unknown`. MP4 compilation and BPM are written as
+the native `cpil`/`tmpo` atoms after the main write (lofty keeps them only in memory), and
+Original Artist / URL use `----:com.apple.iTunes:` freeform atoms; `read_mp4_bpm` reads
+`tmpo` back. A minimal (STREAMINFO-only) FLAC gets an empty comments block spliced in first
+(`ensure_flac_writable`). The round-trip is guarded by
+`mass_edit_round_trips_every_field_across_formats` and `minimal_flac_round_trips_tags_after_fix`.
+
 ## Testing and CI
 
 `cargo test` covers the pure logic: playlist operations and M3U/PLS parsing,

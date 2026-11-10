@@ -1,9 +1,13 @@
-# Retro Audio Roadmap
+# Retro Audio Roadmap and QA Sample Cookbook
 
-Goal: make LinAmp a one-stop destination for audio. Drop in anything, past or present,
-and get sound out. This document is the plan for widening format coverage, with special
-attention to the retro and chiptune world, and to how we get or generate a test file for
-every new format so both the Linux and Windows machines can QA it.
+Goal: make LinAmp a one-stop destination for audio. Drop in anything, past or present, and
+get sound out. Most of this roadmap is now delivered: as of v1.2.0 the retro and chiptune
+coverage is broad (console chiptunes, the tracker zoo, AdLib/OPL, SID, game-engine streams,
+QOA, and the full `*SF` program-music family). The two living parts of this document are the
+short list of formats still to come (and the walls we will not implement), and the
+per-format QA sample cookbook in the appendix, which is the canonical, in-git recipe for
+building the gitignored `qa-music/format-samples/` corpus so both the Linux and Windows
+boxes QA against the same samples.
 
 ## Guiding principles (the mantra)
 
@@ -393,12 +397,11 @@ gitignored scratch note of what that box happened to build, not a source of trut
 ## Status tracker
 
 Phase 1 - FFmpeg freebies
-- [ ] Shorten (.shn)
-- [ ] MPEG-4 ALS (.als)
-- [ ] TwinVQ (.vqf)
-- [ ] CRI ADX (.adx)
-- [ ] Amiga 8SVX (.8svx/.iff)
-- [ ] Creative VOC (.voc), Sun AU (.au/.snd), Wave64 (.w64)
+- [x] Shorten (.shn) - `ffmpeg` feature
+- [x] CRI ADX (.adx) - `ffmpeg` feature
+- [x] Amiga 8SVX (.8svx) - `ffmpeg` feature
+- [x] Creative VOC (.voc), Sun AU (.au), Wave64 (.w64) - `ffmpeg` feature
+- [ ] MPEG-4 ALS (.als, ALS-in-mp4 only), TwinVQ (.vqf) - deferred
 - [ ] Flash Nellymoser / .swf audio, QuickTime QDM2
 - [ ] Speech: GSM (.gsm), G.729, QCELP, EVRC, iLBC (as useful)
 
@@ -432,14 +435,12 @@ Phase 2 stretch
   Windows builds (`build-upse-min.sh` / `build-upse.ps1`), CI, and tarball wired; CI green on both
   platforms. Reproducible CC0 QA sample (hand-authored minimal PSF, recipe in the cookbook); for real
   PSF1 music, procure a tune from Zophar (local QA only).
-- [~] `*SF` family, the rest - deep-researched 2026-11-09: all ROM-less, none a wall (cores/licenses
-  in "Phase 2 stretch" above). **SSF+DSF (Highly_Theoretical), QSF (Highly_Quixotic), NCSF (SSEQPlayer)
-  DONE** on `feat/tier2f-ssf-dsf-qsf-ncsf` (merged, PR #241, v1.1.6). **USF (lazyusf2) + 2SF (vio2sf)
-  DONE** on `feat/tier2f-usf-2sf` (`usf`/`twosf` features, shared psflib; validated on real N64 + DS
-  rips; pending QA/merge). **GSF (libgsf/mGBA) DONE** on `feat/tier2f-gsf` (`gsf` feature; CMake build,
-  no psflib; validated by building + rendering libgsf's bundled test GSFs; pending QA/merge). This
-  completes the `*SF` family. GSF (MPL) and NCSF (WTFPL) are permissive; the rest are GPL. SNSF stays a
-  wall (snes9x non-commercial).
+- [x] `*SF` family, the rest - shipped in v1.2.0, all ROM-less (cores/licenses in "Phase 2
+  stretch" above). SSF+DSF (Highly_Theoretical), QSF (Highly_Quixotic) and NCSF (SSEQPlayer)
+  merged in PR #241 (v1.1.6); USF (lazyusf2) and 2SF (vio2sf) as the `usf`/`twosf` features;
+  GSF (libgsf/mGBA, `gsf` feature, its own CMake build, no psflib). This completes the `*SF`
+  family. GSF (MPL) and NCSF (WTFPL) are permissive; the rest are GPL. SNSF stays a wall
+  (snes9x non-commercial).
 
 Phase 3 - Modern/ideal
 - [x] QOA (.qoa) - the `qoa` feature (qoaudio, pure Rust)
