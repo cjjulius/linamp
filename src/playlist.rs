@@ -1659,6 +1659,9 @@ mod tests {
 
         // Specialised decoders: (name, predicate, the exts it owns). The const-backed
         // ones reference the module's own list, so they can't drift from the router.
+        // `mut` is used only by the feature-gated `push`es below, so it is unused when
+        // no optional decoder features are enabled (the default build).
+        #[allow(unused_mut)]
         let mut decoders: Vec<(&str, Pred, Vec<&str>)> = vec![
             ("midi", crate::midi::is_midi as Pred, crate::midi::MIDI_EXTS.to_vec()),
             ("tracker", crate::tracker::is_tracker, crate::tracker::TRACKER_EXTS.to_vec()),

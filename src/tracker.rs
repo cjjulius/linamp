@@ -198,7 +198,7 @@ mod tests {
         // (never longer, that was the bug).
         let diff = played - reported.as_secs_f64();
         assert!(
-            diff <= 0.05 && diff >= -0.05,
+            (-0.05..=0.05).contains(&diff),
             "played {played:.3}s vs reported {:.3}s (must match, never over)",
             reported.as_secs_f64()
         );

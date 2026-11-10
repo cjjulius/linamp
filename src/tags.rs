@@ -1413,19 +1413,18 @@ mod tests {
         // Change only the album.
         let mask = FieldMask { album: true, ..Default::default() };
         let new = Id3Fields { album: "Mass Album".into(), artist: "Should Not Apply".into(), ..Default::default() };
-        assert_eq!(write_mass(&tmp, &new, &mask, true).unwrap(), true, "a real change writes");
+        assert!(write_mass(&tmp, &new, &mask, true).unwrap(), "a real change writes");
         let got = read_primary(&tmp);
         assert_eq!(got.album, "Mass Album", "marked field applied");
         assert_eq!(got.title, "Seed Title", "unmarked field preserved");
         assert_eq!(got.artist, "Seed Artist", "unmarked field preserved even when new carries a value");
 
         // Re-applying the same album is a no-op and is skipped.
-        assert_eq!(write_mass(&tmp, &new, &mask, true).unwrap(), false, "no net change is skipped");
+        assert!(!write_mass(&tmp, &new, &mask, true).unwrap(), "no net change is skipped");
 
         // An empty mask never writes.
-        assert_eq!(
-            write_mass(&tmp, &new, &FieldMask::default(), true).unwrap(),
-            false,
+        assert!(
+            !write_mass(&tmp, &new, &FieldMask::default(), true).unwrap(),
             "empty mask is a no-op"
         );
         let _ = std::fs::remove_file(&tmp);
@@ -1570,7 +1569,7 @@ mod tests {
         std::fs::copy(src, &tmp).unwrap();
         let mask = FieldMask { artist: true, album: true, ..Default::default() };
         let new = Id3Fields { artist: "Green Day".into(), album: "Saviors".into(), ..Default::default() };
-        assert_eq!(write_mass(&tmp, &new, &mask, true).unwrap(), true);
+        assert!(write_mass(&tmp, &new, &mask, true).unwrap());
         let back = read_single(&tmp);
         assert_eq!(back.artist, "Green Day");
         assert_eq!(back.album, "Saviors");

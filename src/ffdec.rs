@@ -131,8 +131,10 @@ fn append_frame(out: &mut Vec<f32>, frame: &AudioFrame) {
     let bytes = &frame.data(0)[..valid * 4];
     out.extend(
         bytes
-            .chunks_exact(4)
-            .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]])),
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&b| f32::from_ne_bytes(b)),
     );
 }
 
@@ -382,7 +384,7 @@ pub fn media_info(path: &Path) -> Option<(u32, u8, u32)> {
     if rate == 0 {
         return None;
     }
-    let channels = decoder.channels().max(0) as u8;
+    let channels = decoder.channels() as u8;
     // Bitrate in bits/s: the codec's own figure, else the container's overall rate, else estimate
     // from the file size and duration (covers lossless streams that report no bitrate).
     let mut bits = decoder.bit_rate() as u64;

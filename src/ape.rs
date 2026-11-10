@@ -122,20 +122,20 @@ fn decode_pcm_into(out: &mut Vec<f32>, bytes: &[u8], bits: u16, signed8: bool) {
     match bits {
         8 if signed8 => out.extend(bytes.iter().map(|&b| b as i8 as f32 / 128.0)),
         8 => out.extend(bytes.iter().map(|&b| (b as f32 - 128.0) / 128.0)),
-        24 => out.extend(bytes.chunks_exact(3).map(|c| {
+        24 => out.extend(bytes.as_chunks::<3>().0.iter().map(|c| {
             // Sign-extend the 24-bit little-endian sample into an i32.
             let v = ((c[0] as i32) | ((c[1] as i32) << 8) | ((c[2] as i32) << 16)) << 8;
             (v >> 8) as f32 / 8_388_608.0
         })),
         32 => out.extend(
             bytes
-                .chunks_exact(4)
+                .as_chunks::<4>().0.iter()
                 .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32 / 2_147_483_648.0),
         ),
         // 16-bit (the common case) and anything else.
         _ => out.extend(
             bytes
-                .chunks_exact(2)
+                .as_chunks::<2>().0.iter()
                 .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32_768.0),
         ),
     }

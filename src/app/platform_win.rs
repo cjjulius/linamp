@@ -100,6 +100,9 @@ mod x11util {
     use std::ptr;
     use x11_dl::xlib;
 
+    // One thread-local instance, so the large `Xlib` fn-pointer table in `Ready` costs
+    // nothing in practice; boxing it would only add indirection on every X call.
+    #[allow(clippy::large_enum_variant)]
     enum Conn {
         Untried,
         Unavailable,
@@ -107,7 +110,7 @@ mod x11util {
     }
 
     thread_local! {
-        static CONN: RefCell<Conn> = RefCell::new(Conn::Untried);
+        static CONN: RefCell<Conn> = const { RefCell::new(Conn::Untried) };
     }
 
     /// Run `f` with the cached Xlib handle + display, opening the connection on
@@ -302,7 +305,7 @@ mod x11util {
         thread_local! {
             // (eq_visible, pl_visible, lib_visible, linked?) we last acted on.
             static STATE: RefCell<(bool, bool, bool, bool)> =
-                RefCell::new((false, false, false, false));
+                const { RefCell::new((false, false, false, false)) };
         }
         let cfg = (eq_visible, pl_visible, lib_visible);
         let done = STATE.with(|s| {
@@ -412,10 +415,7 @@ mod x11util {
                     if handle.is_null() {
                         None
                     } else {
-                        let sym = dlsym(
-                            handle,
-                            b"XShapeCombineRectangles\0".as_ptr() as *const c_char,
-                        );
+                        let sym = dlsym(handle, c"XShapeCombineRectangles".as_ptr());
                         if sym.is_null() {
                             None
                         } else {
@@ -637,7 +637,7 @@ mod x11util {
                 let mut data: Vec<c_long> = Vec::with_capacity(2 + (w * h) as usize);
                 data.push(w as c_long);
                 data.push(h as c_long);
-                for px in rgba.chunks_exact(4) {
+                for px in rgba.as_chunks::<4>().0 {
                     let (r, g, b, a) = (
                         px[0] as c_long,
                         px[1] as c_long,
@@ -702,10 +702,14 @@ mod x11util {
         pixels: *mut u32,
     }
 
+    type CreateFn = unsafe extern "C" fn(c_int, c_int) -> *mut XcursorImage;
+    type LoadFn = unsafe extern "C" fn(*mut xlib::Display, *const XcursorImage) -> xlib::Cursor;
+    type DestroyFn = unsafe extern "C" fn(*mut XcursorImage);
+
     struct CursorFns {
-        create: unsafe extern "C" fn(c_int, c_int) -> *mut XcursorImage,
-        load: unsafe extern "C" fn(*mut xlib::Display, *const XcursorImage) -> xlib::Cursor,
-        destroy: unsafe extern "C" fn(*mut XcursorImage),
+        create: CreateFn,
+        load: LoadFn,
+        destroy: DestroyFn,
     }
 
     /// Resolve the three libXcursor entry points we need (cached). `None` when
@@ -740,9 +744,9 @@ mod x11util {
                         } else {
                             // Leak a 'static so the pointers stay valid for the process.
                             Some(&*Box::leak(Box::new(CursorFns {
-                                create: std::mem::transmute(create),
-                                load: std::mem::transmute(load),
-                                destroy: std::mem::transmute(destroy),
+                                create: std::mem::transmute::<*mut c_void, CreateFn>(create),
+                                load: std::mem::transmute::<*mut c_void, LoadFn>(load),
+                                destroy: std::mem::transmute::<*mut c_void, DestroyFn>(destroy),
                             })))
                         }
                     }

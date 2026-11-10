@@ -111,7 +111,7 @@ fn strip_comment(line: &str) -> &str {
 /// list is one polygon. Sizes that would overrun the available points are
 /// clamped so malformed files can't panic.
 fn split_polygons(num_points: &[usize], point_list: &[i32]) -> Vec<Polygon> {
-    let all: Vec<(i32, i32)> = point_list.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+    let all: Vec<(i32, i32)> = point_list.as_chunks::<2>().0.iter().map(|c| (c[0], c[1])).collect();
     if all.len() < 3 {
         return Vec::new();
     }

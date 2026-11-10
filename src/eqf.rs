@@ -67,7 +67,7 @@ pub fn write(presets: &[EqfPreset]) -> Vec<u8> {
         let nb = p.name.as_bytes();
         let n = nb.len().min(NAME_LEN);
         buf.extend_from_slice(&nb[..n]);
-        buf.extend(std::iter::repeat(0u8).take(NAME_LEN - n));
+        buf.extend(std::iter::repeat_n(0u8, NAME_LEN - n));
         for &b in &p.bands {
             buf.push(db_to_byte(b));
         }
@@ -179,7 +179,7 @@ mod tests {
         let mut name = vec![0xFFu8]; // an invalid UTF-8 lead byte
         name.resize(NAME_LEN, 0);
         bytes.extend_from_slice(&name);
-        bytes.extend(std::iter::repeat(32u8).take(VALUES));
+        bytes.extend(std::iter::repeat_n(32u8, VALUES));
         // A lossy decode keeps the record rather than erroring the whole file.
         let got = parse(&bytes).unwrap();
         assert_eq!(got.len(), 1);
