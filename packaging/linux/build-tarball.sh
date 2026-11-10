@@ -11,16 +11,15 @@ VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
 
 # Optional Cargo features. Set FEATURES to build a variant, example:
 #   FEATURES=ffmpeg ./packaging/linux/build-tarball.sh   # adds WMA (links libav*)
-# The default (no FEATURES) is the pure-Rust build. A featured build gets a name
-# suffix so it never overwrites the default tarball. A build that links FFmpeg (the
-# ffmpeg feature) also bundles the FFmpeg shared libraries below, so the install is
-# self-contained and needs no system FFmpeg at runtime.
+# The default (no FEATURES) is the pure-Rust build. The tarball is always named
+# linamp-<version>-linux-x86_64.tar.gz regardless of the features built in (so a
+# variant overwrites rather than accumulating a long feature-list filename). A build
+# that links FFmpeg (the ffmpeg feature) also bundles the FFmpeg shared libraries
+# below, so the install is self-contained and needs no system FFmpeg at runtime.
 FEATURES="${FEATURES:-}"
 if [ -n "$FEATURES" ]; then
-  SUFFIX="-$(echo "$FEATURES" | tr ', ' '--')"
   FEATURE_ARGS="--features $FEATURES"
 else
-  SUFFIX=""
   FEATURE_ARGS=""
 fi
 case ",$FEATURES," in
@@ -104,7 +103,7 @@ if [ "$BUNDLE_SSF" = 1 ] || [ "$BUNDLE_QSF" = 1 ] || [ "$BUNDLE_NCSF" = 1 ] || [
 else
   BUNDLE_PSFLIB=0
 fi
-NAME="linamp-${VERSION}-linux-x86_64${SUFFIX}"
+NAME="linamp-${VERSION}-linux-x86_64"
 STAGE="dist/$NAME"
 
 # A bundled-FFmpeg build links WMA/DTS against a self-contained FFmpeg built from
