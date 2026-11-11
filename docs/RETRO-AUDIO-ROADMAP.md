@@ -1,7 +1,7 @@
 # Retro Audio Roadmap and QA Sample Cookbook
 
 Goal: make LinAmp a one-stop destination for audio. Drop in anything, past or present, and
-get sound out. Most of this roadmap is now delivered: as of v1.2.5 the retro and chiptune
+get sound out. Most of this roadmap is now delivered: as of v1.2.6 the retro and chiptune
 coverage is broad (console chiptunes, the tracker zoo, AdLib/OPL, SID, game-engine streams,
 QOA, and the full `*SF` program-music family). The two living parts of this document are the
 short list of formats still to come (and the walls we will not implement), and the
@@ -435,7 +435,7 @@ Phase 2 stretch
   Windows builds (`build-upse-min.sh` / `build-upse.ps1`), CI, and tarball wired; CI green on both
   platforms. Reproducible CC0 QA sample (hand-authored minimal PSF, recipe in the cookbook); for real
   PSF1 music, procure a tune from Zophar (local QA only).
-- [x] `*SF` family, the rest - shipped in v1.2.5, all ROM-less (cores/licenses in "Phase 2
+- [x] `*SF` family, the rest - shipped in v1.2.6, all ROM-less (cores/licenses in "Phase 2
   stretch" above). SSF+DSF (Highly_Theoretical), QSF (Highly_Quixotic) and NCSF (SSEQPlayer)
   merged in PR #241 (v1.1.6); USF (lazyusf2) and 2SF (vio2sf) as the `usf`/`twosf` features;
   GSF (libgsf/mGBA, `gsf` feature, its own CMake build, no psflib). This completes the `*SF`
