@@ -526,6 +526,71 @@ mod tests {
         assert!(src.next().is_some(), "should still decode after a seek");
     }
 
+    // Repro for the QA report: scrubbing an MP3 all the way back to the start freezes
+    // the time display and locks the scrubber at the beginning while audio continues.
+    // The displayed position comes from rodio's TrackPosition::get_pos(); these assert
+    // it keeps advancing after a seek to 0. qa-music is gitignored, so skip on CI.
+    #[test]
+    fn position_advances_after_seeking_mp3_to_start_source_only() {
+        use rodio::Source;
+        let p = Path::new("qa-music/SoundHelix-Song-2.mp3");
+        if !p.exists() {
+            return;
+        }
+        let src = open_file(p).expect("mp3 opens");
+        let rate = src.sample_rate();
+        let ch = src.channels() as u32;
+        let mut tp = src.track_position();
+        for _ in 0..(rate * ch * 2) as usize {
+            tp.next();
+        }
+        tp.try_seek(Duration::ZERO).expect("seek to 0");
+        let at_seek = tp.get_pos();
+        for _ in 0..(rate * ch) as usize {
+            tp.next();
+        }
+        let after = tp.get_pos();
+        assert!(
+            after.as_secs_f32() > at_seek.as_secs_f32() + 0.5,
+            "source-only: position froze after seek to 0: at_seek={at_seek:?} after={after:?}"
+        );
+    }
+
+    #[test]
+    fn position_advances_after_seeking_mp3_to_start_full_chain() {
+        use rodio::Source;
+        let p = Path::new("qa-music/SoundHelix-Song-2.mp3");
+        if !p.exists() {
+            return;
+        }
+        let src = open_file(p).expect("mp3 opens");
+        let rate = src.sample_rate();
+        let ch = src.channels() as u32;
+        // The exact player chain: eq -> viz tap -> balance, then rodio's position tracker.
+        let chain = crate::balance::balance(
+            crate::viz::tap(
+                crate::eq::eq(src, crate::eq::EqShared::new()),
+                crate::viz::VizShared::new(),
+            ),
+            crate::balance::BalanceShared::new(),
+        );
+        let mut tp = chain.track_position();
+        for _ in 0..(rate * ch * 2) as usize {
+            tp.next();
+        }
+        let before = tp.get_pos();
+        tp.try_seek(Duration::ZERO).expect("seek to 0");
+        let at_seek = tp.get_pos();
+        for _ in 0..(rate * ch) as usize {
+            tp.next();
+        }
+        let after = tp.get_pos();
+        assert!(
+            after.as_secs_f32() > at_seek.as_secs_f32() + 0.5,
+            "full chain: position froze after seek to 0: before={before:?} at_seek={at_seek:?} after={after:?}"
+        );
+    }
+
     #[test]
     fn supported_exts_match_the_symphonia_registry() {
         // Guard the SUPPORTED_EXTS list against advertising formats we can't decode.
