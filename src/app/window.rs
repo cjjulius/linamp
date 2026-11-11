@@ -468,6 +468,26 @@ impl super::LinAmpApp {
             if win == ClWin::Pl {
                 self.plview.scroll_drag = false;
             }
+            // Same for a slider drag (seek/volume/balance): releasing with the cursor off
+            // the window is common when scrubbing hard to the very start or end and
+            // overshooting the edge. The `released` path below only fires with the cursor
+            // over the window, so without this a seek released off-window leaves the
+            // scrubber and time display frozen at the preview position and never applies
+            // the seek (the audio keeps playing). Commit the pending seek and drop the
+            // active region here; volume and balance already applied live during the drag,
+            // so they only need the region cleared.
+            if win == ClWin::Main {
+                if let Some(r) = self.render.active_region {
+                    if matches!(r, Btn::Seek | Btn::Volume | Btn::Balance) {
+                        if r == Btn::Seek {
+                            if let Some(p) = self.classic_seek_preview.take() {
+                                self.player.seek(Duration::from_secs_f32(p));
+                            }
+                        }
+                        self.render.active_region = None;
+                    }
+                }
+            }
         }
 
         if released {
