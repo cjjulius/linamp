@@ -18,6 +18,31 @@ pub enum PlayState {
     Paused,
 }
 
+/// What `poll_device` should do on a given tick.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DeviceAction {
+    /// The open device is still the default (or we are deviceless and none appeared): leave it.
+    Nothing,
+    /// The default output vanished (e.g. a USB DAC unplugged): forget its name so that when a
+    /// device returns -- even the same one, replugged under the same name -- a rebuild fires.
+    Forget,
+    /// The default output changed (or one appeared after a deviceless launch): rebuild on it.
+    Rebuild,
+}
+
+/// Decide what `poll_device` should do, given the name of the device whose stream is currently
+/// open (`open`) and the current system default (`current`). Pure, so the unplug/replug edge is
+/// unit-tested: without `Forget`, re-plugging the same-named device left `open == current` and so
+/// skipped the rebuild, leaving playback silently wired to the dead stream.
+fn device_action(open: &Option<String>, current: &Option<String>) -> DeviceAction {
+    match current {
+        None if open.is_some() => DeviceAction::Forget,
+        None => DeviceAction::Nothing,
+        Some(_) if current == open => DeviceAction::Nothing,
+        Some(_) => DeviceAction::Rebuild,
+    }
+}
+
 /// Wraps the rodio output stream + sink and exposes a simple transport API.
 ///
 /// `OutputStream` is not `Send`, which is fine: the whole player lives on the
@@ -113,8 +138,16 @@ impl Player {
     /// rebuild the output stream on the new device and resume playback in place.
     pub fn poll_device(&mut self) {
         let current = Self::default_device_name();
-        if current.is_none() || current == self.device_name {
-            return;
+        match device_action(&self.device_name, &current) {
+            DeviceAction::Nothing => return,
+            DeviceAction::Forget => {
+                // The default output disappeared. Forget its name so that when a device
+                // returns -- even the same one replugged under the same name -- the next
+                // poll sees a change and rebuilds, instead of staying wired to a dead stream.
+                self.device_name = None;
+                return;
+            }
+            DeviceAction::Rebuild => {}
         }
         let path = self.current_path.clone();
         let pos = self.position();
@@ -644,6 +677,30 @@ pub(crate) fn open_source(path: &Path) -> Result<Box<dyn Source<Item = f32> + Se
 #[cfg(test)]
 mod tests {
     use super::crossfade_step;
+    use super::{device_action, DeviceAction};
+
+    #[test]
+    fn device_action_covers_the_unplug_replug_edge() {
+        let dac = || Some("USB DAC".to_string());
+        let hp = || Some("Headphones".to_string());
+
+        // Steady state: the open device is still the default -> leave it alone.
+        assert_eq!(device_action(&dac(), &dac()), DeviceAction::Nothing);
+        // Deviceless and still no device.
+        assert_eq!(device_action(&None, &None), DeviceAction::Nothing);
+
+        // Default switched (headphones plugged in) -> rebuild on the new device.
+        assert_eq!(device_action(&dac(), &hp()), DeviceAction::Rebuild);
+        // A device appears after a deviceless launch -> rebuild.
+        assert_eq!(device_action(&None, &dac()), DeviceAction::Rebuild);
+
+        // The regression: unplug the only device, then replug the SAME one.
+        // Unplug -> forget the stale name...
+        assert_eq!(device_action(&dac(), &None), DeviceAction::Forget);
+        // ...so after forgetting, the same-named device returning now rebuilds
+        // (before the fix this was Nothing, leaving audio wired to a dead stream).
+        assert_eq!(device_action(&None, &dac()), DeviceAction::Rebuild);
+    }
 
     /// Every supported codec must feed the visualizer: decode one sample per extension through
     /// the real dispatch (open_source), run it through viz::tap, and confirm the analyzer ring
