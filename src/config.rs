@@ -9,12 +9,26 @@ use serde::{Deserialize, Serialize};
 /// fails to parse and loses the whole session/prefs. Rename replaces the
 /// destination atomically on both the Windows and Linux targets.
 fn write_atomic(path: &std::path::Path, contents: &[u8]) {
+    use std::io::Write;
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     let tmp = path.with_extension("tmp");
-    if std::fs::write(&tmp, contents).is_ok() {
+    // Write the temp file and flush it all the way to disk BEFORE the rename, so a power
+    // loss can't reorder the rename ahead of the data and leave a zero-length file that
+    // then fails to parse -- which would silently drop the whole session/prefs. Only rename
+    // once the bytes are durable; on any failure, remove the temp so a half-written file
+    // isn't left lying next to the real one.
+    let wrote = (|| -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(contents)?;
+        f.sync_all()?;
+        Ok(())
+    })();
+    if wrote.is_ok() {
         let _ = std::fs::rename(&tmp, path);
+    } else {
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 
@@ -370,6 +384,26 @@ impl EqPresets {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_atomic_round_trips_and_overwrites_cleanly() {
+        let dir = std::env::temp_dir().join("linamp_write_atomic_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        // Fresh write into a directory that doesn't exist yet (create_dir_all path).
+        write_atomic(&path, b"first");
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+
+        // Overwrite in place.
+        write_atomic(&path, b"second-is-longer");
+        assert_eq!(std::fs::read(&path).unwrap(), b"second-is-longer");
+
+        // No stray temp file is left next to the target after a successful write.
+        assert!(!path.with_extension("tmp").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn eq_presets_save_replaces_by_name() {
