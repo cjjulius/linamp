@@ -1,7 +1,7 @@
 # Retro Audio Roadmap and QA Sample Cookbook
 
 Goal: make LinAmp a one-stop destination for audio. Drop in anything, past or present, and
-get sound out. Most of this roadmap is now delivered: as of v1.2.6 the retro and chiptune
+get sound out. Most of this roadmap is now delivered: as of v1.3.0 the retro and chiptune
 coverage is broad (console chiptunes, the tracker zoo, AdLib/OPL, SID, game-engine streams,
 QOA, and the full `*SF` program-music family). The two living parts of this document are the
 short list of formats still to come (and the walls we will not implement), and the
