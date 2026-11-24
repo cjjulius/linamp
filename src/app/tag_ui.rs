@@ -354,8 +354,23 @@ impl super::LinAmpApp {
                     .fill(ui.visuals().extreme_bg_color)
                     .show(ui, |ui| {
                         ui.set_min_width(624.0);
+                        // Read-only but selectable: the user can select the whole path
+                        // (Ctrl+A) and copy it (Ctrl+C) to paste into a file manager.
+                        // A single-line field scrolls horizontally rather than
+                        // truncating with an ellipsis, so the full path is always
+                        // reachable. Bound to a per-frame clone so stray edits never
+                        // stick (egui 0.29 has no read-only TextEdit); the saved path
+                        // always comes from ed.path, never this display field.
+                        // Frameless with zero margin so its height matches the old
+                        // label exactly: the window is a fixed, non-resizable size
+                        // (TAG_WINDOW_CHROME), so a taller field would clip the buttons.
+                        let mut shown = ed.info.path.clone();
                         ui.add(
-                            egui::Label::new(RichText::new(&ed.info.path).strong()).truncate(),
+                            egui::TextEdit::singleline(&mut shown)
+                                .frame(false)
+                                .margin(egui::Margin::ZERO)
+                                .desired_width(f32::INFINITY)
+                                .text_color(ui.visuals().strong_text_color()),
                         );
                     });
                 ui.add_space(4.0);
