@@ -28,9 +28,12 @@ pub(super) struct TagEditor {
     /// that one tag.
     single: bool,
     /// true for a console / chiptune format (PSF family, SID, libgme) whose native
-    /// metadata is shown read-only on the Tags tab (`v2` holds it). Editing these is
-    /// a later roadmap phase, so there is no save path for them.
+    /// metadata is held in `v2`. When `native_kind` is None it is shown read-only
+    /// (libgme formats); when Some, it is editable and saved by the native writer.
     native: bool,
+    /// The writable native format (PSF or SID), or None for a read-only native file
+    /// (libgme) or a non-native file. Drives the editable native Tags tab and save.
+    native_kind: Option<crate::native_tags::NativeKind>,
     status: String,
 }
 
@@ -68,6 +71,24 @@ fn native_fields(nt: &crate::native_tags::NativeTags) -> crate::tags::Id3Fields 
         comment: nt.comment.clone().unwrap_or_default(),
         copyright: nt.copyright.clone().unwrap_or_default(),
         ..Default::default()
+    }
+}
+
+/// Map the editor's fields back to native tags for writing. A blank field becomes
+/// `None` (cleared). Only the fields the native formats carry are taken.
+fn fields_to_native(f: &crate::tags::Id3Fields) -> crate::native_tags::NativeTags {
+    let opt = |s: &str| {
+        let s = s.trim();
+        (!s.is_empty()).then(|| s.to_string())
+    };
+    crate::native_tags::NativeTags {
+        title: opt(&f.title),
+        artist: opt(&f.artist),
+        album: opt(&f.album),
+        year: opt(&f.year),
+        genre: opt(&f.genre),
+        comment: opt(&f.comment),
+        copyright: opt(&f.copyright),
     }
 }
 
@@ -223,6 +244,7 @@ impl super::LinAmpApp {
         let (v1, v2, v1_on, v2_on, single, native) = read_editor_tags(&path);
         let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
+        let native_kind = crate::native_tags::writable_kind(&path);
         // No read-only banner: a non-editable file simply shows the Basic Info tab
         // alone (the ID3 tab is hidden). Status is for save errors only.
         let status = String::new();
@@ -238,6 +260,7 @@ impl super::LinAmpApp {
             editable,
             single,
             native,
+            native_kind,
             status,
         });
     }
@@ -249,6 +272,7 @@ impl super::LinAmpApp {
         let (v1, v2, v1_on, v2_on, single, native) = read_editor_tags(&path);
         let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
+        let native_kind = crate::native_tags::writable_kind(&path);
         // No read-only banner: a non-editable file simply shows the Basic Info tab
         // alone (the ID3 tab is hidden). Status is for save errors only.
         let status = String::new();
@@ -264,6 +288,7 @@ impl super::LinAmpApp {
             editable,
             single,
             native,
+            native_kind,
             status,
         });
     }
@@ -271,8 +296,8 @@ impl super::LinAmpApp {
     /// Write the editor's tags back to the file and refresh the playlist row.
     /// Returns `true` when the write succeeded (so the caller can close).
     pub(super) fn save_tag_editor(&mut self) -> bool {
-        let (index, path, v1, v2, v1_on, v2_on, single) = match &self.tag_editor {
-            Some(ed) if ed.editable => (
+        let (index, path, v1, v2, v1_on, v2_on, single, native_kind) = match &self.tag_editor {
+            Some(ed) if ed.editable || ed.native_kind.is_some() => (
                 ed.index,
                 ed.path.clone(),
                 ed.v1.clone(),
@@ -280,10 +305,14 @@ impl super::LinAmpApp {
                 ed.v1_on,
                 ed.v2_on,
                 ed.single,
+                ed.native_kind,
             ),
             _ => return false,
         };
-        let result = if single {
+        let result = if native_kind.is_some() {
+            // Console / chiptune native tag (PSF `[TAG]` or SID header), held in `v2`.
+            crate::native_tags::write(&path, &fields_to_native(&v2))
+        } else if single {
             // Non-MP3 formats carry one native tag, held in `v2`.
             crate::tags::write_single(&path, &v2)
         } else {
@@ -332,10 +361,19 @@ impl super::LinAmpApp {
 
     /// The tag editor window (own viewport, like preferences / library).
     pub(super) fn ui_tag_editor(&mut self, ctx: &egui::Context) {
-        let Some((editable, native, basic_rows, native_row_count)) = self
+        let Some((editable, native, native_edit, basic_rows, native_row_count)) = self
             .tag_editor
             .as_ref()
-            .map(|e| (e.editable, e.native, basic_info_rows(&e.info), native_rows(&e.v2)))
+            .map(|e| {
+                // An editable native format shows a fixed field set (PSF 7, SID 3); a
+                // read-only one shows only the fields it carries.
+                let nr = match e.native_kind {
+                    Some(crate::native_tags::NativeKind::Psf) => 7.0,
+                    Some(crate::native_tags::NativeKind::Sid) => 3.0,
+                    None => native_rows(&e.v2),
+                };
+                (e.editable, e.native, e.native_kind.is_some(), basic_info_rows(&e.info), nr)
+            })
         else {
             return;
         };
@@ -344,7 +382,8 @@ impl super::LinAmpApp {
         // ID3 tab is the tallest when the file is editable; otherwise only the
         // Basic Info tab shows, sized to its own row count.
         let box_h = tag_box_height(editable, native, basic_rows, native_row_count);
-        let win_h = box_h + TAG_WINDOW_CHROME + if editable { TAG_STATUS_H } else { 0.0 };
+        let win_h =
+            box_h + TAG_WINDOW_CHROME + if editable || native_edit { TAG_STATUS_H } else { 0.0 };
         let size = egui::vec2(660.0, win_h);
         // Keep the window on-screen: a tall editor opened near the bottom/right edge
         // would otherwise spill off the desktop.
@@ -366,7 +405,8 @@ impl super::LinAmpApp {
         ctx.show_viewport_immediate(id, builder, |ctx, _| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let ed = self.tag_editor.as_mut().unwrap();
-                let on = ed.editable;
+                // Editable for lofty formats and for writable native formats (PSF/SID).
+                let on = ed.editable || ed.native_kind.is_some();
 
                 // Escape closes the window without saving. Consume it here, before
                 // the text fields can swallow it, but let an open dropdown close
@@ -508,10 +548,34 @@ impl super::LinAmpApp {
                             None
                         }
                         TagTab::Id3 if ed.single => {
-                            if ed.native {
-                                // Console / chiptune native tags, read-only (editing is
-                                // a later roadmap phase): show just the fields the file
-                                // carries, as label/value rows, on the Tags tab.
+                            if let Some(kind) = ed.native_kind {
+                                // Editable native tags: PSF `[TAG]` or the SID header.
+                                // Show only the fields the format stores (SID has just
+                                // name/author/released); Update saves via the native
+                                // writer, preserving the rest of the file.
+                                egui::Grid::new("native_edit_grid")
+                                    .num_columns(2)
+                                    .spacing([12.0, 4.0])
+                                    .show(ui, |ui| {
+                                        let f = &mut ed.v2;
+                                        let w = 260.0;
+                                        let field = |ui: &mut egui::Ui, l: &str, v: &mut String| {
+                                            ui.label(l);
+                                            ui.add(egui::TextEdit::singleline(v).desired_width(w));
+                                            ui.end_row();
+                                        };
+                                        field(ui, "Title", &mut f.title);
+                                        field(ui, "Artist", &mut f.artist);
+                                        field(ui, "Game", &mut f.album);
+                                        if kind == crate::native_tags::NativeKind::Psf {
+                                            field(ui, "Year", &mut f.year);
+                                            field(ui, "Genre", &mut f.genre);
+                                            field(ui, "Comment", &mut f.comment);
+                                            field(ui, "Copyright", &mut f.copyright);
+                                        }
+                                    });
+                            } else if ed.native {
+                                // Read-only native tags (libgme formats: no writer yet).
                                 egui::Grid::new("native_tags_grid")
                                     .num_columns(2)
                                     .spacing([12.0, 4.0])

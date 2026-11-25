@@ -738,6 +738,18 @@ impl Track {
             return;
         }
         self.loaded = true;
+        // Reset the derived display fields first, so a reload (after a tag edit)
+        // re-derives them from the file instead of keeping stale values. This also
+        // makes the native-tag read below fire on reload: it is gated on an empty
+        // artist, which would never be true the second time without this reset.
+        // Title falls back to the filename stem, exactly as in `new`.
+        self.title = self
+            .path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Unknown".to_string());
+        self.artist = String::new();
+        self.album = String::new();
         // Whether lofty supplied a real title (not the filename fallback), so the
         // symphonia tag probe below doesn't overwrite it.
         let mut tag_title = false;
