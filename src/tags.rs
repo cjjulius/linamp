@@ -166,9 +166,14 @@ pub struct FileInfo {
 }
 
 /// Extensions LinAmp can currently *write* tags for. Reading isn't restricted.
-/// MP2/MP1 are MPEG audio too, so they carry ID3 tags like MP3.
-pub const EDITABLE_EXTS: &[&str] =
-    &["mp3", "mp2", "mp1", "mpa", "flac", "ogg", "oga", "opus", "m4a", "m4b", "mp4", "ape"];
+/// MP2/MP1 are MPEG audio too, so they carry ID3 tags like MP3. The trailing group
+/// are bonus formats that carry a native, universal tag container lofty round-trips:
+/// WavPack and Musepack both use APEv2 (same path as `.ape`), and AIFF stores an ID3
+/// chunk (the same ID3v2 frames as MP3's v2 tag, written as its single native tag).
+pub const EDITABLE_EXTS: &[&str] = &[
+    "mp3", "mp2", "mp1", "mpa", "flac", "ogg", "oga", "opus", "m4a", "m4b", "mp4", "ape",
+    "wv", "mpc", "mp+", "mpp", "aiff", "aif", "aifc",
+];
 
 /// True when `path` uses ID3 tags (the v1/v2 model), i.e. any MPEG audio layer.
 /// Other editable formats (FLAC/Ogg Vorbis comments, MP4 atoms) carry a single
@@ -663,6 +668,8 @@ fn format_label(ext: &str) -> String {
         "m4a" | "m4b" | "mp4" => "MPEG-4 / AAC",
         "wav" | "wave" => "WAV",
         "aif" | "aiff" | "aifc" => "AIFF",
+        "wv" => "WavPack",
+        "mpc" | "mp+" | "mpp" => "Musepack",
         "mid" | "midi" | "rmi" | "kar" => "MIDI",
         "mod" | "xm" | "it" | "s3m" | "mtm" | "umx" => "Tracker module",
         "" => return String::new(),
@@ -790,6 +797,7 @@ fn lofty_parses(ext: &str) -> bool {
         ext,
         "flac" | "ogg" | "oga" | "opus" | "spx" | "m4a" | "m4b" | "mp4"
             | "aac" | "wav" | "wave" | "aif" | "aiff" | "aifc" | "ape" | "wv"
+            | "mpc" | "mp+" | "mpp"
     )
 }
 
@@ -1068,11 +1076,20 @@ mod tests {
         assert!(can_edit(Path::new("song.flac")));
         assert!(can_edit(Path::new("tune.ogg")));
         assert!(can_edit(Path::new("tune.m4a")));
-        assert!(!can_edit(Path::new("sound.wav")));
+        // Bonus formats with a native tag container lofty round-trips.
+        assert!(can_edit(Path::new("song.wv"))); // WavPack, APEv2
+        assert!(can_edit(Path::new("song.mpc"))); // Musepack, APEv2
+        assert!(can_edit(Path::new("song.mp+"))); // Musepack (legacy ext)
+        assert!(can_edit(Path::new("song.aiff"))); // AIFF, ID3 chunk
+        assert!(can_edit(Path::new("song.aif")));
+        assert!(!can_edit(Path::new("sound.wav"))); // RIFF-INFO subset; held for later
         assert!(!can_edit(Path::new("noext")));
-        // Only MP3 uses the ID3 v1/v2 model; the others carry a single tag.
+        // Only MPEG audio uses the ID3 v1/v2 model; the others carry a single tag.
         assert!(uses_id3(Path::new("song.mp3")));
         assert!(!uses_id3(Path::new("song.flac")));
+        assert!(!uses_id3(Path::new("song.wv")));
+        assert!(!uses_id3(Path::new("song.mpc")));
+        assert!(!uses_id3(Path::new("song.aiff")));
     }
 
     #[test]
@@ -1149,6 +1166,53 @@ mod tests {
         assert_eq!(back.album, "QA");
         assert_eq!(back.year, "2026");
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Write the core fields to a copy of `sample` and read them back, asserting the
+    /// round-trip. Shared by the bonus-format tests below. Gated on a local sample
+    /// (qa-music is gitignored, so these skip on CI); returns early when it is absent.
+    #[cfg(test)]
+    fn assert_single_tag_round_trip(sample: &str) {
+        let src = std::path::Path::new(sample);
+        if !src.exists() {
+            return;
+        }
+        assert!(can_edit(src), "{sample} must be tag-editable");
+        let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("bin");
+        let tmp = std::env::temp_dir().join(format!("linamp_tag_rt_test.{ext}"));
+        std::fs::copy(src, &tmp).unwrap();
+        let fields = Id3Fields {
+            title: "Scale Test".into(),
+            artist: "LinAmp".into(),
+            album: "QA".into(),
+            year: "2026".into(),
+            ..Default::default()
+        };
+        write_single(&tmp, &fields).unwrap_or_else(|e| panic!("write tags to {sample}: {e:#}"));
+        let back = read_single(&tmp);
+        assert_eq!(back.title, "Scale Test", "{sample}");
+        assert_eq!(back.artist, "LinAmp", "{sample}");
+        assert_eq!(back.album, "QA", "{sample}");
+        assert_eq!(back.year, "2026", "{sample}");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn wavpack_tags_write_and_read_back() {
+        // WavPack carries APEv2, the same tag path as .ape.
+        assert_single_tag_round_trip("qa-music/format-samples/sample.wv");
+    }
+
+    #[test]
+    fn musepack_tags_write_and_read_back() {
+        // Musepack carries APEv2, the same tag path as .ape.
+        assert_single_tag_round_trip("qa-music/format-samples/sample.mpc");
+    }
+
+    #[test]
+    fn aiff_tags_write_and_read_back() {
+        // AIFF stores an ID3 chunk (ID3v2 frames) as its single native tag.
+        assert_single_tag_round_trip("qa-music/format-samples/sample.aiff");
     }
 
     #[test]
