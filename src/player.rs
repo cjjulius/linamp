@@ -387,6 +387,24 @@ impl Player {
             }
         }
 
+        // Musepack decodes the whole file up front (the oxideav-musepack crate has no
+        // frame-streaming decode), which is multiple seconds for a long track. Run that
+        // decode on a background thread so it never blocks the UI: the source reports its
+        // format from a header read and yields silence until the samples land, then plays
+        // from the start. Pass its ready flag so a crossfade holds its fade-in until real
+        // audio flows, the same as the CD path (#160). Every other format opens cheaply
+        // through the shared dispatch below.
+        if crate::mpc::is_mpc(path) {
+            let source = crate::mpc::open_mpc_streaming(path)?;
+            let ready = source.ready_flag();
+            self.append_source(source, Some(ready), true)?;
+            self.current_path = Some(path.to_path_buf());
+            self.current_url = None;
+            self.stream_title = None;
+            self.state = PlayState::Playing;
+            return Ok(());
+        }
+
         // Decode or synthesize the file to a rodio `Source` through the shared dispatch, then
         // feed it into the EQ / analyzer / balance chain. The routing lives in open_source so
         // the exact same path backs both playback and the viz-coverage test.

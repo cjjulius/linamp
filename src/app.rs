@@ -1569,12 +1569,7 @@ impl LinAmpApp {
         let mut i = idx.min(len - 1);
         let mut skipped = 0;
         for _ in 0..len {
-            // DIAGNOSTIC (fix/queue-advance-freeze): time each synchronous stage of the
-            // advance so the status bar shows where a stall on wrap/next goes. Remove
-            // before merging; the real fix likely moves this work off the UI thread.
-            let t_load = std::time::Instant::now();
             self.playlist.ensure_loaded(i);
-            let load_ms = t_load.elapsed().as_millis();
             let Some(track) = self.playlist.tracks.get(i).cloned() else {
                 break;
             };
@@ -1587,10 +1582,7 @@ impl LinAmpApp {
                 i = (i + 1) % len;
                 continue;
             }
-            let t_open = std::time::Instant::now();
-            let open_res = self.player.play_file(&track.path);
-            let open_ms = t_open.elapsed().as_millis();
-            match open_res {
+            match self.player.play_file(&track.path) {
                 Ok(()) => {
                     self.playlist.current = Some(i);
                     // Scroll the playlist so the now-playing track is in view (it may
@@ -1600,19 +1592,12 @@ impl LinAmpApp {
                     self.seek_preview = 0.0;
                     self.marquee_offset = 0.0;
                     self.apply_eq();
-                    let t_cover = std::time::Instant::now();
                     self.art_bytes = crate::playlist::read_cover(&track.path);
-                    let cover_ms = t_cover.elapsed().as_millis();
                     self.art_dirty = true;
-                    // DIAGNOSTIC: append per-stage timings so a wrap/next stall is visible.
-                    let timing = format!(" [load {load_ms}ms open {open_ms}ms cover {cover_ms}ms]");
                     self.status = if skipped == 0 {
-                        format!("Playing: {}{timing}", track.display_name())
+                        format!("Playing: {}", track.display_name())
                     } else {
-                        format!(
-                            "Playing: {} (skipped {skipped} unplayable){timing}",
-                            track.display_name()
-                        )
+                        format!("Playing: {} (skipped {skipped} unplayable)", track.display_name())
                     };
                     // Record the play for the library's Most/Recently Played views
                     // (no-op when the track isn't in the library).
