@@ -86,6 +86,12 @@ pub struct Player {
     /// held (current track at full, CD silent) until this flips, so the CD's spin-up
     /// doesn't blend against silence (#160). None for an ordinary crossfade.
     incoming_ready: Option<Arc<AtomicBool>>,
+    /// A track whose whole-file decode is still running on a background thread, held
+    /// here instead of appended to the sink so the playback clock and visualizer stay
+    /// idle (a "loading" state) while the UI thread stays responsive. `poll_load`
+    /// appends it the moment its decode lands. Only Musepack's background decode uses
+    /// this today (the other side-decoders open cheaply).
+    pending: Option<crate::mpc::MpcSource>,
 }
 
 impl Player {
@@ -118,6 +124,7 @@ impl Player {
             fade_out: 1.0,
             fade_in: 1.0,
             incoming_ready: None,
+            pending: None,
         }
     }
 
@@ -295,6 +302,8 @@ impl Player {
     where
         S: Source<Item = f32> + Send + 'static,
     {
+        // Appending a real source supersedes any track that was still loading.
+        self.pending = None;
         self.viz.clear();
         self.viz.set_rate(source.sample_rate());
         // Capture the source's own length before it's consumed into the sink. For
@@ -396,11 +405,32 @@ impl Player {
         // through the shared dispatch below.
         if crate::mpc::is_mpc(path) {
             let source = crate::mpc::open_mpc_streaming(path)?;
-            let ready = source.ready_flag();
-            self.append_source(source, Some(ready), true)?;
             self.current_path = Some(path.to_path_buf());
             self.current_url = None;
             self.stream_title = None;
+            // The length is read from the header up front, so the scrub bar shows the
+            // full track even while it loads.
+            self.current_total = source.total_duration();
+            if source.ready_flag().load(Ordering::Acquire) {
+                // The eager fallback (unreadable header) already decoded: play now.
+                self.append_source(source, None, true)?;
+            } else {
+                // The decode is still running on its background thread. Stop whatever
+                // was playing and hold the track in `pending` instead of appending it,
+                // so the clock and visualizer stay idle (loading) until the audio is
+                // ready, while the UI thread stays free. `poll_load` appends it then.
+                if let Some(sink) = self.sink.take() {
+                    sink.stop();
+                }
+                if let Some(f) = self.fading.take() {
+                    f.stop();
+                }
+                self.incoming_ready = None;
+                self.fade_in = 1.0;
+                self.fade_out = 1.0;
+                self.viz.clear();
+                self.pending = Some(source);
+            }
             self.state = PlayState::Playing;
             return Ok(());
         }
@@ -475,6 +505,7 @@ impl Player {
         if let Some(f) = self.fading.take() {
             f.stop(); // also stop any outgoing crossfade track
         }
+        self.pending = None; // cancel a track that was still loading
         self.state = PlayState::Stopped;
         self.current_url = None;
         self.stream_title = None;
@@ -487,10 +518,38 @@ impl Player {
 
     /// Current playback position within the track.
     pub fn position(&self) -> Duration {
+        // A track whose decode hasn't landed yet reports position 0, so the clock and
+        // scrub bar stay at the start until its audio actually begins (no silence is
+        // played and counted).
+        if self.pending.is_some() {
+            return Duration::ZERO;
+        }
         self.sink
             .as_ref()
             .map(|s| s.get_pos())
             .unwrap_or_default()
+    }
+
+    /// Append a track that was loading in the background once its decode has landed.
+    /// Called every UI frame. A no-op until the pending track is ready; on a decode
+    /// failure the source is empty, so it ends at once and the player advances.
+    pub fn poll_load(&mut self) {
+        let ready = self
+            .pending
+            .as_ref()
+            .is_some_and(|s| s.ready_flag().load(Ordering::Acquire));
+        if !ready {
+            return;
+        }
+        if let Some(source) = self.pending.take() {
+            let paused = self.state == PlayState::Paused;
+            if self.append_source(source, None, true).is_ok() && paused {
+                // Honour a pause requested while the track was still loading.
+                if let Some(sink) = &self.sink {
+                    sink.pause();
+                }
+            }
+        }
     }
 
     /// Length of the source currently playing, if it reported one. Used to backfill
@@ -522,7 +581,10 @@ impl Player {
     /// True once the current track has played out (sink drained) while we still
     /// think we're playing. Used by the UI to auto-advance.
     pub fn finished(&self) -> bool {
-        matches!(self.state, PlayState::Playing | PlayState::Paused)
+        // A track still loading in the background hasn't started yet: the sink is
+        // empty, but we must not auto-advance past it.
+        self.pending.is_none()
+            && matches!(self.state, PlayState::Playing | PlayState::Paused)
             && self.sink.as_ref().map(|s| s.empty()).unwrap_or(false)
     }
 }

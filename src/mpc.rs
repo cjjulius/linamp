@@ -358,7 +358,7 @@ mod tests {
         let Some(mpc) = sample() else { return };
         let eager: Vec<f32> = open_mpc(&mpc).unwrap().collect();
 
-        let mut src = open_mpc_streaming(&mpc).unwrap();
+        let src = open_mpc_streaming(&mpc).unwrap();
         // Format is known before the decode lands (header-only read).
         assert_eq!(src.channels(), 2, "stereo");
         assert_eq!(src.sample_rate(), 44_100);
