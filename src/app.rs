@@ -4036,6 +4036,11 @@ impl eframe::App for LinAmpApp {
         // the CD reader thread has let go of the drive (#191).
         self.poll_pending_eject(ctx);
 
+        // Start a track whose background decode (Musepack) has just landed. Held
+        // until now so the clock and visualizer stayed idle while it loaded; appended
+        // here so `finished()` below sees the real sink this same frame.
+        self.player.poll_load();
+
         // Advance any in-progress crossfade, then start one when the current track
         // nears its end (begins the next track overlapping this one's tail).
         self.player.tick_crossfade(dt);
