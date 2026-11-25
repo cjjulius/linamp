@@ -461,10 +461,11 @@ impl super::LinAmpApp {
                             None
                         }
                         TagTab::Id3 if ed.single => {
-                            // One native tag (FLAC/Ogg Vorbis comments, MP4 atoms):
+                            // One native tag (FLAC/Ogg Vorbis comments, MP4 atoms,
+                            // APEv2 for WavPack/Musepack/Monkey's Audio, AIFF ID3):
                             // a single column, no ID3v1/ID3v2 split or copy buttons.
-                            ui.label(RichText::new("Tags").strong());
-                            ui.add_space(2.0);
+                            // No "Tags" heading here: the tab itself is labelled "Tags",
+                            // so a heading would just repeat it.
                             ui.add_enabled_ui(on, |ui| {
                                 tag_fields_grid(ui, &mut ed.v2, "single_grid");
                             });
