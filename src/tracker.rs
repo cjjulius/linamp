@@ -170,7 +170,7 @@ mod tests {
     fn open_tracker_renders_a_module() {
         // End-to-end render check against the xmrs example module, when present
         // (qa-music is local/gitignored, so this skips on a bare checkout/CI).
-        let p = Path::new("qa-music/note.xm");
+        let p = Path::new("qa-music/format-samples/note.xm");
         if !p.exists() {
             return;
         }
@@ -186,7 +186,7 @@ mod tests {
         // The user-facing guarantee: a module plays for exactly the time the playlist
         // shows, never past it (looping modules used to run on past the reported
         // length). Uses the local sample when present.
-        let p = Path::new("qa-music/Generated_tests/sample_scale.mod");
+        let p = Path::new("qa-music/format-samples/sample_scale.mod");
         if !p.exists() {
             return;
         }

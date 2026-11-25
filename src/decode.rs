@@ -514,7 +514,7 @@ mod tests {
         // MPEG Layer II needs symphonia's "mp2" feature (we also enable mp1); with
         // only "mp3" it failed to decode with "unsupported codec" (#157). Uses the
         // local qa sample when present (qa-music is gitignored, so this skips on CI).
-        let p = Path::new("qa-music/Generated_tests/sample_scale.mp2");
+        let p = Path::new("qa-music/format-samples/sample_scale.mp2");
         if !p.exists() {
             return;
         }
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn position_advances_after_seeking_mp3_to_start_source_only() {
         use rodio::Source;
-        let p = Path::new("qa-music/SoundHelix-Song-2.mp3");
+        let p = Path::new("qa-music/format-samples/SoundHelix-Song-2.mp3");
         if !p.exists() {
             return;
         }
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn position_advances_after_seeking_mp3_to_start_full_chain() {
         use rodio::Source;
-        let p = Path::new("qa-music/SoundHelix-Song-2.mp3");
+        let p = Path::new("qa-music/format-samples/SoundHelix-Song-2.mp3");
         if !p.exists() {
             return;
         }
@@ -728,7 +728,7 @@ mod tests {
     fn probe_duration_reads_lengths_lofty_cannot() {
         // Raw .aac and .mpa are the cases lofty can't measure; the symphonia probe
         // fills them in. qa-music is local/gitignored, so skip on a bare checkout.
-        for (f, secs) in [("qa-music/scale.aac", 59.7), ("qa-music/scale.mpa", 60.0)] {
+        for (f, secs) in [("qa-music/format-samples/scale.aac", 59.7), ("qa-music/format-samples/scale.mpa", 60.0)] {
             let p = Path::new(f);
             if !p.exists() {
                 continue;

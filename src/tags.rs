@@ -1625,7 +1625,7 @@ mod tests {
     fn minimal_flac_round_trips_tags_after_fix() {
         // End-to-end on a real minimal (rip-style) FLAC: without the fix the write is
         // silently dropped. Gated on a local sample (skips on CI).
-        let src = Path::new("qa-music/rip_testing/Green Day - Bobby Sox.flac");
+        let src = Path::new("qa-music/format-samples/Green Day - Bobby Sox.flac");
         if !src.exists() {
             return;
         }
