@@ -256,6 +256,53 @@ pub fn duration(path: &Path) -> Option<Duration> {
     ms.map(|ms| Duration::from_millis(ms as u64))
 }
 
+/// Read a chiptune's native metadata (from libgme's info record for its first
+/// subsong) for the playlist and the Basic Info tab, without rendering audio.
+/// song -> title, author -> artist, game -> album, plus copyright and comment.
+/// `None` when the file is not a libgme format or carries no usable metadata.
+pub fn tags(path: &Path) -> Option<crate::native_tags::NativeTags> {
+    if !is_gme(path) {
+        return None;
+    }
+    let cpath = CString::new(path.as_os_str().to_string_lossy().as_bytes()).ok()?;
+    let mut emu: *mut MusicEmu = std::ptr::null_mut();
+    if !unsafe { gme_open_file(cpath.as_ptr(), &mut emu, OUT_RATE as c_int) }.is_null()
+        || emu.is_null()
+    {
+        return None;
+    }
+    let mut info: *mut GmeInfo = std::ptr::null_mut();
+    // `gme_track_info` returns null on success (the error-string convention).
+    let tags = if unsafe { gme_track_info(emu, &mut info, 0) }.is_null() && !info.is_null() {
+        let i = unsafe { &*info };
+        // A libgme info string is UTF-8; null or blank fields become None.
+        let s = |p: *const c_char| -> Option<String> {
+            if p.is_null() {
+                return None;
+            }
+            let v = unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().trim().to_string();
+            (!v.is_empty()).then_some(v)
+        };
+        let t = crate::native_tags::NativeTags {
+            title: s(i.song),
+            artist: s(i.author),
+            album: s(i.game),
+            copyright: s(i.copyright),
+            comment: s(i.comment),
+            ..Default::default()
+        };
+        unsafe { gme_free_info(info) };
+        (t.title.is_some() || t.artist.is_some() || t.album.is_some()).then_some(t)
+    } else {
+        if !info.is_null() {
+            unsafe { gme_free_info(info) };
+        }
+        None
+    };
+    unsafe { gme_delete(emu) };
+    tags
+}
+
 // A GYM register dump is a log of hardware writes clocked at one frame per 1/60 s (NTSC
 // Genesis), so its length is the frame count over 60. These are the raw-GYM commands; an
 // unknown byte means the stream is not a plain register log we can trust, so we give up.

@@ -27,22 +27,56 @@ pub(super) struct TagEditor {
     /// shows one "Tags" column instead of the ID3v1/ID3v2 pair, and saving writes
     /// that one tag.
     single: bool,
+    /// true for a console / chiptune format (PSF family, SID, libgme) whose native
+    /// metadata is shown read-only on the Tags tab (`v2` holds it). Editing these is
+    /// a later roadmap phase, so there is no save path for them.
+    native: bool,
     status: String,
 }
 
-/// Read a file's tags for the editor. MP3 keeps the ID3v1/v2 pair; other formats
-/// read their single native tag into `v2` (shown as one "Tags" column). Returns
-/// `(v1, v2, v1_on, v2_on, single)`.
+/// Read a file's tags for the editor. MP3 keeps the ID3v1/v2 pair; other editable
+/// formats read their single native tag into `v2` (shown as one "Tags" column).
+/// A console / chiptune format reads its read-only native metadata into `v2` and
+/// sets the `native` flag. Returns `(v1, v2, v1_on, v2_on, single, native)`.
 fn read_editor_tags(
     path: &std::path::Path,
-) -> (crate::tags::Id3Fields, crate::tags::Id3Fields, bool, bool, bool) {
+) -> (crate::tags::Id3Fields, crate::tags::Id3Fields, bool, bool, bool, bool) {
     if crate::tags::uses_id3(path) {
         let (v1, v2) = crate::tags::read_id3(path);
         let (on1, on2) = (v1.is_some(), v2.is_some());
-        (v1.unwrap_or_default(), v2.unwrap_or_default(), on1, on2, false)
+        (v1.unwrap_or_default(), v2.unwrap_or_default(), on1, on2, false, false)
+    } else if crate::tags::can_edit(path) {
+        (Default::default(), crate::tags::read_single(path), false, true, true, false)
+    } else if let Some(nt) = crate::native_tags::read(path) {
+        // Console / chiptune native metadata, shown read-only on the Tags tab.
+        (Default::default(), native_fields(&nt), false, true, true, true)
     } else {
-        (Default::default(), crate::tags::read_single(path), false, true, true)
+        // MIDI, tracker modules, untagged files: Basic Info only, no Tags tab.
+        (Default::default(), Default::default(), false, false, true, false)
     }
+}
+
+/// Map a console/chiptune file's native tags into the shared field set for the
+/// editor's read-only Tags tab. Only the fields these formats carry are filled.
+fn native_fields(nt: &crate::native_tags::NativeTags) -> crate::tags::Id3Fields {
+    crate::tags::Id3Fields {
+        title: nt.title.clone().unwrap_or_default(),
+        artist: nt.artist.clone().unwrap_or_default(),
+        album: nt.album.clone().unwrap_or_default(),
+        year: nt.year.clone().unwrap_or_default(),
+        genre: nt.genre.clone().unwrap_or_default(),
+        comment: nt.comment.clone().unwrap_or_default(),
+        copyright: nt.copyright.clone().unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+/// Rows the read-only native Tags tab draws: one per non-empty field, plus the
+/// read-only note line, so the window is sized to fit it.
+fn native_rows(f: &crate::tags::Id3Fields) -> f32 {
+    let fields = [&f.title, &f.artist, &f.album, &f.year, &f.genre, &f.comment, &f.copyright];
+    let n = fields.iter().filter(|s| !s.trim().is_empty()).count();
+    n as f32 + 1.0
 }
 
 /// One grid row (label + field) in points, including the grid's vertical
@@ -86,8 +120,16 @@ fn basic_info_rows(i: &crate::tags::FileInfo) -> f32 {
 /// is tallest: 15 fields (see `tag_fields_grid`), the 2-line Comment counting as
 /// an extra row, plus a header row. Otherwise only the Basic Info tab shows, sized
 /// to its actual row count. Keep the ID3 count in step with the render code.
-fn tag_box_height(editable: bool, basic_rows: f32) -> f32 {
-    let rows = if editable { 17.0 } else { basic_rows };
+fn tag_box_height(editable: bool, native: bool, basic_rows: f32, native_rows: f32) -> f32 {
+    let rows = if editable {
+        17.0
+    } else if native {
+        // Two visible tabs (Basic Info + read-only Tags); size to the taller so
+        // switching between them does not resize the window.
+        basic_rows.max(native_rows)
+    } else {
+        basic_rows
+    };
     rows * TAG_ROW_H
 }
 
@@ -178,7 +220,7 @@ impl super::LinAmpApp {
             self.cd_tag_view = Some(track.clone());
             return;
         }
-        let (v1, v2, v1_on, v2_on, single) = read_editor_tags(&path);
+        let (v1, v2, v1_on, v2_on, single, native) = read_editor_tags(&path);
         let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
         // No read-only banner: a non-editable file simply shows the Basic Info tab
@@ -195,6 +237,7 @@ impl super::LinAmpApp {
             tab: TagTab::Basic,
             editable,
             single,
+            native,
             status,
         });
     }
@@ -203,7 +246,7 @@ impl super::LinAmpApp {
     /// not be in the playlist). `index` is a sentinel so saving doesn't touch a
     /// playlist row.
     pub(super) fn open_tag_editor_path(&mut self, path: std::path::PathBuf) {
-        let (v1, v2, v1_on, v2_on, single) = read_editor_tags(&path);
+        let (v1, v2, v1_on, v2_on, single, native) = read_editor_tags(&path);
         let info = crate::tags::read_info(&path);
         let editable = crate::tags::can_edit(&path);
         // No read-only banner: a non-editable file simply shows the Basic Info tab
@@ -220,6 +263,7 @@ impl super::LinAmpApp {
             tab: TagTab::Basic,
             editable,
             single,
+            native,
             status,
         });
     }
@@ -288,10 +332,10 @@ impl super::LinAmpApp {
 
     /// The tag editor window (own viewport, like preferences / library).
     pub(super) fn ui_tag_editor(&mut self, ctx: &egui::Context) {
-        let Some((editable, basic_rows)) = self
+        let Some((editable, native, basic_rows, native_row_count)) = self
             .tag_editor
             .as_ref()
-            .map(|e| (e.editable, basic_info_rows(&e.info)))
+            .map(|e| (e.editable, e.native, basic_info_rows(&e.info), native_rows(&e.v2)))
         else {
             return;
         };
@@ -299,7 +343,7 @@ impl super::LinAmpApp {
         // content is clipped and the height doesn't jump when switching tabs. The
         // ID3 tab is the tallest when the file is editable; otherwise only the
         // Basic Info tab shows, sized to its own row count.
-        let box_h = tag_box_height(editable, basic_rows);
+        let box_h = tag_box_height(editable, native, basic_rows, native_row_count);
         let win_h = box_h + TAG_WINDOW_CHROME + if editable { TAG_STATUS_H } else { 0.0 };
         let size = egui::vec2(660.0, win_h);
         // Keep the window on-screen: a tall editor opened near the bottom/right edge
@@ -400,7 +444,10 @@ impl super::LinAmpApp {
                         // tab is Alt-A (underline the a) since Alt-T is taken by the
                         // "Copy to ID3v1" button on MP3.
                         let (tag_label, tag_pos) = if ed.single { ("Tags", 1) } else { ("ID3", 0) };
-                        let i = on.then(|| tab_btn(ui, tag_label, tag_pos, ed.tab == TagTab::Id3));
+                        // Show the second tab for editable files and for console /
+                        // chiptune files whose native tags we display read-only.
+                        let i = (on || ed.native)
+                            .then(|| tab_btn(ui, tag_label, tag_pos, ed.tab == TagTab::Id3));
                         (b, i)
                     })
                     .inner;
@@ -412,7 +459,7 @@ impl super::LinAmpApp {
                         ed.tab = TagTab::Id3;
                     }
                 }
-                if !on {
+                if !on && !ed.native {
                     ed.tab = TagTab::Basic;
                 }
 
@@ -461,14 +508,41 @@ impl super::LinAmpApp {
                             None
                         }
                         TagTab::Id3 if ed.single => {
-                            // One native tag (FLAC/Ogg Vorbis comments, MP4 atoms,
-                            // APEv2 for WavPack/Musepack/Monkey's Audio, AIFF ID3):
-                            // a single column, no ID3v1/ID3v2 split or copy buttons.
-                            // No "Tags" heading here: the tab itself is labelled "Tags",
-                            // so a heading would just repeat it.
-                            ui.add_enabled_ui(on, |ui| {
-                                tag_fields_grid(ui, &mut ed.v2, "single_grid");
-                            });
+                            if ed.native {
+                                // Console / chiptune native tags, read-only (editing is
+                                // a later roadmap phase): show just the fields the file
+                                // carries, as label/value rows, on the Tags tab.
+                                egui::Grid::new("native_tags_grid")
+                                    .num_columns(2)
+                                    .spacing([12.0, 4.0])
+                                    .show(ui, |ui| {
+                                        let f = &ed.v2;
+                                        let mut row = |k: &str, v: &str| {
+                                            if !v.trim().is_empty() {
+                                                ui.label(k);
+                                                ui.label(v);
+                                                ui.end_row();
+                                            }
+                                        };
+                                        row("Title", &f.title);
+                                        row("Artist", &f.artist);
+                                        row("Game", &f.album);
+                                        row("Year", &f.year);
+                                        row("Genre", &f.genre);
+                                        row("Comment", &f.comment);
+                                        row("Copyright", &f.copyright);
+                                    });
+                                ui.add_space(4.0);
+                                ui.label(RichText::new("Read-only").weak());
+                            } else {
+                                // One editable native tag (FLAC/Ogg Vorbis comments, MP4
+                                // atoms, APEv2 for WavPack/Musepack/Monkey's Audio, AIFF
+                                // ID3): a single column, no ID3v1/ID3v2 split or copy
+                                // buttons. No "Tags" heading; the tab already says "Tags".
+                                ui.add_enabled_ui(on, |ui| {
+                                    tag_fields_grid(ui, &mut ed.v2, "single_grid");
+                                });
+                            }
                             None
                         }
                         TagTab::Id3 => {
@@ -590,13 +664,12 @@ impl super::LinAmpApp {
                 let mut do_copy_to = k_to && can_copy;
                 let mut do_copy_from = k_from && can_copy;
                 ui.horizontal(|ui| {
-                    // Update and the copy buttons only apply to the ID3 tab.
-                    if id3 {
-                        ui.add_enabled_ui(on, |ui| {
-                            if ui.button(mnem("Update", 0)).clicked() {
-                                do_save = true;
-                            }
-                        });
+                    // Update and the copy buttons only apply to an editable Tags/ID3
+                    // tab; a read-only native tab has no Update button.
+                    if id3 && on {
+                        if ui.button(mnem("Update", 0)).clicked() {
+                            do_save = true;
+                        }
                     }
                     if ui.button(mnem("Cancel", 0)).clicked() {
                         close = true;

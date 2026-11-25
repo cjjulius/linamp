@@ -47,6 +47,7 @@ mod twosf;
 mod gsf;
 #[cfg(feature = "qoa")]
 mod qoa;
+mod native_tags;
 mod cue;
 mod flv;
 mod icon;

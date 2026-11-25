@@ -792,6 +792,31 @@ impl Track {
                 }
             }
         }
+        // Console / chiptune formats (the PSF family, SID, libgme chiptunes) keep
+        // their metadata in format-native fields that neither lofty nor symphonia
+        // reads, so a bare artist here means they still show the filename. Fill
+        // title / artist / album from those native fields when that is the case.
+        if self.artist.trim().is_empty() {
+            if let Some(nt) = crate::native_tags::read(&self.path) {
+                if let Some(t) = nt.title {
+                    if !t.trim().is_empty() {
+                        self.title = t;
+                    }
+                }
+                if let Some(a) = nt.artist {
+                    if !a.trim().is_empty() {
+                        self.artist = a;
+                    }
+                }
+                if self.album.trim().is_empty() {
+                    if let Some(al) = nt.album {
+                        if !al.trim().is_empty() {
+                            self.album = al;
+                        }
+                    }
+                }
+            }
+        }
         // Formats lofty can't read (MIDI, tracker modules) still have a known
         // length; fill it in so the playlist shows a time for them too. The
         // symphonia probe is the last resort, it reads the length lofty misses on
