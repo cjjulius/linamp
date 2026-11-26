@@ -142,13 +142,17 @@ fn sid_tags(path: &Path) -> Option<NativeTags> {
 }
 
 /// A console/chiptune format whose native tags LinAmp can edit (write back). The
-/// gme formats (SPC/VGM/NSF/...) are read-only for now; their writers come later.
+/// remaining gme formats (NSF/GBS/AY/...) and gzip-compressed `.vgz` are read-only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeKind {
     /// The PSF family: tags live in the appended `[TAG]` block.
     Psf,
     /// SID (PSID/RSID): name/author/released in the fixed header.
     Sid,
+    /// VGM (uncompressed `.vgm`): tags in the trailing GD3 block (UTF-16LE).
+    Vgm,
+    /// SPC (SNES SPC700): tags in the fixed ID666 header.
+    Spc,
 }
 
 /// The writable native kind for `path`, or `None` when LinAmp has no writer for it
@@ -172,6 +176,11 @@ pub fn writable_kind(path: &Path) -> Option<NativeKind> {
         && matches!(magic(4).as_slice(), b"PSID" | b"RSID")
     {
         Some(NativeKind::Sid)
+    } else if ext == "vgm" && magic(4) == b"Vgm " {
+        // Uncompressed VGM only; a gzip-compressed .vgz stays read-only for now.
+        Some(NativeKind::Vgm)
+    } else if ext == "spc" && magic(27) == b"SNES-SPC700 Sound File Data" {
+        Some(NativeKind::Spc)
     } else {
         None
     }
@@ -186,6 +195,8 @@ pub fn write(path: &Path, t: &NativeTags) -> anyhow::Result<()> {
     match writable_kind(path) {
         Some(NativeKind::Psf) => write_psf(path, t),
         Some(NativeKind::Sid) => write_sid(path, t),
+        Some(NativeKind::Vgm) => write_vgm(path, t),
+        Some(NativeKind::Spc) => write_spc(path, t),
         None => anyhow::bail!("no native tag writer for {}", path.display()),
     }
 }
@@ -305,6 +316,117 @@ fn write_sid(path: &Path, t: &NativeTags) -> anyhow::Result<()> {
     put(&mut data, 0x16, &t.title);
     put(&mut data, 0x36, &t.artist);
     put(&mut data, 0x56, &t.album);
+    atomic_write(path, &data)
+}
+
+/// Read a UTF-16LE null-terminated string at `pos`; returns it and the index just
+/// past the terminator (GD3 strings are packed this way).
+fn read_utf16z(data: &[u8], pos: usize) -> (String, usize) {
+    let mut units = Vec::new();
+    let mut p = pos;
+    while p + 2 <= data.len() {
+        let u = u16::from_le_bytes([data[p], data[p + 1]]);
+        p += 2;
+        if u == 0 {
+            break;
+        }
+        units.push(u);
+    }
+    (String::from_utf16_lossy(&units), p)
+}
+
+/// Rewrite a VGM file's trailing GD3 tag block (UTF-16LE) with the edited English
+/// fields, keeping the Japanese variants and the system/date/dumper/notes. Creates
+/// a GD3 if the file has none. The GD3 is the last block, so this replaces it and
+/// updates the GD3 offset (0x14) and EOF offset (0x04) in the header.
+fn write_vgm(path: &Path, t: &NativeTags) -> anyhow::Result<()> {
+    use anyhow::anyhow;
+    let data = fs::read(path)?;
+    if data.len() < 0x40 || &data[0..4] != b"Vgm " {
+        return Err(anyhow!("not a VGM file: {}", path.display()));
+    }
+    // GD3 offset is relative to 0x14; 0 means there is no GD3 yet.
+    let gd3_rel = u32::from_le_bytes([data[0x14], data[0x15], data[0x16], data[0x17]]) as usize;
+    // The 11 GD3 strings, parsed from the existing block or left blank.
+    let mut strings: Vec<String> = vec![String::new(); 11];
+    let mut gd3_start = data.len(); // default: append at EOF when there is no GD3
+    if gd3_rel != 0 {
+        let off = 0x14 + gd3_rel;
+        if off + 12 <= data.len() && &data[off..off + 4] == b"Gd3 " {
+            gd3_start = off;
+            let mut p = off + 12; // past "Gd3 "(4) + version(4) + length(4)
+            for s in strings.iter_mut() {
+                let (val, next) = read_utf16z(&data, p);
+                *s = val;
+                p = next;
+            }
+        }
+    }
+    // Update only the English fields; an empty edit clears that field.
+    let set = |strings: &mut [String], i: usize, v: &Option<String>| {
+        strings[i] = v.as_deref().unwrap_or("").trim().replace('\0', " ");
+    };
+    set(&mut strings, 0, &t.title); // track name (EN)
+    set(&mut strings, 2, &t.album); // game name (EN)
+    set(&mut strings, 6, &t.artist); // author (EN)
+
+    let mut body: Vec<u8> = Vec::new();
+    for s in &strings {
+        for u in s.encode_utf16() {
+            body.extend_from_slice(&u.to_le_bytes());
+        }
+        body.extend_from_slice(&[0, 0]); // null terminator
+    }
+    let mut out = Vec::with_capacity(gd3_start + 12 + body.len());
+    out.extend_from_slice(&data[..gd3_start]); // everything before the old GD3
+    out.extend_from_slice(b"Gd3 ");
+    out.extend_from_slice(&0x0100u32.to_le_bytes()); // GD3 version 1.00
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(&body);
+    // Fix up the header offsets (both relative).
+    out[0x14..0x18].copy_from_slice(&((gd3_start - 0x14) as u32).to_le_bytes());
+    let eof_rel = (out.len() - 0x04) as u32;
+    out[0x04..0x08].copy_from_slice(&eof_rel.to_le_bytes());
+    atomic_write(path, &out)
+}
+
+/// Overwrite a SPC file's ID666 header tags in place: song title (0x2E), game
+/// (0x4E) and comment (0x7E) at fixed offsets, and artist at 0xB1 (text ID666) or
+/// 0xB0 (binary ID666). Each is a 32-byte ISO-8859-1 field. The file size and the
+/// SPC RAM/DSP state (0x100 on) are untouched.
+fn write_spc(path: &Path, t: &NativeTags) -> anyhow::Result<()> {
+    use anyhow::anyhow;
+    let mut data = fs::read(path)?;
+    if data.len() < 0x100 || &data[0..27] != b"SNES-SPC700 Sound File Data" {
+        return Err(anyhow!("not a SPC file: {}", path.display()));
+    }
+    // Mark the header as carrying an ID666 tag (0x23: 26 = present, 27 = absent),
+    // since we are writing one.
+    data[0x23] = 26;
+    let put = |data: &mut [u8], off: usize, len: usize, s: &Option<String>| {
+        let field = &mut data[off..off + len];
+        field.fill(0);
+        if let Some(v) = s {
+            let bytes: Vec<u8> = v
+                .trim()
+                .chars()
+                .map(|c| if (c as u32) <= 0xFF { c as u8 } else { b'?' })
+                .take(len - 1)
+                .collect();
+            field[..bytes.len()].copy_from_slice(&bytes);
+        }
+    };
+    put(&mut data, 0x2E, 32, &t.title); // song title
+    put(&mut data, 0x4E, 32, &t.album); // game title
+    put(&mut data, 0x7E, 32, &t.comment); // comment
+    // The artist offset depends on text vs binary ID666 (the length/fade region at
+    // 0xA9..0xB0 differs). Text format holds ASCII digits/spaces/nulls there, so
+    // pick 0xB1 then, else 0xB0. A misread only nudges the tag, never the audio.
+    let text = data[0xA9..0xB1].iter().all(|&b| b.is_ascii_digit() || b == 0 || b == b' ');
+    let artist_off = if text { 0xB1 } else { 0xB0 };
+    if artist_off + 32 <= data.len() {
+        put(&mut data, artist_off, 32, &t.artist);
+    }
     atomic_write(path, &data)
 }
 
@@ -437,5 +559,111 @@ mod tests {
         std::fs::write(&dsf, b"DSD \0\0\0\0").unwrap();
         assert_eq!(writable_kind(&dsf), None);
         let _ = std::fs::remove_file(&dsf);
+
+        let vgm = std::env::temp_dir().join("linamp_wk.vgm");
+        std::fs::write(&vgm, b"Vgm \0\0\0\0").unwrap();
+        assert_eq!(writable_kind(&vgm), Some(NativeKind::Vgm));
+        let _ = std::fs::remove_file(&vgm);
+
+        let spc = std::env::temp_dir().join("linamp_wk.spc");
+        std::fs::write(&spc, b"SNES-SPC700 Sound File Data v0.30").unwrap();
+        assert_eq!(writable_kind(&spc), Some(NativeKind::Spc));
+        let _ = std::fs::remove_file(&spc);
+    }
+
+    #[test]
+    fn vgm_gd3_write_updates_english_fields_and_preserves_the_rest() {
+        // Minimal VGM: 0x40 header + 4 bytes of "data", then a GD3 with all 11
+        // strings set so the non-edited ones can be checked for survival.
+        let mut data = vec![0u8; 0x40];
+        data[0..4].copy_from_slice(b"Vgm ");
+        let vgm_data = b"DATA";
+        data.extend_from_slice(vgm_data);
+        let gd3_start = data.len();
+        data[0x14..0x18].copy_from_slice(&((gd3_start - 0x14) as u32).to_le_bytes());
+        let strings = [
+            "TitleEN", "TitleJP", "GameEN", "GameJP", "SysEN", "SysJP", "AuthEN",
+            "AuthJP", "2020", "Dumper", "Notes",
+        ];
+        let mut body = Vec::new();
+        for s in strings {
+            for u in s.encode_utf16() {
+                body.extend_from_slice(&u.to_le_bytes());
+            }
+            body.extend_from_slice(&[0, 0]);
+        }
+        data.extend_from_slice(b"Gd3 ");
+        data.extend_from_slice(&0x0100u32.to_le_bytes());
+        data.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        data.extend_from_slice(&body);
+        let eof_rel = (data.len() - 0x04) as u32;
+        data[0x04..0x08].copy_from_slice(&eof_rel.to_le_bytes());
+        let p = std::env::temp_dir().join("linamp_vgm_write.vgm");
+        std::fs::write(&p, &data).unwrap();
+
+        let edit = NativeTags {
+            title: Some("New Title".into()),
+            artist: Some("New Author".into()),
+            album: Some("New Game".into()),
+            ..Default::default()
+        };
+        write_vgm(&p, &edit).expect("write vgm");
+
+        let raw = std::fs::read(&p).unwrap();
+        assert_eq!(&raw[0x40..0x44], vgm_data, "VGM data preserved");
+        let off = 0x14 + u32::from_le_bytes([raw[0x14], raw[0x15], raw[0x16], raw[0x17]]) as usize;
+        assert_eq!(&raw[off..off + 4], b"Gd3 ");
+        let mut parsed = Vec::new();
+        let mut pp = off + 12;
+        for _ in 0..11 {
+            let (s, n) = read_utf16z(&raw, pp);
+            parsed.push(s);
+            pp = n;
+        }
+        assert_eq!(parsed[0], "New Title"); // title EN updated
+        assert_eq!(parsed[2], "New Game"); // game EN updated
+        assert_eq!(parsed[6], "New Author"); // author EN updated
+        assert_eq!(parsed[1], "TitleJP"); // JP preserved
+        assert_eq!(parsed[5], "SysJP"); // system JP preserved
+        assert_eq!(parsed[9], "Dumper"); // dumper preserved
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn spc_id666_text_write_updates_fields_and_keeps_audio() {
+        // Minimal SPC: 0x100 header (text ID666) + a 4-byte "RAM" body.
+        let mut data = vec![0u8; 0x100];
+        data[0..27].copy_from_slice(b"SNES-SPC700 Sound File Data");
+        data[0x23] = 26; // has ID666
+        for b in data[0xA9..0xB1].iter_mut() {
+            *b = b'0'; // text length/fade region, so artist is read at 0xB1
+        }
+        data.extend_from_slice(b"RAM!");
+        let p = std::env::temp_dir().join("linamp_spc_write.spc");
+        std::fs::write(&p, &data).unwrap();
+        let before = std::fs::metadata(&p).unwrap().len();
+
+        let edit = NativeTags {
+            title: Some("Song".into()),
+            artist: Some("Composer".into()),
+            album: Some("Game".into()),
+            comment: Some("Hi".into()),
+            ..Default::default()
+        };
+        write_spc(&p, &edit).expect("write spc");
+
+        let raw = std::fs::read(&p).unwrap();
+        let field = |off: usize, len: usize| -> String {
+            let b = &raw[off..off + len];
+            let end = b.iter().position(|&x| x == 0).unwrap_or(len);
+            b[..end].iter().map(|&x| x as char).collect()
+        };
+        assert_eq!(field(0x2E, 32), "Song");
+        assert_eq!(field(0x4E, 32), "Game");
+        assert_eq!(field(0x7E, 32), "Hi");
+        assert_eq!(field(0xB1, 32), "Composer"); // text ID666 -> artist at 0xB1
+        assert_eq!(before, std::fs::metadata(&p).unwrap().len(), "size unchanged");
+        assert_eq!(&raw[0x100..0x104], b"RAM!", "SPC body preserved");
+        let _ = std::fs::remove_file(&p);
     }
 }

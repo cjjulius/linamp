@@ -369,10 +369,15 @@ impl super::LinAmpApp {
                 // read-only one shows only the fields it carries.
                 let nr = match e.native_kind {
                     Some(crate::native_tags::NativeKind::Psf) => 7.0,
-                    Some(crate::native_tags::NativeKind::Sid) => 3.0,
+                    Some(crate::native_tags::NativeKind::Spc) => 4.0,
+                    Some(crate::native_tags::NativeKind::Sid)
+                    | Some(crate::native_tags::NativeKind::Vgm) => 3.0,
                     None => native_rows(&e.v2),
                 };
-                (e.editable, e.native, e.native_kind.is_some(), basic_info_rows(&e.info), nr)
+                // A writable native format has a Tags tab even if the file had no
+                // tags yet, so size for it in that case too.
+                let has_native_tab = e.native || e.native_kind.is_some();
+                (e.editable, has_native_tab, e.native_kind.is_some(), basic_info_rows(&e.info), nr)
             })
         else {
             return;
@@ -567,11 +572,20 @@ impl super::LinAmpApp {
                                         field(ui, "Title", &mut f.title);
                                         field(ui, "Artist", &mut f.artist);
                                         field(ui, "Game", &mut f.album);
-                                        if kind == crate::native_tags::NativeKind::Psf {
-                                            field(ui, "Year", &mut f.year);
-                                            field(ui, "Genre", &mut f.genre);
-                                            field(ui, "Comment", &mut f.comment);
-                                            field(ui, "Copyright", &mut f.copyright);
+                                        match kind {
+                                            crate::native_tags::NativeKind::Psf => {
+                                                field(ui, "Year", &mut f.year);
+                                                field(ui, "Genre", &mut f.genre);
+                                                field(ui, "Comment", &mut f.comment);
+                                                field(ui, "Copyright", &mut f.copyright);
+                                            }
+                                            // SPC ID666 also carries a comment field.
+                                            crate::native_tags::NativeKind::Spc => {
+                                                field(ui, "Comment", &mut f.comment);
+                                            }
+                                            // SID and VGM edit just title/artist/game.
+                                            crate::native_tags::NativeKind::Sid
+                                            | crate::native_tags::NativeKind::Vgm => {}
                                         }
                                     });
                             } else if ed.native {
